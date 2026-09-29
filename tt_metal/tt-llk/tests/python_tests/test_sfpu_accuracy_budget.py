@@ -20,6 +20,7 @@ import math
 import re
 import textwrap
 from dataclasses import fields
+from itertools import product
 
 import pytest
 import torch
@@ -35,7 +36,6 @@ from helpers.sfpu_accuracy_budget import (
     _BUDGET_KEY_TYPES,
     _SFPU_ACCURACY_BUDGET,
     _TABLE_PATH,
-    BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
     MEASURED_ARCH,
     TOLERANCE_CONTRACT,
@@ -43,13 +43,13 @@ from helpers.sfpu_accuracy_budget import (
     BudgetKey,
     Metric,
     _load_table,
+    _winner,
     accuracy_contract,
     enrolled_ops,
     resolve_contract,
     usable_budget_ceiling,
     validate_registry,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
     _ULP_DTYPES,
@@ -392,11 +392,14 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp(
     """Abs has a step budget, but these formats keep their block-aware compares -- by
     falling back, not by raising."""
     assert not has_ulp_gate(fmt)
-    assert MathOperation.Abs in enrolled_ops()
-    contract = accuracy_contract(
-        MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH
+    # The same query on a gated format is a step budget, so the fall-through below is
+    # the downgrade under test and not a query that matched nothing.
+    query = dict(op=MathOperation.Abs, arch=MEASURED_ARCH)
+    assert (
+        accuracy_contract(output_format=DataFormat.Float16_b, **query).metric
+        is Metric.ULP
     )
-    assert contract is TOLERANCE_CONTRACT
+    assert accuracy_contract(output_format=fmt, **query) is TOLERANCE_CONTRACT
 
 
 @pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
@@ -778,46 +781,44 @@ def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
     assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
 
 
-def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
+def test_a_block_float_output_is_never_enrolled_only_incidentally_covered():
     """In a shared-exponent block a small element next to a large one quantizes to zero,
-    so even Abs reaches 15616 bf16 steps. Integers in a bounded range escape that. A new
-    op here must produce block-friendly values; raising its budget is not the answer."""
-    on_bfp8 = {op for op, _, fmt, _ in _live_step_budgets() if fmt is DataFormat.Bfp8_b}
-    assert on_bfp8 == set(INTEGER_VALUED)
+    so even Abs reaches 15616 bf16 steps on a Bfp8_b output, and the exhaustive sweep
+    never enrols a block-float cell: it walks a format in value order, so adjacent
+    values share a block -- the best case, not a representative one. So no row may pin
+    a step budget to a block-float output.
 
-
-@pytest.mark.parametrize("op", INTEGER_VALUED, ids=lambda op: op.name)
-@pytest.mark.parametrize(
-    "input_format",
-    # Every input the unary driver pairs with a Bfp8_b output.
-    [
-        DataFormat.Float32,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.Bfp8_b,
-        DataFormat.Bfp4_b,
-    ],
-    ids=lambda f: f.name,
-)
-def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
-    op, input_format
-):
-    """Bfp8_b holds integers exactly only while every block maximum stays below
-    ``BFP8_B_EXACT_INTEGER_DOMAIN``. That is a property of the op's stimulus domain,
-    which may depend on the input format, so it is checked per pipeline."""
-    spec = exclude_undefined(
-        op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A
-    )
-    # The generator draws from `intervals` when set, and ignores low/high then.
-    bounds = spec.intervals or [(spec.low, spec.high)]
-    # ceil: the result rounds outward by up to one integer.
-    reachable = math.ceil(max(abs(v) for pair in bounds for v in pair))
-    assert reachable < BFP8_B_EXACT_INTEGER_DOMAIN, (
-        f"{op.name} from {input_format.name} is swept over [{spec.low}, {spec.high}], "
-        f"whose results reach {reachable} and so whose block maxima can reach "
-        f"{BFP8_B_EXACT_INTEGER_DOMAIN}. Its 0-step Bfp8_b budget relied on every "
-        "block maximum staying below that; re-measure before widening."
-    )
+    Floor, Ceil and Trunc still *resolve* to a budget there, through their op-wide
+    ``{max_ulp: 0}`` row, wherever no more specific row shadows it. That is incidental
+    cover and not a gate: the sweep skips block-float outputs and the unary functional
+    driver takes only the tolerance arm. It is allowed only in that shape -- the default
+    row of an integer-valued op -- so a deliberate Bfp8_b enrolment fails here."""
+    for op, table in _SFPU_ACCURACY_BUDGET.items():
+        for key, contract in table.items():
+            assert not (
+                contract.metric is Metric.ULP and key.output_format in _ULP_PROXY_DTYPES
+            ), f"{op.name} pins a step budget to {key.output_format.name}: {key.describe()}"
+        for input_format, approx_mode, dest_acc in product(
+            [f for f in QUERYABLE_INPUT_FORMATS if f is not None],
+            [*ApproximationMode, None],
+            DestAccumulation,
+        ):
+            query = BudgetKey(
+                approx_mode=approx_mode,
+                input_format=input_format,
+                output_format=DataFormat.Bfp8_b,
+                dest_acc=dest_acc,
+                arch=MEASURED_ARCH,
+            )
+            found = _winner(table, query, op.name)
+            if found is None or found[1].metric is not Metric.ULP:
+                continue
+            key = found[0]
+            assert key == DEFAULT and op in INTEGER_VALUED, (
+                f"{op.name} {input_format.name}->Bfp8_b approx={approx_mode} "
+                f"dest={dest_acc.name} is step-gated by {key.describe()}; a block "
+                "float's lattice compare is the stronger criterion"
+            )
 
 
 def test_no_step_budget_is_keyed_on_a_format_without_a_per_element_ulp():

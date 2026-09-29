@@ -528,9 +528,14 @@ def sfpu_binary(
             tile_cnt=tile_cnt_A,
         )
 
-    # Blackhole needs a 32-bit Dest for these formats. Hoisted above the golden call, which
-    # models the Dest width from the effective dest_acc.
-    if (
+    # The kernel runs with a 32-bit Dest where the hardware needs one -- an exponent-B
+    # input packed to Float16 on either arch, a Float16/Float32 input on Blackhole -- and
+    # TestConfig promotes dest_acc silently. Hoisted above the golden, which models the
+    # Dest width from it, and above the contract, whose `dest: "Yes"` rows describe the
+    # kernel that ran. Left at No, both would describe a variant that never executed.
+    if is_format_combination_outlier(
+        formats.input_format, formats.output_format, dest_acc
+    ) or (
         formats.input_format in [DataFormat.Float16, DataFormat.Float32]
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):

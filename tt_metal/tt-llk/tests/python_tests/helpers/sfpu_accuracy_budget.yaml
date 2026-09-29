@@ -44,15 +44,15 @@
 # designed, and two orders of magnitude past bf16's 128-step ceiling. So a budget cannot
 # gate these here, and raising it until they pass gates nothing; a near_zero_atol floor
 # would absorb it but would then be the flat-tolerance gate under a new name. Parked on
-# tolerance, whose lattice compare is already the stronger criterion. Floor/Ceil/Trunc
-# are the exception: integer results, which a shared exponent represents exactly.
+# tolerance, whose lattice compare is already the stronger criterion -- every Bfp8_b
+# output cell, including Floor/Ceil/Trunc's: the exhaustive sweep walks a format in
+# value order, so adjacent values share a block, and a 0 measured that way is the best
+# case for a block float rather than a representative one. Their `{out: Bfp8_b,
+# max_ulp: 0}` wildcards below record the sampled measurement; every driver names an
+# input, and every input has a more specific tolerance row, so no test gates a Bfp8_b
+# output by steps (test_no_driver_variant_is_step_gated_on_a_bfp8_b_output).
 #   wh: Abs/Neg max 15616 ULP, Square max 17664, Floor/Ceil/Trunc max 0, 2026-09-16
 
-# Exact everywhere, including Bfp8_b -- the only ops enrolled there, and for a narrower
-# reason than "integers are exact in a block float": a shared exponent is exact only
-# while every block maximum stays below 2**7, which holds only because
-# _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10). A wider domain fails, by
-# what takes Abs/Neg to 15616 steps.
 Floor:
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 16129 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-24

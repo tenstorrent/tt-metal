@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import re
 from functools import lru_cache
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
@@ -104,10 +104,9 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     bfloat16, 63,487 for float16 -- into a fixed 65,536-lane tensor, so the last 257
     (or 2,049) lanes are padding rather than data. They are not values the sweep chose
     to feed, and they are all the same one, so they belong in no statistic: they
-    inflate every lane count, and on an op singular at zero whose registered domain
-    includes it they would read as a real failure. ``reciprocal`` is the near miss --
-    the hardware returns ``Inf`` there against a finite golden clamp, and only its
-    registered domain excluding zero keeps those 257 lanes out of the verdict.
+    inflate every lane count, and on an op singular at zero they land on the pole:
+    ``reciprocal`` returns ``Inf`` there, golden and hardware alike, so the lanes are
+    not a mismatch but they are 257 copies of one value the sweep never chose.
 
     Identified by position rather than by value, because ``0.0`` is also a legitimate
     swept value: exactly one, in the middle of the sorted order. Confirmed on hardware
@@ -252,12 +251,14 @@ def nonfinite_failures(
 
     * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
       flushes them and the golden does not, so a disagreement there is the flush.
-    * **a golden past the output format's finite range.** A full-range sweep feeds
-      every value of a 16-bit input, and ``relu_min`` passes most of them straight
-      through, so a bf16 input against a Float16 output reaches magnitudes fp16 cannot
-      represent -- 14,334 lanes of it. Saturating there is the store doing what it must
-      (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
-      wrong, and no budget on any op could be met.
+    * **a golden the output format cannot hold**, which includes an infinite or NaN
+      golden -- ``log(0)``, ``exp`` past its overflow -- so this function judges only
+      lanes where the *hardware* went non-finite against a finite answer. A full-range
+      sweep feeds every value of a 16-bit input, and ``relu_min`` passes most of them
+      straight through, so a bf16 input against a Float16 output reaches magnitudes fp16
+      cannot represent -- 14,334 lanes of it. Saturating there is the store doing what
+      it must (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel
+      being wrong, and no budget on any op could be met.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
     * **an input the op makes no claim on** (:func:`_claimed`): the undefined side of
       a registered singularity, or past an argument-reduction limit. ``Sin`` and
@@ -298,7 +299,7 @@ def nonfinite_failures(
 EMIT = False
 
 #: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session.
-MEASURED: Dict[str, Dict[Tuple[str, str, str, str], int]] = {}
+MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
 
 #: Headroom over the measured worst lane. The sweep is exhaustive, so unlike a sampled
 #: measurement there is no unseen tail to leave room for -- but a budget at exactly the

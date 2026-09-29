@@ -172,8 +172,9 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
   budgets, and `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells
   demoted to tolerance to an explicit list, each with its measurement.
 - **`Bfp8_b` charges for block quantization.** A budget there is denominated in bfloat16
-  steps, two to one `Bfp8_b` step, and does not forgive the shared exponent. Only ops
-  whose result a shared exponent represents exactly are enrolled on it.
+  steps, two to one `Bfp8_b` step, and does not forgive the shared exponent. No cell
+  with a `Bfp8_b` output is gated by steps: the sweep records its measurement and the
+  cell stays on tolerance, whose lattice compare is the stronger criterion there.
 
 ## Not enrolling an op
 

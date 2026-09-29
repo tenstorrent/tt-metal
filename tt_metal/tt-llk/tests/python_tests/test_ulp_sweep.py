@@ -9,6 +9,7 @@ regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
 import math
+import os
 
 import pytest
 import torch
@@ -47,6 +48,16 @@ def _refuses(match, kind=ValueError):
     return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
 
 
+@pytest.fixture(autouse=True)
+def _host_only_arch(monkeypatch):
+    """``sweep_cells`` asks the chip which cells promote to a 32-bit Dest, and without
+    ``CHIP_ARCH`` that opens a device. These tests run on hosts without one."""
+    import helpers.chip_architecture as chip
+
+    monkeypatch.setenv("CHIP_ARCH", os.environ.get("CHIP_ARCH", "wormhole"))
+    monkeypatch.setattr(chip, "_cached_chip_architecture", None)
+
+
 @pytest.fixture
 def table(tmp_path):
     path = tmp_path / "budget.yaml"
@@ -72,8 +83,9 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     rows = _rows(table)
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
     assert "max 5 ULP, today" in rows[0]
-    # The op this run never measured, untouched.
-    assert any("Log1p" in l for l in table.read_text().splitlines())
+    assert not any("max_ulp: 7" in row for row in rows)  # the superseded cell is gone
+    # The same op's other (in, out) cell, and the op this run never measured: untouched.
+    assert any("{in: Float16_b, out: Float32, max_ulp: 9}" in row for row in rows)
     assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
 
 
@@ -141,6 +153,9 @@ def test_the_emitted_budget_uses_the_declared_headroom():
     assert _verdict(100, "Float32") == ("ulp", math.ceil(100 * EMIT_HEADROOM))
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
+    # A block float never enrols from a sorted sweep, however small the reading.
+    assert _verdict(3, "Bfp8_b") == ("block", 3)
+    assert _verdict(0, "Bfp8_b") == ("block", 0)
 
 
 def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
@@ -260,6 +275,30 @@ def test_xdist_workers_measurements_merge_worst_lane_first(table):
             ("Float16", "Float16", "Yes", "No"): 2,
         }
     }
+
+
+@pytest.mark.parametrize(
+    "unmeasurable_first", [True, False], ids=["str,int", "int,str"]
+)
+def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
+    table, unmeasurable_first
+):
+    """One worker's reason string and another's step count for the same cell: the
+    verdict is "not measurable" whichever export the controller merges first. A number
+    must not rescue an overflow, and a string must never reach ``max()``."""
+    from helpers.ulp_sweep import record_unmeasurable
+
+    key = ("Float16", "Float16", "No", "No")
+    record_unmeasurable("Gelu", key, "3 lane(s) non-finite against a finite golden")
+    with_reason = export_measured()
+    MEASURED.clear()
+    record("Gelu", key, 4)
+    with_number = export_measured()
+    MEASURED.clear()
+
+    for export in [with_reason, with_number][:: 1 if unmeasurable_first else -1]:
+        merge_measured(export)
+    assert MEASURED == {"Gelu": {key: "3 lane(s) non-finite against a finite golden"}}
 
 
 @pytest.mark.parametrize(

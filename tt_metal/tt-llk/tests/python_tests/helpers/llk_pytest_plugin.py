@@ -1015,9 +1015,13 @@ def _finish_ulp_emit(session):
     after every cell of an op has been seen. A refusal fails the session."""
     from . import ulp_sweep
 
-    if not ulp_sweep.EMIT or not ulp_sweep.MEASURED:
+    if not ulp_sweep.EMIT:
         return
     try:
+        if not ulp_sweep.MEASURED:
+            # Silence here read as a successful rewrite: a `-k` that matched nothing, a
+            # --compile-producer run, a mode that deselects the sweep.
+            raise RuntimeError("nothing was measured, so the table was not touched")
         message = ulp_sweep.finish_emit(get_chip_architecture(), session.testsfailed)
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
