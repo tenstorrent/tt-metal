@@ -479,8 +479,9 @@ class _DeviceState:
 class GlmDeviceModel:
     """Ladder / profile adapter over tt/model.py:TtGlmModel.
 
-    The residual is a replicated [1, 1, S, 4 H] bf16 device tensor (4 mHC streams packed on the last dim) from the
-    embedding to the final norm. Each layer is TtGlmBlock.__call__: run_block over the reference block graph with the
+    The residual is a [1, 1, S, 4 H] bf16 device tensor (4 mHC streams packed on the last dim) from the embedding to
+    the final norm: split by sequence, chip d = 2 r + c holding rows d S/4 .. (default), or replicated
+    (GLM_RESIDUAL_LAYOUT=replicated). Each layer is TtGlmBlock.__call__: run_block over the reference block graph with the
     validated device modules (one profiler section per step). Only the LM head runs on the host (ladder logits on
     sampled rows, when the stack ends at the model's last layer)."""
 
@@ -523,17 +524,18 @@ class GlmDeviceModel:
         return h
 
     def from_host(self, h):
-        """Reference residual [S * 4, H] -> device [1, 1, S, 4 H] (harness boundary)."""
-        from models.demos.glm53_flash_d_p.tt.common import replicate
+        """Reference residual [S * 4, H] -> device [1, 1, S, 4 H] in the model's layout (harness boundary)."""
+        from models.demos.glm53_flash_d_p.tt.common import replicate, split_from_host
 
         s = h.shape[0] // self.n
-        return replicate(self.mesh, h.reshape(1, 1, s, self.n * h.shape[-1]).to(torch.bfloat16))
+        t = h.reshape(1, 1, s, self.n * h.shape[-1]).to(torch.bfloat16)
+        return split_from_host(self.mesh, t) if self.model.layout == "split" else replicate(self.mesh, t)
 
     def to_host(self, h):
         """Device [1, 1, S, 4 H] -> reference [S * 4, H]; [1, 1, S, H] (the final norm) -> [S, H]."""
-        from models.demos.glm53_flash_d_p.tt.common import replicated_to_host
+        from models.demos.glm53_flash_d_p.tt.common import replicated_to_host, split_to_host
 
-        t = replicated_to_host(h).float()
+        t = (split_to_host(h) if self.model.layout == "split" else replicated_to_host(h)).float()
         s, w = t.shape[-2], t.shape[-1]
         hidden = self.cfg.hidden_size
         return t.reshape(s * (w // hidden), hidden)
@@ -559,10 +561,11 @@ class GlmDeviceModel:
         ttnn.synchronize_device(self.mesh)
 
     def perf_settings(self):
-        """Recorded in the profile: the mHC residual mix path (GLM_RESIDUAL_MIX=matmul | addcmul)."""
+        """Recorded in the profile: the mHC residual mix path (GLM_RESIDUAL_MIX=matmul | addcmul) and the residual
+        layout (GLM_RESIDUAL_LAYOUT=split | replicated)."""
         from models.demos.glm53_flash_d_p.tt.residual import residual_mix_mode
 
-        return {"residual_mix": residual_mix_mode()}
+        return {"residual_mix": residual_mix_mode(), "residual_layout": self.model.layout}
 
 
 def device_model(mesh, spec, layers, lm_head=True):

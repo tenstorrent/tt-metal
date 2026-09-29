@@ -324,26 +324,38 @@ class TtExperts:
         ttnn.deallocate(x)
         return out
 
-    def __call__(self, x, dense=None, idx=None, wts=None):
+    def __call__(self, x, dense=None, idx=None, wts=None, split=False):
         """x [1,1,S,H] replicated; routing as dense [1,1,S,E] or (idx, wts) [1,1,S,K], replicated
-        -> experts_out [1,1,S,H] bf16 replicated."""
+        -> experts_out [1,1,S,H] bf16 replicated.
+        split: x and the routing are already mesh row r's half [r S/2, (r+1) S/2) (on both of its chips); the output is
+        this chip's quarter [r S/2 + c S/4, +S/4) (the split residual layout: reduce_scatter on axis 1, no gather)."""
         tmp = []
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
             tmp.append(x)
-        xh = ttnn.mesh_partition(x, dim=-2, cluster_axis=DISPATCH_AXIS)
+        part_rows = (lambda t: t) if split else (lambda t: ttnn.mesh_partition(t, dim=-2, cluster_axis=DISPATCH_AXIS))
+        xh = part_rows(x)
         if idx is None:
-            dh = ttnn.mesh_partition(dense, dim=-2, cluster_axis=DISPATCH_AXIS)
+            dh = part_rows(dense)
             ih, wh = self.topk_from_dense(dh)
-            tmp += [dh]
+            tmp += [ih, wh] + ([] if split else [dh])
         else:
-            ih = ttnn.mesh_partition(idx, dim=-2, cluster_axis=DISPATCH_AXIS)
-            wh = ttnn.mesh_partition(wts, dim=-2, cluster_axis=DISPATCH_AXIS)
-        tmp += [xh, ih, wh]
+            ih, wh = part_rows(idx), part_rows(wts)
+            tmp += [] if split else [ih, wh]
+        if not split:
+            tmp.append(xh)
         part = self.routed_half(xh, ih, wh)
         # Add the other dispatch group's experts in fp32 (a bf16 all_reduce biases the sum upwards, known issues).
         pf = ttnn.typecast(part, ttnn.float32)
         ttnn.deallocate(part)
+        if split:
+            sf = ttnn.reduce_scatter(pf, dim=-2, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pf)
+            out = ttnn.typecast(sf, ttnn.bfloat16)
+            ttnn.deallocate(sf)
+            for t in tmp:
+                ttnn.deallocate(t)
+            return out
         sf = ttnn.all_reduce(pf, cluster_axis=1)
         ttnn.deallocate(pf)
         summed = ttnn.typecast(sf, ttnn.bfloat16)

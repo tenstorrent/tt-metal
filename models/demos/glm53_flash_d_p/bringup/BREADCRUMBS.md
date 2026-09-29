@@ -2390,3 +2390,63 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile mo
 Re-run: the gate from the brief; the old path with `GLM_RESIDUAL_MIX=addcmul TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh
 --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`.
+
+## X.3 fix, attempt 1 (run1): timeline_ok 0 is a profiler-buffer overflow, not a model fault
+- The failure: every metric passed except `timeline_ok`. The log says "timeline: device programs per chip {1281 each}
+  != op-mode counts {1319 each}" and shows "Profiler DRAM buffers were full, markers were dropped! ...
+  bufferEndIndex = 12000" when the timeline is collected.
+- Cause: the unsynced timeline run reads the device profiler once, at the end. The buffer holds
+  `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` programs per RISC (default 1000, 12 words each). The chunk runs 1319
+  programs per chip, so the busy cores drop the rest. Op mode drains after every op, so it does not overflow.
+- Check: the same `test_profile.py` run with `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000` added (BRINGUP_TASK=X.3.diag,
+  results in generated/bringup_adhoc) gives `timeline_ok` 1, 869 op rows, device timeline 423.7 ms = kernels 422.9 +
+  gaps 0.7, host dispatch 43.4 ms, host wall 430.8 ms: the model is device-bound.
+- No change to the model or the forks: this step may change only the forks and the notes, and the fix is in the
+  framework (the X.3 env in plan/ledger_gen.py, or profiler.PROFILER_ENV / test_profile). Recorded as finding
+  `x3-timeline-profiler-buffer` and a known-issues proposal.
+- Re-run (diagnostic): `BRINGUP_TASK=X.3.diag TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 BRINGUP_FULL_PREFILL=1
+  BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+  PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py`.
+- Gate re-run as written in the brief (without `--no-precompile`): ladder PASS (the same PCCs), profile PASS with
+  `timeline_ok` 0 again (1281 vs 1319 programs). test_positions HANGs in model load (`ttnn.zeros` latent cache)
+  after the precompile collect pass, in 2 of 2 runs. With `--no-precompile`, which `core/gate.py` adds for the
+  orchestrator, it passes (5 positions, 394..547 ms per chunk). See the known-issues proposal.
+
+## P.2 perf, attempt 1 (run1): mHC residual split by sequence (GLM_RESIDUAL_LAYOUT=split, default)
+- What: the residual [1, 1, S, 4 H] between modules is split by sequence. Chip d = 2 r + c (row-major) holds rows
+  [d S/4, (d + 1) S/4), the same split the indexer / MLA queries already use. attn_hc / ffn_hc, both collapses, both
+  norms, both residuals, q_a, the router and moe_add run on the chip's own rows only. The modules are unchanged
+  (they are per-row); the component tests still run them replicated through the host fns.
+- Where the rows are re-partitioned (tt/model.py TtGlmBlock split step table, tt/common.py helpers):
+  - KDA (`TtKdaAttention(split=True)`): all_gather axis 1 of the chip's rows gives the SP half ttKDA takes. Out: the
+    all_gather axis 1 (hidden) as before, then mesh_partition axis 1 to the quarter; the axis-0 all_gather is gone.
+  - DSA: attn_norm = norm on the chip's rows + all_gather axis 1 + axis 0 (pooled keys and latent need all S rows).
+    q_a takes `local_rows` of it. The indexer takes q_resid as local (`q_local=True`). The MLA (`split=True`) takes
+    q_resid as local and drops its two output all_gathers.
+  - Dense FFN: ffn_norm + all_gather axis 1 + axis 0. The MLP (`split=True`) swaps its fp32 all_reduce for
+    reduce_scatter dim -2 axis 0 then axis 1 (`scatter_rows`).
+  - MoE FFN: ffn_norm + all_gather axis 1 = the mesh row's half (the dispatch rows), which the router routes directly.
+    The experts (`split=True`) skip mesh_partition and swap all_reduce axis 1 + all_gather axis 0 for
+    reduce_scatter dim -2 axis 1. The shared expert does all_gather axis 0 of the half, then the MLP with
+    `scatter_rows`.
+  - Embedding: each chip embeds `local_rows(ids, dim=-1)`. The final norm is per-row. Harness boundary:
+    hooks.GlmDeviceModel from_host / to_host shard / concat in the split layout.
+- CCLs per layer, replicated -> split: KDA 2 AG -> 2 AG (the input AG replaces the axis-0 output AG). DSA 2 AG -> 2 AG
+  (moved from the MLA output to attn_norm). Dense 1 fp32 AR -> 2 bf16 AG + 2 fp32 RS. MoE (AR + AG) + AR -> 2 AG +
+  3 RS. Measured on a 2x2 probe at S 5120 (wall, synced): AR both axes fp32 4.1 ms vs RS ax0 + ax1 1.6 ms; AR ax1 fp32
+  S/2 1.1 ms vs RS ax1 0.6 ms; AG bf16 S/4 -> S 0.8 ms; KDA out old 0.79 ms vs new in + out 0.62 ms.
+- Result (warm profile, chunk [51200, 56320), 5 layers): device_ms_total 425.4 -> 275.1 ms (replicated re-run on the
+  same tree: 428). Per section, split vs replicated: attn_hc 8.7 / 31.4, ffn_hc 8.8 / 31.3, attn_residual 8.0 / 31.6,
+  ffn_residual 8.0 / 31.6, attn_collapse 6.4 / 24.4, ffn_collapse 6.4 / 24.4, attn_norm 1.2 / 1.2 (now includes
+  the DSA gather), ffn_norm 3.2 / 1.2 (includes the gathers), q_a 0.7 / 2.1, router 1.7 / 2.9, attention 75.2 / 80.3,
+  experts 51.8 / 58.4, mlp 40.1 / 47.8, shared_expert 8.6 / 13.0, indexer 46.2 / 46.3. Accuracy unchanged: s4096
+  worst layer 0.999952, worst state 0.999144; last rung worst layer 0.999941, pcc_state_min 0.99839;
+  host_transfers_per_layer 0. All 24 mHC component tests pass (unchanged modules). The contract test
+  (test_contract.py, split default) passes: KV latent 0.99997, index_key 0.99998, KDA state min 0.99923.
+- The profile's settings record `residual_layout` next to `residual_mix`.
+- Re-run: the gate from the brief. The old path: `GLM_RESIDUAL_LAYOUT=replicated TT_METAL_DEVICE_PROFILER=1
+  TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+  PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`.
+- Next candidates: the DSA latent / pooled keys could be computed on the chip's rows, with the 512- / 128-wide results
+  gathered instead of the 4096-wide attn_norm. The shared expert could run TP 2 on the half (it would drop the AG
+  axis 0 + RS axis 0), but that needs a new weight layout.
