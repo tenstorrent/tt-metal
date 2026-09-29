@@ -26,13 +26,16 @@ def test_isin_narrow_dtype_writes_uint32_mask(dtype, invert, device):
     _isin_matches(dtype, invert, device)
 
 
-def test_isin_uint16_spans_two_subchunks(device):
-    # Wide enough that the row is split, so a later subchunk is written at a non-zero offset.
-    # Values stay inside uint16.
-    elements = torch.arange(160000, dtype=torch.int64) % 30000
-    test_elements = torch.tensor([0, 17, 1000, 29999], dtype=torch.int64)
-    elements_ttnn = ttnn.from_torch(elements, device=device, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    test_elements_ttnn = ttnn.from_torch(test_elements, device=device, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT)
+# Sizes just past each dtype's single-subchunk limit on WH, so a later subchunk is written at a non-zero offset.
+@pytest.mark.parametrize("dtype, size", [(ttnn.uint16, 160000), (ttnn.bfloat16, 160000), (ttnn.uint8, 210000)])
+def test_isin_spans_two_subchunks(dtype, size, device):
+    elements = torch.arange(size, dtype=torch.int64) % 250  # exact in uint8 and bfloat16
+    test_elements = torch.tensor([0, 17, 100, 249], dtype=torch.int64)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.int64
+    elements_ttnn = ttnn.from_torch(elements.to(torch_dtype), device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    test_elements_ttnn = ttnn.from_torch(
+        test_elements.to(torch_dtype), device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
 
     torch_result = torch.isin(elements, test_elements)
     ttnn_result = ttnn.to_torch(ttnn.experimental.isin(elements_ttnn, test_elements_ttnn))

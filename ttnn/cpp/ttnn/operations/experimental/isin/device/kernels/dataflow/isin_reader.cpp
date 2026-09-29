@@ -81,6 +81,7 @@ FORCE_INLINE void prefill_output(
 */
 void kernel_main() {
     constexpr auto ctas = get_ctas();
+    static_assert(ctas.output_tensor_datum_size == sizeof(uint32_t), "isin output mask must be uint32");
 
     const uint32_t elements_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t test_elements_buffer_address = get_arg_val<uint32_t>(1);

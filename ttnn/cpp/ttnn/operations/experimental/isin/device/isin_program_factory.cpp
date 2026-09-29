@@ -93,7 +93,8 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
         test_elements_tensor.logical_volume(),
         single_fetch_subchunk_size,
         static_cast<uint32_t>(invert),
-        elements_tensor.element_size()};
+        elements_tensor.element_size(),
+        output_datum_size};
     tt::tt_metal::TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
