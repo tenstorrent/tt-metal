@@ -667,6 +667,13 @@ tasks:
     - ffn_hc
     - ffn_hc_pre
     layer: 0
+  frozen:
+    at: '2026-09-29T08:38:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py: 149de4bdc7ae8494aa70ef99d23034b45a7a9853cee1c6f9dd4510af4fb015a1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.dense_full.ffn_norm
   title: dense_full ffn_norm (norm) on device, layer 0
   step: implement
