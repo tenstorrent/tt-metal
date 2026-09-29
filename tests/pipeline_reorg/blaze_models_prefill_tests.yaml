@@ -895,7 +895,7 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k"
+- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k alternating default-A-C x2"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -906,10 +906,21 @@
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
-    '
+    i=0
+    for cfg in default A C default A C; do
+      i=$((i+1))
+      case $cfg in
+        default) export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=0 TT_METAL_THREAD_POOL_RESERVED_CORES=0 ;;
+        A) export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=0 TT_METAL_THREAD_POOL_RESERVED_CORES=16 ;;
+        C) export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=100 TT_METAL_THREAD_POOL_RESERVED_CORES=4 ;;
+      esac
+      echo "ALT_RUN_BEGIN i=$i cfg=$cfg $(date -u +%H:%M:%S)"
+      mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      ' || echo "ALT_RUN_FAILED i=$i cfg=$cfg"
+      echo "ALT_RUN_END i=$i cfg=$cfg $(date -u +%H:%M:%S)"
+    done
   test_type: glm_chunked
   test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
   test_group: module
@@ -924,103 +935,6 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k variant A spin0 reserved16"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export TT_METAL_DISPATCH_STATS=1
-    export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=0
-    export TT_METAL_THREAD_POOL_RESERVED_CORES=16
-    echo "HOST_CPU_INFO nproc=$(nproc) cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null)"; lscpu | sed 's/^/HOST_CPU_INFO /' | head -30
-    export TT_METAL_SHM_TRACKING_DISABLED=1
-    export LOGURU_LEVEL=ERROR
-    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
-    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
-    '
-  test_type: glm_chunked
-  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 116
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k variant B spin100 reserved0"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export TT_METAL_DISPATCH_STATS=1
-    export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=100
-    export TT_METAL_THREAD_POOL_RESERVED_CORES=0
-    echo "HOST_CPU_INFO nproc=$(nproc) cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null)"; lscpu | sed 's/^/HOST_CPU_INFO /' | head -30
-    export TT_METAL_SHM_TRACKING_DISABLED=1
-    export LOGURU_LEVEL=ERROR
-    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
-    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
-    '
-  test_type: glm_chunked
-  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 116
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k variant C spin100 reserved4"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export TT_METAL_DISPATCH_STATS=1
-    export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=100
-    export TT_METAL_THREAD_POOL_RESERVED_CORES=4
-    echo "HOST_CPU_INFO nproc=$(nproc) cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null)"; lscpu | sed 's/^/HOST_CPU_INFO /' | head -30
-    export TT_METAL_SHM_TRACKING_DISABLED=1
-    export LOGURU_LEVEL=ERROR
-    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
-    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
-    '
-  test_type: glm_chunked
-  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 116
-      tier: 2
-      release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
-# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
-# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
-# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
-# time than its untraced twin.
 - name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k, traced"
   fabric_profile: torus_xy
   cmd: |
