@@ -170,7 +170,7 @@ async def run(args):
     for case in cases:
         payload = request_payload(case["question"] + INSTRUCTION)
         ids = tokenizer.apply_chat_template(
-            payload["messages"], tokenize=True, add_generation_prompt=True, enable_thinking=False
+            payload["messages"], tokenize=True, add_generation_prompt=True, enable_thinking=False, return_dict=False
         )
         payloads.append(
             {"id": case["id"], "payload": payload, "prompt_token_ids": ids, "expected": str(answer(case["answer"]))}
