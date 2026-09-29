@@ -20,9 +20,11 @@
 # arch it names. A budget may only be *raised* by re-measuring and updating that comment
 # in the same change -- the whole point of the table is that no number here is a guess.
 #
-# Only the rows the exhaustive sweep drives are gated: a Float16_b/Float16/Bfp8_b input
-# into a Float16_b/Float16 output. `Float32` rows are a record of a sampled measurement
-# that no gate reads yet -- the functional drivers take only the tolerance arm.
+# A unary step budget is gated only where the exhaustive sweep drives it: a
+# Float16_b/Float16/Bfp8_b input into a Float16_b/Float16 output. A unary `Float32` row is
+# a record of a sampled measurement no gate reads yet -- the unary functional driver takes
+# only the tolerance arm. Binary and ternary rows are gated by their own drivers, on every
+# output format, because those drivers' sweeps are what measured them.
 #
 # Every exhaustive row was measured with FAST_MODE(No) and CLAMP_NEGATIVE(True) compiled
 # in. The key has no axis for either, so a row holds for a kernel built that way: the
@@ -1152,8 +1154,10 @@ SfpuXlogy:
 # These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
 # constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
 # is 0 and any drift at all is a regression. The exception is the 16-bit outputs of
-# ReluMax, ReluMin and Frac, which carry 1: the op is still exact, and the step is the
-# output rounding on the way out of Dest, as the rows there record.
+# ReluMax, ReluMin and Frac, which measure 1 step: the op is still exact, and the step is
+# the output rounding on the way out of Dest, as the rows there record. A sampled row
+# carries that 1; an exhaustive Float16 -> Float16_b row carries 2, the measured step plus
+# the emitter's 1.1x headroom rounded up to a whole step.
 #
 # Every row names an output format that was actually measured. Nothing is enrolled on
 # Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
@@ -1632,8 +1636,6 @@ SfpuElwNe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-# add/sub/rsub are single IEEE operations: one step on bf16, and the Float32 65536 is the
-# usual output-rounding figure. fp16 needs 140 steps on sub/rsub, past its 51 ceiling.
 SfpuElwGt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1736,6 +1738,8 @@ SfpuBinaryMin:
 SfpuAddTopRow:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 1 variant / 2048 lanes -- the whole sweep, 2026-09-18
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+# add/sub/rsub are single IEEE operations: one step on bf16, and the Float32 65536 is the
+# usual output-rounding figure. fp16 needs 140 steps on sub/rsub, past its 51 ceiling.
 SfpuElwadd:
   - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
