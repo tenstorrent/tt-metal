@@ -2155,6 +2155,13 @@ tasks:
     kind: router
     layer: 4
     stateful: false
+  frozen:
+    at: '2026-09-29T17:36:55'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_router.py: c3a08a378c5991d16cd56661e5e3a5ebaa81f697c68ef88faa6bc83f14f3758b
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_moe.09
   title: 'kda_moe block with steps 1-9 on device (last: router)'
   step: implement
