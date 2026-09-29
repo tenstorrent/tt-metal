@@ -160,6 +160,7 @@ def _run_moe_compute_single_card_test(
     compute_only=True,
     skip_on_ci=False,
     matmul_xfail_on_bh=False,
+    num_shared_experts_per_device=0,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -192,6 +193,8 @@ def _run_moe_compute_single_card_test(
     # Derived dims (mirrors run_moe_compute_test in test_moe_compute_6U.py).
     num_devices = mesh_shape[0] * mesh_shape[1]
     assert num_devices == 1, "single-card test must be run on a 1x1 mesh"
+    if num_shared_experts_per_device:
+        assert num_shared_experts_per_device == 1 and not compute_only
     num_dispatch_devices = num_devices  # cluster_axis is None
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -256,12 +259,16 @@ def _run_moe_compute_single_card_test(
     sparse_buffer, expert_indices, expert_scores, _ = gen_sparse_buffer_and_indices(
         tokens_per_device,
         hidden_size,
-        experts,
+        experts - num_shared_experts_per_device,
         selected_experts_k,
         mesh_shape,
         cluster_axis,
         dtype=tt_to_torch_dtype(dtype),
     )
+
+    if num_shared_experts_per_device:
+        expert_indices[..., -1] = experts - 1
+        expert_scores[..., -1] = 1.0
 
     # Goldens.
     tilize_golden_output, expert_token_counts = compute_selective_tilize_golden(
@@ -416,6 +423,7 @@ def _run_moe_compute_single_card_test(
             optional_cross_device_semaphore=None,
             activation_type=activation_type,
             compute_only=compute_only,
+            num_shared_experts_per_device=num_shared_experts_per_device or None,
         )
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
@@ -973,3 +981,31 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, 
             activation_type=MoEActivationFunction.SILU,
             compute_only=True,
         )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("tokens_per_device", [1, 33])
+def test_moe_compute_single_card_full_local_shared_expert(mesh_device, mesh_shape, tokens_per_device):
+    """Preserve the existing 1x1 shared-expert path against the independent routed-expert golden."""
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        compute_only=False,
+        num_shared_experts_per_device=1,
+    )
