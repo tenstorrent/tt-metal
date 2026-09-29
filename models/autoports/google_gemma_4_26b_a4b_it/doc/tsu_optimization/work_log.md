@@ -697,3 +697,168 @@ incremental speedup claim; its larger TTFT includes the unchanged serial prefill
 of32 long prompts. After completion, only owned API PID159311 receives SIGINT.
 Pre-commit normalizes trailing whitespace/end-of-file in packaged evidence;
 JSON values and compressed raw profile window bytes remain unchanged.
+
+### Shared-batch publication and remaining expert probe
+
+Shared batching is committed/pushed as TT-Metal
+`c9ec3469f1b875e7e5e505660c4421e5126e8dad`. Focused exact-image CI
+run36576438888 uses TTI `a5722f48e706f4595fefda549313120903b89b96`,
+transport vLLM `c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42`, QB2 main,
+and two rows:4096/128/C1/N4 plus128/128/C32/N32. Build job109433282221
+is monitored. The builder's exact-SHA snapshot selection regression passes;
+focused and subsequently restored full-matrix CPU suites each pass58 tests.
+No evaluation workflow is dispatched or modified.
+
+The probe-only expert union now builds membership from selected indices rather
+than nonzero BF16 weights, preserving selected zero-weight experts. Initial
+capture rejects `ones_like(integer_indices, dtype=bfloat16)` because the dtype
+override falls back to host fill. Cleanup then raises while releasing the
+unfinished trace and retains a UMD lock. A full live tt-triage capture is saved
+as `experts_trace_failure_triage.txt`, with the host exceptions/log preserved.
+The op mesh is idle, no active ops or lightweight asserts are reported, and
+core magic passes. Detailed binary/NoC warnings are not silently equated with
+the all-pass summary. Root `AUTOTRIAGE.md` records source evidence and limits.
+Host fuser missed container-owned device FDs; future launch checks additionally
+require prior exec completion and the container process/FD view.
+Only owned waitingPID162549 and failedPID162423 receive TERM after capture;
+both exit143, no reset. The adapted probe uses a same-dtype tiled BF16 route
+slice for device-only mask fill and runs as `batch32_experts_index_devicefill`.
+It remains probe-only, with no accepted performance or correctness claim yet.
+
+The device-fill retry exits0 without a reset: all32 reduced logits have
+max_abs0. Its five steps are44.8909/44.8580/44.7956/44.8014/44.8308ms,
+slightly below shared-only45.22ms. The indexed-union contract then passes all6
+real layer0/5 output and full-cache comparisons under Watcher/allocation tracking,
+including changed inputs and positions. Complete30-layer testing follows;
+neither reduced timing nor unchanged caches alone is a serving speedup claim.
+The restored full-matrix TTI head is `f6c191109c01bbe3e149d3d9c2c0a8c6b5831392`.
+
+One remaining CCL hypothesis is packet geometry: current4352B payload transports
+4096B pages one per packet, while native CCL reports a12288B ideal payload.
+The warning is only a topology hint, not proof of a bottleneck. A probe-only
+`measure_tsu_paths.py --fabric-payload` argument will compare explicit4352B and
+12288B at unchanged precision, full cache capacity and real reduced layers;
+no production fabric default changes without measured generator/serving benefit.
+
+Complete30-layer indexed-union probe passes all32 logits exactly. Baseline
+steps677.3649/677.4766/677.4582/677.4725/677.4866ms become
+636.7300/637.6163/638.3029/638.3169/637.7552ms. This is only about3.3ms
+beyond the selected shared-only641.01ms control, and remains a generator result.
+A guarded B32-only runtime experiment (`GEMMA4_BATCHED_EXPERT_DECODE=1`,
+default0) is prepared for actual serving qualification. It keeps selected decode
+weights/fidelity, original per-row top8 accumulation order and clones routing
+indices before reuse. No sampled/accuracy/context capability is removed.
+
+Final opt-in runtime source passes84 guard/reuse CPU tests and all pre-commit
+hooks. Its B32 Watcher/allocation contract passes all6 exact output/full-KV
+cases. A fresh reduced runtime probe explicitly asserts the expert-union branch
+is selected on both real layers; all32 logits remain exact and steps are
+44.9173/44.8773/44.8045/44.8612/44.8843ms. After verified exec completion
+and a container `/proc/*/fd` check showing no TT device owners, the unprofiled
+`expert_candidate_async` server starts with GEMMA4_BATCHED_EXPERT_DECODE=1.
+
+Fabric reduced4352/12288/4352 sequence produces queued-step means approximately
+2.37768/2.37344/2.37733ms (three repeats per condition). All128 generated tokens
+are identical across conditions and both buffered/token-out paths. This is a
+repeatable~4us reduced-trace improvement, not a measured full-model TSU gain.
+The trace-failure source report is archived as `autotriage_expert_mask.md`.
+
+Baseline CI raw artifacts contain23 rows,1007 completed requests and0 failures.
+New `compare_tsu_ci.py` self-checks that complete matrix and compares the focused
+remote C1 checkpoint against its exact-shape baseline: all four generated texts,
+input/output lengths, model IDs and tokenizer IDs match. Raw baseline TPOT is
+23.231992344958634ms, so exact TSU gain is17.735202%; medianITL improves
+20.61953->19.58531ms and E2EL5045.66764->4596.01487ms. This confirms a
+steady-interval improvement in addition to removing the per-request capture
+spike. The full-matrix raw download is local/ignored, reproducible from baseline
+CI artifact11007447924; its compact report and comparisons are committed.
+TTI diff from the handed-off318c40a source contains only snapshot build selection,
+the Gemma async flag, and their tests; the benchmark harness/matrix is restored
+unchanged at f6c19110. Final matrix source/config identity is checked separately
+from the comparator's shape/text/latency assertions.
+
+Expert serving completes the six matched cohorts with all104 texts and lengths
+exact (`expert_candidate_comparison.json`). Relative to shared-only default,
+C1 changes -0.0376% and C8 -0.0566%, both unchanged fallback/noise. C32 pooled
+TPOT643.75947->643.07233ms gives only+0.10685% TSU; medianITL changes
+640.92443->640.79993ms. TTFT13444.34->12467.50ms and E2EL95201.79->94137.69ms
+improve more, so the small mean-TPOT gain is not evidence of a large steady
+decode win. Inspect before selecting: this is much smaller than synthetic
+generator improvement and may be routing-dependent or noise.
+
+Inspector existing host logs (no profiler/RPC sampling during measured work)
+confirm the opt-in server built the four extra union-gather kernels present in
+the runtime expert probe and absent from the uninstrumented shared-only server:
+reader hashes17610156978611305939/3344665743477485915 and writer hashes
+10451125168048646003/5695959540372071882. The EngineCore environment also
+contains GEMMA4_BATCHED_EXPERT_DECODE=1. This establishes activation beyond a
+mere launch-intent flag, without claiming dynamic per-step route counts.
+A matched4096/128/C32/N32 row is running to test actual-context dependence.
+
+### 2026-09-29 14:14 UTC — user intervention, effective immediately
+
+1. For benchmark CI, build the new exact TT-Metal image only once when required by the selected runtime SHA. Reuse that exact published image for every subsequent focused and matrix benchmark run; do not rebuild on each dispatch. Record the image URI/digest and every run that reuses it.
+2. Benchmark/optimize concurrency only at C1, C8, and C16. Stop spending time on C32 qualification or optimization. Existing C32 evidence may remain as historical/probe evidence, but do not dispatch or wait on more C32 work. Adapt the shared-batching work to C8/C16 and judge it there.
+3. Prioritize the largest measured end-to-end bottlenecks and material wins. Deprioritize tiny isolated improvements (for example ~0.06% LM-head changes) unless they are essentially free and already proven. Focus on changes with meaningful TSU/E2E impact in actual benchmark shapes.
+4. Append this intervention verbatim/clearly to `models/autoports/google_gemma_4_26b_a4b_it/doc/tsu_optimization/work_log.md`, including timestamp/context and how the experiment/CI matrix changed.
+
+Context/actions: C1 image run36564611976 has completed successfully and its
+exact image/digest and +17.7352% TSU are recorded above. Before this intervention,
+run36576438888 started the one required build for selected shared-runtime
+c9ec3469; that build is still running. Its original focused C32 benchmark will
+not be allowed to run; subsequent benchmarks will reuse the published shared
+image and use only C1/C8/C16. The original23-row sweep is superseded by a
+capacity-safe matrix using these three concurrency values. Historical C32
+results remain evidence only, not a requirement for further qualification.
+The just-completed expert C32 guard gives only+0.3100% TSU (32 exact texts);
+the earlier short guard gives+0.1069%. This B32-only candidate is rejected for
+selection and its production hook will be removed. The completed36-request
+qualitative artifact is retained; no additional C32 requests are started.
+The ~4us reduced fabric-packet improvement is deprioritized without extending
+to full-model/serving work. C8 shared batching already has a measured+2.859%
+local TSU win; C16 and actual4K/C8,C16 become the immediate qualification work.
+
+The rejected production source is archived as `rejected_expert_*.patch` and
+`rejected_batched_experts.py.txt`; selected multichip runtime SHA256 is restored
+exactly to1635882a40eff01005d57de94725c5b068d05c5f1a8a289705e27079f736b7f9.
+No expert-union knob/helper remains in production. The completed historical
+36-request suite matches all pinned texts/finish reasons/token usages; human
+inspection confirms six coherent outputs, four inherited256-token caps, and
+the inherited thermodynamics wording error, not a claim of ideal quality.
+C16 shared batching passes six exact-output/full-KV Watcher cases. The first
+launch used misspelled allocation flags and is Watcher-only evidence; the
+`batch16_tracked_contract` rerun uses TT_METAL_TRACE_ALLOC_TRACKING=1,
+TRACE_ALLOC_TRACEBACKS=1 and TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 and also passes
+all six. After clean teardown, `c8c16_control_async` starts with only
+GEMMA4_BATCHED_SHARED_DECODE=0 and the identical full-capacity async launch.
+
+Reuse-only control CI36581849489 is dispatched on QB2 main with explicit
+`docker-image=ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f`,
+TT runtime eb1d2af61c7630c7424e9593b646093ef7be45af and focused TTI
+5723918d1736c2f509ea2332b1b869afc072a2d4. All build jobs are skipped;
+benchmark job109451944217 is running. The five rows are4096/128 C1N4,C8N8,
+C16N16 plus128/128 C8N8,C16N16. `image_reuse.json` records every image and
+reuse run. The same focused TTI revision will qualify shared runtime c9ec3469
+once its existing build publishes; no repeated build is authorized/planned.
+The branch then restores the full12 ISL/OSL pairs with only C1/C8/C16 where
+their combined tokens fit the unchanged shared KV budget:29 rows, including
+all12 C1 contexts,9 C8 contexts and8 C16 contexts. Both focused and full
+configurations pass58 CPU tests; all other models retain their original matrix.
+
+CI36581849489 attempt1 fails before image pull/model execution, at checkout:
+EACCES unlink of the runner workspace `.git/FETCH_HEAD`; missing local actions
+are downstream of that failure. Full log is preserved as
+`ci_reuse_control_checkout_failure.log` (ignored raw log). One failed-job retry
+is requested after its cleanup, retaining the same image digest and source
+inputs; no rebuild, runner permission rewrite or unrelated workflow action.
+Local full-capacity control benchmarks proceed at all five new focused shapes,
+two repeats each. The final full-matrix TTI SHA is
+6d88032ed5f8259333233c53db671cd29aad377d;58 CPU tests pass.
+
+The one retry (attempt2/job109453348357, runner120-qb2-p03t02) passes both
+checkouts, Docker login and image selection and reaches Run tests. All build
+jobs remain skipped. No permissions were rewritten and no other workflow was
+modified. A bounded owned10-second poll watches build109433282221; on success
+it records publication artifacts and cancels only supersededrun36576438888,
+preventing its obsolete C32 benchmark. Production files remain exactly c9ec3469;
+the intervening archival/tool/test commits do not require a new runtime image.

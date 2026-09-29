@@ -1,0 +1,56 @@
+{
+  "scope": "Exact-shape raw CI cohorts; source revisions/configuration require separate provenance review",
+  "tsu_definition": "1000 / mean_tpot_ms, not aggregate output throughput",
+  "control": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw",
+  "candidate": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_36564611976/logs",
+  "allow_subset": true,
+  "source_sha256": "d8a6d3c1fd9edb42a3c7f35080939aa54a80e625cdf6b60164762273da5e271c",
+  "rows": [
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-49-04_isl-4096_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "1055d9efe50feb84548a05e451725ee911e4df65fd666b22b77906a9e95b587d",
+        "mean_tpot_ms": 23.231992344958634,
+        "mean_ttft_ms": 2095.204615732655,
+        "mean_e2el_ms": 5045.6676435424015,
+        "median_itl_ms": 20.619530463591218,
+        "tsu": 43.04409131819472,
+        "completed": 4,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_36564611976/logs/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_13-23-35_isl-4096_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "300d82b8cc6f31efa5055a8a40042cb7ca36559d48fe061cc1443dc4c5b99ad7",
+        "mean_tpot_ms": 19.732409558354284,
+        "mean_ttft_ms": 2089.9988564196974,
+        "mean_e2el_ms": 4596.014870330691,
+        "median_itl_ms": 19.58531280979514,
+        "tsu": 50.67804806314803,
+        "completed": 4,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 17.73520246605007
+    }
+  ],
+  "passed": true
+}

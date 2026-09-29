@@ -17,7 +17,7 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import build_genera
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--batch", type=int, default=32, choices=(2, 3, 8, 32))
+    parser.add_argument("--batch", type=int, default=16, choices=(2, 3, 8, 16, 32))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--candidate",

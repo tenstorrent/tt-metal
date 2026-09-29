@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--cache-context", type=int, default=262144)
     parser.add_argument("--reduced", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--fabric-payload", type=int, choices=(4096, 4352, 8192, 12288))
     parser.add_argument(
         "--head-blocks", nargs="+", type=int, help="Unprofiled same-process full-generator head controls"
     )
@@ -47,7 +48,10 @@ def main():
         args.output.write_text(json.dumps(report, indent=2) + "\n")
 
     torch.set_num_threads(8)
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    router_config = ttnn.FabricRouterConfig()
+    if args.fabric_payload is not None:
+        router_config.max_packet_payload_size_bytes = args.fabric_payload
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, router_config=router_config)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1000000000)
     gen = None
     try:

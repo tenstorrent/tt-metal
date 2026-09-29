@@ -16,7 +16,11 @@ def main():
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
+    parser.add_argument("--concurrency", type=int, default=18)
+    parser.add_argument("--repeats", type=int, default=3)
     args = parser.parse_args()
+    if not 1 <= args.concurrency <= 32 or args.repeats < 1:
+        parser.error("concurrency must be1..32 and repeats positive")
     suite_bytes = args.suite.read_bytes()
     suite = json.loads(suite_bytes)
     assert len(suite) == 6 and all(row["prompt_mode"] == "chat" for row in suite)
@@ -41,8 +45,8 @@ def main():
         "suite": str(args.suite),
         "suite_sha256": hashlib.sha256(suite_bytes).hexdigest(),
         "server_info": response.json(),
-        "concurrency": 18,
-        "repeats": 3,
+        "concurrency": args.concurrency,
+        "repeats": args.repeats,
         "request_params": {"model": MODEL_ID, "temperature": 0, "max_tokens": 256, "seed": 0},
         "prompts": [],
         "responses": [],
@@ -84,12 +88,14 @@ def main():
             }
 
         try:
-            with ThreadPoolExecutor(max_workers=18) as executor:
-                futures = [executor.submit(request, index, repeat) for repeat in range(3) for index in range(6)]
+            with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+                futures = [
+                    executor.submit(request, index, repeat) for repeat in range(args.repeats) for index in range(6)
+                ]
                 for future in as_completed(futures):
                     report["responses"].append(future.result())
                     save()
-            report["passed"] = len(report["responses"]) == 18 and all(
+            report["passed"] = len(report["responses"]) == 6 * args.repeats and all(
                 row["matches_suite"] for row in report["responses"]
             )
             assert report["passed"], "Concurrent qualitative mismatch; review all saved texts"

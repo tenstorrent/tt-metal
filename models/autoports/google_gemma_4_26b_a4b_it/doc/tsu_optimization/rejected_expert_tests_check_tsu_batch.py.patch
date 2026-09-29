@@ -1,0 +1,35 @@
+diff --git a/models/autoports/google_gemma_4_26b_a4b_it/tests/check_tsu_batch.py b/models/autoports/google_gemma_4_26b_a4b_it/tests/check_tsu_batch.py
+index 3cbda5218b..b8002cef53 100644
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/check_tsu_batch.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/check_tsu_batch.py
+@@ -27,6 +27,7 @@ def main():
+             "attention_rowsdpa",
+             "norms",
+             "runtime",
++            "runtime_experts",
+             "experts",
+             "experts_vector_mix",
+             "experts_index_union",
+@@ -59,6 +60,7 @@ def main():
+         # enables batching; otherwise runtime comparisons test the same path.
+         for decoder in gen.model.layers:
+             decoder.batched_shared_decode = False
++            decoder.batched_expert_decode = False
+         report["baseline_batched_shared_decode"] = False
+         for layer_number, decoder in enumerate(gen.model.layers):
+             index = gen.model.layer_indices[layer_number]
+@@ -89,8 +91,13 @@ def main():
+                     )
+                     del hidden, result
+                 if candidate:
+-                    if args.candidate == "runtime":
++                    if args.candidate in ("runtime", "runtime_experts"):
+                         decoder.batched_shared_decode = True
++                        decoder.batched_expert_decode = args.candidate == "runtime_experts"
++                        if args.candidate == "runtime_experts":
++                            selected = decoder._can_batch_experts(args.batch)
++                            report.setdefault("expert_union_selected", []).append(selected)
++                            assert selected == (args.batch == 32)
+                     else:
+                         install_shared_batch(
+                             SimpleNamespace(layers=[decoder]),

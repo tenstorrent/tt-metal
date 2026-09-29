@@ -1,0 +1,69 @@
+{
+  "scope": "Matched serving benchmark cohorts; TSU is 1000 / mean TPOT",
+  "control": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch_default_async/guard4k_c32",
+  "candidate": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/expert_candidate_async/guard4k_c32",
+  "source_sha256": "e5140fbb831f15db2b95e6020a87bdfd95e8763282f73d444362f31ec1ba941a",
+  "rows": [
+    {
+      "shape": [
+        4096,
+        128,
+        32,
+        32
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 662.4530263084233,
+        "mean_ttft_ms": 74665.26176978368,
+        "mean_e2el_ms": 158796.79611095344,
+        "median_itl_ms": 660.1017788052559,
+        "output_throughput": 25.793477909925898,
+        "tsu": 1.5095409942839062
+      },
+      "candidate": {
+        "mean_tpot_ms": 660.4056410742629,
+        "mean_ttft_ms": 73792.27562717278,
+        "mean_e2el_ms": 157663.7920436042,
+        "median_itl_ms": 659.0243051759899,
+        "output_throughput": 25.97884481758035,
+        "tsu": 1.5142208633671401
+      }
+    }
+  ],
+  "pooled": [
+    {
+      "shape": [
+        4096,
+        128,
+        32,
+        32
+      ],
+      "repeats": 1,
+      "control": {
+        "mean_tpot_ms": 662.4530263084233,
+        "mean_ttft_ms": 74665.26176978368,
+        "mean_e2el_ms": 158796.79611095344,
+        "median_itl_ms": 660.1017788052559,
+        "tsu": 1.5095409942839062
+      },
+      "candidate": {
+        "mean_tpot_ms": 660.4056410742629,
+        "mean_ttft_ms": 73792.27562717278,
+        "mean_e2el_ms": 157663.7920436042,
+        "median_itl_ms": 659.0243051759899,
+        "tsu": 1.5142208633671401
+      },
+      "tsu_gain_percent": 0.3100193436915477
+    }
+  ],
+  "passed": true
+}

@@ -1,0 +1,287 @@
+{
+  "scope": "Matched serving benchmark cohorts; TSU is 1000 / mean TPOT",
+  "control": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch_default_async/bench",
+  "candidate": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/expert_candidate_async/bench",
+  "source_sha256": "e5140fbb831f15db2b95e6020a87bdfd95e8763282f73d444362f31ec1ba941a",
+  "rows": [
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 19.481238841233175,
+        "mean_ttft_ms": 2144.8353400919586,
+        "mean_e2el_ms": 4618.952672928572,
+        "median_itl_ms": 19.59140645340085,
+        "output_throughput": 27.710405621400042,
+        "tsu": 51.331437807920196
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.514889690995684,
+        "mean_ttft_ms": 2143.38003937155,
+        "mean_e2el_ms": 4621.771030128002,
+        "median_itl_ms": 19.59478948265314,
+        "output_throughput": 27.69352670742171,
+        "tsu": 51.24292352323198
+      }
+    },
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 19.6890150394848,
+        "mean_ttft_ms": 2102.7302860748023,
+        "mean_e2el_ms": 4603.235196089372,
+        "median_itl_ms": 19.58881365135312,
+        "output_throughput": 27.80485725592743,
+        "tsu": 50.789742300190085
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.670087015476284,
+        "mean_ttft_ms": 2103.9605010300875,
+        "mean_e2el_ms": 4602.061551995575,
+        "median_itl_ms": 19.594185054302216,
+        "output_throughput": 27.812180270048035,
+        "tsu": 50.83861597628964
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 643.8192305403512,
+        "mean_ttft_ms": 13926.513766637072,
+        "mean_e2el_ms": 95691.55604526168,
+        "median_itl_ms": 640.9347211010754,
+        "output_throughput": 42.80328620772257,
+        "tsu": 1.5532310197704249
+      },
+      "candidate": {
+        "mean_tpot_ms": 643.1724150861269,
+        "mean_ttft_ms": 12790.61524925055,
+        "mean_e2el_ms": 94473.51196518866,
+        "median_itl_ms": 640.8270155079663,
+        "output_throughput": 43.35517683423552,
+        "tsu": 1.5547930485577348
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 643.6997122384744,
+        "mean_ttft_ms": 12962.157411471708,
+        "mean_e2el_ms": 94712.02086575795,
+        "median_itl_ms": 640.9141318872571,
+        "output_throughput": 43.24593190672808,
+        "tsu": 1.5535194143904254
+      },
+      "candidate": {
+        "mean_tpot_ms": 642.9722397627153,
+        "mean_ttft_ms": 12144.39122195472,
+        "mean_e2el_ms": 93801.86567181954,
+        "median_itl_ms": 640.7728544436395,
+        "output_throughput": 43.66566609304178,
+        "tsu": 1.5552770993177614
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 175.58785866190658,
+        "mean_ttft_ms": 2985.7651066267863,
+        "mean_e2el_ms": 25285.42315668892,
+        "median_itl_ms": 172.69896110519767,
+        "output_throughput": 40.49672160849384,
+        "tsu": 5.695154594518373
+      },
+      "candidate": {
+        "mean_tpot_ms": 175.56734172046168,
+        "mean_ttft_ms": 3140.334392315708,
+        "mean_e2el_ms": 25437.386790814344,
+        "median_itl_ms": 172.73754067718983,
+        "output_throughput": 40.254937022498126,
+        "tsu": 5.695820134887045
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 175.29246204910345,
+        "mean_ttft_ms": 2998.9674371900037,
+        "mean_e2el_ms": 25261.110117426142,
+        "median_itl_ms": 172.72424092516303,
+        "output_throughput": 40.53580981521237,
+        "tsu": 5.704751866169105
+      },
+      "candidate": {
+        "mean_tpot_ms": 175.51152681424026,
+        "mean_ttft_ms": 3089.994534093421,
+        "mean_e2el_ms": 25379.958439501934,
+        "median_itl_ms": 172.74483991786838,
+        "output_throughput": 40.34595716794415,
+        "tsu": 5.69763147840649
+      }
+    }
+  ],
+  "pooled": [
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 19.58512694035899,
+        "mean_ttft_ms": 2123.7828130833805,
+        "mean_e2el_ms": 4611.093934508972,
+        "median_itl_ms": 19.590110052376986,
+        "tsu": 51.05915335883293
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.592488353235986,
+        "mean_ttft_ms": 2123.670270200819,
+        "mean_e2el_ms": 4611.916291061789,
+        "median_itl_ms": 19.59448726847768,
+        "tsu": 51.03996909278935
+      },
+      "tsu_gain_percent": -0.03757262857211341
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 643.7594713894127,
+        "mean_ttft_ms": 13444.33558905439,
+        "mean_e2el_ms": 95201.78845550981,
+        "median_itl_ms": 640.9244264941663,
+        "tsu": 1.553375203694822
+      },
+      "candidate": {
+        "mean_tpot_ms": 643.072327424421,
+        "mean_ttft_ms": 12467.503235602635,
+        "mean_e2el_ms": 94137.6888185041,
+        "median_itl_ms": 640.7999349758029,
+        "tsu": 1.5550350362689616
+      },
+      "tsu_gain_percent": 0.10685329405228927
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 175.44016035550501,
+        "mean_ttft_ms": 2992.366271908395,
+        "mean_e2el_ms": 25273.26663705753,
+        "median_itl_ms": 172.71160101518035,
+        "tsu": 5.69994919050256
+      },
+      "candidate": {
+        "mean_tpot_ms": 175.53943426735097,
+        "mean_ttft_ms": 3115.1644632045645,
+        "mean_e2el_ms": 25408.67261515814,
+        "median_itl_ms": 172.7411902975291,
+        "tsu": 5.696725662662071
+      },
+      "tsu_gain_percent": -0.05655362412457787
+    }
+  ],
+  "passed": true
+}

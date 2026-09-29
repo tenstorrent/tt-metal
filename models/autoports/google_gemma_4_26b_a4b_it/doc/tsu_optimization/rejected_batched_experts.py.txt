@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Batched TP decode projections with each row's original top-k mixing order."""
+
+import ttnn
+
+
+def decode_expert_union(experts, x, routes, indices):
+    """Compute the selected-expert union without changing decode precision."""
+    batch = x.shape[-2]
+    if batch != 32 or experts.expert_split or experts.indexed_router is None:
+        raise ValueError("Expert union requires 32 indexed, packed TP decode rows")
+    if experts.decode_activation_dtype is not None:
+        x = ttnn.typecast(x, experts.decode_activation_dtype)
+    ids = ttnn.concat(indices, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Membership follows indices, including selected experts whose BF16 weight
+    # is zero. Same-dtype tiled fill remains device-only inside trace capture.
+    selected = ttnn.scatter(
+        ttnn.zeros_like(routes),
+        dim=-1,
+        index=ids,
+        src=ttnn.ones_like(routes[..., : experts.config.top_k]),
+    )
+    sparsity = ttnn.to_layout(ttnn.sum(selected, dim=2, keepdim=True), ttnn.ROW_MAJOR_LAYOUT)
+    common = dict(
+        sparsity=sparsity,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tile=ttnn.Tile([32, 32]),
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=experts.decode_compute,
+    )
+    gu = ttnn.sparse_matmul(x, experts.gate_up, program_config=experts.gate_config, **common)
+    gu = ttnn.reshape(gu, (1, experts.config.num_experts, batch, 2 * experts.width))
+    gate, up = gu[..., : experts.width], gu[..., experts.width :]
+    hidden = (
+        ttnn.mul(gate, up, input_tensor_a_activations=experts.decode_gelu_activations)
+        if experts.decode_gelu_activations is not None
+        else ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
+    )
+    down = ttnn.sparse_matmul(
+        hidden, experts.down, program_config=experts.down_config, is_input_a_sparse=True, **common
+    )
+    down = ttnn.reshape(down, (1, experts.config.num_experts, batch, experts.config.hidden_size))
+    down = ttnn.permute(down, (0, 2, 1, 3))
+    mix = ttnn.gather(ttnn.to_layout(routes, ttnn.ROW_MAJOR_LAYOUT), dim=-1, index=ids)
+    mix = ttnn.reshape(ttnn.to_layout(mix, ttnn.TILE_LAYOUT), (1, batch, 1, experts.config.top_k))
+    gather_ids = ttnn.repeat(
+        ttnn.reshape(ttnn.typecast(ids, ttnn.uint32), (1, batch, experts.config.top_k, 1)),
+        (1, 1, 1, experts.config.hidden_size),
+    )
+    chosen = ttnn.gather(ttnn.to_layout(down, ttnn.ROW_MAJOR_LAYOUT), dim=2, index=gather_ids)
+    cfg = experts.mix_program
+    program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
+        in0_block_w=cfg.in0_block_w,
+        out_subblock_h=cfg.out_subblock_h,
+        out_subblock_w=cfg.out_subblock_w,
+        out_block_h=cfg.out_block_h,
+        out_block_w=cfg.out_block_w,
+        per_core_M=cfg.per_core_M,
+        per_core_N=cfg.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    output = ttnn.matmul(
+        mix,
+        ttnn.to_layout(chosen, ttnn.TILE_LAYOUT),
+        dtype=ttnn.bfloat16,
+        memory_config=experts.mix_memory,
+        program_config=program,
+        compute_kernel_config=experts.mix_compute,
+    )
+    return ttnn.reshape(output, (1, 1, batch, experts.config.hidden_size))
