@@ -481,6 +481,38 @@ ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
     return info;
 }
 
+ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device) {
+    const ll_api::BufRwInfo raw = this->query_buf_rw(device);
+    ResolvedBufRw out;
+    out.opaque = raw.opaque;
+    out.reads.reserve(raw.reads.size());
+    out.writes.reserve(raw.writes.size());
+    // The slot is a binding's base-address CRTA byte offset: it names the binding (its
+    // tensor_parameter_name) and points at the CRTA word the runtime filled with the bound buffer address.
+    const RuntimeArgsData& crta = this->common_runtime_args_data();
+    auto resolve = [&](uint32_t slot) {
+        ResolvedBufRw::Access access;
+        for (const auto& handle : this->tensor_binding_handles_) {
+            if (handle.addr_crta_offset == slot) {
+                access.param_name = handle.tensor_parameter_name;  // string_view into the handle -- no copy
+                break;
+            }
+        }
+        const std::size_t word = slot / sizeof(uint32_t);
+        if (word < crta.size()) {
+            access.address = crta.data()[word];
+        }
+        return access;
+    };
+    for (uint32_t slot : raw.reads) {
+        out.reads.push_back(resolve(slot));
+    }
+    for (uint32_t slot : raw.writes) {
+        out.writes.push_back(resolve(slot));
+    }
+    return out;
+}
+
 std::vector<std::string> Kernel::elf_paths_by_processor_index(
     const IDevice& device, const std::string& binary_root) const {
     const auto paths = this->file_paths(device, binary_root);
