@@ -274,6 +274,28 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 
 }  // namespace
 
+// Raises a 2D blocking's K depth to at least the legacy selection's, keeping its output blocks: legacy splits K
+// into as many blocks as the grid is wide (in0_block_w = Kt / grid width when that divides K), shrinking it
+// to a divisor until L1 fits. Where legacy's K blocks are deeper, v2's shallower ones were slower on large
+// output blocks (each K block spills and reloads the partial sums of the whole output block), so v2 doesn't
+// go shallower than legacy; where v2's are already deeper, this leaves them.
+void deepen_to_legacy_k_depth(const Problem& p, const HardwareDesc& hw, Blocking& b) {
+    if (p.Kt % hw.grid.x != 0) {
+        return;
+    }
+    for (uint32_t k : divisors_desc(p.Kt / hw.grid.x)) {
+        if (k <= b.in0_block_w) {
+            return;
+        }
+        Blocking deeper = b;
+        deeper.in0_block_w = k;
+        if (circular_buffer_bytes(p, hw, Family::Mcast2D, deeper) <= hw.l1_cb_budget) {
+            b = deeper;
+            return;
+        }
+    }
+}
+
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
 // blocks at the layout's preferred in0_block_w, if any fit); ties go to the larger output block, then the
 // squarer one (each loaded A and B tile is reused across the block's width and height, so a square block
@@ -742,7 +764,11 @@ std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
         return result;
     }
     const uint32_t M = output_rows(p, fuse_batch);
-    add(Family::Mcast2D, block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch));
+    auto two_d = block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch);
+    if (two_d) {
+        deepen_to_legacy_k_depth(p, hw, *two_d);
+    }
+    add(Family::Mcast2D, two_d);
     if (!p.no_mcast_1d) {
         add(Family::Mcast1DIn0, block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch));
         add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch));

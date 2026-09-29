@@ -223,11 +223,43 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
     EXPECT_GT(chosen->blocking.out_block_h * chosen->blocking.out_block_w, LARGE_BLOCK_TILES);
     EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
-    p = make_problem(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);  // 1x4 blocks
+    // 1x4 blocks: MAX_IN0_BLOCK_W would give 8, but 2D goes no shallower than legacy's Kt / grid width = 16
+    p = make_problem(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);
     hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
-    EXPECT_LE(chosen->blocking.in0_block_w, MAX_IN0_BLOCK_W);
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
+    EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
+}
+
+// Interleaved 2D goes no shallower than the legacy selection's K depth (Kt / grid width), with the same
+// output blocks, where L1 allows
+TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (const auto& s : shapes()) {
+            const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N);
+            for (const auto& c : candidates(p, hw)) {
+                if (c.family != Family::Mcast2D || p.Kt % hw.grid.x != 0) {
+                    continue;
+                }
+                const uint32_t legacy = p.Kt / hw.grid.x;
+                if (c.blocking.in0_block_w >= legacy) {
+                    continue;
+                }
+                // Shallower only when legacy's depth (or any deeper divisor of it) doesn't fit L1
+                for (uint32_t k = c.blocking.in0_block_w + 1; k <= legacy; ++k) {
+                    if (legacy % k != 0) {
+                        continue;
+                    }
+                    auto deeper = c.blocking;
+                    deeper.in0_block_w = k;
+                    EXPECT_GT(circular_buffer_bytes(p, hw, Family::Mcast2D, deeper), hw.l1_cb_budget)
+                        << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " k=" << k;
+                }
+            }
+        }
+    }
 }
 
 // When keeping the full multicast extent only fits with single-tile K steps, 1D shrinks it instead
@@ -578,12 +610,12 @@ TEST(MatmulAutoConfig, DefaultEstimatorsKeepHeuristicChoice) {
 // The roofline doesn't depend on K depth, so with the default estimators the K-depth refinement keeps the
 // heuristics' choice; a K-aware estimator moves it, and a less confident one doesn't
 TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
-    struct PreferDeep final : Estimator {
+    struct PreferShallow final : Estimator {
         double confidence;
-        explicit PreferDeep(double c) : confidence(c) {}
-        std::string_view name() const override { return "prefer_deep"; }
+        explicit PreferShallow(double c) : confidence(c) {}
+        std::string_view name() const override { return "prefer_shallow"; }
         std::optional<Estimate> estimate(const Problem&, const HardwareDesc&, const Candidate& c) const override {
-            return Estimate{.cycles = 1.0 / c.blocking.in0_block_w, .confidence = confidence, .source = name()};
+            return Estimate{.cycles = double(c.blocking.in0_block_w), .confidence = confidence, .source = name()};
         }
     };
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
@@ -592,23 +624,23 @@ TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
     ASSERT_TRUE(seed.has_value());
     const auto neighbours = k_depth_neighbours(p, hw, *seed);
     ASSERT_FALSE(neighbours.empty());
-    uint32_t deepest = seed->blocking.in0_block_w;
+    uint32_t shallowest = seed->blocking.in0_block_w;
     for (const auto& n : neighbours) {
-        deepest = std::max(deepest, n.blocking.in0_block_w);
+        shallowest = std::min(shallowest, n.blocking.in0_block_w);
     }
-    ASSERT_GT(deepest, seed->blocking.in0_block_w);
+    ASSERT_LT(shallowest, seed->blocking.in0_block_w);
 
     const auto by_default = choose_candidate(p, hw);
     ASSERT_TRUE(by_default.has_value());
     EXPECT_EQ(by_default->blocking.in0_block_w, seed->blocking.in0_block_w);
 
     const RooflineEstimator roofline_estimator;
-    const PreferDeep confident(1.0);
-    const PreferDeep doubtful(-1.0);
+    const PreferShallow confident(1.0);
+    const PreferShallow doubtful(-1.0);
     const Estimator* confident_first[] = {&roofline_estimator, &confident};
     const auto refined = choose_candidate(p, hw, confident_first);
     ASSERT_TRUE(refined.has_value());
-    EXPECT_EQ(refined->blocking.in0_block_w, deepest);
+    EXPECT_EQ(refined->blocking.in0_block_w, shallowest);
     const Estimator* doubtful_first[] = {&roofline_estimator, &doubtful};
     const auto kept = choose_candidate(p, hw, doubtful_first);
     ASSERT_TRUE(kept.has_value());
