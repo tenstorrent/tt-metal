@@ -41,12 +41,23 @@ struct LayerNormShardedProgramFactory {
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 };
 
+// LayerNormDefaultProgramConfig.width_split > 1: every tile row is split across width_split cores (RMSNorm, interleaved
+// TILE input), which exchange their partial mean of squares point to point (layernorm_op_multi_core_wsplit.cpp).
+struct LayerNormWidthSplitProgramFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+};
+
 struct LayerNormDeviceOperation {
     using operation_attributes_t = LayerNormParams;
     using tensor_args_t = LayerNormInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory>;
+    using program_factory_t = std::
+        variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory, LayerNormWidthSplitProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

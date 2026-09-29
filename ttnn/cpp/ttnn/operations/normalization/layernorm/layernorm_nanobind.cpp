@@ -37,14 +37,16 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 
     nb::class_<ttnn::prim::LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(
-            nb::init<bool, bool, bool>(),
+            nb::init<bool, bool, bool, std::size_t>(),
             nb::kw_only(),
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
-            nb::arg("use_welford").noconvert() = false)
+            nb::arg("use_welford").noconvert() = false,
+            nb::arg("width_split").noconvert() = 1)
         .def_rw("legacy_reduction", &prim::LayerNormDefaultProgramConfig::legacy_reduction)
         .def_rw("legacy_rsqrt", &prim::LayerNormDefaultProgramConfig::legacy_rsqrt)
         .def_rw("use_welford", &prim::LayerNormDefaultProgramConfig::use_welford)
+        .def_rw("width_split", &prim::LayerNormDefaultProgramConfig::width_split)
         .def("__repr__", [](const ttnn::prim::LayerNormDefaultProgramConfig& config) {
             return fmt::format("{}", config);
         });

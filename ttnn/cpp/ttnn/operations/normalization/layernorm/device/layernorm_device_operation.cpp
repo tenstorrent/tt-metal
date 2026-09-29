@@ -15,10 +15,53 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+void validate_width_split(const LayerNormParams& attrs, const LayerNormInputs& args) {
+    const auto& a = args.input;
+    const auto& pc = std::get<LayerNormDefaultProgramConfig>(attrs.program_config);
+    const uint32_t S = pc.width_split;
+    TT_FATAL(S == 2 || S == 3, "width_split must be 1, 2 or 3, got {}", S);
+    TT_FATAL(attrs.norm_type == LayerNormType::RMSNORM, "width_split layernorm is RMSNorm only");
+    TT_FATAL(
+        attrs.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED, "width_split: not distributed");
+    TT_FATAL(!pc.use_welford, "width_split: no Welford");
+    TT_FATAL(!attrs.fused_activation.has_value(), "width_split: no fused activation");
+    TT_FATAL(
+        a.layout() == Layout::TILE && !a.is_sharded() && !attrs.output_mem_config.is_sharded(),
+        "width_split: interleaved TILE input and output");
+    TT_FATAL(
+        args.weight.has_value() && args.weight.value().layout() == Layout::ROW_MAJOR && !args.bias.has_value(),
+        "width_split: ROW_MAJOR gamma, no beta");
+    if (args.residual_input_tensor.has_value()) {
+        const auto& b = args.residual_input_tensor.value();
+        TT_FATAL(b.layout() == Layout::TILE && !b.is_sharded(), "width_split: interleaved TILE residual");
+    }
+    const uint32_t tw = a.tensor_spec().tile().get_width();
+    const uint32_t th = a.tensor_spec().tile().get_height();
+    const uint32_t K = a.padded_shape()[-1];
+    TT_FATAL(a.logical_shape()[-1] == K && K % tw == 0, "width_split: tile-aligned width");
+    const uint32_t Kt = K / tw;
+    TT_FATAL(Kt >= 2 * S, "width_split: at least 2 tiles per core ({} tiles, split {})", Kt, S);
+    const uint32_t Mt = a.physical_volume() / K / th;
+    const auto g = a.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        Mt * S <= g.x * g.y,
+        "width_split: one tile row per core needs {} x {} = {} cores, the grid has {}",
+        Mt,
+        S,
+        Mt * S,
+        g.x * g.y);
+}
+}  // namespace
+
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return LayerNormShardedProgramFactory{};
+    }
+    if (const auto* dc = std::get_if<LayerNormDefaultProgramConfig>(&operation_attributes.program_config);
+        dc != nullptr && dc->width_split > 1) {
+        return LayerNormWidthSplitProgramFactory{};
     }
     return LayerNormMultiCoreProgramFactory{};
 }
@@ -311,6 +354,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (program_config.width_split > 1) {
+                    validate_width_split(operation_attributes, tensor_args);
+                }
                 if (program_config.use_welford) {
                     TT_FATAL(
                         operation_attributes.norm_type != LayerNormType::RMSNORM,

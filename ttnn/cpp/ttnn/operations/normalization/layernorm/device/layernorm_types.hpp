@@ -20,6 +20,9 @@ struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
     bool use_welford = false;
+    // > 1 (RMSNorm on an interleaved TILE input only): split every tile row across width_split cores, which
+    // exchange their partial mean of squares (LayerNormWidthSplitProgramFactory). 1 = one core per tile row.
+    std::size_t width_split = 1;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
