@@ -190,6 +190,8 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     // block
     const auto shard_spec = a.shard_spec().value();
     // check dims
+    // Cache hits also reach these checks only because this op has no validate_on_program_cache_hit; one added
+    // later must keep the two zero-divisor checks below.
     TT_FATAL(args.subblock_wt > 0, "subblock_w must be greater than 0.");
     TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
     TT_FATAL(args.num_links > 0, "num_links must be greater than 0.");
