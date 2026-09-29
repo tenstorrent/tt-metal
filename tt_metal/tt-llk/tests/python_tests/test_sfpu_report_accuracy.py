@@ -210,3 +210,248 @@ def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, k
         },
         out / name,
     )
+
+
+# =============================================================================
+# Binary SFPU ops
+#
+# Runs through sfpu_binary() of test_eltwise_binary_sfpu.py, the functional binary
+# driver, so the operand layout (tile 2k = in0, 2k+1 = in1), the per-op stimuli
+# domains and the golden are exactly the functional test's. Its final assertion is
+# swapped for a capture: the report compares, it does not judge.
+# =============================================================================
+
+BINARY_OPS = [s for s in os.environ.get("SFPU_REPORT_BINARY_OPS", "").split(",") if s]
+
+F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
+I32, U32 = DataFormat.Int32, DataFormat.UInt32
+
+#: op -> formats it is measured in (as test_eltwise_binary_sfpu tests it, in == out).
+#: Ops whose result is not a rounded real number (comparisons, integers) are compared
+#: exactly: a lane is right or wrong.
+_FLOAT_FULL = [F16B, F16, F32]
+BINARY_FORMATS = {
+    **{
+        op: _FLOAT_FULL
+        for op in (
+            "SfpuElwmul",
+            "SfpuElwrsub",
+            "SfpuElwpow",
+            "SfpuXlogy",
+            "SfpuLogaddexp",
+            "SfpuLogaddexp2",
+            "SfpuBinaryMax",
+            "SfpuBinaryMin",
+            "SfpuBinaryFmod",
+            "SfpuBinaryRemainder",
+            "SfpuElwEq",
+            "SfpuElwNe",
+        )
+    },
+    "SfpuElwadd": _FLOAT_FULL + [I32],
+    "SfpuElwsub": _FLOAT_FULL + [I32],
+    "SfpuElwdiv": [F16B, F32],
+    "SfpuAtan2": [F16B, F32],
+    "SfpuIsclose": [F16B, F32],
+    "SfpuLogsigmoid": [F16B, F32],
+    **{
+        op: _FLOAT_FULL + [I32]
+        for op in ("SfpuElwLt", "SfpuElwGt", "SfpuElwLe", "SfpuElwGe")
+    },
+    **{
+        op: [I32]
+        for op in (
+            "SfpuElwLeftShift",
+            "SfpuElwRightShift",
+            "SfpuElwLogicalRightShift",
+            "SfpuBitwiseAnd",
+            "SfpuBitwiseOr",
+            "SfpuBitwiseXor",
+            "SfpuEqInt",
+            "SfpuNeInt",
+            "SfpuRsubInt32",
+            "SfpuDivInt32",
+            "SfpuDivInt32Floor",
+            "SfpuGcd",
+            "SfpuLcm",
+            "SfpuMulInt32",
+            "SfpuMaxInt32",
+            "SfpuMinInt32",
+            "SfpuRemainderInt32",
+            "SfpuFmodInt32",
+        )
+    },
+    **{op: [U32] for op in ("SfpuMaxUint32", "SfpuMinUint32", "SfpuRemainderUint32")},
+}
+
+#: Results that are not a rounded real number: compared lane by lane, right or wrong.
+EXACT_BINARY_OPS = {
+    "SfpuElwLt",
+    "SfpuElwGt",
+    "SfpuElwLe",
+    "SfpuElwGe",
+    "SfpuElwEq",
+    "SfpuElwNe",
+    "SfpuIsclose",
+}
+
+#: What the report says about an op's coverage when it is narrower than the format.
+BINARY_COVERAGE_NOTES = {
+    "SfpuLogsigmoid": "x in [-8, 3.9] only: the harness cannot supply the device-computed exp(-x) the x > 4 branch reads",
+}
+
+
+def _binary_cells():
+    cells = []
+    for op in BINARY_OPS:
+        for fmt in BINARY_FORMATS.get(op, []):
+            for dest in (
+                (DestAccumulation.No, DestAccumulation.Yes)
+                if not fmt.is_integer()
+                else (DestAccumulation.Yes,)
+            ):
+                if fmt.is_32_bit() and dest == DestAccumulation.No:
+                    continue
+                cells.append((op, fmt, dest))
+    return cells or [("none", F16B, DestAccumulation.No)]
+
+
+def binary_special_pairs(fmt):
+    """One tile pair: the cross product of the values a random draw never lands on."""
+    if fmt.is_integer():
+        lo = -(2**31) if fmt == I32 else 0
+        hi = 2**31 - 1 if fmt == I32 else 2**32 - 1
+        values = sorted(
+            {lo, lo + 1, -2, -1, 0, 1, 2, 31, 32, 2**16, hi - 1, hi}
+            & set(range(lo, hi + 1))
+        )
+        dtype = torch.int64
+    else:
+        info = torch.finfo(format_dict[fmt])
+        values = [
+            float("nan"),
+            float("inf"),
+            -float("inf"),
+            0.0,
+            -0.0,
+            info.tiny / 2,
+            -info.tiny / 2,
+            info.tiny,
+            info.max,
+            -info.max,
+            1.0,
+            -1.0,
+            2.0,
+            0.5,
+        ]
+        dtype = torch.float64
+    pairs = [(a, b) for a in values for b in values]
+    n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    pairs = (pairs * (-(-n // len(pairs))))[:n]
+    a = torch.tensor([p[0] for p in pairs], dtype=dtype)
+    b = torch.tensor([p[1] for p in pairs], dtype=dtype)
+    return a, b
+
+
+def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
+    import test_eltwise_binary_sfpu as fb
+    from helpers.stimuli_generator import DistributionKind, StimuliSpec
+
+    mathop = MathOperation[op_name]
+    formats = InputOutputFormat(fmt, fmt)
+    captured = {}
+
+    def capture_assert(_mathop, _formats, _dest_acc, golden, result, **_kwargs):
+        captured["golden"], captured["result"] = golden, result
+
+    real_generate = fb.generate_stimuli
+
+    def capture_generate(*args, **kwargs):
+        out = real_generate(*args, **kwargs)
+        captured["src"] = out[0]
+        return out
+
+    monkeypatch.setattr(fb, "_assert_against_contract", capture_assert)
+    monkeypatch.setattr(fb, "generate_stimuli", capture_generate)
+
+    kwargs = {}
+    if kind == "specials":
+        a, b = binary_special_pairs(fmt)
+        override = torch.cat([a, b])
+        kwargs["src_A_override"] = override
+    elif op_name == "SfpuAtan2":
+        kwargs["spec_A"] = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0
+        )
+    elif op_name == "SfpuLogsigmoid":
+        kwargs["spec_A"] = fb._logsigmoid_stimuli_spec()
+    elif mathop in fb._INT_BINARY_STIMULI:
+        low, high = fb._INT_BINARY_STIMULI[mathop]
+        kwargs["spec_A"] = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=low, high=high
+        )
+    if op_name == "SfpuRsubInt32":
+        kwargs["twos_complement"] = True
+
+    fb.sfpu_binary(formats, dest_acc, mathop, **kwargs)
+    src = captured["src"].flatten()
+    if kind == "specials":
+        src = kwargs["src_A_override"].to(src.dtype).flatten()
+        src = src.repeat(captured["result"].numel() // src.numel())
+    n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    # Tile 2k holds in0 and the result, tile 2k+1 holds in1.
+    pairs = lambda t: t.flatten()[: (t.numel() // (2 * n)) * 2 * n].reshape(
+        -1, 2, n
+    )  # noqa: E731
+    s, g, r = (
+        pairs(src),
+        pairs(torch.as_tensor(captured["golden"])),
+        pairs(captured["result"]),
+    )
+    return s[:, 0].flatten(), s[:, 1].flatten(), g[:, 0].flatten(), r[:, 0].flatten()
+
+
+@pytest.mark.skipif(
+    not DUMP_DIR or not BINARY_OPS, reason="run by the LLK SFPU report only"
+)
+@pytest.mark.parametrize("kind", ["random", "specials"])
+@pytest.mark.parametrize(
+    "op_name, fmt, dest_acc",
+    [
+        pytest.param(*c, id=f"{c[0]}-{c[1].name}-dest_acc:{c[2].name}")
+        for c in _binary_cells()
+    ],
+)
+def test_sfpu_report_accuracy_binary(op_name, fmt, dest_acc, kind, monkeypatch):
+    if op_name == "none":
+        pytest.skip("no binary op requested")
+    from helpers.chip_architecture import ChipArchitecture
+
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        if op_name == "SfpuLcm":
+            pytest.skip("SfpuLcm dest_acc=Yes hangs on Blackhole; see tt-metal#52997")
+        if fmt == F16 and dest_acc == DestAccumulation.No:
+            pytest.skip("Blackhole runs Float16 SFPU input through a 32-bit Dest only")
+    a, b, golden, result = _binary_run(op_name, fmt, dest_acc, kind, monkeypatch)
+    name = f"{op_name}__{fmt.name}-{fmt.name}__No__{dest_acc.name}__{kind}.pt"
+    out = Path(DUMP_DIR)
+    out.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "op": op_name,
+            "in": fmt.name,
+            "out": fmt.name,
+            "approx": "No",
+            "dest_acc": dest_acc.name,
+            "kind": kind,
+            "binary": True,
+            "exact": fmt.is_integer() or op_name in EXACT_BINARY_OPS,
+            "coverage": BINARY_COVERAGE_NOTES.get(op_name),
+            "src": a,
+            "src_b": b,
+            "golden": golden,
+            "result": result,
+            "classes": None,
+        },
+        out / name,
+    )
