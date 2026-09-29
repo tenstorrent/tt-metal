@@ -997,3 +997,27 @@ Next: the O.1 fork-test case for this call (sparse_sdpa high_precision, GLM shap
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py`
 Fork tests: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py`;
 `python -m models.demos.common.bringup.testing.fork_source --fork sdpa`.
+
+## S.dsa_moe.06 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc, attn_collapse, attn_norm, q_a, indexer and
+attention on the device, and rewrote it from swap 05's test. Gated metric unchanged: pcc_swap_out (PCC >= 0.98).
+- The indexer and the attention both set `dctx.extra["state_out"]`: the main run wraps the indexer override to keep
+  its pooled keys; the latent cache is the state_out left after the main run.
+- First try (swap 05 shares with the device attention re-run downstream) failed on noise: the re-run device
+  attention differs by rel ~0.004 on any input change (known issue proposed). The earlier steps' shares now use the
+  attention-share block (device hc..topk outputs fixed, CPU attention) as their base, with the CPU attention
+  downstream: they reproduce swap 05 exactly, limits unchanged. The indexer share at attn_out is CPU attention(device
+  topk) vs CPU attention(CPU topk).
+- New attention checks: vs golden (rel 0.012, ratio [0.99, 1.01], row 0.03; the component ratio fails on upstream
+  error: CPU attention of the device inputs scores 0.9939), vs the CPU attention of the same inputs (rel 0.006,
+  ratio [0.994, 1.004], row 0.02), latent rows vs golden (0.006 / [0.997, 1.003] / 0.01) and vs CPU (0.0035 /
+  [0.997, 1.003] / 0.005), prefix unchanged, attention share at block out (flips <= 48, rel <= 0.0012, ratio [0.996,
+  1.004]), and chunk 0 (block PCC, indexer structure, attention vs CPU same input).
+Sensitivity (CPU host script /tmp/dsas06/sens.py, not kept; numbers in the test docstring). Unlike attn_norm, the
+attention output scale reaches block out (x1.01: 57 flips / 0.0029). Zeroed rows and a dropped pool show only at
+attn_out (worst row).
+Results: device passes (PCC 0.999995, c0 0.999994; attention vs CPU same input 0.00370 / [0.9954, 1.0004]; latent vs
+CPU 0.00204; attention share 30 / 0.00069; ~90 s). Reference passes (same-input and share checks exact). Stub fails.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_06_attention.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
