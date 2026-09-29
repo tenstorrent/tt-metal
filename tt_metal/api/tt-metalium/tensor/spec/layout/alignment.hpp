@@ -4,9 +4,16 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iosfwd>
 #include <string>
+#include <string_view>
+#include <tuple>
 
-#include <fmt/core.h>
+#include <fmt/base.h>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/shape_base.hpp>
