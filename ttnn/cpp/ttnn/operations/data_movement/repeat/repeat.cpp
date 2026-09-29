@@ -6,6 +6,7 @@
 #include <array>
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -220,46 +221,14 @@ ttnn::Tensor repeat_dim_codegen(
     const uint32_t rep_dim_4d = dim + pad;
     const auto& shape4d = working.logical_shape();
 
-    uint32_t lower_pages = 0;
-    uint32_t rep_dim_pages = 0;
-    uint32_t total_out_pages = 0;
-    uint32_t stick_size = 0;
-
-    if (working.layout() == ttnn::TILE_LAYOUT) {
-        const uint32_t Ht = (shape4d[2] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-        const uint32_t Wt = (shape4d[3] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-        const std::array<uint32_t, 4> dim_pages = {shape4d[0], shape4d[1], Ht, Wt};
-        lower_pages = 1;
-        for (uint32_t d = rep_dim_4d + 1; d < 4; ++d) {
-            lower_pages *= dim_pages[d];
-        }
-        rep_dim_pages = dim_pages[rep_dim_4d];
-        total_out_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3] * repetitions;
-        // stick_size stays 0: unused on the TILE branch.
-    } else {
-        stick_size = shape4d[3] * working.element_size();
-        if (rep_dim_4d == 3) {
-            // Last-dim (within-stick) path: page count is unaffected by the repeat.
-            total_out_pages = shape4d[0] * shape4d[1] * shape4d[2];
-        } else {
-            const std::array<uint32_t, 4> dim_pages = {shape4d[0], shape4d[1], shape4d[2], 1};
-            lower_pages = 1;
-            for (uint32_t d = rep_dim_4d + 1; d < 4; ++d) {
-                lower_pages *= dim_pages[d];
-            }
-            const uint32_t total_src_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3];
-            rep_dim_pages = dim_pages[rep_dim_4d];
-            total_out_pages = total_src_pages * repetitions;
-        }
-    }
-
+    const auto page_map = ttnn::prim::derive_page_map(working, rep_dim_4d, repetitions);
     ttnn::prim::RepeatCodegenParams params{
         .rep_dim = rep_dim_4d,
         .num_repeats = repetitions,
-        .lower_pages = lower_pages,
-        .rep_dim_pages = rep_dim_pages,
-        .total_out_pages = total_out_pages,
-        .stick_size = stick_size,
+        .lower_pages = page_map.lower_pages,
+        .rep_dim_pages = page_map.rep_dim_pages,
+        .total_out_pages = page_map.total_out_pages,
+        .stick_size = page_map.stick_size,
         .output_mem_config = output_mem_config,
     };
 
@@ -275,29 +244,6 @@ ttnn::Tensor repeat_dim_codegen(
     auto expected_shape = shape;
     expected_shape[dim] *= repetitions;
     return ttnn::view(out, ttnn::Shape(expected_shape));
-}
-
-// Decomposes a (possibly multi-dim) repeat into a sequence of single-dim
-// prim::repeat_codegen calls, mirroring the reverse-order per-dim loops above
-// (native TILE/RM). Each single-dim step is independent (orthogonal axes), so
-// iteration order doesn't affect correctness.
-ttnn::Tensor repeat_via_codegen(
-    const ttnn::Tensor& tensor,
-    const ttsl::SmallVector<uint32_t>& repetition_vector,
-    const MemoryConfig& output_mem_config,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    ttnn::Tensor working_tensor = tensor;
-    for (auto it = repetition_vector.crbegin(); it != repetition_vector.crend(); ++it) {
-        if (*it == 1) {
-            continue;
-        }
-        const auto dim = repetition_vector.crend() - it - 1;
-        // Only the final non-1 dim can land in the preallocated buffer.
-        const bool is_last = std::none_of(std::next(it), repetition_vector.crend(), [](uint32_t r) { return r != 1; });
-        auto step_out = is_last ? optional_output_tensor : std::nullopt;
-        working_tensor = repeat_dim_codegen(working_tensor, dim, *it, output_mem_config, std::move(step_out));
-    }
-    return working_tensor;
 }
 
 namespace {
@@ -317,33 +263,88 @@ MemoryConfig derive_output_mem_config(
         input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
 }
 
-// Whether the codegen path can serve this call, on the rank-matched tensor and repeat vector.
-// Correctness only -- perf demotion is a separate, routing-only question.
-bool codegen_can_serve(
-    const ttnn::Tensor& working_tensor,
-    const ttsl::SmallVector<uint32_t>& working_repetition_vector,
-    const MemoryConfig& output_mem_config) {
-    // A zero anywhere makes the output empty, which repeat_native answers up front without
-    // dispatching anything. supported_by_codegen() only asks whether *some* dim is repeated, so
-    // it accepts a vector like {0, 3, 1, 1}; those belong to native.
-    if (std::any_of(
-            working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](uint32_t r) { return r == 0; })) {
+bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
+    if (a.memory_layout() != b.memory_layout() || a.buffer_type() != b.buffer_type()) {
         return false;
     }
-    // Sharded *output* has no resharding path here (the codegen path only ever produces an
-    // interleaved output tensor); gated here rather than in supported_by_codegen(), which is
-    // about the input side.
-    if (output_mem_config.is_sharded()) {
-        return false;
+    return !a.is_sharded() || a.shard_spec() == b.shard_spec();
+}
+
+MemoryConfig interleaved_in(BufferType buffer_type) {
+    return MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
+}
+
+// Decomposes a (possibly multi-dim) repeat into single-dim prim::repeat_codegen legs. Each leg is
+// independent (orthogonal axes), so leg order affects only intermediate sizes, never the result.
+// Intermediate legs are interleaved in the input's buffer type, since a repeated shape does not tile
+// the input's shard spec. Only the final leg writes the requested placement, and only when its pages
+// line up with it; otherwise one placement hop runs at the end.
+ttnn::Tensor repeat_via_codegen(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const MemoryConfig& output_mem_config,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    const auto& shape = tensor.logical_shape();
+    const uint32_t ndim = shape.rank();
+    // The whole-call gate budgeted L1 against this same plan.
+    const auto plan = repeat_codegen::plan_codegen_legs(tensor, repetition_vector, output_mem_config);
+    const bool round_trip = plan.round_trip;
+    const MemoryConfig& intermediate_mc = plan.intermediate_mc;
+    const MemoryConfig& final_mc = plan.final_mc;
+    const std::optional<Tensor> final_out = plan.final_in_place ? optional_output_tensor : std::nullopt;
+    std::vector<uint32_t> rep_dims = plan.rep_dims;
+
+    ttnn::Tensor working = tensor;
+    if (plan.unshard_input) {
+        working = ttnn::to_memory_config(working, interleaved_in(BufferType::DRAM), std::nullopt);
     }
-    // Placement must match too: the RM factories derive CB slot sizes and per-page transfer
-    // sizes from one side's aligned page size, and DRAM/L1 page alignments differ, so a
-    // cross-placement call can overrun destination pages or CB slots. Native derives both
-    // sides' pitches independently and handles the conversion.
-    if (output_mem_config.buffer_type() != working_tensor.memory_config().buffer_type()) {
-        return false;
+
+    if (round_trip) {
+        working = ttnn::to_layout(working, ttnn::ROW_MAJOR_LAYOUT);
     }
-    return repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
+
+    // Unit outer axes of a TILE tensor only factor one tile-page plane, so every outer repeat
+    // collapses into one leg over a [1, H, W] view.
+    const uint32_t outer_rank = ndim - 2;
+    const auto outer_reps =
+        std::count_if(rep_dims.cbegin(), rep_dims.cend(), [&](uint32_t d) { return d < outer_rank; });
+    if (!round_trip && working.layout() == ttnn::TILE_LAYOUT && outer_reps >= 2 &&
+        !working.memory_config().is_sharded() &&
+        std::all_of(shape.cbegin(), shape.cbegin() + outer_rank, [](uint32_t s) { return s == 1; })) {
+        uint32_t combined = 1;
+        for (uint32_t d = 0; d < outer_rank; ++d) {
+            combined *= repetition_vector[d];
+        }
+        std::erase_if(rep_dims, [&](uint32_t d) { return d < outer_rank; });
+        const bool is_final = rep_dims.empty();
+        const auto flat = ttnn::view(working, ttnn::Shape({1, shape[-2], shape[-1]}));
+        const auto flat_out = repeat_dim_codegen(
+            flat, 0, combined, is_final ? final_mc : intermediate_mc, is_final ? final_out : std::nullopt);
+        ttsl::SmallVector<uint32_t> collapsed_shape(shape.cbegin(), shape.cend());
+        for (uint32_t d = 0; d < outer_rank; ++d) {
+            collapsed_shape[d] = repetition_vector[d];
+        }
+        working = ttnn::view(flat_out, ttnn::Shape(collapsed_shape));
+    }
+
+    for (size_t i = 0; i < rep_dims.size(); ++i) {
+        const bool is_final = i + 1 == rep_dims.size();
+        const uint32_t d = rep_dims[i];
+        working = repeat_dim_codegen(
+            working,
+            d,
+            repetition_vector[d],
+            is_final ? final_mc : intermediate_mc,
+            is_final ? final_out : std::nullopt);
+    }
+
+    if (round_trip) {
+        working = ttnn::to_layout(working, ttnn::TILE_LAYOUT, tensor.dtype());
+    }
+    if (!same_placement(working.memory_config(), output_mem_config)) {
+        working = ttnn::to_memory_config(working, output_mem_config, std::nullopt);
+    }
+    return working;
 }
 
 // Everything a preallocated output has to satisfy. Both routes run this, so a case that lands on
@@ -570,15 +571,15 @@ ttnn::Tensor repeat_force_codegen(
     const std::optional<MemoryConfig>& memory_config) {
     auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
     const MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config);
+    // Never falls back to native: a forced leg that quietly served native would make any
+    // comparison against native vacuous. Perf demotion is deliberately not consulted here.
     TT_FATAL(
-        codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config),
-        "repeat_force_codegen invoked for a case the codegen path does not support (requires an "
-        "unsharded rank-2..4 input, at least one dim repeated more than once and none repeated zero "
-        "times, an interleaved output in the same buffer type as the input, and per-layout rules -- "
-        "ROW_MAJOR rejects bfloat8_b and needs a last dim of at least 2 elements, TILE needs the "
-        "repeated H/W axis tile-aligned). This entry never falls back to native, because a forced "
-        "leg that quietly served native would make any comparison against native vacuous. Use "
-        "ttnn::repeat if you want the case routed.");
+        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, output_mem_config),
+        "repeat_force_codegen invoked for a case the codegen path does not support (requires a "
+        "rank-2..4 input with a default untransposed tile, at least one dim repeated more than once "
+        "and none repeated zero times, an explicit shard_spec on a sharded output, and no row-major "
+        "leg over bfloat8_b or with a stick too wide for its CB -- a TILE input whose sub-tile H/W "
+        "axis is repeated runs row-major). Use ttnn::repeat if you want the case routed.");
     return repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);
 }
 
@@ -602,10 +603,15 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
-    if (detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
-        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
-        // The codegen path writes an interleaved output in the input's buffer type and adds no layout
-        // or resharding hop after it, so its last per-dim step can land in the prealloc directly.
+    // compute_output_specs() hands a preallocated output's spec straight back, so a tile the input
+    // does not share would reach kernels generated for the input's pages.
+    const bool output_page_ok = !optional_output_tensor.has_value() ||
+                                repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
+    if (output_page_ok &&
+        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, output_mem_config) &&
+        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, output_mem_config)) {
+        // The final leg lands in the prealloc when it can write that placement directly; otherwise the
+        // result is copied in.
         return detail::finalize_into_preallocated(
             detail::repeat_via_codegen(
                 working_tensor, working_repetition_vector, output_mem_config, optional_output_tensor),

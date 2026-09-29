@@ -55,6 +55,8 @@ void kernel_main() {
                 {.offset_bytes = 0},
                 {.page_id = output_base + copy * repeated_block, .offset_bytes = 0});
         }
-        noc.async_write_barrier();
+        // The next read overwrites the slot, so the writes must have left it, but need not have landed.
+        noc.async_writes_flushed();
     }
+    noc.async_write_barrier();
 }

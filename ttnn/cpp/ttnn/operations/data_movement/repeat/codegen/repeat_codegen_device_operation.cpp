@@ -18,25 +18,100 @@ RepeatCodegenDeviceOperation::program_factory_t RepeatCodegenDeviceOperation::se
     return RepeatCodegenProgramFactory{};
 }
 
+namespace {
+
+namespace repeat_codegen = ttnn::operations::data_movement::repeat_codegen;
+
+const MemoryConfig& output_mem_config_of(
+    const RepeatCodegenParams& operation_attributes, const RepeatCodegenInputs& tensor_args) {
+    return tensor_args.optional_output_tensor.has_value() ? tensor_args.optional_output_tensor->memory_config()
+                                                          : operation_attributes.output_mem_config;
+}
+
+// The output checks both validators run. A preallocated output is not part of the program-cache key
+// beyond its spec, so a hit can pair a cached program with a buffer that aliases the input or sits on
+// another device.
+void validate_output(const RepeatCodegenParams& operation_attributes, const RepeatCodegenInputs& tensor_args) {
+    const Tensor& input = tensor_args.input;
+    auto expected_shape = input.logical_shape();
+    expected_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
+    // The writers address the output by page id alone, so a sharded output must keep the interleaved page grid.
+    TT_FATAL(
+        repeat_codegen::shard_spec_is_page_identical(
+            output_mem_config_of(operation_attributes, tensor_args), expected_shape, input.layout()),
+        "RepeatCodegen output placement must be interleaved or a page-identical shard spec");
+
+    if (!tensor_args.optional_output_tensor.has_value()) {
+        return;
+    }
+    const auto& out = tensor_args.optional_output_tensor.value();
+    TT_FATAL(out.storage_type() == ttnn::StorageType::DEVICE, "Repeat codegen optional output must be on device");
+    TT_FATAL(out.buffer() != nullptr, "Repeat codegen optional output must be allocated in a buffer on device");
+    TT_FATAL(out.logical_shape() == expected_shape, "Repeat codegen optional output shape mismatch");
+    TT_FATAL(
+        repeat_codegen::output_matches_input_page(input, out),
+        "Repeat codegen optional output must match the input's dtype, layout and tile");
+    TT_FATAL(out.device() == input.device(), "Repeat codegen optional output must be on the same device");
+    TT_FATAL(out.buffer() != input.buffer(), "Repeat codegen optional output must not alias the input buffer");
+}
+
+}  // namespace
+
 void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(
-        ttnn::operations::data_movement::repeat_codegen::supported_by_codegen(
-            input, operation_attributes.rep_dim, operation_attributes.num_repeats),
+        repeat_codegen::supported_by_codegen(
+            input,
+            operation_attributes.rep_dim,
+            operation_attributes.num_repeats,
+            output_mem_config_of(operation_attributes, tensor_args)),
         "Input is not supported by RepeatCodegen");
+    validate_output(operation_attributes, tensor_args);
+}
 
-    if (tensor_args.optional_output_tensor.has_value()) {
-        const auto& out = tensor_args.optional_output_tensor.value();
-        auto expected_shape = input.logical_shape();
-        expected_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
-        TT_FATAL(out.logical_shape() == expected_shape, "Repeat codegen optional output shape mismatch");
-        TT_FATAL(out.dtype() == input.dtype(), "Repeat codegen optional output dtype mismatch");
-        TT_FATAL(out.layout() == input.layout(), "Repeat codegen optional output layout mismatch");
-        TT_FATAL(out.device() == input.device(), "Repeat codegen optional output must be on the same device");
+void RepeatCodegenDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // The key pins the input spec, the attributes and the CB plan; only the buffers can differ.
+    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    validate_output(operation_attributes, tensor_args);
+}
+
+// The default key is the attributes and the tensor specs, and the live L1 frontier is in neither. A
+// ROW_MAJOR leg's CB batch and depth are read off that frontier, and a cached program's CB region is
+// re-checked against the current frontier on every enqueue, so a plan cached against a clear
+// frontier would throw once an unrelated L1 tensor moved it. Keying on the derived plan rather than
+// on the frontier keeps entries down to genuinely distinct plans: a frontier that shifts without
+// changing the plan still hits.
+//
+// create_output_tensors() has already run when the key is computed, so this sees the same frontier,
+// the op's own L1 output included, that create_descriptor() will.
+//
+// Cost: a custom hash opts this op out of the canonical program-cache key, so a 64-bit collision
+// between two distinct repeat specs resolves to a wrong hit rather than a rebuild. The plan cannot be
+// an attribute instead: it depends on an output that is not allocated when the attributes are built.
+ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const Tensor& input = tensor_args.input;
+    uint32_t rm_batch = 0;
+    if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        // A preallocated output's buffer is visible here; the op's own output is not yet, so its page
+        // comes from the spec it will be allocated from.
+        const auto& out = tensor_args.optional_output_tensor;
+        const uint32_t out_aligned =
+            out.has_value() && out->buffer() != nullptr
+                ? static_cast<uint32_t>(out->buffer()->aligned_page_size())
+                : spec_aligned_page_bytes(input, compute_output_specs(operation_attributes, tensor_args));
+        const auto cb_plan = live_rm_cb_plan(
+            input, rm_slot_bytes(static_cast<uint32_t>(input.buffer()->aligned_page_size()), out_aligned));
+        rm_batch = cb_plan.has_value() ? cb_plan->batch : 0;
     }
+    // Mirrors the default key and appends to it, so no discrimination the default traversal makes is
+    // dropped here by omission.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>, operation_attributes, tensor_args, rm_batch);
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(
@@ -50,7 +125,9 @@ RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            input.dtype(), tt::tt_metal::PageConfig(input.layout()), operation_attributes.output_mem_config));
+            input.dtype(),
+            tt::tt_metal::PageConfig(input.layout(), input.tensor_spec().tile()),
+            operation_attributes.output_mem_config));
 }
 
 RepeatCodegenDeviceOperation::tensor_return_value_t RepeatCodegenDeviceOperation::create_output_tensors(
@@ -72,6 +149,33 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOp
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
     const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
+    // The program key is hashed before either validator runs, and for a ROW_MAJOR input it reads the
+    // input's buffer and device, so the structural checks cannot wait for validation.
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
+    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    // The factory indexes a 4D page map by rep_dim and divides the output page count by num_repeats.
+    TT_FATAL(
+        input.logical_shape().rank() == 4,
+        "RepeatCodegen expects a 4D input, got rank {}",
+        input.logical_shape().rank());
+    TT_FATAL(params.rep_dim < 4, "RepeatCodegen rep_dim must be in [0, 3], got {}", params.rep_dim);
+    TT_FATAL(params.num_repeats >= 1, "RepeatCodegen num_repeats must be at least 1, got {}", params.num_repeats);
+    // The kernels split total_out_pages writes across the output buffer, so a page map that does not
+    // describe this input addresses pages past its end.
+    const auto page_map = derive_page_map(input, params.rep_dim, params.num_repeats);
+    TT_FATAL(
+        params.lower_pages == page_map.lower_pages && params.rep_dim_pages == page_map.rep_dim_pages &&
+            params.total_out_pages == page_map.total_out_pages && params.stick_size == page_map.stick_size,
+        "RepeatCodegen page map (lower_pages {}, rep_dim_pages {}, total_out_pages {}, stick_size {}) does not "
+        "match the one derived from the input (lower_pages {}, rep_dim_pages {}, total_out_pages {}, stick_size {})",
+        params.lower_pages,
+        params.rep_dim_pages,
+        params.total_out_pages,
+        params.stick_size,
+        page_map.lower_pages,
+        page_map.rep_dim_pages,
+        page_map.total_out_pages,
+        page_map.stick_size);
     using OperationType = RepeatCodegenDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         params,
