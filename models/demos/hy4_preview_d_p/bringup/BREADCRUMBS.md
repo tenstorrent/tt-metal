@@ -2795,3 +2795,40 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
+
+## S.moe_shared.08.test.1 (test review)
+
+What
+- Replaced the rendered swap test (moe_shared layer 2, attn_hc .. attn_residual + ffn_hc on device). It is swap 07
+  (moe_shared) with every check and limit unchanged, including the layer-2 shared_topk setup. Added the ffn_hc checks
+  of test_swap_moe_full_08_ffn_hc.py: ffn_hc vs golden; vs the CPU ffn_hc on the same device h_mid; the pre gates
+  through ffn_x; the post gates through out with the block's own mlp_out; and out vs the whole CPU tail. The column
+  set and out limit come from test_c_moe_shared_ffn_hc.py.
+- CPU mutation study at layer 2: /tmp/hy4_ssh8/study.py + study2.py (adapted from /tmp/hy4_sm8/study.py, outside the
+  repo, ~5 s per variant). The table is in the test docstring.
+
+Decisions
+- FHC_SMALL_COLS = (1,): only pre gate 1 sits at hc_eps at layer 2. Layer 1 used (0, 1, 6).
+- The vs-CPU per-column limit is 0.01 (layer 1: 0.015) and column 1's is 0.02. The device's worst values are 0.0074
+  (column 6) and 0.0100 (column 1).
+- Post through out: 0.003 per stream (layer 1: 0.005). Post x 1.01 scores 0.0043; the device scores 0.0010.
+- No scaled-input eps probe. At the block's own scale, eps 5e-6 already fails the per-column check (0.014).
+
+Gotchas
+- 36 of 49 ffn_hc mutations pass the 0.98 out gate, including post = 1 x sigmoid (0.986) and one chip's partial
+  sumsq (0.985). The extra checks catch every one except post x 1.005.
+- The layer-1 study's row swap (`o[[1023, 1024]].copy_(...)`) was a no-op, because advanced indexing copies. Fixed
+  here with `__setitem__` (known_issues Proposed).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc_swap_out 0.999995, ffn_hc vs CPU exact, router 0.99725).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device: TtHcGates for ffn_hc, TtHcPost, TtHy4Attention, ...): PASS, identical over two runs. pcc_swap_out
+  0.999977; ffn_hc vs golden 0.00043 / columns <= 0.0105 / post row 0.0088; vs CPU 0.00018 / columns <= 0.0074
+  (column 1 0.0100) / post row 0.0067; ffn_x vs CPU 0.00038 / 0.0013; post through out <= 0.0010 / 0.0026; tail
+  0.0016; router 0.99341; out rel 0.00686.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
