@@ -367,6 +367,7 @@ void bind_disaggregation_api(nb::module_& mod) {
         [](const std::string& seed, const nb::handle& key, const nb::callable& build, const std::string& out_path) {
             nb::object dumps = nb::module_::import_("json").attr("dumps");
             return get_or_build_kv_chunk_table(
+                default_kv_chunk_table_cache_dir(),
                 seed,
                 nb::cast<std::string>(dumps(key, nb::arg("sort_keys") = true)),
                 [&build](const std::string& path) {

@@ -35,8 +35,9 @@ using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LIN
 
 class JitBuildSettings;
 
-// Cache root used when TT_METAL_CACHE is unset: ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
-std::string get_default_root_path();
+// Root of the tt-metal cache: TT_METAL_CACHE as captured by `rtoptions` if set, else
+// ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions);
 
 struct JitBuiltStateConfig {
     HalProgrammableCoreType core_type{};

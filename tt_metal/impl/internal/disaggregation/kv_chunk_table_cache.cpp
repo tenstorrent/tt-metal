@@ -4,7 +4,6 @@
 
 #include <internal/disaggregation/kv_chunk_table_cache.hpp>
 
-#include <cstdlib>
 #include <filesystem>
 #include <random>
 #include <system_error>
@@ -13,21 +12,15 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "common/stable_hash.hpp"
+#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 
 namespace {
 
 namespace fs = std::filesystem;
-
-// Same root JitBuildEnv resolves for compiled kernels.
-fs::path cache_dir() {
-    if (const char* env = std::getenv("TT_METAL_CACHE"); env != nullptr) {
-        return (fs::path(env) / "tt-metal-cache" / "kv-chunk-tables").lexically_normal();
-    }
-    return fs::path(get_default_root_path()) / "kv-chunk-tables";
-}
 
 // Files are written under a unique temporary name and renamed, so a reader never sees a partial table.
 fs::path temp_sibling(const fs::path& path) {
@@ -63,16 +56,23 @@ void write_atomically(const std::function<void(const std::string&)>& write_table
 
 }  // namespace
 
-std::string kv_chunk_table_cache_path(const std::string& seed, const std::string& key) {
+std::string default_kv_chunk_table_cache_dir() {
+    const std::string root = MetalContext::instance_exists() ? get_cache_root(MetalContext::instance().rtoptions())
+                                                             : get_cache_root(llrt::RunTimeOptions{});
+    return (fs::path(root) / "kv-chunk-tables").string();
+}
+
+std::string kv_chunk_table_cache_path(const std::string& cache_dir, const std::string& seed, const std::string& key) {
     tt::StableHasher hasher;
     for (const std::string& part : {seed, key}) {
         hasher.update(static_cast<uint64_t>(part.size()));
         hasher.update(part);
     }
-    return (cache_dir() / fmt::format("{:016x}.pb", hasher.digest())).string();
+    return (fs::path(cache_dir) / fmt::format("{:016x}.pb", hasher.digest())).string();
 }
 
 bool get_or_build_kv_chunk_table(
+    const std::string& cache_dir,
     const std::string& seed,
     const std::string& key,
     const std::function<void(const std::string& path)>& write_table,
@@ -81,7 +81,7 @@ bool get_or_build_kv_chunk_table(
         write_atomically(write_table, out_path);
         return false;
     }
-    const fs::path cached = kv_chunk_table_cache_path(seed, key);
+    const fs::path cached = kv_chunk_table_cache_path(cache_dir, seed, key);
     std::error_code ec;
     if (fs::is_regular_file(cached, ec) && copy_atomically(cached, out_path)) {
         log_info(tt::LogMetal, "KV chunk table cache hit: {}", cached.string());
