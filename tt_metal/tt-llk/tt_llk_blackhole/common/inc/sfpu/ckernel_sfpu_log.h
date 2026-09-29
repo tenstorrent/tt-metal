@@ -115,7 +115,7 @@ sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d
  * @brief One row of log_base(x) = ln(x) * base_scale in place in Dest.
  *
  * @param base_scale 1/ln(base), bound by the caller outside its row loop.
- * The ln(0) = -inf fixup is applied after the scaling, as it always was.
+ * The ln(0) = -inf fixup is applied after the scaling.
  */
 sfpi_inline void _calculate_log_with_base_body_(
     const sfpi::vFloat c, const sfpi::vFloat d, const sfpi::vFloat base_scale, const std::uint32_t dst_idx = 0)
