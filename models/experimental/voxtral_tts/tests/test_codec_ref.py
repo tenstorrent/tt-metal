@@ -167,8 +167,7 @@ def test_quantizer_decode_shapes_and_acoustic_range(w):
 
 def test_fsq_rescale_inverts_flow_model_quantization(w):
     """Round-trip every one of the 21 levels: the flow model quantizes, the codec must rescale back
-    to a
-    value that re-quantizes to the same code. If these two drift the audio degrades silently."""
+    to a value that re-quantizes to the same code. If these two drift the audio degrades silently."""
     lvl = ACOUSTIC_CODEBOOK_SIZE
     codes = torch.arange(lvl).view(1, 1, lvl).expand(1, NUM_CODEBOOKS - 1, lvl).contiguous()
     full = torch.cat([torch.zeros(1, 1, lvl, dtype=torch.long), codes], dim=1)

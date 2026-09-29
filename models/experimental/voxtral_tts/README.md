@@ -133,6 +133,10 @@ pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py
 pytest models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 pytest models/experimental/voxtral_tts/tests/test_codec_request_path.py
 pytest models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
+# Those gates skip the few positions/frames where the fp32 reference itself is decided by rounding
+# (tests/conditioning_fixture.json, from the bringup repo's tools/make_conditioning_fixture.py);
+# this host test keeps that list small.
+pytest models/experimental/voxtral_tts/tests/test_conditioning_fixture.py
 
 # The serving contract: TtVoxtralPipeline() owning its device, synthesize(), close()
 pytest models/experimental/voxtral_tts/tests/test_serving_contract.py
@@ -195,15 +199,15 @@ case 0 excluded because it pays one-time program-cache compilation:
 | Backbone decode | ~15.9 ms/frame | traced |
 | Flow model | ~14.2 ms/frame | traced, 7 Euler steps |
 | Codec decoder | ~3.5 ms/utterance | once per utterance, not per frame |
-| **whole frame** | **26–27 ms/frame** | vs 80 ms real time → **~3x faster than real time** |
+| **whole frame** | **25–27 ms/frame** | vs 80 ms real time → **~3x faster than real time** |
 
 Per request, as `tests/perf/test_perf.py` measures it (best of 2, warm; decode includes the one-time
-trace capture; 11x10 p150b, 2026-09-28):
+trace capture; 11x10 p150b, tt-metal main aa97958452, 2026-09-29):
 
 | utterance | frames | audio | prefill | decode | ms/frame | codec | total | vs real time |
 |---|---|---|---|---|---|---|---|---|
-| short | 31 | 2.5 s | 0.05 s | 0.93 s | 29.86 | 0.02 s | 1.00 s | 2.49x |
-| long | 451 | 36.1 s | 0.07 s | 11.79 s | 26.15 | 0.05 s | 11.92 s | 3.03x |
+| short | 31 | 2.5 s | 0.05 s | 0.89 s | 28.55 | 0.02 s | 0.95 s | 2.61x |
+| long | 459 | 36.7 s | 0.07 s | 11.69 s | 25.48 | 0.04 s | 11.80 s | 3.11x |
 
 Quality: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
 

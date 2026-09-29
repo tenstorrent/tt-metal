@@ -4,8 +4,7 @@
 """The host-side sampling contract of `generate()`: seed, CFG and termination.
 
 The flow model's own CFG behaviour is covered at reference level in test_flow_ref.py; what is
-checked here
-is the pipeline's contract, which is what a caller depends on.
+checked here is the pipeline's contract, which is what a caller depends on.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_sampling.py

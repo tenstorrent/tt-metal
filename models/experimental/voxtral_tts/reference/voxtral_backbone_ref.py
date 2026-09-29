@@ -86,8 +86,7 @@ def embed_text(w, token_ids):
 
 def embed_frame(w, codes):
     """One frame's 37 codes (offset by N_AUDIO_SPECIAL, as the flow model emits) -> [1, 1, 3072]:
-    each
-    codebook indexes its own slice of one flat table and the 37 vectors are summed.
+    each codebook indexes its own slice of one flat table and the 37 vectors are summed.
     see VOXTRAL_TTS_BACKBONE.md [gpt-30]"""
     c = torch.as_tensor(codes, dtype=torch.long).reshape(-1)
     assert c.numel() == NUM_CODEBOOKS, f"expected {NUM_CODEBOOKS} codes, got {c.numel()}"
@@ -161,8 +160,7 @@ def reference_prefill_then_step(inputs_embeds, w, step_embeds, n_layers=N_LAYERS
 
 class IncrementalBackbone:
     """Stateful prefill + single-step decode over a KV cache, for loops that interleave the flow
-    model
-    between steps. Shaped like the TTNN decoder: build once, prefill, then step per frame."""
+    model between steps. Shaped like the TTNN decoder: build once, prefill, then step per frame."""
 
     def __init__(self, w, n_layers=N_LAYERS):
         self.w, self.n_layers = w, n_layers

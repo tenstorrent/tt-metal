@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(HERE, "tests", "prompt_fixture.json")
 FRAMES = os.path.join(HERE, "tests", "real_frames_fixture.pt")
 FRAMES_LONG = os.path.join(HERE, "tests", "real_frames_long_fixture.pt")
+CONDITIONING = os.path.join(HERE, "tests", "conditioning_fixture.json")
 
 
 @functools.lru_cache(maxsize=1)
@@ -26,6 +27,24 @@ def fixture_cases():
     """-> the fixture's case list (real tokenized prompts + voice names)."""
     with open(FIXTURE) as fh:
         return json.load(fh)["cases"]
+
+
+@functools.lru_cache(maxsize=1)
+def conditioning_fixture():
+    """-> the ill-conditioned positions/frames fixture. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    with open(CONDITIONING) as fh:
+        return json.load(fh)
+
+
+def ill_conditioned_positions(case_idx):
+    """-> prefill positions where the fp32 reference itself is not pinned down at device precision,
+    so a device result there is a rounding draw. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    return frozenset(conditioning_fixture()["prefill"].get(str(case_idx), ()))
+
+
+def ill_conditioned_frames(case_idx):
+    """-> the same for decode frames of the prompt's own trajectory. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    return frozenset(conditioning_fixture()["decode"].get(str(case_idx), ()))
 
 
 def case_ids():

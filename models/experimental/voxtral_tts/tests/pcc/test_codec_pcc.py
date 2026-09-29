@@ -128,8 +128,7 @@ def test_shipped_precision_holds_the_gate(device):
 
 def test_real_speech_frames_decode_correctly(device):
     """Decode REAL model output (64-frame fixture of the backbone and flow model codes), not
-    synthetic codes;
-    gates PCC and worst sample. see VOXTRAL_TTS_CODEC.md [codec-54]"""
+    synthetic codes; gates PCC and worst sample. see VOXTRAL_TTS_CODEC.md [codec-54]"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     fx = FRAMES

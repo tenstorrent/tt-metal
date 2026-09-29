@@ -4,8 +4,7 @@
 """The flow model on device against the fp32 reference.
 
 The flow model emits integer codes, so the frame comparison is exact-or-not and the velocity field
-is the
-only continuous quantity worth a PCC. Synthetic inputs are acceptable for the exactness checks; the
+is the only continuous quantity worth a PCC. Synthetic inputs are acceptable for the exactness checks; the
 real-hidden-state tests below drive it from the reference's own last-position hidden state, which is
 what the backbone hands it at inference.
 
