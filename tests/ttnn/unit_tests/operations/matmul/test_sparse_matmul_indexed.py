@@ -417,7 +417,10 @@ def test_indexed_optional_output(device):
 @pytest.mark.parametrize("compact_a", [False, True], ids=["broadcast_a", "compact_a"])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("n,grid,per_core_n,out_block_w", [(32, (1, 1), 1, 1), (96, (2, 1), 2, 2), (128, (1, 1), 4, 2)])
-def test_indexed_bias_and_cache_rebinding(device, compact_a, weight_dtype, n, grid, per_core_n, out_block_w):
+@pytest.mark.parametrize("fp32_dest_acc_en,packer_l1_acc", [(True, False), (False, False), (True, True)])
+def test_indexed_bias_and_cache_rebinding(
+    device, compact_a, weight_dtype, n, grid, per_core_n, out_block_w, fp32_dest_acc_en, packer_l1_acc
+):
     """Each compact group uses its own bias, including on cache hits with new indices and bias buffers."""
     torch.manual_seed(81)
     experts, active, m, k = 8, 3, 64, 128
@@ -443,8 +446,8 @@ def test_indexed_bias_and_cache_rebinding(device, compact_a, weight_dtype, n, gr
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
     )
     cases = []
     for ids, sign in [([7, 1, 5], 1), ([4, 6, 0], -1)]:
