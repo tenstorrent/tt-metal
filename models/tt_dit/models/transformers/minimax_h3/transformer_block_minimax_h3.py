@@ -254,6 +254,7 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -262,9 +263,13 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
+        tables: the six modulation tables for this step, if the caller cached them (see
+            `MiniMaxH3Transformer3DModel.modulation_tables`); otherwise projected from `temb` here.
+
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        if tables is None:
+            tables = self._modulation_tables(temb)
 
         # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))

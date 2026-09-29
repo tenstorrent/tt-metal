@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -201,6 +204,10 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
+        # MINIMAX_H3_ADALN_CACHE=1: keep every block's six modulation tables per distinct timestep vector (eager
+        # path only), so a fixed schedule projects each block's adaLN once instead of once per step.
+        self._adaln_cache_enabled = os.environ.get("MINIMAX_H3_ADALN_CACHE") == "1"
+        self._modulation_cache: dict[tuple, list[list[ttnn.Tensor]]] = {}
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -350,6 +357,7 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: ttnn.Tensor,
         pad_to: int,
         traced: bool = False,
+        timestep_key: tuple | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -405,6 +413,7 @@ class MiniMaxH3Transformer3DModel(Module):
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
 
+        tables = self.modulation_tables(temb, timestep_key) if (not traced and timestep_key is not None) else None
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -412,6 +421,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            tables,
             traced=traced,
             tracer_trace_key=pad_to,
         )
@@ -449,8 +459,9 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        tables: list[list[ttnn.Tensor]] | None = None,
     ) -> ttnn.Tensor:
-        for block in self.transformer_blocks:
+        for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
                 logical_n,
@@ -458,8 +469,26 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                tables=tables[i] if tables is not None else None,
             )
         return hidden
+
+    def modulation_tables(self, temb: ttnn.Tensor, timestep_key: tuple) -> list[list[ttnn.Tensor]] | None:
+        """Per-block modulation tables for this timestep vector from the cache, building them on a miss.
+        Returns None when the cache is off or device memory ran out (the blocks then project per step)."""
+        if not self._adaln_cache_enabled:
+            return None
+        cached = self._modulation_cache.get(timestep_key)
+        if cached is None:
+            try:
+                cached = [block._modulation_tables(temb) for block in self.transformer_blocks]
+            except RuntimeError as exc:  # out of device memory: fall back for good
+                logger.warning(f"adaLN schedule cache disabled: {str(exc)[:120]}")
+                self._adaln_cache_enabled = False
+                self._modulation_cache.clear()
+                return None
+            self._modulation_cache[timestep_key] = cached
+        return cached
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
