@@ -636,8 +636,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     TT_FATAL(
         operation_attributes.routed_expert_writers > 0,
         "combine_fabric2d: the number of routed-expert writer cores must be set");
-    const auto placement =
-        decide_placement(mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group);
+    const auto placement = decide_placement(
+        mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group, /*with_collector=*/true);
     const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a sender can
@@ -651,7 +651,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         tensor_args.expert_token_counts.buffer(),
         tensor_args.expert_region_offsets.buffer(),
         tensor_args.expert_offsets.buffer(),
-        tensor_args.global_expert_idx_table.buffer()};
+        tensor_args.global_expert_idx_table->buffer()};
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
