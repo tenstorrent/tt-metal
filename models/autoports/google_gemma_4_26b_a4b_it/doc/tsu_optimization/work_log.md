@@ -998,3 +998,10 @@ exact-image shared-disabled control. No extra rerun or qualitative request is
 started. OwnedAPI176 receivesTERM after benchmark completion; serverexec12753
 exits0 and the owned container has no remaining device file descriptors.
 Only evidence/docs/tooling differ from runtimec9ec3469; no new image is needed.
+
+Closure evidence checkpoint: TT-Metal branch `mvasiljevic/gemma4-ttft-opt`,
+commit `8db72babe196ae54d33db1e152194bc5c4605be9`; selected runtime remains
+`c9ec3469f1b875e7e5e505660c4421e5126e8dad`. Inference-server branch
+`mvasiljevic/gemma4-ttft-monorepo-compat` remains at pushed full-matrix-config
+commit `6d88032ed5f8259333233c53db671cd29aad377d` (configuration only, sweep
+not run). No local benchmark/server or dispatched performance CI remains active.
