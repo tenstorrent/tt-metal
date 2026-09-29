@@ -4,9 +4,10 @@ This implementation shards GPT-OSS 120B across a 1×4 Blackhole mesh. It uses
 indexed sparse experts, chunked prefill, sliding-window KV rings and device
 sampling. Adam Housman developed the original implementation.
 
-**Integration status:** native operation tests and host contracts pass. Full-model
-correctness, serving qualification and matched performance measurements on this
-upstream integration are pending. The source package's accuracy and throughput
+**Integration status:** native operation tests, host contracts and the complete
+100-token full-model reference test pass with the transfer setting below.
+Partial-batch state checks, serving qualification and matched performance
+measurements on this upstream integration are pending. The source package's accuracy and throughput
 numbers are not validation of this code. The directory name does not establish
 qualification on a particular QuietBox SKU.
 
@@ -44,6 +45,14 @@ That change preserves the width of pending host logits when a later decode
 submission selects another bucket. Keep serving and evaluation dependencies in
 separate environments when their version requirements differ.
 
+Cached weights require `TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0` on the tested
+QB2 (KMD 2.10.0, IOMMU enabled). The default pinned path timed out uploading a
+read-only tensor cache; the copy path completed. This is an explicit runtime
+configuration, also used upstream for the weight-load regression tracked in
+[#57763](https://github.com/tenstorrent/tt-metal/issues/57763). A shared root cause
+for the timeout and that performance issue has not been established. Keep this
+setting in both test and server environments until the pinned path is qualified.
+
 ## Standalone reference test
 
 Download the pinned checkpoint through the normal Hugging Face client, excluding
@@ -52,6 +61,7 @@ cache and independent reference artifact. The reference SHA256 is checked by the
 test; it is not an output produced by this implementation.
 
 ```bash
+export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export GPT_OSS_120B_SNAPSHOT=/path/to/pinned/snapshot
 export TT_METAL_CACHE=/path/to/writable/gpt-oss-120b-cache
 export GPT_OSS_120B_REFERENCE=/path/to/aime24_chat_100_top100.refpt
@@ -108,6 +118,7 @@ prepared for device validation. CLI parsing has been checked against vLLM 0.26.0
 successful server startup alone is not serving qualification.
 
 ```bash
+export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export MESH_DEVICE=P150x4
 export TT_METAL_HOME="$PWD"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
