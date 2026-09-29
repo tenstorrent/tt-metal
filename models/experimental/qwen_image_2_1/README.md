@@ -54,7 +54,7 @@ Device tests cover the text encoder, DiT prefix/steps, VAE, complete traced deno
 
 ### Publication validation in progress
 
-On one P150b with native base `bdfc59036eea3e988ba0e2374c12ca0c15c6c970`, the exact weekly registry command passed all seven real HTTP tests in 18 minutes 1 second, including cold-cache compilation, request isolation, prompt eviction and both aspect-ratio transitions. Three warmed 40-step requests averaged 22.40 seconds for text and 39.57 seconds for the two-image edit. These measurements cover the fixed examples below, not population image quality.
+On one P150b with native base `bdfc59036eea3e988ba0e2374c12ca0c15c6c970`, the exact weekly registry command passed all seven real HTTP tests in 18 minutes 1 second, including cold TT kernel compilation, request isolation, prompt eviction and both aspect-ratio transitions. Weights and Python dependencies were pre-cached. Three warmed 40-step requests averaged 22.40 seconds for text and 39.57 seconds for the two-image edit. These measurements cover the fixed examples below, not population image quality.
 
 | Comparison | PCC | Criterion | Result |
 | --- | ---: | ---: | --- |
@@ -64,7 +64,7 @@ On one P150b with native base `bdfc59036eea3e988ba0e2374c12ca0c15c6c970`, the ex
 | One-image edit final latent vs new independent fp32 Diffusers | 0.93839 | 0.98 | **Fail** |
 | One-image edit RGB vs new independent fp32 Diffusers | 0.89603 | 0.90 | **Fail** |
 
-The independent one-image editing failure remains unresolved. Its fp32 reference uses a different trajectory precision from the source package's CUDA bf16 reference; an independent bf16 comparison is pending. Published-P150 agreement does not establish independent editing correctness. The weekly test deliberately labels that check as a regression. The model remains under publication validation.
+The independent one-image editing failure remains unresolved. Reconstructed original Python and native source reproduce the published two-edit PNG exactly (PCC 1.0), but also fail the new one-edit FP32 latent check (PCC 0.94644 against 0.98). Its fp32 reference uses a different trajectory precision from the source package's CUDA bf16 reference; an independent bf16 comparison is pending. Published-P150 agreement does not establish independent editing correctness. The weekly test deliberately labels that check as a regression. The model remains under publication validation.
 
 ## Memory and dispatch
 
