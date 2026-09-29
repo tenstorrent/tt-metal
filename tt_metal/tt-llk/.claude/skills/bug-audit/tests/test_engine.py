@@ -826,3 +826,30 @@ def test_init_run_refuses_an_empty_scope(tmp_path):
     tree = _git_tree(tmp_path, ["a/x.c"])
     code, out, _ = _init(tmp_path, tree, "--include", "nowhere/*")
     assert code != 0 and "no file" in out.lower(), out
+
+
+def test_every_spawn_user_imports_it_before_first_use():
+    import ast
+    import glob
+
+    for path in glob.glob(os.path.join(SKILL, "engine", "*.py")) + glob.glob(
+        os.path.join(SKILL, "mining", "*.py")
+    ):
+        tree = ast.parse(open(path).read())
+        uses = [
+            n.lineno
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute)
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "spawn"
+        ]
+        if not uses:
+            continue
+        imports = [
+            n.lineno
+            for n in tree.body
+            if isinstance(n, ast.Import) and any(a.name == "spawn" for a in n.names)
+        ]
+        assert imports and min(imports) < min(
+            uses
+        ), f"{path}: spawn used at {min(uses)} before any import"

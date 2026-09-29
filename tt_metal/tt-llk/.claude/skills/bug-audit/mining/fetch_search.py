@@ -5,8 +5,14 @@ The window is on the creation date by default; `--field closed` windows on the c
 incremental refresh needs (a bug opened long ago and closed this week lives in an old creation window).
 Exit 3 = window holds >1000 results; split it and rerun."""
 import json
+import os
 import sys
 import time
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 repo, kind, quals, win, out = sys.argv[1:6]
 field = sys.argv[sys.argv.index("--field") + 1] if "--field" in sys.argv else "created"
@@ -58,12 +64,5 @@ with open(out + ".part", "w") as f:
         cur = d["pageInfo"]["endCursor"]
         if not d["pageInfo"]["hasNextPage"]:
             break
-import os
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
-)
-import spawn  # noqa: E402
-
 os.replace(out + ".part", out)
 print(win, n, total)
