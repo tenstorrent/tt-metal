@@ -303,8 +303,8 @@ If no ``mode`` override is provided, the data representation in
 tha Architecture. You may override that default with the ``mode``
 function, which optionally specifies a data representation, and an
 optional addr_mode operand. This may be specified on both loads and
-stores.  The following data representations and defaults are
-available:
+stores.  The following data representations and defaults, if
+applicable, are available:
 
   * FSrcB - (vFloat) dynamic float representation
   * F32 - 32-bit float
@@ -313,8 +313,10 @@ available:
   * I32 - (vInt, except Wormhole), 32-bit 2's complement integer
   * U32 - (vUInt), 32-bit unsigned integer
   * U16 - (vUInt16), 16-bit unsigned integer
+  * U8 - 8-bit unsigned integer, (Quasar only)
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
+  * SM8 - 8-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
   * LO16 - low 16 bits
   * HI16 - high 16 bits
@@ -323,9 +325,11 @@ On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
 ``vSMag`` to or from ``I32`` a conversion operation is inserted -- on
 Wormhole this is part of the load or store, on other architectures it
-is a separate operation. It is unspecified how 2's complement's most
-negative value converts to sign-magnitude.  Not all data
-representations are permitted for all types.
+is a separate operation. On all ISAs, loading or storing SM16 or SM8
+to or from vInt or related types will insert conversion operations.
+It is unspecified how 2's complement's most negative value converts to
+sign-magnitude.  Not all data representations are permitted for all
+types.
 
 The ``LO16`` layout transfers 16 bits to and from the low part of a
 ``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
@@ -572,21 +576,6 @@ Returns the absolute value of ''v''.
 
 Returns the count of leading (left-most) zeros of ''v''. ``LZMode``
 may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
-
-.. code-block:: c++
-
-   impl_::FloatInt round (vFloat v);
-
-Round v to nearest integer, ties round to nearest even. This returns a
-tuple that may be implicitly converted to either ``vFloat`` or
-``vInt``, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both:
-
-.. code-block:: c++
-
-   auto [f1, i1] = round (v);
-   vFloat f2 = round (v);
-   vInt i2 = round (v);
 
 .. code-block:: c++
 
@@ -945,7 +934,7 @@ vector to memory will result in an error similar to the following:
 .. code-block:: c++
 
     tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
-      792 |     v = (initialized) ? __builtin_rvtt_sfpassign_lv(v, in) : in;
+      792 |     v = __builtin_rvtt_sfpassign_lv (v, in);
           |       ^
     /tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
 

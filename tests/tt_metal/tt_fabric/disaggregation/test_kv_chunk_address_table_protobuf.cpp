@@ -423,6 +423,10 @@ TEST(KvChunkAddressTableProtobuf, LegacySingleConfigWireStillReads) {
 
 // --- Strided-run compression (field 11 `runs`) ---
 
+// Budget large enough that any table in these tests dual-writes. The mirror is opt-in now
+// (the default budget is 0 = runs-only), so tests that want it must ask for it.
+constexpr const char* kDualWriteOn = "2000000000";
+
 // Scoped override for KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES (read at each export call).
 class DualWriteEnvGuard {
 public:
@@ -627,7 +631,7 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
 TEST(KvChunkAddressTableProtobuf, DualWriteSurvivesReexport) {
     // A small dual-written table imports as an in-memory StridedRowMap (runs authoritative).
     // Re-exporting THAT must keep the entries mirror for old readers downstream.
-    DualWriteEnvGuard guard(nullptr);  // default threshold: dual-write
+    DualWriteEnvGuard guard(kDualWriteOn);
     auto original = make_strided_table();
 
     auto first = import_from_protobuf(export_to_protobuf(original));
@@ -643,7 +647,7 @@ TEST(KvChunkAddressTableProtobuf, DualWriteSurvivesReexport) {
 }
 
 TEST(KvChunkAddressTableProtobuf, DualWriteMirrorsEntriesBelowThreshold) {
-    DualWriteEnvGuard guard(nullptr);  // default threshold: a small table dual-writes
+    DualWriteEnvGuard guard(kDualWriteOn);  // opt in: a small table then dual-writes
     auto original = make_strided_table();
 
     ::tt::disaggregation::proto::KvChunkAddressTable pb;
@@ -653,6 +657,34 @@ TEST(KvChunkAddressTableProtobuf, DualWriteMirrorsEntriesBelowThreshold) {
 
     auto restored = import_from_protobuf(pb.SerializeAsString());
     expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, DefaultExportIsRunsOnly) {
+    // The shipped default: no env override, compressible config -> runs only, no entries
+    // mirror. This is what makes compression pay off in file size.
+    DualWriteEnvGuard guard(nullptr);
+    auto original = make_strided_table();
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.runs_size(), 4);
+    EXPECT_EQ(pb.entries_size(), 0);
+    ASSERT_EQ(pb.configs_size(), 1);
+    EXPECT_EQ(pb.configs(0).compression(), ::tt::disaggregation::proto::STRIDED_ROWS);
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, UnparsableDualWriteBudgetFallsBackToDefault) {
+    // A malformed override must not silently resurrect the mirror.
+    DualWriteEnvGuard guard("not-a-number");
+    auto original = make_strided_table();
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.runs_size(), 4);
+    EXPECT_EQ(pb.entries_size(), 0);
 }
 
 TEST(KvChunkAddressTableProtobuf, NegativeStrideRoundTrip) {

@@ -30,26 +30,27 @@ namespace {
 // sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
 constexpr uint32_t kMaxRunStep = 64;
 
-// Dual-write threshold: while the estimated payload (entries mirror + runs) stays below this,
-// STRIDED_ROWS configs also mirror every chunk into `entries` so pre-runs readers keep
-// working (they ignore `runs` and the compression tag). The threshold sits just under
-// protobuf's 2 GiB (2^31) message cap, using conservative wire estimates of 48 B/entry and
-// 72 B/run — so the mirror is dropped only when the dual-written message itself could not be
-// serialized, i.e. when no entries-only reader could have consumed the table anyway.
-// Override for tests/canary.
-constexpr uint64_t kDefaultDualWriteMaxBytes = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
+// Dual-write budget, in estimated payload bytes (entries mirror + runs). While the estimate
+// stays within the budget, STRIDED_ROWS configs ALSO mirror every chunk into `entries` so
+// pre-runs readers keep working (they ignore `runs` and the compression tag).
+//
+// The budget is 0 by default to enable compression by default
+constexpr uint64_t kDefaultDualWriteMaxBytes = 0;  // compress by default
+// Ceiling on an opted-in budget: just under protobuf's 2 GiB (2^31) message cap, so a
+// dual-written message stays serializable (wire estimates below).
+constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
 constexpr uint64_t kRunWireEstimate = 72;
 
-// Read per call on purpose: this is a test/canary override (tests re-point it between
-// exports via DualWriteEnvGuard), not a production runtime setting — export is cold-path,
-// so the getenv cost is irrelevant.
+// Read per call on purpose: this is an opt-in compatibility escape hatch (tests re-point it
+// between exports via DualWriteEnvGuard), not a production runtime setting — export is
+// cold-path, so the getenv cost is irrelevant.
 uint64_t dual_write_max_bytes() {
     if (const char* env = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
         uint64_t value = 0;
         const char* end = env + std::strlen(env);
         if (std::from_chars(env, end, value).ec == std::errc{}) {
-            return value;
+            return std::min(value, kDualWriteMaxBytesCeiling);
         }
         // unparsable: fall through to the default
     }
@@ -89,7 +90,8 @@ uint32_t delta_period(std::span<const KvCacheLocation> row) {
 }
 
 // Newest format_version this reader knows. 0 = legacy (pre-tag) files; 1 = compression tags.
-// Bump when the wire format changes incompatibly; old readers must keep working via dual-write.
+// Bump when the wire format changes incompatibly; old readers keep working only if the
+// `entries` mirror is opted into (off by default).
 constexpr uint32_t kMaxKnownFormatVersion = 1;
 
 // Wire conversion, with fail-closed validation of the declared tag.
@@ -325,15 +327,18 @@ void emit_config_payload(
 
     // Dual-write decision needs the total size up front: entries mirror plus the runs payload.
     // Worst case each populated row emits kMaxRunStep runs (one per residue class), so bound
-    // runs by rows * kMaxRunStep.
+    // runs by rows * kMaxRunStep. A zero budget (the default) means never mirror — checked
+    // separately so an empty table, whose estimate is also 0, still exports runs-only.
     const uint64_t total_chunks = table.total_entries();
     uint64_t total_rows = 0;
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
         total_rows += static_cast<uint64_t>(cfg.num_slots) * cfg.num_layers;
     }
+    const uint64_t dual_write_budget = dual_write_max_bytes();
     const bool dual_write =
-        total_chunks * kEntryWireEstimate + total_rows * kMaxRunStep * kRunWireEstimate <= dual_write_max_bytes();
+        dual_write_budget > 0 &&
+        total_chunks * kEntryWireEstimate + total_rows * kMaxRunStep * kRunWireEstimate <= dual_write_budget;
 
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
@@ -387,9 +392,9 @@ void emit_config_payload(
 }
 
 KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
-    // Fail closed on newer formats (old readers ignore this field and read the dual-written
-    // entries — the intended transition path; a runs-only file yields an empty-but-valid
-    // legacy table there, which is why rollout upgrades readers first).
+    // Fail closed on newer formats. Pre-compression readers predate this field and ignore it,
+    // so a runs-only file — the default output now — yields an empty-but-valid legacy table
+    // there rather than an error; that is why rollout upgrades readers first.
     if (pb.format_version() > kMaxKnownFormatVersion) {
         throw std::runtime_error(
             "KvChunkAddressTable format_version=" + std::to_string(pb.format_version()) +

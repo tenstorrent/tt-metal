@@ -218,12 +218,11 @@ jobs:
         timeout-minutes: 10
         with:
           name: workflow-run-data
+          if-no-files-found: warn
           path: |
-            if-no-files-found: warn
-            path: |
-              pipelinecopy_*.json
-              workflow.json
-              workflow_jobs.json
+            pipelinecopy_*.json
+            workflow.json
+            workflow_jobs.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
