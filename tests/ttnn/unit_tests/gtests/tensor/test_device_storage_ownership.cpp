@@ -7,6 +7,10 @@
 
 #include <array>
 #include <optional>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -23,11 +27,13 @@ using ::testing::SizeIs;
 
 using tt::tt_metal::BufferType;
 using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::DataType;
 using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::MeshDevice1x1Fixture;
 using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::ShardOrientation;
@@ -120,31 +126,31 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRetainsOwnerAndValidatesBoun
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRejectsReinterpretedSource) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    const TensorSpec nestedSpec = make_nested_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    const TensorSpec nested_spec = make_nested_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
 
     // A reinterpretation's MeshBuffer aliases memory without owning or retaining it, so it cannot be the base of a
     // retained view, whether it reinterprets an owner or a retained view.
     Tensor reinterpreted_owner = ttnn::unchecked_reinterpret_layout(owner, Layout::ROW_MAJOR);
     EXPECT_THAT(
-        [&] { (void)ttnn::experimental::create_sharded_tensor_view(reinterpreted_owner, viewSpec, kViewOffset); },
+        [&] { (void)ttnn::experimental::create_sharded_tensor_view(reinterpreted_owner, view_spec, kViewOffset); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("reinterpreted storage is not supported")));
     Tensor reinterpreted_view = ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
     EXPECT_THAT(
         [&] {
-            (void)ttnn::experimental::create_sharded_tensor_view(reinterpreted_view, nestedSpec, kNestedViewOffset);
+            (void)ttnn::experimental::create_sharded_tensor_view(reinterpreted_view, nested_spec, kNestedViewOffset);
         },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("reinterpreted storage is not supported")));
 }
 
 TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewTracksItsSource) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
     Tensor reinterpreted = ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
 
     reinterpreted.deallocate(/*force=*/true);
@@ -158,28 +164,28 @@ TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewTracksItsSource
 }
 
 TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewDeallocationReleasesRoot) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    uint32_t ownerAddress = 0;
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    uint32_t owner_address = 0;
     Tensor reinterpreted = [&] {
-        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-        ownerAddress = owner.buffer()->address();
-        Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+        Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+        owner_address = owner.buffer()->address();
+        Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
         return ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
     }();
 
     reinterpreted.deallocate(/*force=*/true);
 
-    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
+    Tensor replacement = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), owner_address)
         << "deallocating the only reference to the owner must release its allocation";
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocatesWithoutForce) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
 
     view.deallocate();
 
@@ -222,10 +228,10 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationPreservesOwner) 
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationInvalidatesView) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
 
     owner.deallocate(/*force=*/true);
 
@@ -235,40 +241,40 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationInvalidates
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationReclaimsMemory) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    const uint32_t ownerAddress = owner.buffer()->address();
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    const uint32_t owner_address = owner.buffer()->address();
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
 
     owner.deallocate(/*force=*/true);
 
     EXPECT_FALSE(view.is_allocated());
-    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
+    Tensor replacement = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), owner_address)
         << "explicit owner deallocation must release the allocation while views of it still exist";
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationReleasesRetainedOwner) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    uint32_t ownerAddress = 0;
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    uint32_t owner_address = 0;
     Tensor view = [&] {
-        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-        ownerAddress = owner.buffer()->address();
-        return ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
+        Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+        owner_address = owner.buffer()->address();
+        return ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
     }();
-    Tensor viewCopy = view;
+    Tensor view_copy = view;
     ASSERT_TRUE(view.is_allocated());
 
     view.deallocate(/*force=*/true);
 
     EXPECT_FALSE(view.is_allocated());
-    EXPECT_FALSE(viewCopy.is_allocated());
-    EXPECT_FALSE(viewCopy.device_storage().is_root_allocated());
+    EXPECT_FALSE(view_copy.is_allocated());
+    EXPECT_FALSE(view_copy.device_storage().is_root_allocated());
     // The owner allocation is released while view objects still exist: a fresh allocation reuses its address.
-    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    EXPECT_EQ(replacement.buffer()->address(), ownerAddress);
+    Tensor replacement = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), owner_address);
 }
 
 TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewRetainsEverySource) {
@@ -443,16 +449,16 @@ TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, ShardedTensorViewPreservesOwnerCoordinates) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    auto ownerShards = get_device_tensors(owner);
-    ASSERT_THAT(ownerShards, SizeIs(2));
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    auto owner_shards = get_device_tensors(owner);
+    ASSERT_THAT(owner_shards, SizeIs(2));
 
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(ownerShards.front(), viewSpec, kViewOffset);
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner_shards.front(), view_spec, kViewOffset);
 
     ASSERT_THAT(view.device_storage().get_coords(), SizeIs(1));
-    EXPECT_EQ(view.device_storage().get_coords().front(), ownerShards.front().device_storage().get_coords().front());
+    EXPECT_EQ(view.device_storage().get_coords().front(), owner_shards.front().device_storage().get_coords().front());
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {
@@ -505,15 +511,15 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
 }
 
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRejectsRelease) {
-    const TensorSpec ownerSpec = make_owner_spec();
-    const TensorSpec viewSpec = make_view_spec();
-    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, kViewOffset);
-    DeviceStorage viewStorage = view.device_storage();
+    const TensorSpec owner_spec = make_owner_spec();
+    const TensorSpec view_spec = make_view_spec();
+    Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, kViewOffset);
+    DeviceStorage view_storage = view.device_storage();
 
     // A released MeshTensor rewrapped in a new Tensor would lose the view's dependency on its source.
     EXPECT_THAT(
-        [&] { (void)viewStorage.release_mesh_tensor(); },
+        [&] { (void)view_storage.release_mesh_tensor(); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("cannot release a retained view")));
     EXPECT_TRUE(view.is_allocated());
 }
@@ -626,6 +632,92 @@ TEST_F(DeviceStorageMultiDeviceTest, Tensor_ShardsShareDeviceStorageOwnership) {
         EXPECT_FALSE(shards[i].is_allocated());
     }
 }
+
+// The view uses the owner's shard grid and covers the lower kViewShardHeight rows of every kOwnerShardHeight-row owner
+// shard, for every sharding scheme and layout.
+constexpr uint32_t kOwnerShardHeight = 64;
+constexpr uint32_t kViewShardHeight = 32;
+constexpr uint32_t kShardWidth = 64;
+
+class ShardedTensorViewDataTest
+    : public MeshDevice1x1Fixture,
+      public ::testing::WithParamInterface<std::tuple<TensorMemoryLayout, Layout, DataType>> {
+protected:
+    TensorSpec make_spec(uint32_t height, uint32_t width, uint32_t shard_height) const {
+        const auto [memory_layout, layout, data_type] = GetParam();
+        const CoreCoord grid_end =
+            memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? CoreCoord(1, 1) : CoreCoord(1, 0);
+        const MemoryConfig memory_config(
+            memory_layout,
+            BufferType::L1,
+            ShardSpec(
+                CoreRangeSet(CoreRange(CoreCoord(0, 0), grid_end)),
+                {shard_height, kShardWidth},
+                ShardOrientation::ROW_MAJOR));
+        return TensorSpec(Shape{1, 1, height, width}, TensorLayout(data_type, layout, memory_config));
+    }
+
+    template <typename T>
+    void check_view_aliases_lower_rows_of_each_shard() {
+        const auto memory_layout = std::get<TensorMemoryLayout>(GetParam());
+        const uint32_t shard_rows = memory_layout == TensorMemoryLayout::WIDTH_SHARDED ? 1 : 2;
+        const uint32_t width = (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? 1 : 2) * kShardWidth;
+        const uint32_t owner_height = shard_rows * kOwnerShardHeight;
+        const uint32_t view_height = shard_rows * kViewShardHeight;
+        constexpr uint32_t upper_rows = kOwnerShardHeight - kViewShardHeight;
+        const auto owner_row = [](uint32_t view_row) {
+            return ((view_row / kViewShardHeight) * kOwnerShardHeight) + upper_rows + (view_row % kViewShardHeight);
+        };
+        // Exact in BFLOAT16: magnitudes stay below 256 with at most one fractional bit.
+        const auto value = [](uint32_t row, uint32_t col, float sign) {
+            return T(sign * (static_cast<float>(row) + (0.5F * static_cast<float>(col % 2))));
+        };
+
+        std::vector<T> owner_values(owner_height * width);
+        for (uint32_t row = 0; row < owner_height; ++row) {
+            for (uint32_t col = 0; col < width; ++col) {
+                owner_values[(row * width) + col] = value(row, col, 1.0F);
+            }
+        }
+        const TensorSpec view_spec = make_spec(view_height, width, kViewShardHeight);
+        Tensor owner =
+            Tensor::from_vector(owner_values, make_spec(owner_height, width, kOwnerShardHeight), mesh_device_.get());
+        Tensor view =
+            ttnn::experimental::create_sharded_tensor_view(owner, view_spec, upper_rows * kShardWidth * sizeof(T));
+
+        std::vector<T> expected_view_values(view_height * width);
+        std::vector<T> written_values(view_height * width);
+        std::vector<T> expected_owner_values = owner_values;
+        for (uint32_t row = 0; row < view_height; ++row) {
+            for (uint32_t col = 0; col < width; ++col) {
+                expected_view_values[(row * width) + col] = owner_values[(owner_row(row) * width) + col];
+                written_values[(row * width) + col] = value(row + 1, col, -1.0F);
+                expected_owner_values[(owner_row(row) * width) + col] = written_values[(row * width) + col];
+            }
+        }
+        EXPECT_EQ(view.to_vector<T>(), expected_view_values);
+
+        ttnn::copy_to_device(Tensor::from_vector(written_values, view_spec), view);
+        EXPECT_EQ(owner.to_vector<T>(), expected_owner_values);
+    }
+};
+
+TEST_P(ShardedTensorViewDataTest, ViewReadsAndWritesLowerRowsOfEachOwnerShard) {
+    if (std::get<DataType>(GetParam()) == DataType::BFLOAT16) {
+        check_view_aliases_lower_rows_of_each_shard<bfloat16>();
+    } else {
+        check_view_aliases_lower_rows_of_each_shard<float>();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardingLayoutsAndDataTypes,
+    ShardedTensorViewDataTest,
+    ::testing::Combine(
+        ::testing::Values(
+            TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED),
+        ::testing::Values(Layout::ROW_MAJOR, Layout::TILE),
+        ::testing::Values(DataType::BFLOAT16, DataType::FLOAT32)));
 
 }  // namespace
 }  // namespace ttnn::distributed::test
