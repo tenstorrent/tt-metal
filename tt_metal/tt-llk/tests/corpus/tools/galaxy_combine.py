@@ -16,13 +16,34 @@ def verdict_tokens(text: str) -> dict[str, str]:
     return dict(pairs)
 
 
-def combine(out: Path, npar: int, space: int, op: str, golden: bool, shard_failed: bool):
+def combine(
+    out: Path,
+    npar: int,
+    space: int,
+    op: str,
+    golden: bool,
+    shard_failed: bool,
+    failed_chips: "set[int] | None" = None,
+):
     covered = 0
-    expected_per_slice = space // npar if npar > 0 and space % npar == 0 else None
+    # A zero-sized slice is not a covered slice: with space==0 (or space<npar)
+    # every per-slice check below compares 0 against 0 and passes, so empty
+    # slices used to combine into BIT-EXACT-ALL-INPUTS having enumerated
+    # nothing.  Require a positive space AND a positive slice.
+    expected_per_slice = (
+        space // npar if npar > 0 and space > 0 and space % npar == 0 else None
+    )
+    if expected_per_slice is not None and expected_per_slice < 1:
+        expected_per_slice = None
     all_equal = True
     numeric_ok = True
     witness = []
-    invalid = set()
+    # Chips the driver saw exit non-zero are invalid by identity, whatever
+    # verdict file happens to be sitting in their slice dir.
+    invalid = set(failed_chips or ())
+    if invalid:
+        all_equal = False
+        numeric_ok = False
     for chip in range(npar):
         slice_dir = out / f"slice-{chip}"
         verdict_path = slice_dir / f"{op}-VERDICT.txt"
@@ -95,9 +116,22 @@ def main() -> int:
     parser.add_argument("op")
     parser.add_argument("golden", type=int, choices=(0, 1))
     parser.add_argument("shard_rc", type=int)
+    parser.add_argument(
+        "--failed-chips",
+        default="",
+        help="comma-separated chip indices whose slice process exited non-zero; "
+        "their ranges are marked invalid regardless of any verdict file present",
+    )
     args = parser.parse_args()
+    failed_chips = {int(x) for x in args.failed_chips.split(",") if x.strip()}
     summary, passed = combine(
-        args.out, args.npar, args.space, args.op, bool(args.golden), bool(args.shard_rc)
+        args.out,
+        args.npar,
+        args.space,
+        args.op,
+        bool(args.golden),
+        bool(args.shard_rc),
+        failed_chips,
     )
     print(summary)
     return 0 if passed else 1

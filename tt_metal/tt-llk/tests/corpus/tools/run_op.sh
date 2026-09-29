@@ -33,7 +33,17 @@ case "$SWEEP" in
   *) echo "FATAL: SWEEP must be fp32 or binary, got '$SWEEP'" >&2; exit 2 ;;
 esac
 
-[ -s "$OUT/$op/$op-VERDICT.txt" ] && { echo "$op already has a verdict"; exit 0; }
+# Resume short-circuit.  A REFUSED-IDENTITY file is a refusal, not a verdict:
+# treating it as "done" made every later attempt exit 0 without streaming a
+# single input, so a mis-built pair reported success for the rest of time.
+if [ -s "$OUT/$op/$op-VERDICT.txt" ]; then
+  if grep -q 'VERDICT=REFUSED' "$OUT/$op/$op-VERDICT.txt"; then
+    echo "$op has a REFUSED verdict; re-running the identity gate"
+    rm -f "$OUT/$op/$op-VERDICT.txt"
+  else
+    echo "$op already has a verdict"; exit 0
+  fi
+fi
 
 sem=$(awk -F'\t' -v o="$op" '$1==o{print $2}' "$OPS_TSV")
 hand=$(awk -F'\t' -v o="$op" '$1==o{print $3}' "$OPS_TSV")

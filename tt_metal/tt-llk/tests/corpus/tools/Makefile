@@ -5,7 +5,7 @@
 OUT  ?= $(if $(CRAQ_PROVE_OUT),$(CRAQ_PROVE_OUT),$(HOME)/craq-keep/prove-all)
 JOBS ?= 8
 
-.PHONY: prove-all prove-all-selftest prove-all-manifest prove-all-force
+.PHONY: prove-all prove-all-selftest prove-all-manifest prove-all-force shard-selftest
 
 ## prove every board op at the current pin and emit the master coverage ledger
 prove-all:
@@ -18,6 +18,10 @@ prove-all-force:
 ## guard routing + census math (fast unit + live 3-op end-to-end)
 prove-all-selftest:
 	python3 selftest_prove_all.py
+
+## guard the 32-chip shard arithmetic + combiner fail-closed paths (no hardware)
+shard-selftest:
+	python3 selftest_galaxy_shard.py
 
 ## print the data-driven routing manifest census (no proving)
 prove-all-manifest:

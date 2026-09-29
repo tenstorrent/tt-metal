@@ -52,6 +52,22 @@ case "$SWEEP" in
 esac
 [ -f "$STREAMER" ] || { echo "FATAL: no streamer at $STREAMER" >&2; exit 2; }
 
+# ---- knob validation ------------------------------------------------------
+# Every geometry knob reaches `$(( ))`, where bash silently treats a
+# non-numeric word as 0 (and `set -u` turns it into an unbound-variable abort
+# mid-script instead of a named refusal).  Validate them as plain decimals up
+# front so a typo is a refusal, never a zero-sized "proof".
+_posint() { case "${2:-}" in ''|*[!0-9]*) echo "FATAL: $1 must be a decimal integer, got '${2:-}'" >&2; exit 2 ;; esac; }
+_posint NPAR      "$NPAR"
+_posint SPACE     "$SPACE"
+_posint BAND_BITS "$BAND_BITS"
+_posint STAGGER   "$STAGGER"
+case "${GOLDEN:-1}" in 0|1) ;; *) echo "FATAL: GOLDEN must be 0 or 1, got '${GOLDEN:-}'" >&2; exit 2 ;; esac
+[ "$NPAR"  -gt 0 ] || { echo "FATAL: NPAR must be positive" >&2; exit 2; }
+[ "$SPACE" -gt 0 ] || { echo "FATAL: SPACE must be positive — a zero-sized space would 'cover' itself" >&2; exit 2; }
+[ "$BAND_BITS" -gt 0 ] && [ "$BAND_BITS" -le 32 ] \
+  || { echo "FATAL: BAND_BITS must be in 1..32, got '$BAND_BITS'" >&2; exit 2; }
+
 # ---- op identity ----------------------------------------------------------
 # Certified binarypow defaults: the pinned SfpuElwpow pair and the two build
 # variants their .text hashes came from.  Any other op must supply its own,
@@ -92,8 +108,7 @@ fi
 [ -n "$SEM_VARIANT" ] && [ -n "$HAND_VARIANT" ] || {
   echo "FATAL: no build variants for '$OP' — set SEM_VARIANT and HAND_VARIANT, or pass IDMAP" >&2; exit 2; }
 
-mkdir -p "$OUT"
-[ "$NPAR" -gt 0 ] 2>/dev/null || { echo "FATAL: NPAR must be positive" >&2; exit 2; }
+mkdir -p "$OUT" || { echo "FATAL: cannot create OUT=$OUT" >&2; exit 2; }
 echo "HOST=$(hostname) OP=$OP SWEEP=$SWEEP NPAR=$NPAR BAND_BITS=$BAND_BITS SPACE=$SPACE $(date -u +%H:%M:%SZ)" \
   | tee "$OUT/DRIVER.log"
 
@@ -101,8 +116,28 @@ echo "HOST=$(hostname) OP=$OP SWEEP=$SWEEP NPAR=$NPAR BAND_BITS=$BAND_BITS SPACE
 # sem != hand .text, both non-empty.  Done here rather than only per-slice so a
 # mis-built pair costs one gate instead of 32 slice failures.  Each slice still
 # re-gates through --idmap when one is supplied.
-OBJ_SEM=$(find "$BUILD/tt-llk-build/sources" -path "*${SEM_VARIANT}/elf/math.elf" | head -1)
-OBJ_HAND=$(find "$BUILD/tt-llk-build/sources" -path "*${HAND_VARIANT}/elf/math.elf" | head -1)
+# The per-slice gate hashes ONE source subtree (binary_stream_sweep.py
+# --idmap-source, default sfpu_binary_test.cpp; fp32_stream_sweep.py hardcodes
+# eltwise_unary_sfpu_test.cpp).  An unscoped `find | head -1` can pick a
+# same-variant ELF from a DIFFERENT subtree, so the driver would certify one
+# file and all 32 slices would then refuse a different one.  Look in the
+# sweep's own subtree first, fall back to the whole tree, and sort so the
+# choice is reproducible rather than filesystem-order.
+case "$SWEEP" in
+  binary) IDMAP_SOURCE="${IDMAP_SOURCE:-sfpu_binary_test.cpp}" ;;
+  fp32)   IDMAP_SOURCE="${IDMAP_SOURCE:-eltwise_unary_sfpu_test.cpp}" ;;
+esac
+_find_elf() {  # $1 = variant hash
+  find "$BUILD/tt-llk-build/sources/$IDMAP_SOURCE" -path "*${1}/elf/math.elf" 2>/dev/null \
+    | LC_ALL=C sort | head -1
+}
+_find_elf_anywhere() {
+  find "$BUILD/tt-llk-build/sources" -path "*${1}/elf/math.elf" 2>/dev/null \
+    | LC_ALL=C sort | head -1
+}
+OBJ_SEM=$(_find_elf "$SEM_VARIANT");   [ -n "$OBJ_SEM" ]  || OBJ_SEM=$(_find_elf_anywhere "$SEM_VARIANT")
+OBJ_HAND=$(_find_elf "$HAND_VARIANT"); [ -n "$OBJ_HAND" ] || OBJ_HAND=$(_find_elf_anywhere "$HAND_VARIANT")
+echo "IDGATE sem_elf=${OBJ_SEM:-<none>} hand_elf=${OBJ_HAND:-<none>}" | tee -a "$OUT/DRIVER.log"
 sha_sem=$("$VENV" "$TOOLS/elf_text_sha.py" "$OBJ_SEM" 2>/dev/null)
 sha_hand=$("$VENV" "$TOOLS/elf_text_sha.py" "$OBJ_HAND" 2>/dev/null)
 echo "IDGATE sem_text=$sha_sem hand_text=$sha_hand" | tee -a "$OUT/DRIVER.log"
@@ -118,15 +153,23 @@ fi
 # Every resumable slice is bound to this exact object identity map.  Direct
 # variant arguments get a generated one; legacy bare-SHA caches are refused by
 # the streamer rather than silently adopted.
-ACTIVE_IDMAP="${IDMAP:-$OUT/IDENTITY-MAP.tsv}"
+# Op-scoped: two ops sharing one OUT would otherwise clobber each other's
+# single-row map and each other's slices would refuse on the wrong row.
+ACTIVE_IDMAP="${IDMAP:-$OUT/IDENTITY-MAP-$OP.tsv}"
 if [ -z "${IDMAP:-}" ]; then
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$OP" "$SEM_VARIANT" "$sha_sem" "$HAND_VARIANT" "$sha_hand" > "$ACTIVE_IDMAP"
 fi
 
 SLICE=$(( SPACE / NPAR ))
-[ $(( SLICE * NPAR )) -eq "$SPACE" ] \
+[ "$(( SLICE * NPAR ))" -eq "$(( SPACE ))" ] \
   || { echo "FATAL: SPACE=$SPACE is not divisible by NPAR=$NPAR — slices would not cover it" >&2; exit 2; }
+# SLICE==0 (SPACE<NPAR) makes every slice a no-op whose streamer trivially
+# reports covered==total==0, and the combiner's expected_per_slice is then 0
+# too, so 32 empty slices used to combine to BIT-EXACT-ALL-INPUTS having
+# checked nothing.  Refuse instead.
+[ "$SLICE" -ge 1 ] \
+  || { echo "FATAL: SLICE=0 (SPACE=$SPACE < NPAR=$NPAR) — every slice would be empty" >&2; exit 2; }
 echo "SLICE=$SLICE inputs/chip" | tee -a "$OUT/DRIVER.log"
 
 idmap_args=(--idmap "$ACTIVE_IDMAP")
@@ -140,11 +183,17 @@ golden_args=()
 # seconds apart spreads the one-time import so every chip's harness comes up.
 # Streaming itself is device-bound and unaffected.
 pids=()
+chips=()
 for k in $(seq 0 $((NPAR-1))); do
   RT="/tmp/galaxy-shard-rt-$k"
   [ -d "$RT/tt-llk-build/sources" ] || { mkdir -p "$RT"; cp -a "$BUILD/tt-llk-build" "$RT/"; }
   start=$(( k * SLICE ))
   sdir="$OUT/slice-$k"
+  # A slice verdict left by an earlier run must never stand in for THIS run's
+  # slice: if the chip dies now, the stale file would make the combiner count
+  # its range as covered.  Band caches (sdir/bands) are provenance-bound and
+  # stay, so a re-run still resumes rather than re-streaming.
+  rm -f "$sdir/$OP-VERDICT.txt" "$sdir/$OP-CORRECTNESS-VERDICT.txt"
   ( SFPU_WAIT_TIMEOUT="${SFPU_WAIT_TIMEOUT:-600}" \
     "$VENV" "$STREAMER" \
       --op "$OP" --sem-node "$SEM" --hand-node "$HAND" \
@@ -154,18 +203,26 @@ for k in $(seq 0 $((NPAR-1))); do
       ${idmap_args[@]+"${idmap_args[@]}"} \
       ${golden_args[@]+"${golden_args[@]}"} > "$OUT/slice-$k.log" 2>&1 ) &
   pids+=("$!")
+  chips+=("$k")
   sleep "$STAGGER"
 done
 echo "launched $NPAR chip-slices $(date -u +%H:%M:%SZ)" | tee -a "$OUT/DRIVER.log"
 shard_rc=0
-for p in "${pids[@]}"; do
-  wait "$p" || shard_rc=1
+failed_chips=""
+for i in "${!pids[@]}"; do
+  if ! wait "${pids[$i]}"; then
+    shard_rc=1
+    failed_chips="${failed_chips:+$failed_chips,}${chips[$i]}"
+  fi
 done
-echo "all slices done $(date -u +%H:%M:%SZ)" | tee -a "$OUT/DRIVER.log"
+echo "all slices done $(date -u +%H:%M:%SZ) failed_chips=[${failed_chips}]" | tee -a "$OUT/DRIVER.log"
 
 # ---- combine ----
-"$VENV" "$TOOLS/galaxy_combine.py" \
-  "$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc" \
-  | tee "$OUT/$OP-VERDICT.txt"
-combine_rc=$?
+# --failed-chips names the dead slices so the combiner marks their ranges
+# invalid by identity, instead of leaning on one shard_rc boolean that a
+# hand re-run of galaxy_combine.py would not reproduce.
+combine_args=("$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc")
+[ -n "$failed_chips" ] && combine_args+=(--failed-chips "$failed_chips")
+"$VENV" "$TOOLS/galaxy_combine.py" "${combine_args[@]}" | tee "$OUT/$OP-VERDICT.txt"
+combine_rc=${PIPESTATUS[0]}
 [ "$shard_rc" -eq 0 ] && [ "$combine_rc" -eq 0 ]
