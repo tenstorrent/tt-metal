@@ -16,7 +16,7 @@
 #                   + didt matmul stress (pytest, galaxy mesh)
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   pre_reboot      data collection before a BMC reboot: snapshot + -glx_reset
+#   pre_reboot      data collection before a BMC reboot, no resets: snapshot
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #
@@ -38,8 +38,8 @@ Tiers:
               + QSFP tests
   deploy      3 resets + full GDDR pattern set + eth bandwidth + didt matmul stress (pytest)
               + post-test reset + triage + QSFP tests
-  pre_reboot  Data collection before a BMC reboot: snapshot + -glx_reset + triage
-              + QSFP tests. No tests.
+  pre_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests.
+              No resets, no tests.
 
 The QSFP tests check ETH link training, cabling and module state across all 448
 ports. They run on medium, deploy and pre_reboot when \`tt-bh-glx-cluster-debug\` is on PATH

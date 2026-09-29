@@ -32,17 +32,16 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | `tt-smi -glx_reset` × 1 (the post-test reset; no pre-test resets) | — | host_side + device_side | yes, if installed | snapshot + reset + triage + ~7 min | Collect data before a BMC reboot |
+| `pre_reboot` | none | — | host_side + device_side | yes, if installed | snapshot + triage + ~7 min | Collect data before a BMC reboot |
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
-nothing that would change it. The initial snapshot is taken before any reset, so
-it shows the unit as it was found. Then comes one bare `-glx_reset`, then the
-triage tools and the QSFP tests. There are no gtests or pytests: a stress run on
-a unit that is already going to be rebooted would change the state the later
-phases are meant to record. The reset loop and test phases are recorded as SKIP
-with the reason, not left out. `--skip-reset` also skips its `-glx_reset`,
-the same as on the other tiers.
+nothing that would change it. It never resets the unit: the snapshot, the
+triage tools and the QSFP tests all read the unit as it was found. There are no
+gtests or pytests either: a stress run on a unit that is already going to be
+rebooted would change the state the later phases are meant to record. The reset
+loop and test phases are recorded as SKIP with the reason, not left out; there
+is no `post_test_reset` phase.
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -73,11 +72,12 @@ The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 
 ## Triage phase
 
-`medium`, `deploy` and `pre_reboot` end with a post-test `tt-smi -glx_reset` followed by the
+`medium` and `deploy` end with a post-test `tt-smi -glx_reset` followed by the
 first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
-node sweep). They live in `tools/scaleout/kmd_triage/`. Tables are
-`POST_TEST_RESET_PLAN`, `TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
+node sweep). `pre_reboot` runs the same tools with no reset before them. They
+live in `tools/scaleout/kmd_triage/`. Tables are `POST_TEST_RESET_PLAN`,
+`TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
 
 **What the two tools actually check, how to run them by hand, their exit codes
 and their known gaps are documented in

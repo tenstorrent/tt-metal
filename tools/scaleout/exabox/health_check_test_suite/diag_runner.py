@@ -234,11 +234,14 @@ TIER_TESTS = {
 # out of the post-reset snapshot dedupe in run_diag(). Adding revalidation here
 # means reworking that block, which assumes a single batch of snapshot_after_*
 # phases judged by normalize_health_report() on post[-1].
+#
+# pre_reboot runs no tests, so there is nothing for triage to overlap, and a
+# reset would wipe the state it is there to record before the BMC reboot.
 POST_TEST_RESET_PLAN = {
     "light": [],
     "medium": ["-glx_reset"],
     "deploy": ["-glx_reset"],
-    "pre_reboot": ["-glx_reset"],
+    "pre_reboot": [],
 }
 
 # First-step triage tools, run after POST_TEST_RESET_PLAN. They live in
