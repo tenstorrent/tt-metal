@@ -410,10 +410,11 @@ time, so an edit mid-run measures a mixture. For long runs, launch each arm with
   counterpart.
 - **Batch sizing:** tiny batches waste most of the budget in per-agent overhead, so pack directories contiguously
   up to the line bound.
-- **The 1,000-agent cap per workflow.** Measured on the final version: about 17.7 agents per batch (hunt, trace
-  audit, screens including trace-audit candidates, two deep verifiers per survivor). So a wave must stay at 50
-  batches or fewer (`audit-wave.js` refuses larger ones). If verification is per finding, cluster it by (class, file) when a
-  wave would exceed the cap.
+- **The 1,000-agent cap per workflow.** About 17.7 agents per batch on average (hunt, trace audit, screens including
+  trace-audit candidates, two deep verifiers per survivor), measured on small benchmark batches. Outliers are the
+  risk: one real batch once had 144 candidates, about 400 agents on its own. So `audit-wave.js` keeps waves at 50
+  batches AND counts every agent: a candidate whose screen and deep verifiers would not fit under 950 is deferred as
+  `needs_recheck`, never dropped, and step 5's recheck verifies it.
 - **Yield steers the run.** Order later waves by measured confirm yield per class (`COVERAGE.md`), not by class
   number. A class with many candidates and a near-zero confirm rate is a PROMPT defect: fix the prompt, not the code.
 - **"No caller" is not "unreachable".** A parser saying a file or function is dead is not proof (earlier audits found

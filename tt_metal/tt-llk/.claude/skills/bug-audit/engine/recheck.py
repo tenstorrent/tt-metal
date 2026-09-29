@@ -53,6 +53,8 @@ if argv[0] == "queue":
             "needs_recheck": "a verifier died",
             "uncertain": "no verifier could settle it",
         }.get(f["status"])
+        if str((f.get("reasons") or [""])[0]).startswith("[deferred]"):
+            why = "deferred at the wave's agent limit"
         if why is None and key in sample:
             why = "refuted-sample"
         if why and key not in rc and key not in confirmed:

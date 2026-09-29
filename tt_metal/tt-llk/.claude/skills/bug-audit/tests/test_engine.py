@@ -590,6 +590,29 @@ def test_a_recheck_does_not_overrule_a_later_confirmation(rundir):
     ] == ["r.cpp:4"]
 
 
+def test_recheck_queues_a_candidate_deferred_at_the_agent_limit(rundir):
+    deferred = finding(
+        "d.cpp",
+        7,
+        status="needs_recheck",
+        reasons=[
+            "[deferred] the wave reached its 950-agent limit before verifying this"
+        ],
+    )
+    write(str(rundir / "verdicts" / "A-0000.json"), {"findings": [deferred]})
+    code, out, err = run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "queue",
+        "--to-dir",
+        rundir / "items",
+    )
+    assert code == 0, out + err
+    rc = json.load(open(rundir / "recheck.json"))
+    assert rc["d.cpp:7"]["why"] == "deferred at the wave's agent limit", rc
+
+
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
     _mined(tmp_path, n=2)
     cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]

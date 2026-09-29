@@ -278,28 +278,40 @@ function tally(f, batch, votes, planned) {
            reasons: got.map((v) => `[${v.verdict}] ${v.reason}`) }
 }
 
-// A workflow may spawn at most 1000 agents. Measured on the final version: about 17.7 agents per batch (hunt, trace
-// audit, a screen per candidate including trace-audit ones, two deep verifiers per survivor). Past the cap, agent()
-// throws and the tail of the wave is lost, so keep waves at 50 batches (about 885 agents) or fewer.
+// A workflow may spawn at most 1000 agents; past the cap, agent() throws and the tail of the wave is lost. The average
+// is about 17.7 agents per batch, but one batch with a hundred candidates needs ~300 on its own, so the batch cap
+// alone cannot hold the line: every agent is counted, and a candidate is verified only if its screen and both deep
+// verifiers fit under AGENT_LIMIT. One that does not is deferred as needs_recheck, which recheck.py verifies later.
 const MAX_BATCHES = A.max_batches || 50
+const AGENT_LIMIT = A.agent_limit || 950
+let spawned = 0
+let reserved = 0 // agents promised to work already started: a batch's hunt + trace attempts, a candidate's verifiers
+const counted = (prompt, opts) => { reserved--; spawned++; return agent(prompt, opts) }
+const reserve = (n) => { if (spawned + reserved + n > AGENT_LIMIT) return false; reserved += n; return true }
+const deferred = (f, batch) => ({ ...f, batch, status: 'needs_recheck', votes: { confirmed: 0, refuted: 0, uncertain: 0, died: 0 },
+  reasons: [`[deferred] the wave reached its ${AGENT_LIMIT}-agent limit before verifying this; recheck.py verifies it`] })
 if (BATCHES.length > MAX_BATCHES) {
   throw new Error(`wave of ${BATCHES.length} batches exceeds ${MAX_BATCHES} (the 1000-agent cap at ~18 agents/batch); ` +
                   'split it with next_wave.py N <= 50, or pass max_batches if your measured agents/batch is lower')
 }
 log(`wave: ${BATCHES.length} batches, knowledge files: ${KNOWLEDGE.length}`)
+reserved = BATCHES.length * 3 // each batch: its hunt, plus up to two trace-audit attempts
+if (reserved > AGENT_LIMIT) throw new Error(`${BATCHES.length} batches need up to ${reserved} hunt and trace agents, over the ${AGENT_LIMIT}-agent limit`)
 
 const results = await pipeline(
   BATCHES,
-  (batch) => agent(huntPrompt(batch), { label: `hunt:${batch}`, phase: 'Hunt', schema: FIND_SCHEMA }),
+  (batch) => counted(huntPrompt(batch), { label: `hunt:${batch}`, phase: 'Hunt', schema: FIND_SCHEMA }),
   async (res, batch) => {
-    if (!res) return { batch, ok: false, hunt: null, judged: [] }
+    if (!res) { reserved -= 2; return { batch, ok: false, hunt: null, judged: [] } }
     const sample = traceSample(res)
     let traceAudit = null
     // the trace audit is part of the contract: one retry for a dead agent, then record that it did not run --
     // never as "nothing to sample", which would read as a clean audit
-    for (let attempt = 0; sample.length && !traceAudit && attempt < 2; attempt++) {
-      traceAudit = await agent(tracePrompt(batch, sample, rootOf(batch)), { label: `trace:${batch}${attempt ? ':retry' : ''}`, phase: 'Trace audit', schema: TRACE_SCHEMA })
+    let attempt = 0
+    for (; sample.length && !traceAudit && attempt < 2; attempt++) {
+      traceAudit = await counted(tracePrompt(batch, sample, rootOf(batch)), { label: `trace:${batch}${attempt ? ':retry' : ''}`, phase: 'Trace audit', schema: TRACE_SCHEMA })
     }
+    reserved -= 2 - attempt // release the trace attempts this batch did not use
     const extra = ((traceAudit && traceAudit.findings) || []).map((f) => ({ ...f, source: 'trace-audit' }))
     res.trace_audit = traceAudit
       ? { sampled: sample.length, rechecked: traceAudit.rechecked }
@@ -307,20 +319,22 @@ const results = await pipeline(
     const cands = [...(res.findings || []), ...extra]
     if (!cands.length) return { batch, ok: true, hunt: res, judged: [] }
 
-    const screened = await parallel(cands.map((f) => () =>
-      agent(verifyPrompt(f, SCREEN_LENS, rootOf(batch)), { label: `screen:${f.file.split('/').pop()}:${f.line}`, phase: 'Screen', schema: VERDICT_SCHEMA })
+    const judged = []
+    // reserve each candidate's screen and both deep verifiers up front, so a started verification always finishes
+    const go = cands.filter((f) => reserve(1 + DEEP_LENSES.length) || (judged.push(deferred(f, batch)), false))
+    const screened = await parallel(go.map((f) => () =>
+      counted(verifyPrompt(f, SCREEN_LENS, rootOf(batch)), { label: `screen:${f.file.split('/').pop()}:${f.line}`, phase: 'Screen', schema: VERDICT_SCHEMA })
         .then((v) => ({ f, v }))))
 
-    const judged = []
     const alive = []
     for (const s of screened.filter(Boolean)) {
-      if (!s.v) judged.push(tally(s.f, batch, [], 1))
-      else if (s.v.verdict === 'refuted') judged.push({ ...tally(s.f, batch, [s.v], 1), status: 'refuted' })
+      if (!s.v) { reserved -= DEEP_LENSES.length; judged.push(tally(s.f, batch, [], 1)) }
+      else if (s.v.verdict === 'refuted') { reserved -= DEEP_LENSES.length; judged.push({ ...tally(s.f, batch, [s.v], 1), status: 'refuted' }) }
       else alive.push(s)
     }
     const deep = await parallel(alive.map((s) => () =>
       parallel(DEEP_LENSES.map((lens) => () =>
-        agent(verifyPrompt(s.f, lens, rootOf(batch)), { label: `verify:${s.f.file.split('/').pop()}:${s.f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA })))
+        counted(verifyPrompt(s.f, lens, rootOf(batch)), { label: `verify:${s.f.file.split('/').pop()}:${s.f.line}`, phase: 'Verify', schema: VERDICT_SCHEMA })))
         .then((vs) => tally(s.f, batch, [s.v, ...vs], 1 + DEEP_LENSES.length))))
     judged.push(...deep.filter(Boolean))
     return { batch, ok: true, hunt: res, judged }
@@ -330,5 +344,6 @@ const results = await pipeline(
 const good = results.filter(Boolean)
 const all = good.flatMap((r) => r.judged)
 const count = (s) => all.filter((f) => f.status === s).length
-log(`confirmed ${count('confirmed')}, uncertain ${count('uncertain')}, refuted ${count('refuted')}, needs_recheck ${count('needs_recheck')}; batches ok ${good.filter((r) => r.ok).length}/${BATCHES.length}`)
+const nDeferred = all.filter((f) => ((f.reasons || [])[0] || '').startsWith('[deferred]')).length
+log(`confirmed ${count('confirmed')}, uncertain ${count('uncertain')}, refuted ${count('refuted')}, needs_recheck ${count('needs_recheck')} (${nDeferred} deferred at the agent limit); ${spawned} agents; batches ok ${good.filter((r) => r.ok).length}/${BATCHES.length}`)
 return { batches: BATCHES, results: good }
