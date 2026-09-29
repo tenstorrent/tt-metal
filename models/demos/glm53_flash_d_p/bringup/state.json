@@ -3952,6 +3952,94 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "fe9ffd7b-a8e1-4ecc-8d76-5e4b71c7015b"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/P.1.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/P.1.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 810.8,
+    "session_id": "fe9ffd7b-a8e1-4ecc-8d76-5e4b71c7015b",
+    "t": "2026-09-29T21:55:16"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 139.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T21:41:45"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T21:57:37"
+   }
+  ],
+  "last_run": "2026-09-29T21:57:37",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/P.1.log",
+  "metrics": {
+   "device_ms_attn_residual": 31.53,
+   "device_ms_ffn_residual": 31.5,
+   "device_ms_total": 428.38,
+   "host_transfers_per_layer": 0,
+   "pcc_attn_residual_L00": 0.9999936815610965,
+   "pcc_attn_residual_L03": 0.9999960388186001,
+   "pcc_attn_residual_L04": 0.9999952147591741,
+   "pcc_ffn_residual_L00": 0.9999930724764524,
+   "pcc_ffn_residual_L03": 0.9999957516945172,
+   "pcc_ffn_residual_L04": 0.9999952514669904,
+   "pcc_layer_L00": 0.9999752004233728,
+   "pcc_layer_L01": 0.9999665558776015,
+   "pcc_layer_L02": 0.9999865028898893,
+   "pcc_layer_L03": 0.9999553474830585,
+   "pcc_layer_L04": 0.9999405339315828,
+   "pcc_state_min": 0.99838979218403
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-29T21:55:17",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 14.1,
@@ -7186,7 +7274,8 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-29T21:01:00",
-  "status": "PASS"
+  "status": "PASS",
+  "waiting": "pick opportunities in models/demos/glm53_flash_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
  "_run": {
   "branch": "dnijemcevic/glm53_prefill",
