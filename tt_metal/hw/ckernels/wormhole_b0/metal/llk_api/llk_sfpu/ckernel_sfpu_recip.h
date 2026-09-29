@@ -21,7 +21,7 @@ namespace sfpu {
 //               correctly rounds BF16 inputs with normal BF16 reciprocals (≤0.5 ULP).
 // max_iter = 0: this has the same effect as max_iter=1 at the moment;
 //               it may be replaced with a cheaper approximation in future.
-// round_to_bf16 rounds the normalized result to BF16, nearest with ties to even,
+// round_to_bf16 rounds the normalized result to BF16, nearest with ties away from zero,
 // before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 template <int max_iter = 2, bool round_to_bf16 = false>
