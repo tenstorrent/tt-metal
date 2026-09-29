@@ -1198,6 +1198,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 3
+  frozen:
+    at: '2026-09-29T10:01:08'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_08_ffn_hc.py: 8f51e9a825bf608c0eb54d873fb5dba009f312fe4a0bb6ebd27665d488eb5b02
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.ffn_collapse
   title: dsa_moe ffn_collapse (op) on device, layer 3
   step: implement
