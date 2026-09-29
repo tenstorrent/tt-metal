@@ -103,6 +103,13 @@ def _report():
         logger.info("\n".join(_REPORT))
 
 
+def _emit(line):
+    """Record a result row, and print it right away (flushed): a CI log keeps what was measured even if the job
+    is killed later; the whole table is printed again at the end of the module."""
+    _REPORT.append(line)
+    print(f"FABRIC_ALL_GATHER {line.strip()}", flush=True)
+
+
 def _slowest_chip_ns(mesh_device):
     ttnn.ReadDeviceProfiler(mesh_device)
     chip_ns = []
@@ -162,7 +169,7 @@ def test_fabric_all_gather(mesh_device):
     link_gbps = float(_LINK_GBPS_ENV) if _LINK_GBPS_ENV else (27.0 if rows * cols == 32 else 48.5)
     fabric = str(ttnn.get_fabric_config()).split(".")[-1]
     if not _REPORT:
-        _REPORT.append(
+        _emit(
             f"\n=== fabric_all_gather  box={socket.gethostname()}  arch={mesh_device.arch()}  payload={PAYLOAD}B  "
             f"{DTYPE_NAME} {LAYOUT_NAME} dim={DIM}  trials={TRIALS} (median)  link peak {link_gbps:.1f} GB/s ==="
         )
@@ -211,7 +218,7 @@ def _gather_one_size(mesh_device, H, W, fabric, link_gbps):
                 if STRICT:
                     raise
                 msg = str(e).splitlines()[0][:110]
-                _REPORT.append(f"{tag}  unsupported: {msg}")
+                _emit(f"{tag}  unsupported: {msg}")
                 continue
             ttnn.synchronize_device(mesh_device)
             dev = ttnn.get_device_tensors(out)
@@ -236,7 +243,7 @@ def _gather_one_size(mesh_device, H, W, fabric, link_gbps):
             busiest = max(load.values())
             geo = f"busiest hop {busiest:.1f} shards, {nbrs} neighbours/chip"
             if EMULE or TRIALS == 0:
-                _REPORT.append(f"{tag}  bit-exact on all {rows * cols} chips  ✓  {geo}  (no timing)")
+                _emit(f"{tag}  bit-exact on all {rows * cols} chips  ✓  {geo}  (no timing)")
                 continue
             run = lambda: fabric_all_gather(
                 inp,
@@ -258,7 +265,7 @@ def _gather_one_size(mesh_device, H, W, fabric, link_gbps):
                     samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)
             per_link = busiest * shard_bytes / (num_links * ns)  # GB/s on each link of the busiest hop
-            _REPORT.append(
+            _emit(
                 f"{tag}  {ns / 1e3:>9.1f} us  receive {shard_bytes * (G - 1) / ns:6.1f} GB/s/chip  "
                 f"busiest link {per_link:5.1f} GB/s = {100 * per_link / link_gbps:3.0f}% of peak  ✓  {geo}"
             )
@@ -396,9 +403,7 @@ def test_fabric_all_gather_output_reuse(mesh_device):
             ttnn.synchronize_device(mesh_device)
             for i, (host, snap) in enumerate(zip(hosts, snaps)):
                 _check(host, snap, groups, cols, H, W, f"{topo_name} links={num_links} balance={balance} call {i}")
-            _REPORT.append(
-                f"    reuse  {topo_name:<15} links={num_links} balance={balance!s:<5}  {REUSE_CALLS} calls ✓"
-            )
+            _emit(f"    reuse  {topo_name:<15} links={num_links} balance={balance!s:<5}  {REUSE_CALLS} calls ✓")
 
 
 def _gather_strip(mesh_device, columns):
@@ -469,7 +474,7 @@ def test_fabric_all_gather_subdevice(mesh_device, external_semaphores):
                         _check(hosts[0], out, groups, cols, H, W, f"subdevice {topo_name} links={num_links} call 0")
                 ttnn.synchronize_device(mesh_device, sub_device_ids=[sd])
                 _check(hosts[-1], out, groups, cols, H, W, f"subdevice {topo_name} links={num_links} last call")
-                _REPORT.append(
+                _emit(
                     f"    subdevice({'external' if sems else 'own'} sems)  {topo_name:<15} links={num_links}  "
                     f"{len(used)} cores in a 4-column strip ✓"
                 )
