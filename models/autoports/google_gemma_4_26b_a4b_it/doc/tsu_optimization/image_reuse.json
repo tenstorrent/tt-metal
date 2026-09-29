@@ -1,0 +1,31 @@
+{
+  "policy": "Build once per selected runtime SHA; pass the immutable published image to all subsequent benchmark dispatches.",
+  "images": [
+    {
+      "tt_metal_sha": "eb1d2af61c7630c7424e9593b646093ef7be45af",
+      "publication_run": 36564611976,
+      "build_job": 109393485980,
+      "tag_uri": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-eb1d2af61c7630c7424e9593b646093ef7be45af-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109393485980",
+      "digest": "sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f",
+      "reuse_runs": [
+        {
+          "run": 36581849489,
+          "inference_server_sha": "5723918d1736c2f509ea2332b1b869afc072a2d4",
+          "purpose": "C1/C8/C16 five-row shared-batching control",
+          "attempts": [
+            {"attempt": 1, "job": 109451944217, "status": "failed before image pull: runner checkout EACCES .git/FETCH_HEAD"},
+            {"attempt": 2, "job": 109453348357, "status": "running; checkout and image selection passed, build jobs skipped"}
+          ],
+          "image_input": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f"
+        }
+      ]
+    },
+    {
+      "tt_metal_sha": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
+      "publication_run": 36576438888,
+      "build_job": 109433282221,
+      "status": "building; original pre-intervention C32 benchmark must be cancelled after publication",
+      "reuse_runs": []
+    }
+  ]
+}

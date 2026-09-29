@@ -204,7 +204,10 @@ def expert_union_decode(experts, x, routes, indices, *, vector_mix=False, indexe
         # Include a selected expert even if its BF16 routing weight is zero.
         ids = ttnn.concat(indices, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         selected = ttnn.scatter(
-            ttnn.zeros_like(routes), dim=-1, index=ids, src=ttnn.ones_like(ids, dtype=ttnn.bfloat16)
+            ttnn.zeros_like(routes),
+            dim=-1,
+            index=ids,
+            src=ttnn.ones_like(routes[..., : experts.config.top_k]),
         )
     else:
         selected = routes

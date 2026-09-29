@@ -1,0 +1,71 @@
+diff --git a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+index 15fafec8df..f155358303 100644
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -824,6 +824,7 @@ class MultichipDecoder(OptimizedDecoder):
+         self.fused_tail = fused_tail
+         self.shared_geometry = shared_geometry
+         self.batched_shared_decode = os.environ.get("GEMMA4_BATCHED_SHARED_DECODE", "1") != "0"
++        self.batched_expert_decode = os.environ.get("GEMMA4_BATCHED_EXPERT_DECODE", "0") != "0"
+         self.moe_ccl_bfp8 = sliding if moe_ccl_bfp8 is None else bool(moe_ccl_bfp8)
+         if sharded_residual:
+             self.allreduce = self.reduce_scatter
+@@ -1526,11 +1527,25 @@ class MultichipDecoder(OptimizedDecoder):
+             kv_cache=kv_cache,
+         )
+ 
++    def _can_batch_experts(self, batch):
++        experts = self.layer.moe.experts
++        return (
++            getattr(self, "batched_expert_decode", False)
++            and batch == 32
++            and type(experts) is _HybridExperts
++            and type(experts.decode) is OptimizedExperts
++            and not experts.decode.expert_split
++            and experts.decode.indexed_router is not None
++        )
++
+     def _decode_shared_batch(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+         """Keep per-slot attention/routing; amortize shared MLP, MoE CCL and tail."""
+         self._validate_kv_cache(kv_cache)
+         eps = self.config.rms_norm_eps
+         residuals, routed_rows, shared_inputs = [], [], []
++        experts = self.layer.moe.experts
++        batch_experts = self._can_batch_experts(hidden_states.shape[-2])
++        expert_inputs, route_rows, route_indices = [], [], []
+         for slot in range(hidden_states.shape[-2]):
+             x = hidden_states[:, :, slot : slot + 1]
+             memory = getattr(self, "decode_residual_memory", None)
+@@ -1556,15 +1571,29 @@ class MultichipDecoder(OptimizedDecoder):
+             expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+             if memory is not None:
+                 expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
+-            routed_rows.append(self.layer.moe.experts(expert_input, routes))
++            if batch_experts:
++                expert_inputs.append(expert_input)
++                route_rows.append(routes)
++                route_indices.append(ttnn.clone(self.layer.moe.router.decode_indices()))
++            else:
++                routed_rows.append(experts(expert_input, routes))
+             shared_inputs.append(ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16))
+             residuals.append(residual)
+         shared = self.layer.shared_mlp.decode_batch(
+             ttnn.concat(shared_inputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG), reduce_output=False
+         )
+-        shared, routed = self._reduce_moe_pair(
+-            shared, ttnn.concat(routed_rows, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+-        )
++        if batch_experts:
++            from models.autoports.google_gemma_4_26b_a4b_it.tt.batched_experts import decode_expert_union
++
++            routed = decode_expert_union(
++                experts.decode,
++                ttnn.concat(expert_inputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG),
++                ttnn.concat(route_rows, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG),
++                route_indices,
++            )
++        else:
++            routed = ttnn.concat(routed_rows, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        shared, routed = self._reduce_moe_pair(shared, routed)
+         residual = ttnn.concat(residuals, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+         return self._fused_tail(residual, shared, routed, True)

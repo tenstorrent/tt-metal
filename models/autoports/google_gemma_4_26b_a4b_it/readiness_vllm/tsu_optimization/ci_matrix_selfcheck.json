@@ -1,0 +1,1046 @@
+{
+  "scope": "Exact-shape raw CI cohorts; source revisions/configuration require separate provenance review",
+  "tsu_definition": "1000 / mean_tpot_ms, not aggregate output throughput",
+  "control": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw",
+  "candidate": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw",
+  "allow_subset": false,
+  "source_sha256": "d8a6d3c1fd9edb42a3c7f35080939aa54a80e625cdf6b60164762273da5e271c",
+  "rows": [
+    {
+      "shape": [
+        128,
+        128,
+        1,
+        8
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-26-26_isl-128_osl-128_maxcon-1_n-8.json",
+        "canonical_json_sha256": "ef39ef0e7968b589c7626d444946a226213a2790ee30d263d5138e50e7c49f2b",
+        "mean_tpot_ms": 20.105260571897556,
+        "mean_ttft_ms": 97.66995953395963,
+        "mean_e2el_ms": 2651.0380521649495,
+        "median_itl_ms": 19.983186153694987,
+        "tsu": 49.73822629276269,
+        "completed": 8,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-26-26_isl-128_osl-128_maxcon-1_n-8.json",
+        "canonical_json_sha256": "ef39ef0e7968b589c7626d444946a226213a2790ee30d263d5138e50e7c49f2b",
+        "mean_tpot_ms": 20.105260571897556,
+        "mean_ttft_ms": 97.66995953395963,
+        "mean_e2el_ms": 2651.0380521649495,
+        "median_itl_ms": 19.983186153694987,
+        "tsu": 49.73822629276269,
+        "completed": 8,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        256
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-27-05_isl-128_osl-128_maxcon-32_n-256.json",
+        "canonical_json_sha256": "39400fba7352a3145ea586efc94b0983903326b868f76ec002cd79c620328174",
+        "mean_tpot_ms": 769.8838624516546,
+        "mean_ttft_ms": 4151.950541223414,
+        "mean_e2el_ms": 101927.20107258356,
+        "median_itl_ms": 678.9928753860295,
+        "tsu": 1.29889720874984,
+        "completed": 256,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-27-05_isl-128_osl-128_maxcon-32_n-256.json",
+        "canonical_json_sha256": "39400fba7352a3145ea586efc94b0983903326b868f76ec002cd79c620328174",
+        "mean_tpot_ms": 769.8838624516546,
+        "mean_ttft_ms": 4151.950541223414,
+        "mean_e2el_ms": 101927.20107258356,
+        "median_itl_ms": 678.9928753860295,
+        "tsu": 1.29889720874984,
+        "completed": 256,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        128,
+        1024,
+        1,
+        4
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-40-51_isl-128_osl-1024_maxcon-1_n-4.json",
+        "canonical_json_sha256": "280a1b7a6253218c4f1cc970b0b3b0f71b3debbebe326a86d494c06db099fd77",
+        "mean_tpot_ms": 20.30617208094887,
+        "mean_ttft_ms": 96.15945268888026,
+        "mean_e2el_ms": 20869.373491499573,
+        "median_itl_ms": 20.199964055791497,
+        "tsu": 49.246110789053844,
+        "completed": 4,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-40-51_isl-128_osl-1024_maxcon-1_n-4.json",
+        "canonical_json_sha256": "280a1b7a6253218c4f1cc970b0b3b0f71b3debbebe326a86d494c06db099fd77",
+        "mean_tpot_ms": 20.30617208094887,
+        "mean_ttft_ms": 96.15945268888026,
+        "mean_e2el_ms": 20869.373491499573,
+        "median_itl_ms": 20.199964055791497,
+        "tsu": 49.246110789053844,
+        "completed": 4,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        128,
+        1024,
+        32,
+        128
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-42-45_isl-128_osl-1024_maxcon-32_n-128.json",
+        "canonical_json_sha256": "e7f2b1be75ee060c67fcb04f3297e87803fd38e991dea7b7845ed6a2993c68b2",
+        "mean_tpot_ms": 698.5905595484693,
+        "mean_ttft_ms": 3837.930636920646,
+        "mean_e2el_ms": 718496.0730550047,
+        "median_itl_ms": 688.4071636013687,
+        "tsu": 1.431453640951497,
+        "completed": 128,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_22-42-45_isl-128_osl-1024_maxcon-32_n-128.json",
+        "canonical_json_sha256": "e7f2b1be75ee060c67fcb04f3297e87803fd38e991dea7b7845ed6a2993c68b2",
+        "mean_tpot_ms": 698.5905595484693,
+        "mean_ttft_ms": 3837.930636920646,
+        "mean_e2el_ms": 718496.0730550047,
+        "median_itl_ms": 688.4071636013687,
+        "tsu": 1.431453640951497,
+        "completed": 128,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        1024,
+        128,
+        1,
+        4
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-31-09_isl-1024_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "6f024e015503a13895a0b326cc382e6fc02d0584e6f15ebf3a2a6215b1b84f3e",
+        "mean_tpot_ms": 20.66008157672463,
+        "mean_ttft_ms": 530.2236609859392,
+        "mean_e2el_ms": 3154.0540212299675,
+        "median_itl_ms": 20.548394648358226,
+        "tsu": 48.40251943276868,
+        "completed": 4,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-31-09_isl-1024_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "6f024e015503a13895a0b326cc382e6fc02d0584e6f15ebf3a2a6215b1b84f3e",
+        "mean_tpot_ms": 20.66008157672463,
+        "mean_ttft_ms": 530.2236609859392,
+        "mean_e2el_ms": 3154.0540212299675,
+        "median_itl_ms": 20.548394648358226,
+        "tsu": 48.40251943276868,
+        "completed": 4,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        1024,
+        128,
+        32,
+        128
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-31-35_isl-1024_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "c0f4c0bc0a33ad53e002403f9152403346dd39452ef6e202dfb174d57700c7f7",
+        "mean_tpot_ms": 785.9368797909106,
+        "mean_ttft_ms": 16166.471322805592,
+        "mean_e2el_ms": 115980.45505625123,
+        "median_itl_ms": 695.7047630567104,
+        "tsu": 1.2723668092354166,
+        "completed": 128,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-31-35_isl-1024_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "c0f4c0bc0a33ad53e002403f9152403346dd39452ef6e202dfb174d57700c7f7",
+        "mean_tpot_ms": 785.9368797909106,
+        "mean_ttft_ms": 16166.471322805592,
+        "mean_e2el_ms": 115980.45505625123,
+        "median_itl_ms": 695.7047630567104,
+        "tsu": 1.2723668092354166,
+        "completed": 128,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        2048,
+        128,
+        1,
+        4
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-39-31_isl-2048_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "f855befbce297aab5f251fb56b9a3abe19e7539d2dced364f0ed90d2ba601eac",
+        "mean_tpot_ms": 22.92596134100491,
+        "mean_ttft_ms": 1053.5630165832117,
+        "mean_e2el_ms": 3965.160106890835,
+        "median_itl_ms": 20.49243380315602,
+        "tsu": 43.6186725226401,
+        "completed": 4,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-39-31_isl-2048_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "f855befbce297aab5f251fb56b9a3abe19e7539d2dced364f0ed90d2ba601eac",
+        "mean_tpot_ms": 22.92596134100491,
+        "mean_ttft_ms": 1053.5630165832117,
+        "mean_e2el_ms": 3965.160106890835,
+        "median_itl_ms": 20.49243380315602,
+        "tsu": 43.6186725226401,
+        "completed": 4,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        2048,
+        128,
+        32,
+        128
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-40-00_isl-2048_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "90ddc67634fca64c4b3a5ff0847a44af42f20a348c457e9b861a9f5a9b8cf59a",
+        "mean_tpot_ms": 792.0333152444043,
+        "mean_ttft_ms": 32110.227474466228,
+        "mean_e2el_ms": 132698.4585105056,
+        "median_itl_ms": 697.9497112333775,
+        "tsu": 1.2625731528621642,
+        "completed": 128,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-40-00_isl-2048_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "90ddc67634fca64c4b3a5ff0847a44af42f20a348c457e9b861a9f5a9b8cf59a",
+        "mean_tpot_ms": 792.0333152444043,
+        "mean_ttft_ms": 32110.227474466228,
+        "mean_e2el_ms": 132698.4585105056,
+        "median_itl_ms": 697.9497112333775,
+        "tsu": 1.2625731528621642,
+        "completed": 128,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-49-04_isl-4096_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "1055d9efe50feb84548a05e451725ee911e4df65fd666b22b77906a9e95b587d",
+        "mean_tpot_ms": 23.231992344958634,
+        "mean_ttft_ms": 2095.204615732655,
+        "mean_e2el_ms": 5045.6676435424015,
+        "median_itl_ms": 20.619530463591218,
+        "tsu": 43.04409131819472,
+        "completed": 4,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-49-04_isl-4096_osl-128_maxcon-1_n-4.json",
+        "canonical_json_sha256": "1055d9efe50feb84548a05e451725ee911e4df65fd666b22b77906a9e95b587d",
+        "mean_tpot_ms": 23.231992344958634,
+        "mean_ttft_ms": 2095.204615732655,
+        "mean_e2el_ms": 5045.6676435424015,
+        "median_itl_ms": 20.619530463591218,
+        "tsu": 43.04409131819472,
+        "completed": 4,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        4096,
+        128,
+        32,
+        128
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-49-39_isl-4096_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "b533ea246d5bec572904f7a9a3d543a52e3749c692b21dbee84d038d57f6aca0",
+        "mean_tpot_ms": 800.6016499336589,
+        "mean_ttft_ms": 63993.35018250713,
+        "mean_e2el_ms": 165669.7597240818,
+        "median_itl_ms": 699.1496798582375,
+        "tsu": 1.2490606284447003,
+        "completed": 128,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-28_23-49-39_isl-4096_osl-128_maxcon-32_n-128.json",
+        "canonical_json_sha256": "b533ea246d5bec572904f7a9a3d543a52e3749c692b21dbee84d038d57f6aca0",
+        "mean_tpot_ms": 800.6016499336589,
+        "mean_ttft_ms": 63993.35018250713,
+        "mean_e2el_ms": 165669.7597240818,
+        "median_itl_ms": 699.1496798582375,
+        "tsu": 1.2490606284447003,
+        "completed": 128,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        8192,
+        128,
+        1,
+        2
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-00-57_isl-8192_osl-128_maxcon-1_n-2.json",
+        "canonical_json_sha256": "d023528c23ad294f62b6c8e94d37aad0575623b389be8b2cc889888ecd0b945b",
+        "mean_tpot_ms": 23.177874732879907,
+        "mean_ttft_ms": 4185.983702074736,
+        "mean_e2el_ms": 7129.573793150485,
+        "median_itl_ms": 20.66111285239458,
+        "tsu": 43.14459420998638,
+        "completed": 2,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-00-57_isl-8192_osl-128_maxcon-1_n-2.json",
+        "canonical_json_sha256": "d023528c23ad294f62b6c8e94d37aad0575623b389be8b2cc889888ecd0b945b",
+        "mean_tpot_ms": 23.177874732879907,
+        "mean_ttft_ms": 4185.983702074736,
+        "mean_e2el_ms": 7129.573793150485,
+        "median_itl_ms": 20.66111285239458,
+        "tsu": 43.14459420998638,
+        "completed": 2,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        8192,
+        128,
+        31,
+        62
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-01-27_isl-8192_osl-128_maxcon-31_n-62.json",
+        "canonical_json_sha256": "b789590b634f186e6fd0dda0a837d339536d6b4b11e6a75cade8519e3817d03b",
+        "mean_tpot_ms": 831.7423901267083,
+        "mean_ttft_ms": 124854.96454276596,
+        "mean_e2el_ms": 230486.2480888579,
+        "median_itl_ms": 709.5136169809848,
+        "tsu": 1.2022953403248562,
+        "completed": 62,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-01-27_isl-8192_osl-128_maxcon-31_n-62.json",
+        "canonical_json_sha256": "b789590b634f186e6fd0dda0a837d339536d6b4b11e6a75cade8519e3817d03b",
+        "mean_tpot_ms": 831.7423901267083,
+        "mean_ttft_ms": 124854.96454276596,
+        "mean_e2el_ms": 230486.2480888579,
+        "median_itl_ms": 709.5136169809848,
+        "tsu": 1.2022953403248562,
+        "completed": 62,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        8192,
+        1024,
+        1,
+        2
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-09-25_isl-8192_osl-1024_maxcon-1_n-2.json",
+        "canonical_json_sha256": "6433151b06c51893afafd46b307ec916f6604ed38d9a23f0a90faf86434d7497",
+        "mean_tpot_ms": 21.118392960513457,
+        "mean_ttft_ms": 4184.851293917745,
+        "mean_e2el_ms": 25788.96729252301,
+        "median_itl_ms": 20.70274716243148,
+        "tsu": 47.352087910750136,
+        "completed": 2,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-09-25_isl-8192_osl-1024_maxcon-1_n-2.json",
+        "canonical_json_sha256": "6433151b06c51893afafd46b307ec916f6604ed38d9a23f0a90faf86434d7497",
+        "mean_tpot_ms": 21.118392960513457,
+        "mean_ttft_ms": 4184.851293917745,
+        "mean_e2el_ms": 25788.96729252301,
+        "median_itl_ms": 20.70274716243148,
+        "tsu": 47.352087910750136,
+        "completed": 2,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        8192,
+        1024,
+        28,
+        56
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-10-52_isl-8192_osl-1024_maxcon-28_n-56.json",
+        "canonical_json_sha256": "ad507982c1e1d5ccd50bc0b07d15485c438eecf163c8e54170804a58abe204be",
+        "mean_tpot_ms": 655.8922291587663,
+        "mean_ttft_ms": 112548.72692902738,
+        "mean_e2el_ms": 783526.4773584453,
+        "median_itl_ms": 641.1078290548176,
+        "tsu": 1.5246407192269669,
+        "completed": 56,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-10-52_isl-8192_osl-1024_maxcon-28_n-56.json",
+        "canonical_json_sha256": "ad507982c1e1d5ccd50bc0b07d15485c438eecf163c8e54170804a58abe204be",
+        "mean_tpot_ms": 655.8922291587663,
+        "mean_ttft_ms": 112548.72692902738,
+        "mean_e2el_ms": 783526.4773584453,
+        "median_itl_ms": 641.1078290548176,
+        "tsu": 1.5246407192269669,
+        "completed": 56,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        10000,
+        1024,
+        1,
+        2
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-37-34_isl-10000_osl-1024_maxcon-1_n-2.json",
+        "canonical_json_sha256": "10831b691663a0d42ffa476ce91a31f19a57b0eb6ac90a11e917093e1e5a9f53",
+        "mean_tpot_ms": 21.092200457625538,
+        "mean_ttft_ms": 5207.629248732701,
+        "mean_e2el_ms": 26784.950316883624,
+        "median_itl_ms": 20.676254061982036,
+        "tsu": 47.410890201286065,
+        "completed": 2,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-37-34_isl-10000_osl-1024_maxcon-1_n-2.json",
+        "canonical_json_sha256": "10831b691663a0d42ffa476ce91a31f19a57b0eb6ac90a11e917093e1e5a9f53",
+        "mean_tpot_ms": 21.092200457625538,
+        "mean_ttft_ms": 5207.629248732701,
+        "mean_e2el_ms": 26784.950316883624,
+        "median_itl_ms": 20.676254061982036,
+        "tsu": 47.410890201286065,
+        "completed": 2,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        10000,
+        1024,
+        23,
+        46
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-39-16_isl-10000_osl-1024_maxcon-23_n-46.json",
+        "canonical_json_sha256": "b102834be6fd86c7590dd0d043f6c05ae5790520cd5976b27bb9efc9c6d39a16",
+        "mean_tpot_ms": 541.5442548468292,
+        "mean_ttft_ms": 114258.23840740866,
+        "mean_e2el_ms": 668258.0111157149,
+        "median_itl_ms": 527.9262559488416,
+        "tsu": 1.8465711547117065,
+        "completed": 46,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_00-39-16_isl-10000_osl-1024_maxcon-23_n-46.json",
+        "canonical_json_sha256": "b102834be6fd86c7590dd0d043f6c05ae5790520cd5976b27bb9efc9c6d39a16",
+        "mean_tpot_ms": 541.5442548468292,
+        "mean_ttft_ms": 114258.23840740866,
+        "mean_e2el_ms": 668258.0111157149,
+        "median_itl_ms": 527.9262559488416,
+        "tsu": 1.8465711547117065,
+        "completed": 46,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        16384,
+        128,
+        1,
+        2
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-02-09_isl-16384_osl-128_maxcon-1_n-2.json",
+        "canonical_json_sha256": "957cbaf524354a12f2684c400b2717f223ac746516ebb3d3aaca0ce950712bf1",
+        "mean_tpot_ms": 23.20712192651383,
+        "mean_ttft_ms": 8414.531015558168,
+        "mean_e2el_ms": 11361.835500225425,
+        "median_itl_ms": 20.770124159753323,
+        "tsu": 43.09022045760501,
+        "completed": 2,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-02-09_isl-16384_osl-128_maxcon-1_n-2.json",
+        "canonical_json_sha256": "957cbaf524354a12f2684c400b2717f223ac746516ebb3d3aaca0ce950712bf1",
+        "mean_tpot_ms": 23.20712192651383,
+        "mean_ttft_ms": 8414.531015558168,
+        "mean_e2el_ms": 11361.835500225425,
+        "median_itl_ms": 20.770124159753323,
+        "tsu": 43.09022045760501,
+        "completed": 2,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        16384,
+        128,
+        15,
+        30
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-02-53_isl-16384_osl-128_maxcon-15_n-30.json",
+        "canonical_json_sha256": "0545726424db669f2ae911d201cb3460f469b92bde832e5983b91197809b28a7",
+        "mean_tpot_ms": 458.36605493179735,
+        "mean_ttft_ms": 117877.2329569018,
+        "mean_e2el_ms": 176089.72193324007,
+        "median_itl_ms": 346.70796408317983,
+        "tsu": 2.1816624273121517,
+        "completed": 30,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-02-53_isl-16384_osl-128_maxcon-15_n-30.json",
+        "canonical_json_sha256": "0545726424db669f2ae911d201cb3460f469b92bde832e5983b91197809b28a7",
+        "mean_tpot_ms": 458.36605493179735,
+        "mean_ttft_ms": 117877.2329569018,
+        "mean_e2el_ms": 176089.72193324007,
+        "median_itl_ms": 346.70796408317983,
+        "tsu": 2.1816624273121517,
+        "completed": 30,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        32768,
+        128,
+        1,
+        1
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-09-07_isl-32768_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "e3c5cb83b60322549753d4c52e8252506c81f0c548ff9090e3583005da3dbdae",
+        "mean_tpot_ms": 23.510905969007982,
+        "mean_ttft_ms": 16467.19863312319,
+        "mean_e2el_ms": 19453.083691187203,
+        "median_itl_ms": 21.11967490054667,
+        "tsu": 42.53345240367162,
+        "completed": 1,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-09-07_isl-32768_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "e3c5cb83b60322549753d4c52e8252506c81f0c548ff9090e3583005da3dbdae",
+        "mean_tpot_ms": 23.510905969007982,
+        "mean_ttft_ms": 16467.19863312319,
+        "mean_e2el_ms": 19453.083691187203,
+        "median_itl_ms": 21.11967490054667,
+        "tsu": 42.53345240367162,
+        "completed": 1,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        32768,
+        128,
+        7,
+        7
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-09-56_isl-32768_osl-128_maxcon-7_n-7.json",
+        "canonical_json_sha256": "c75a01fbb457ed20c7a9ea703594c1cb21928f86a7ca1df6df8b3929fbe55e11",
+        "mean_tpot_ms": 318.4026385666918,
+        "mean_ttft_ms": 105686.61045535866,
+        "mean_e2el_ms": 146123.7455533285,
+        "median_itl_ms": 164.76929187774658,
+        "tsu": 3.1406774909327346,
+        "completed": 7,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-09-56_isl-32768_osl-128_maxcon-7_n-7.json",
+        "canonical_json_sha256": "c75a01fbb457ed20c7a9ea703594c1cb21928f86a7ca1df6df8b3929fbe55e11",
+        "mean_tpot_ms": 318.4026385666918,
+        "mean_ttft_ms": 105686.61045535866,
+        "mean_e2el_ms": 146123.7455533285,
+        "median_itl_ms": 164.76929187774658,
+        "tsu": 3.1406774909327346,
+        "completed": 7,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        65536,
+        128,
+        1,
+        1
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-12-52_isl-65536_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "5f4ae849437ea5d6a44a1954b4f91c7648007d22902fd00f35641b8b7e81f96b",
+        "mean_tpot_ms": 23.991841016205278,
+        "mean_ttft_ms": 34253.1316508539,
+        "mean_e2el_ms": 37300.09545991197,
+        "median_itl_ms": 21.660530008375645,
+        "tsu": 41.68083638619272,
+        "completed": 1,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-12-52_isl-65536_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "5f4ae849437ea5d6a44a1954b4f91c7648007d22902fd00f35641b8b7e81f96b",
+        "mean_tpot_ms": 23.991841016205278,
+        "mean_ttft_ms": 34253.1316508539,
+        "mean_e2el_ms": 37300.09545991197,
+        "median_itl_ms": 21.660530008375645,
+        "tsu": 41.68083638619272,
+        "completed": 1,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        65536,
+        128,
+        3,
+        3
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-14-17_isl-65536_osl-128_maxcon-3_n-3.json",
+        "canonical_json_sha256": "22773873a562db83c2e6466e67b7463d9b39dcc892da32a8d999d25924bc98d5",
+        "mean_tpot_ms": 288.9172369809797,
+        "mean_ttft_ms": 82486.96903620537,
+        "mean_e2el_ms": 119179.45813278978,
+        "median_itl_ms": 73.17843055352569,
+        "tsu": 3.461198820982194,
+        "completed": 3,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-14-17_isl-65536_osl-128_maxcon-3_n-3.json",
+        "canonical_json_sha256": "22773873a562db83c2e6466e67b7463d9b39dcc892da32a8d999d25924bc98d5",
+        "mean_tpot_ms": 288.9172369809797,
+        "mean_ttft_ms": 82486.96903620537,
+        "mean_e2el_ms": 119179.45813278978,
+        "median_itl_ms": 73.17843055352569,
+        "tsu": 3.461198820982194,
+        "completed": 3,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        131072,
+        128,
+        1,
+        1
+      ],
+      "checks": {
+        "control_complete": true,
+        "control_text_count": true,
+        "control_exact_lengths": true,
+        "candidate_complete": true,
+        "candidate_text_count": true,
+        "candidate_exact_lengths": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "generated_texts_equal": true
+      },
+      "control": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-17-03_isl-131072_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "fe6624cd9ca418c0b8186fc813d8c2b75ad29bdd8c98e0884acf581904aa4f2e",
+        "mean_tpot_ms": 24.859979587394424,
+        "mean_ttft_ms": 74152.98968041316,
+        "mean_e2el_ms": 77310.20708801225,
+        "median_itl_ms": 22.790837567299604,
+        "tsu": 40.225294493285226,
+        "completed": 1,
+        "failed": 0
+      },
+      "candidate": {
+        "file": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/ci_baseline_36490378756/raw/reports_output/benchmarks/google__gemma-4-26B-A4B-it_p300x2_benchmarks/llm/benchmark_google__gemma-4-26B-A4B-it_2026-09-29_01-17-03_isl-131072_osl-128_maxcon-1_n-1.json",
+        "canonical_json_sha256": "fe6624cd9ca418c0b8186fc813d8c2b75ad29bdd8c98e0884acf581904aa4f2e",
+        "mean_tpot_ms": 24.859979587394424,
+        "mean_ttft_ms": 74152.98968041316,
+        "mean_e2el_ms": 77310.20708801225,
+        "median_itl_ms": 22.790837567299604,
+        "tsu": 40.225294493285226,
+        "completed": 1,
+        "failed": 0
+      },
+      "text_mismatch_indices": [],
+      "tsu_gain_percent": 0.0
+    }
+  ],
+  "passed": true
+}

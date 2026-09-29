@@ -1,0 +1,34 @@
+diff --git a/models/autoports/google_gemma_4_26b_a4b_it/tests/test_tsu_batch_policy.py b/models/autoports/google_gemma_4_26b_a4b_it/tests/test_tsu_batch_policy.py
+index 8dbd03e7c4..0fce3c971e 100644
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/test_tsu_batch_policy.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/test_tsu_batch_policy.py
+@@ -8,8 +8,8 @@ from unittest.mock import Mock
+ import pytest
+ 
+ import ttnn
+-from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder, _SharedMLP
+-from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
++from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder, _HybridExperts, _SharedMLP
++from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder, OptimizedExperts
+ 
+ 
+ @pytest.mark.parametrize("batch", [1, 2, 3, 7, 8, 16, 31, 32, 33])
+@@ -81,3 +81,18 @@ def test_invalid_shared_batch_is_rejected(batch, expect_error):
+     shared.decode_weights = (object(), object())
+     with expect_error(ValueError, "at most 32 rows"):
+         shared.decode_batch(SimpleNamespace(shape=(1, 1, batch, 2816)))
++
++
++@pytest.mark.parametrize("batch", [1, 8, 16, 31, 32, 33])
++@pytest.mark.parametrize("unsupported", [None, "disabled", "split", "unindexed", "other_decode", "other_experts"])
++def test_expert_union_requires_measured_hybrid_decode(batch, unsupported):
++    decoder = MultichipDecoder()
++    decode = OptimizedExperts.__new__(OptimizedExperts)
++    decode.expert_split = unsupported == "split"
++    decode.indexed_router = None if unsupported == "unindexed" else object()
++    experts = _HybridExperts(None, object() if unsupported == "other_decode" else decode)
++    decoder.layer = SimpleNamespace(
++        moe=SimpleNamespace(experts=object() if unsupported == "other_experts" else experts)
++    )
++    decoder.batched_expert_decode = unsupported != "disabled"
++    assert decoder._can_batch_experts(batch) == (batch == 32 and unsupported is None)

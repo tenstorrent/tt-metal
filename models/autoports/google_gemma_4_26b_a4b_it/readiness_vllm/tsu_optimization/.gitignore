@@ -29,3 +29,5 @@ profile_short/raw_decode_ops.csv
 batch8_profile_retry/raw_decode_ops.csv
 batch8_profile_retry/raw_decode_ops.csv.gz
 batch8_profile_retry/raw_decode_ops_device*.csv
+# Baseline full-matrix raw download remains reproducible from CI run36490378756.
+ci_baseline_36490378756/raw/

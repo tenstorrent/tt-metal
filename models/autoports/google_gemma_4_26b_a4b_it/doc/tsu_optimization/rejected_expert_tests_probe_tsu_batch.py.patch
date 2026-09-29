@@ -1,0 +1,36 @@
+diff --git a/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_tsu_batch.py b/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_tsu_batch.py
+index 4752b8e3ac..dfd5f3c39c 100644
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_tsu_batch.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_tsu_batch.py
+@@ -29,6 +29,7 @@ def main():
+             "attention_rowsdpa",
+             "norms",
+             "runtime",
++            "runtime_experts",
+             "experts",
+             "experts_vector_mix",
+             "experts_index_union",
+@@ -70,6 +71,7 @@ def main():
+         # Candidate/reference comparisons must not inherit the selected default.
+         for decoder in gen.model.layers:
+             decoder.batched_shared_decode = False
++            decoder.batched_expert_decode = False
+         report["baseline_batched_shared_decode"] = False
+         cache, table = gen.model.allocate_cache(slots=32, context=8192)
+         if args.mixed:
+@@ -107,9 +109,14 @@ def main():
+                     gen.decode_forward(tokens.flip(0) + step, positions + step, page_table=table, kv_cache=cache)
+                     reference_steps.append(gen._read_logits(gen.trace_logits).reshape(-1, vocab)[: args.batch].clone())
+             gen._release_trace()
+-            if args.candidate == "runtime":
++            if args.candidate in ("runtime", "runtime_experts"):
+                 for decoder in gen.model.layers:
+                     decoder.batched_shared_decode = True
++                    decoder.batched_expert_decode = args.candidate == "runtime_experts"
++                    if args.candidate == "runtime_experts":
++                        selected = decoder._can_batch_experts(args.batch)
++                        report.setdefault("expert_union_selected", []).append(selected)
++                        assert selected == (args.batch == 32)
+             else:
+                 install_shared_batch(
+                     gen.model,
