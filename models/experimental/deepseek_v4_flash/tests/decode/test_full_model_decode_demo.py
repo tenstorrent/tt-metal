@@ -62,7 +62,16 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
 )
 
 _DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
-_DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
+# Chat-templated this is exactly 128 tokens (= the prefill alignment / sliding window), so the same prompt can be
+# fed through the prefill model (``tests/prefill/test_prefill_decode_demo.py``) or replayed through decode.
+_DEFAULT_TEXT = (
+    "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. "
+    "Give me details of why you choose those movies. Try to make your response as humours as possible. "
+    "For context, I am putting together a light-hearted movie night for my friends, who love classic dramas, "
+    "science fiction, and over-the-top comedies alike. Keep every entry short, mention the director and the "
+    "release year, and end with a one-line joke about each film. Please format the answer as two clearly "
+    "numbered lists, one for the best and one for the worst."
+)
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "4096")) < 10:
     _DEFAULT_TEXT = "I"
 _WEIGHT_DTYPE = ttnn.bfloat4_b
