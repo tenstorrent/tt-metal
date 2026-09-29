@@ -145,7 +145,10 @@ def _kv_paged_to_seq(paged, blocks, S, nkv, hd):
     sl = ttnn.slice(paged, (0, 0, 0, 0), (blocks, nkv, BLOCK_SIZE, hd))
     pm = ttnn.permute(sl, (1, 0, 2, 3))
     rs = ttnn.reshape(pm, (1, nkv, S, hd))
-    ttnn.deallocate(sl)
+    # A full-range slice (blocks == num_blocks, e.g. export at T == max_seq_len) returns the cache tensor itself:
+    # free only a slice that is its own buffer, never the persistent paged cache.
+    if sl.buffer_address() != paged.buffer_address():
+        ttnn.deallocate(sl)
     return rs
 
 

@@ -72,6 +72,15 @@ def _e2e_decode_steps():
     return int(os.environ.get("QWEN36_E2E_DECODE_STEPS", "4"))
 
 
+def _e2e_tp_max_seq_len(T, n_dec):
+    """max_seq_len of the TP=4 model in e2e phases (a)/(c): the prompt T PLUS room for the n_dec decode
+    positions T..T+n_dec-1, rounded up to the non-paged SDPA-decode K chunk (128). With max_seq_len=T the
+    decode's paged_update_cache / SDPA-decode wrote and read K/V past the end of the [1,1,T,HD] caches
+    (positions >= T), i.e. whatever device memory followed them -- which made the decode depend on
+    leftover memory of earlier processes (step >= 2 PCC ~0 after an SP run with a bigger socket FIFO)."""
+    return T + 128 * max(1, math.ceil(n_dec / 128))
+
+
 def _sp_impl_name():
     return os.environ.get("QWEN36_SP_IMPL", "tp").strip().lower()
 
@@ -536,7 +545,7 @@ _E2E_REF_PT = os.path.join(tempfile.gettempdir(), "qwen36_sp_prefill_then_tp_dec
 _E2E_SP_PT = os.path.join(tempfile.gettempdir(), "qwen36_sp_prefill_then_tp_decode_sp.pt")
 # Optional (QWEN36_E2E_DUMP_STATE=1): phase (a)'s post-prefill TP=4 state, for offline comparison
 # against phase (b)'s SP export (same full-host layout).
-_E2E_TP4_STATE_PT = "/tmp/qwen36_e2e_tp4_state.pt"
+_E2E_TP4_STATE_PT = os.path.join(tempfile.gettempdir(), "qwen36_e2e_tp4_state.pt")
 
 
 def test_sp_prefill_then_tp_decode_a_reference():
@@ -559,7 +568,11 @@ def test_sp_prefill_then_tp_decode_a_reference():
     )
     try:
         model = Qwen36Model.from_pretrained(
-            mesh, max_batch_size=1, max_seq_len=T, hf_model=hf_model, layer_indices=_e2e_layer_indices()
+            mesh,
+            max_batch_size=1,
+            max_seq_len=_e2e_tp_max_seq_len(T, N_DEC),
+            hf_model=hf_model,
+            layer_indices=_e2e_layer_indices(),
         )
         model.reset_tp()
         logits_ref = model.prefill_tp(tokens, valid_len=T).float()
@@ -709,7 +722,11 @@ def test_sp_prefill_then_tp_decode():
     )
     try:
         model = Qwen36Model.from_pretrained(
-            mesh, max_batch_size=1, max_seq_len=T, hf_model=hf_model, layer_indices=_e2e_layer_indices()
+            mesh,
+            max_batch_size=1,
+            max_seq_len=_e2e_tp_max_seq_len(T, N_DEC + 1),  # +1: the optional QWEN36_E2E_WARMUP step
+            hf_model=hf_model,
+            layer_indices=_e2e_layer_indices(),
         )
         model.reset_tp()
         t0 = time.perf_counter()
@@ -753,7 +770,7 @@ def test_sp_prefill_then_tp_decode():
 
     if teacher_force:
         # Dump per-step logits for an offline HF CPU oracle comparison (tp4 ref vs SP-injected vs HF).
-        c_logits_pt = "/tmp/qwen36_sp_prefill_then_tp_decode_c_logits.pt"
+        c_logits_pt = os.path.join(tempfile.gettempdir(), "qwen36_sp_prefill_then_tp_decode_c_logits.pt")
         torch.save(
             {
                 "tokens_ref": tokens_ref,

@@ -176,6 +176,8 @@ def inject_into_tp_model(model, kv_per_attn_layer, gdn_per_layer):
             cm_dev = _upload_sharded(mesh, cm.to(torch.bfloat16), attn.conv_states[m].dtype)
             ttnn.copy(cm_dev, attn.conv_states[m])
             ttnn.deallocate(cm_dev)
+        if hasattr(attn, "refresh_fused_conv_hist"):
+            attn.refresh_fused_conv_hist()  # QWEN36_TP_GDN_DECODE_FUSED: conv_states -> packed conv_hist (no-op when off)
 
 
 def snapshot_tp_model_to_full_host(model):
