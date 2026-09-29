@@ -249,6 +249,21 @@ def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
     label throughput as per-user. Reads the newest profile log; returns None if not found."""
     from models.experimental.perf_automation.agent.perf_adapter import parse_batch_report
 
+    def _report_batch():
+        # Harnesses that don't print a PERF_BATCH_* token (e.g. diffusion pipelines that write CSV
+        # profiles, not a .log) still record the batch in RUN_REPORT.md ('batch: N') / console.log.
+        # Universal fallback so batch shows for ANY model, not just the LLM decode harness.
+        import re as _rre
+        for _f in ('RUN_REPORT.md', 'console.log'):
+            try:
+                _t = (run_dir / _f).read_text(errors='replace')
+            except Exception:
+                continue
+            for _a, _b in _rre.findall(r'PERF_BATCH_[A-Z]+=(\d+)|batch:\s*(\d+)', _t)[::-1]:
+                if _a or _b:
+                    return int(_a or _b)
+        return None
+
     _pb = run_dir / ".requested_batch"
     if _pb.is_file():
         try:
@@ -257,7 +272,7 @@ def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
             pass
     prof = run_dir / "profiles"
     if not prof.is_dir():
-        return int(requested) if requested else None
+        return _report_batch() or (int(requested) if requested else None)
     logs = sorted(prof.glob("*.log"), key=lambda p: (p.stat().st_mtime if p.exists() else 0.0), reverse=True)
     for lg in logs:
         try:
@@ -273,7 +288,7 @@ def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
             return served
     # No harness batch report (e.g. a non-decode model that never prints one): fall back to the batch
     # the run was ASKED to drive (--batch). Batch is a property of the run, not of the LLM decode path.
-    return int(requested) if requested else None
+    return _report_batch() or (int(requested) if requested else None)
 
 
 def _serving_metrics(
