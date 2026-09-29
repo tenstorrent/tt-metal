@@ -1478,6 +1478,15 @@ def _import_closure(demo_dir: Path) -> list:
                 mods += [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 mods.append(node.module)
+                # `from pkg import a, b` may be importing SUBMODULES rather than attributes, and for
+                # some packages that is the ONLY form they are reached by. A namespace package (no
+                # __init__.py, which is how the bring-up tool leaves its stub packages) resolves
+                # through neither `pkg.py` nor `pkg/__init__.py`, so the module name alone finds
+                # nothing and that whole subtree went unwalked: its sources stayed out of the
+                # fingerprint, so editing one of them did not invalidate a cached pass, and its
+                # bring-up state stayed invisible to anything that discovers components this way.
+                # A name that is an attribute rather than a submodule simply resolves to no file.
+                mods += ["%s.%s" % (node.module, a.name) for a in node.names]
         for m in mods:
             rel = Path(*m.split("."))
             for cand in (root / rel.with_suffix(".py"), root / rel / "__init__.py"):

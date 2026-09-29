@@ -5,14 +5,47 @@ import re
 from pathlib import Path
 
 
-def read_graduation(demo_dir):
-    demo_dir = Path(demo_dir)
-    status_path = demo_dir / "bringup_status.json"
-    result = {}
-    if not status_path.is_file():
-        return result
+_STATUS_FILE = "bringup_status.json"
+
+
+def _component_status_dirs(demo_dir):
+    """The bring-up dirs of a COMPOSITE model, discovered from what its own pipeline imports.
+
+    A composite e2e package holds no status file of its own: its parts were brought up separately and
+    each keeps its status beside its own stubs, anywhere in the checkout. Which dirs those are cannot
+    be guessed from the demo path and must not be typed -- so the PIPELINE is asked, by walking the
+    imports it actually makes (the same closure the correctness cache keys on) and keeping every
+    directory along the way that carries a status file. A model that renames or relocates its
+    components still resolves, because nothing here assumed where they were.
+
+    This is the case the gate was failing on: with no status file in the demo dir, `trace_policy`
+    reported `known: False` and `classify_trace_verdict` returned a hard FAIL -- correctly, on its
+    own terms, since nothing licenses skipping a trace on no evidence. But the evidence existed; it
+    was one directory away, and the agent was told to make the status readable from a dir it was
+    never written to. 25 graduated modules read as 0, every round.
+    """
     try:
-        data = json.loads(status_path.read_text())
+        from .commands.emit_e2e import _import_closure
+    except Exception:  # noqa: BLE001 - no walker available: no components to report
+        return []
+    out = []
+    seen = set()
+    for f in _import_closure(Path(demo_dir)):
+        for d in f.parents:
+            if d in seen:
+                continue
+            seen.add(d)
+            if (d / _STATUS_FILE).is_file():
+                out.append(d)
+    return sorted(out)
+
+
+def _graduation_in(status_dir, qualify=False):
+    """The graduation state recorded in ONE bring-up dir: {module: "sharded"|"native"|None}."""
+    status_dir = Path(status_dir)
+    result = {}
+    try:
+        data = json.loads((status_dir / _STATUS_FILE).read_text())
     except Exception:
         return result
     try:
@@ -23,19 +56,34 @@ def read_graduation(demo_dir):
         name = comp.get("name")
         if not name:
             continue
-        stub = demo_dir / "_stubs" / f"{_safe_id(name)}.py"
+        stub = status_dir / "_stubs" / f"{_safe_id(name)}.py"
         native = stub.with_suffix(".py.last_good_native").is_file()
         sharded = stub.with_suffix(".py.last_good_sharded").is_file()
         try:
             graduated = bool(_stub_has_graduated_any(stub))
         except Exception:
             graduated = False
+        # Qualified only when several dirs are being merged, where the same module name can occur in
+        # more than one component and an unqualified key would silently drop one. A single-dir model
+        # keeps the bare names it has always reported.
+        key = "%s/%s" % (status_dir.name, name) if qualify else name
         if graduated and sharded:
-            result[name] = "sharded"
+            result[key] = "sharded"
         elif graduated and native:
-            result[name] = "native"
+            result[key] = "native"
         else:
-            result[name] = None
+            result[key] = None
+    return result
+
+
+def read_graduation(demo_dir):
+    demo_dir = Path(demo_dir)
+    if (demo_dir / _STATUS_FILE).is_file():
+        return _graduation_in(demo_dir)
+    dirs = _component_status_dirs(demo_dir)
+    result = {}
+    for d in dirs:
+        result.update(_graduation_in(d, qualify=len(dirs) > 1))
     return result
 
 
