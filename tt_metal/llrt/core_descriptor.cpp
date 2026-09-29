@@ -108,6 +108,11 @@ inline std::string get_core_descriptor_file(
                 return core_desc_dir + "blackhole_140_arch.yaml";
             }
         case tt::ARCH::QUASAR:
+            // QSR3.A2 packages three 8x4 Quasar dies into one chip, stacked into an 8x12 worker grid.
+            if (soc_desc.get_grid_size(CoreType::TENSIX) == tt_xy_pair(8, 12)) {
+                return core_desc_dir + (quasar_tensix_dispatch_fd ? "quasar_qsr3a2_arch_tensix_dispatch.yaml"
+                                                                  : "quasar_qsr3a2_arch.yaml");
+            }
             return core_desc_dir + (quasar_tensix_dispatch_fd ? "quasar_simulation_8x4_arch_tensix_dispatch.yaml"
                                                               : "quasar_simulation_8x4_arch.yaml");
     };
