@@ -928,10 +928,6 @@ def test_image_agreement_targets_and_throughput(tmp_path, metric, score, success
     measurements = [{"step_name": "inference", "name": "fps", "value": 0.04}]
     if score is not None:
         measurements.append({"step_name": "inference", "name": metric, "value": score})
-    else:
-        # Another image metric makes this an image run but cannot satisfy the missing metric.
-        other = "edit_image_pcc" if metric == "text_image_pcc" else "text_image_pcc"
-        measurements.append({"step_name": "inference", "name": other, "value": 0.99})
     _write_complete_run(
         tmp_path / "generated/benchmark_data/complete_run_image.json",
         model="demo-model",
@@ -946,20 +942,72 @@ def test_image_agreement_targets_and_throughput(tmp_path, metric, score, success
     assert "fps" in result.stdout
 
 
-def test_missing_gsm8k_accuracy_fails(tmp_path):
+@pytest.mark.parametrize("metric", ["ifeval", "gpqa", "gsm8k"])
+def test_throughput_only_task_payload_fails_missing_accuracy(tmp_path, metric):
     _vision_scaffold(tmp_path, "demo-model")
-    _write_single_target(tmp_path, perf={"fps": 0.04}, accuracy={"gsm8k": 80, "gsm8k_tolerance": 0.05})
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0}, accuracy={metric: 80})
     _write_complete_run(
-        tmp_path / "generated/benchmark_data/complete_run_missing_gsm8k.json",
+        tmp_path / "generated/benchmark_data/complete_run_missing_score.json",
         model="demo-model",
         batch_size=1,
         seq_len=128,
-        decode_tsu=0,
-        extra_measurements=[
-            {"step_name": "inference", "name": "fps", "value": 0.04},
-            {"step_name": "inference", "name": "ifeval_accuracy", "value": 90},
-        ],
+        decode_tsu=100.0,
     )
     result = _run_validator(tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "gsm8k" in result.stdout
+    assert f"metric '{metric}' missing in benchmark payload" in result.stdout
+
+
+@pytest.mark.parametrize("metric", ["gsm8k", "text_image_pcc", "edit_image_pcc"])
+def test_accuracy_only_target_requires_score_without_perf_target(tmp_path, metric):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={}, accuracy={metric: 1.0})
+    path = tmp_path / "generated/benchmark_data/complete_run_accuracy_only.json"
+    path.write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "measurements": [{"step_name": "inference", "name": "fps", "value": 0.04}],
+            }
+        )
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"metric '{metric}' missing in benchmark payload" in result.stdout
+
+
+def test_llm_perf_run_still_skips_token_accuracy_targets(tmp_path):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0}, accuracy={"top1": 99.0, "top5": 99.0})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_perf.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "decode_t/s/u" in result.stdout
+    assert "missing-measurement" not in result.stdout
+
+
+def test_throughput_only_classifier_payload_fails_missing_accuracy(tmp_path):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"fps": 30.0}, accuracy={"top1": 75.0})
+    path = tmp_path / "generated/benchmark_data/complete_run_classifier.json"
+    path.write_text(
+        json.dumps(
+            {
+                "ml_model_name": "demo-model",
+                "batch_size": 1,
+                "input_sequence_length": 128,
+                "measurements": [{"step_name": "inference", "name": "fps", "value": 30.0}],
+            }
+        )
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "metric 'top1' missing in benchmark payload" in result.stdout
