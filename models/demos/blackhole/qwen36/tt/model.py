@@ -3746,6 +3746,14 @@ class Qwen36Model:
                     ttnn.deallocate(buf)
                 dn.split_conv_state = None
 
+    def refresh_tp_gdn_conv_hist(self):
+        """QWEN36_TP_GDN_DECODE_FUSED (TP mesh): rebuild every TP GDN layer's packed conv history from its
+        conv_states (eager device ops, trace safe). Call after writing rec_state / conv_states from outside (SP -> TP
+        handoff / inject), before replaying the decode trace. No-op when the flag is off or on single device."""
+        for layer in self.layers:
+            if not layer.is_full_attention and hasattr(layer.attention, "refresh_fused_conv_hist"):
+                layer.attention.refresh_fused_conv_hist()
+
     def _gdn_refresh_conv_hist(self, variant=None):
         """QWEN36_GDN_DECODE_FUSED=2: rebuild every GDN layer's packed conv_hist from its
         fused_conv_state, on device (no host reads -> trace safe), eager. Call after the last

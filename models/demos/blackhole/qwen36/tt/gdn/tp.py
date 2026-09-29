@@ -23,6 +23,18 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
+def tp_gdn_decode_fused_enabled():
+    """QWEN36_TP_GDN_DECODE_FUSED (default "1"; "0" = the composite decode below): TP decode (B = 1) runs
+    qkvzab matmul -> ttnn.experimental.kda.gdn_decode_step (fused-conv mode, fast kernels: 4-tap conv + SiLU,
+    gates, L2 norms, delta rule with the FP32 rec_state updated IN PLACE, gated RMSNorm * silu(z), conv-history
+    shift in place) -> out-proj -> all-reduce. Qwen3.5-2B TP4 traced decode: 8.51 -> 5.59 ms/token. The op's
+    packed conv history (self.conv_hist, [1, Nv, 4, 32, 32] bf16) replaces conv_states during decode;
+    conv_states keep their layout and are the source of truth after prefill / inject: whoever writes conv_states
+    from outside must call refresh_fused_conv_hist() afterwards (the TP prefill capture_state / batched writers
+    and sp_handoff.inject_into_tp_model do)."""
+    return os.environ.get("QWEN36_TP_GDN_DECODE_FUSED", "1") == "1"
+
+
 def _softplus_add(a, bias):
     """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
@@ -197,6 +209,28 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    if tp_gdn_decode_fused_enabled() and fuse_ab and args.gdn_conv_kernel_size == 4:
+        # QWEN36_TP_GDN_DECODE_FUSED: the fused op's packed conv taps, per device [Nv_tp, 4, 32, 32] (tile (h, s) rows
+        # 2c and 2c + 1 = 32-channel chunk c of head h's [q_h | k_h | v_h] tap s), host-packed from the same
+        # per-device [q | k | v] tap vectors as conv_taps above, sharded on dim 0.
+        from models.demos.blackhole.qwen36.tt.gdn.decode_fused import _pack_rows_host
+
+        c_dev = qkv_per
+        packed = torch.cat(
+            [
+                _pack_rows_host([taps[j][d * c_dev : (d + 1) * c_dev] for j in range(4)], nv_per, dk, both_parity=True)
+                for d in range(tp)
+            ],
+            dim=0,
+        )
+        tw["conv_taps_packed"] = ttnn.from_torch(
+            packed,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
     # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights /
     # _conv1d_prefill. When gdn_conv_channel_chunks > 1 it is a list of per-device channel-chunk weights
     # (see TPGatedDeltaNet.__init__ for why); chunks=1 keeps the single tensor.
@@ -317,6 +351,20 @@ class TPGatedDeltaNet:
             and self.mesh.get_num_devices() == 1
             and os.environ.get("QWEN36_SP_L1_RES", "1") != "0"
         )
+        # QWEN36_TP_GDN_DECODE_FUSED (see tp_gdn_decode_fused_enabled): B = 1 only, fused qkvzab weight, K = 4,
+        # Nv == Nk, Dk == Dv (Qwen3.5-2B TP4: Nv = Nk = 4, Dk = Dv = 128 per device).
+        self._fused_decode = (
+            tp_gdn_decode_fused_enabled()
+            and self._fuse_ab
+            and "conv_taps_packed" in tw
+            and self.K == 4
+            and self.B == 1
+            and self.Nv == self.Nk
+            and self.Dk == self.Dv
+            and 2 * self.Nv <= 32
+        )
+        self.conv_hist = None  # fused decode: packed conv history [1, Nv, 4, 32, 32] bf16 (allocated in reset_state)
+        self._zero_hist = None
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -350,6 +398,9 @@ class TPGatedDeltaNet:
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
+        if self._fused_decode:
+            self.conv_hist = z((1, self.Nv, 4, 32, 32))
+            self._zero_hist = z((1, self.Nv, 4, 32, 32))
         # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
@@ -376,6 +427,24 @@ class TPGatedDeltaNet:
         ttnn.copy(self._zero_rec, self.rec_state)
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
+        if self._fused_decode and self.conv_hist is not None:
+            ttnn.copy(self._zero_hist, self.conv_hist)
+
+    def refresh_fused_conv_hist(self):
+        """QWEN36_TP_GDN_DECODE_FUSED: rebuild the packed conv history from conv_states[1..3] on device (eager, device
+        ops only -> trace safe; ~9 ops). No-op when the flag is off. Call after anything writes conv_states (prefill
+        capture, inject / handoff, state restore) and before the next fused decode step."""
+        if not self._fused_decode:
+            return
+        if self.conv_states is None or self.conv_hist is None:
+            self.reset_state()
+        from types import SimpleNamespace
+
+        from models.demos.blackhole.qwen36.tt.gdn.decode_fused import repack_conv_hist
+
+        fcs = ttnn.concat([self.conv_states[m] for m in range(1, self.K)], dim=1)  # [1, 3, qkv_dim_tp], oldest first
+        repack_conv_hist(fcs, self.conv_hist, SimpleNamespace(num_v_heads=self.Nv, head_k_dim=self.Dk))
+        ttnn.deallocate(fcs)
 
     def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
@@ -824,6 +893,7 @@ class TPGatedDeltaNet:
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
+                self.refresh_fused_conv_hist()  # QWEN36_TP_GDN_DECODE_FUSED (no-op when off)
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -835,7 +905,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
             # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
-            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
+            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1, head_split=True)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
@@ -949,6 +1019,7 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = rec_batched
             self.conv_states = conv_states
+        self.refresh_fused_conv_hist()  # QWEN36_TP_GDN_DECODE_FUSED (no-op when off)
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -1245,6 +1316,7 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(new_conv[m])
         else:
             self.conv_states = new_conv
+        self.refresh_fused_conv_hist()  # QWEN36_TP_GDN_DECODE_FUSED (no-op when off)
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
@@ -1257,6 +1329,69 @@ class TPGatedDeltaNet:
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, B, T, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_decode_fused(self, x, B):
+        """QWEN36_TP_GDN_DECODE_FUSED decode step (B = 1): the same qkvzab matmul as the composite path (1D decode
+        progcfg, L1 out) -> kda.gdn_decode_step (fast kernels; rec_state and conv_hist updated in place) -> the same
+        out-proj progcfg -> all-reduce. The op output and the out-proj are FP32 so the out-proj reads FP32 and the
+        reduce-scatter sums FP32 partials, as on the composite path (its gated input is FP32)."""
+        tw, Nv, Dk, Dv = self.tw, self.Nv, self.Dk, self.Dv
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if self.conv_hist is None:
+            self.reset_state()
+        if getattr(self.args, "proj_1d_decode", False):
+            # Same in-proj as _project_qkvzab's decode branch.
+            qkvzab = tpc.matmul_1d_decode(
+                x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
+            )
+        else:
+            qkvzab = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_L1)
+        o = ttnn.experimental.kda.gdn_decode_step(
+            qkvzab,
+            tw["dt_bias"],
+            tw["neg_exp_A"],
+            self.rec_state,
+            tw["norm_w"],
+            Nv,
+            self.Nk,
+            Dk,
+            Dv,
+            scale=self.scale,
+            l2_epsilon=1e-6,
+            norm_epsilon=1e-6,
+            memory_config=_L1,
+            output_dtype=ttnn.float32,
+            conv_hist=self.conv_hist,
+            conv_taps=tw["conv_taps_packed"],
+            qkvz_dim=self.qkv_dim_tp + Nv * Dv,
+            # Fast kernels: reader in first-use order, fast scalar fills, gates on the reader in fp32, late DFB
+            # waits, dual-output state add (48.3 -> 32.6 us per call on 4 cores; not bit-exact: the state add is
+            # full fp32).
+            fast_mode=True,
+        )
+        ttnn.deallocate(qkvzab)
+        if getattr(self.args, "proj_1d_decode", False):
+            partial = ttnn.linear(
+                o,
+                tw["out"],
+                compute_kernel_config=self.cfg,
+                program_config=self.args.gdn_out_decode_1d_progcfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.float32,
+            )
+        else:
+            partial = self._row_proj(o, tw["out"])
+        ttnn.deallocate(o)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         return tt_all_reduce(
             partial,
             self.mesh,
@@ -1281,6 +1416,9 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+
+        if self._fused_decode and B == Bmax:
+            return self._forward_decode_fused(x, B)
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 

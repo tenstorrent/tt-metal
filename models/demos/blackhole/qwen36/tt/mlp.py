@@ -120,6 +120,9 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             )
 
         # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill.
+        # TP w1/w3 in bf8 (as the single-chip path; was bf4): 32-step teacher-forced TP4 decode vs HF PCC
+        # 0.9899 -> 0.9981, KL -49%, same decode speed (the cache file name carries the dtype).
+        _gu_dt = ttnn.bfloat8_b
         return MLPWeights(
             w1=tpc.shard_w(
                 state_dict["gate_proj.weight"],
@@ -127,7 +130,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=_gu_dt,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -135,7 +138,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=_gu_dt,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
