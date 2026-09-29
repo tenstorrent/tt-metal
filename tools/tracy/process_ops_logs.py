@@ -657,15 +657,16 @@ def _enrich_ops_from_perf_csv(
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        # A device absent from the report is not an error by itself: if all of its host ops belong to traces
+        # that were captured but never replayed, the device ran nothing and the loader created no entry for it.
+        # Treat it as having no rows and let the per-op checks below decide.
+        device_rows = device_perf_by_device.get(device_id, {})
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
         replayed_trace_ids: Set[int] = set()
-        for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
+        for (op_id, trace_id, session_id), row in device_rows.items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
             if trace_id is not None:
                 replayed_trace_ids.add(int(trace_id))
@@ -706,14 +707,14 @@ def _enrich_ops_from_perf_csv(
                 dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
                 continue
 
+            missing_hint = ""
+            if host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+                missing_hint += "; the host replayed this trace, so the device report should have rows for it"
+            if not device_rows:
+                missing_hint += "; the report has no rows at all for this device"
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-                + (
-                    "; the host replayed this trace, so the device report should have rows for it"
-                    if host_trace_id is not None and host_trace_id not in replayed_trace_ids
-                    else ""
-                )
+                f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.

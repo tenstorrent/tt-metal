@@ -250,3 +250,24 @@ def test_enrich_ops_from_perf_csv_still_asserts_when_a_host_replayed_trace_has_n
 
     with pytest.raises(AssertionError, match="host replayed this trace"):  # allow-pytest.raises: runs with --noconftest
         process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
+
+
+def test_enrich_ops_from_perf_csv_accepts_a_device_whose_only_trace_was_never_replayed():
+    # Device 1 only captured trace 0 and never replayed it, so the report has no entry for device 1 at all.
+    host_ops = {0: [_host_op(10, None)], 1: [_host_op(20, 0), _host_op(21, 0)]}
+    device_rows = {0: {(10, None, None): _perf_row(10, None, None)}}
+    trace_replays = {}
+
+    enriched = process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
+
+    assert [op["global_call_count"] for op in enriched[0]] == [10]
+    assert enriched[1] == []
+
+
+def test_enrich_ops_from_perf_csv_still_asserts_on_a_device_missing_from_the_report():
+    # Device 1 ran a non-trace op but the report has no entry for it: that is lost device data.
+    host_ops = {0: [_host_op(10, None)], 1: [_host_op(20, None)]}
+    device_rows = {0: {(10, None, None): _perf_row(10, None, None)}}
+
+    with pytest.raises(AssertionError, match="no rows at all"):  # allow-pytest.raises: runs with --noconftest
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, None)
