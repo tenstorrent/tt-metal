@@ -39,11 +39,11 @@ from .attention import (
     _update_cache_at,
     _update_kv_at,
 )
-from .common import _signpost, _profile
-from .layers import DeepSeekV4RMSNorm
+from ..common import _signpost, _profile
+from ..layers import DeepSeekV4RMSNorm
 from .paged_cache import PagedLayerView
-from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
+from ..system_config import active_system_config
+from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
 def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) -> ttnn.Tensor:

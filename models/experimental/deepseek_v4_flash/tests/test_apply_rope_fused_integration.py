@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.attention import _apply_rope, _interleaved_rotate_matrix
+from models.experimental.deepseek_v4_flash.tt.decode.attention import _apply_rope, _interleaved_rotate_matrix
 
 
 PCC_THRESHOLD = 0.999

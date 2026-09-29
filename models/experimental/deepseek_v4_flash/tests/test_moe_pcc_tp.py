@@ -26,7 +26,7 @@ from models.experimental.deepseek_v4_flash.tests.test_moe_pcc import (
     WEIGHT_DTYPE_PCC,
     _generate_reference,
 )
-from models.experimental.deepseek_v4_flash.tt.moe import (
+from models.experimental.deepseek_v4_flash.tt.decode.moe import (
     DeepSeekV4PreloadedExperts,
     DeepSeekV4SparseMoeBlock,
 )

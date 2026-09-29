@@ -198,7 +198,7 @@ from loguru import logger  # noqa: E402
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
 from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa: E402
     DeepSeekV4Attention,
     int32_pos_tensor,
     make_rope_table,

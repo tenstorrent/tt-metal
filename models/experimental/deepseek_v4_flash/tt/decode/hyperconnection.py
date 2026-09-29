@@ -20,7 +20,7 @@ from typing import Optional
 import torch
 import ttnn
 
-from .common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, width_sharded_l1_config, with_tile_height
+from ..common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, width_sharded_l1_config, with_tile_height
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     HC_FN_GCB,
@@ -30,8 +30,8 @@ from .decode_prefetch import (
     hc_fn_page_bytes,
     hc_fn_ring_specs,
 )
-from .layers import Linear, LinearDecode, _rms_norm_unweighted
-from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
+from ..layers import Linear, LinearDecode, _rms_norm_unweighted
+from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 # Partial-K cut for the fused ``fn`` matmul, read off the layout registry rather than
 # repeated here: the GCB is sized from that entry before any layer exists, so a second

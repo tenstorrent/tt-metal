@@ -4,7 +4,7 @@
 """Unit tests for ``ttnn.experimental.deepseek.fused_lightning_select_kv``.
 
 The op fuses the DeepSeek V4-Flash CSA lightning indexer
-(``DeepSeekV4Indexer.select`` in models/experimental/deepseek_v4_flash/tt/attention_csa.py)
+(``DeepSeekV4Indexer.select`` in models/experimental/deepseek_v4_flash/tt/decode/attention_csa.py)
 with the paged KV gather that follows it:
 
     scores[t]  = sum_h ReLU(q[h, Sq-1] . key_cache[t]) * w[Sq-1, h]

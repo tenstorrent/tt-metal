@@ -43,7 +43,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
-from models.experimental.deepseek_v4_flash.tt.attention import (
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     DeepSeekV4Attention,
     int32_pos_tensor,
     make_rope_table,

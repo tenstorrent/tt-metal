@@ -234,17 +234,17 @@ from loguru import logger  # noqa: E402
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
 from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa: E402
     int32_pos_tensor,
     make_rope_table,
 )
-from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.l1_weights import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import make_decode_prefetch_buffers  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.l1_weights import (  # noqa: E402
     build_l1_weight_tensor,
     placement_weights_from_decoder_layer,
 )
-from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4PreloadedExperts  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4PreloadedExperts  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight  # noqa: E402

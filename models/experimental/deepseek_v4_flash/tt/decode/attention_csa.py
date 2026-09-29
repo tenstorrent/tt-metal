@@ -47,16 +47,16 @@ from .attention import (
     _tp_cluster_axis,
     _update_kv_at,
 )
-from .common import _profile, _signpost, width_sharded_l1_config
+from ..common import _profile, _signpost, width_sharded_l1_config
 from .decode_prefetch import (
     check_decode_layout,
     decode_prefetch_page_bytes,
     make_decode_prefetch_buffers,
 )
-from .layers import DeepSeekV4RMSNorm, LinearDecode
+from ..layers import DeepSeekV4RMSNorm, LinearDecode
 from .paged_cache import PagedLayerView
-from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
+from ..system_config import active_system_config
+from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 INDEX_SENTINEL = 0xFFFFFFFF
 
@@ -453,7 +453,7 @@ class DeepSeekV4Indexer:
 
     Key compression is :class:`DeepSeekV4CSACompressor` with ``head_dim=index_head_dim``
     (same Ca/Cb pool, ``csa_pool_window``, RoPE, cache write). Queries come from the
-    shared q_a latent via :class:`~.layers.LinearDecode` ``q_b_proj``. Both
+    shared q_a latent via :class:`~..layers.LinearDecode` ``q_b_proj``. Both
     ``1/√n_heads`` and ``1/√index_head_dim`` are folded into ``weights_proj`` because
     the score op applies no scale of its own.
 

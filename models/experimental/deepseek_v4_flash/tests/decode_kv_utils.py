@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.experimental.deepseek_v4_flash.tt.attention import (
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     PAGED_KV_LAYER_TYPES,
     build_static_layer_cache,
     dense_kv_context_limit,
@@ -22,7 +22,7 @@ from models.experimental.deepseek_v4_flash.tt.attention import (
     int32_pos_tensor,
 )
 from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG
-from models.experimental.deepseek_v4_flash.tt.paged_cache import (
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import (
     PagedKVManager,
     PagedLayerView,
     build_groups,
