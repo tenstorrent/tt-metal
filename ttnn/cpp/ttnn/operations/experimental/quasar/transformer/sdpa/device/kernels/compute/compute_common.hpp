@@ -2297,6 +2297,9 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
+            //    alias_cur_max from the reduce above, so point it at dfb_exp_max_diff first.
+            pack_reconfig_out(dfb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
             DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 

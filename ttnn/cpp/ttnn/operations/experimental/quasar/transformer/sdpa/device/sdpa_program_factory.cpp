@@ -64,13 +64,14 @@ struct CoreChainInfo {
 
 namespace {
 
-// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
-// or Bfp4_b for legacy path.
-tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bool use_streaming_compute) {
+// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss)
+// and on Quasar (no block-float formats), or Bfp4_b for legacy path.
+tt::DataFormat select_mask_dataformat(
+    const std::optional<Tensor>& attn_mask, bool use_streaming_compute, tt::ARCH arch) {
     if (attn_mask.has_value()) {
         return tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype());
     }
-    return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
+    return (use_streaming_compute || arch == tt::ARCH::QUASAR) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
 // Streaming compute (v2) handles every SDPA variant; only fp32 dest-accumulate falls back to the
@@ -596,8 +597,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     // Windowed mask is generated on-device. Float16_b so it works on both the streaming path (which does
     // not decode block-float masks) and the standard path; windowed_mask_gen.hpp fills the right format.
-    tt::DataFormat mask_df =
-        is_windowed ? tt::DataFormat::Float16_b : select_mask_dataformat(attn_mask, use_streaming_compute);
+    tt::DataFormat mask_df = is_windowed ? tt::DataFormat::Float16_b
+                                         : select_mask_dataformat(attn_mask, use_streaming_compute, device->arch());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;

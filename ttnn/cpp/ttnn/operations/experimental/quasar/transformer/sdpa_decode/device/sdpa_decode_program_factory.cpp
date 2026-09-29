@@ -1074,6 +1074,17 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // ---- Kernel specs ----
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/kernels/";
+    // Quasar: every DM-side DFB endpoint with implicit sync draws NoC transaction IDs from one 24-entry
+    // program-wide pool. The attention-sink and sliding-window DFBs (GPT-OSS) push it past the limit, so
+    // they use explicit sync; their producers barrier before push_back.
+    auto reader_hw = ttnn::create_reader_datamovement_config();
+    auto writer_hw = ttnn::create_writer_datamovement_config();
+    if (use_attention_sink) {
+        reader_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_ATTN_SINK);
+    }
+    if (sliding_window_size > 0) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_SLIDING_MASK);
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path(kernel_path + "dataflow/reader_decode_all.cpp"),
@@ -1098,7 +1109,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "mcast_y0",
                   "mcast_y1",
                   "num_dests"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = std::move(reader_hw),
         .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
     };
     KernelSpec writer{
@@ -1133,7 +1144,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "children_per_round_3",
                   "children_per_round_4",
                   "children_per_round_5"}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = std::move(writer_hw),
         .advanced_options =
             {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores},
     };
