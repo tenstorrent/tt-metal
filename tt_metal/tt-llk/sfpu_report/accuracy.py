@@ -26,7 +26,7 @@ DRIVER = "test_sfpu_report_accuracy.py"
 CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
 
 
-def measure(side, arch, ops, out_dir, log, jobs=8):
+def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
     """Dump the side's raw results for ``ops`` (MathOperation names) to ``out_dir``."""
     out_dir.mkdir(parents=True, exist_ok=True)
     unary = [o for o in ops if not o.startswith("Sfpu")]
@@ -35,6 +35,7 @@ def measure(side, arch, ops, out_dir, log, jobs=8):
         "SFPU_REPORT_DUMP": str(out_dir),
         "SFPU_REPORT_OPS": ",".join(unary),
         "SFPU_REPORT_BINARY_OPS": ",".join(binary),
+        "SFPU_REPORT_FORMATS": ",".join(formats),
     }
     runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs)
     return out_dir
