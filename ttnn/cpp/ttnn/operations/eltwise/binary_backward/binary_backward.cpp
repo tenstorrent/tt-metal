@@ -48,9 +48,8 @@ void preallocated_tensors_check(
     }
 }
 
-// After a broadcast-shape multiply, sum-reduce along the axes where the operand was
-// expanded so the grad matches operand shape; mirrors tt-train unbroadcast_grad.
-// bf16 ttnn::sum caps ULP tightness; fused broadcast+reduce kernel (fp32 dest-acc) tracked in #58284.
+// Sum-reduce broadcast axes back to operand shape (mirrors tt-train unbroadcast_grad).
+// bf16 ttnn::sum caps ULP tightness; fused broadcast+reduce kernel tracked in #58284.
 Tensor reduce_grad_to_operand_shape(
     const Tensor& grad, const ttnn::Shape& operand_shape, const std::optional<MemoryConfig>& memory_config) {
     const auto axes = broadcast_reduce_axes(operand_shape, grad.logical_shape());
@@ -591,9 +590,8 @@ std::vector<std::optional<Tensor>> concat_bw(
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
         ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        // The preallocated output governs placement (slice.cpp:123 prefers
-        // optional_output_tensor's config) and input_grad is always set by the helper above,
-        // so passing memory_config here would be inert.
+        // memory_config is inert: slice.cpp:123 prefers optional_output_tensor's config, and input_grad is always set
+        // above.
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
@@ -856,8 +854,7 @@ std::vector<std::optional<Tensor>> mul_bw(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    // Same non-differentiable-operand rejection as the tensor-tensor overload; keeps int/uint
-    // out of the composite ttnn::multiply below so all mul_bw callers fail loudly, not silently.
+    // Reject int/uint here so the composite ttnn::multiply below can't silently coerce them.
     const auto is_float = [](tt::tt_metal::DataType d) {
         return d == tt::tt_metal::DataType::BFLOAT16 || d == tt::tt_metal::DataType::FLOAT32 ||
                d == tt::tt_metal::DataType::BFLOAT8_B || d == tt::tt_metal::DataType::BFLOAT4_B;
@@ -874,8 +871,7 @@ std::vector<std::optional<Tensor>> mul_bw(
         input_tensor_arg.dtype());
 
     std::vector<std::optional<Tensor>> result;
-    // Allocate to input's dtype+config: empty_like(grad, ...) leaks grad's dtype/mem_config, diverging from the fused
-    // path.
+    // Allocate from input, not grad: empty_like(grad, ...) leaks grad's dtype/mem_config vs the fused path.
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(input_tensor_arg, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
@@ -892,9 +888,7 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    // Hard invariants raise so caller errors (bad storage, cross-device, non-float dtype,
-    // preallocated dtype/shape mismatch) cannot be silently coerced. Soft reasons (ROW_MAJOR,
-    // non-32x32 tile, broadcast, sharded, partial mask, A1) drop to composite.
+    // Hard invariants raise (caller errors); soft reasons drop to composite.
     const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
         operations::binary_backward::BinaryBackwardOpType::MUL_BW,
         grad_tensor_arg,
@@ -940,9 +934,8 @@ std::vector<std::optional<Tensor>> mul_bw(
             output_mem_config);
     }
 
-    // Broadcast on the forward makes grad_out.shape == out.shape > operand.shape on some axes;
-    // ttnn::multiply(grad, other) then produces at grad shape, so reduce back to operand shape
-    // before writing into the preallocated buffer (which is sized to operand.shape).
+    // Broadcasted forward → grad at grad_out.shape; reduce back to operand shape before writing the preallocated
+    // buffer.
     const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
         input_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
     const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
@@ -954,8 +947,7 @@ std::vector<std::optional<Tensor>> mul_bw(
 
     if (are_required_outputs.at(0)) {
         if (input_needs_reduce) {
-            // Pin dtype to input's — else ttnn::multiply resolves to grad's dtype and diverges from the
-            // fused/empty_like paths.
+            // Pin dtype to input's — else ttnn::multiply picks grad's dtype and diverges from fused/empty_like.
             Tensor grad_a = ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), mc_a);
             grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
                 grad_a, input_tensor_arg.logical_shape(), mc_a);
@@ -966,8 +958,7 @@ std::vector<std::optional<Tensor>> mul_bw(
                 result[0] = grad_a;
             }
         } else {
-            // Pin dtype and capture return: input_grad is const& optional, so writing it back leaks nullopt when not
-            // preallocated.
+            // Capture return: input_grad is a const& optional, so nullopt would leak when not preallocated.
             Tensor out = ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), mc_a, input_grad);
             result[0] = input_grad_preallocated ? input_grad : std::optional<Tensor>{out};
         }
