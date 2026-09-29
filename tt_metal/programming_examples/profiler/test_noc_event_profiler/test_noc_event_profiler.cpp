@@ -36,19 +36,22 @@ int main() {
         const experimental::KernelSpecName DRAM_COPY_KERNEL{"loopback_dram_copy"};
 
         // See kernel cpp code for details on which noc calls are captured
-        experimental::KernelSpec dram_copy_kernel{
+        const experimental::KernelSpec dram_copy_kernel{
             .unique_id = DRAM_COPY_KERNEL,
             .source = "tt_metal/programming_examples/profiler/test_noc_event_profiler/kernels/loopback_dram_copy.cpp",
             .num_threads = 1,
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}},
+            // config_1xx pins the kernel to BRISC on Wormhole/Blackhole; Quasar ignores it and uses the defaults
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0,
+                            .noc = NOC::RISCV_0_default,
+                        },
+                },
             // With no named args, vararg i is get_arg_val<uint32_t>(i), so the kernel reads its args unchanged
             .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 6},
         };
-        if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            dram_copy_kernel.hw_config =
-                experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
 
         experimental::WorkUnitSpec wu{
             .name = "noc_event_profiler",
