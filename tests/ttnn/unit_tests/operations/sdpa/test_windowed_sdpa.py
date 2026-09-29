@@ -326,3 +326,69 @@ def test_windowed_sdpa_q_offset_tensor_on_mesh(mesh_device, seq_len, chunk, cu_w
         f"windows={cu_window_seqlens} pcc={pcc}"
     )
     assert passing, f"PCC below threshold: {pcc}"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 8_388_608}], indirect=True)
+def test_windowed_sdpa_compact_descriptor_trace_replay(device):
+    """A compact row-major descriptor remains valid through trace replay.
+
+    The descriptor owns exactly three uint32 values. The kernel's L1 landing
+    circular buffer is tile sized, but the source DMA must remain bounded by
+    this 12-byte tensor rather than reading a full uint32 tile from DRAM.
+    """
+
+    torch.manual_seed(17)
+    seq_len, real_len, heads, head_dim = 128, 96, 4, 96
+    q = torch.randn(1, heads, seq_len, head_dim, dtype=torch.bfloat16)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    q_tt = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    k_tt = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    v_tt = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    cu_tt = ttnn.from_torch(
+        torch.tensor([0, real_len, seq_len], dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        exp_approx_mode=False,
+        q_chunk_size=64,
+        k_chunk_size=64,
+    )
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    def run_sdpa():
+        return ttnn.transformer.scaled_dot_product_attention(
+            q_tt,
+            k_tt,
+            v_tt,
+            is_causal=False,
+            scale=head_dim**-0.5,
+            program_config=program_config,
+            compute_kernel_config=compute_config,
+            cu_window_seqlens=cu_tt,
+        )
+
+    device.enable_program_cache()
+    warm_out = run_sdpa()
+    ttnn.synchronize_device(device)
+    warm = ttnn.to_torch(warm_out)
+    cache_after_warmup = device.num_program_cache_entries()
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    traced_out = run_sdpa()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    replay = ttnn.to_torch(traced_out)
+    cache_after_replay = device.num_program_cache_entries()
+    ttnn.release_trace(device, trace_id)
+
+    assert torch.equal(warm, replay)
+    assert cache_after_replay == cache_after_warmup
