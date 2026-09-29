@@ -192,6 +192,9 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "prefill_rings={}: the zero fill of the unowned rows is one ring's job and would race the other rings' "
         "row writes; pass zero_fill_non_owned_rows=False",
         args.prefill_rings);
+    TT_FATAL(
+        args.prefill_rings == 0 || tensor_args.tilize_input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+        "prefill_rings>0 is supported only on Blackhole; use prefill_rings=0 on Wormhole");
     if (args.path == MoEComputePath::LocalOutput) {
         // Nothing is staged in the combine cores' L1 on this path and the tilize cores keep the routing as packed
         // (token, k slot) lists (moe_ring::token_list), so the token count is bounded by the entry format, not by

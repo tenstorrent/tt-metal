@@ -1572,6 +1572,17 @@ def test_moe_compute_local_output_rejects_zero_fill_with_two_rings(mesh_device, 
 
 
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("prefill_rings", [1, 2, 3])
+def test_moe_compute_local_output_rejects_wormhole_replay(mesh_device, mesh_shape, prefill_rings, expect_error):
+    if mesh_device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+        pytest.skip("Wormhole replay admission control")
+    with expect_error(RuntimeError, "prefill_rings>0 is supported only on Blackhole"):
+        _call_moe_compute_for_rejection(
+            mesh_device, cluster_axis=0, zero_fill_non_owned_rows=False, prefill_rings=prefill_rings
+        )
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_pipeline_rejects_prefill_ring(mesh_device, mesh_shape, expect_error):
     with expect_error(RuntimeError, "enable_a2a_pipeline requires the streaming ring"):
         _call_moe_compute_for_rejection(mesh_device, cluster_axis=0, prefill_rings=1, enable_a2a_pipeline=True)
@@ -1745,10 +1756,8 @@ def _run_moe_compute_local_output_prefill_test(
     arch = mesh_device.arch()
     if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
         pytest.skip(f"MoE compute single-card test: arch {arch} is not supported (only WH and BH).")
-    if prefill_rings >= 2 and arch != ttnn.device.Arch.BLACKHOLE:
-        # The replica ring needs the free cells beside the DRAM-adjacent ring; on Wormhole that ring's bounding box
-        # spans the grid and the op places the compact ring instead, which the two-ring mode refuses.
-        pytest.skip("prefill_rings >= 2 needs the DRAM-adjacent ring placement (Blackhole)")
+    if prefill_rings > 0 and arch != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("Replay rings are supported only on Blackhole; Wormhole streaming is covered separately")
     torch.manual_seed(2003)
 
     hidden_size, N, k = _PREFILL_HIDDEN, _PREFILL_N, _PREFILL_K

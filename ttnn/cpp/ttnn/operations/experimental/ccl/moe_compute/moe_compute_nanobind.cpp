@@ -205,7 +205,9 @@ void bind_moe_compute(nb::module_& mod) {
           multiplies unowned slots by an exact 0. ``enable_a2a_pipeline=False`` preserves the serial
           streaming order and two feed buffers. True requires ``prefill_rings=0`` and overlaps weight
           exchange with compute, using three feed buffers and additional scratch space. The caller owns
-          this L1-capacity choice. ``prefill_rings=1`` (this path only) keeps each
+          this L1-capacity choice. Replay rings (``prefill_rings=1``, ``2``, or ``3``) are
+          supported only on Blackhole; Wormhole must use the streaming ``prefill_rings=0`` path.
+          ``prefill_rings=1`` (the local output path only) keeps each
           expert's weight slice resident in the ring cores' L1 for all of the expert's chunks (read
           from DRAM once per expert instead of once per 32-token chunk); the pages are the same.
 
