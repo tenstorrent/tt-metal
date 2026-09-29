@@ -24,7 +24,6 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 

@@ -61,7 +61,10 @@ class TtLMHead(LightweightModule):
 
     @staticmethod
     def check_cache_complete(cache_path: Path) -> bool:
-        """Check if LM head weights cache files exist for the requested mode."""
+        """Check if LM head weight cache files exist.
+
+        Existence only: the cache key does not encode the TP strategy.
+        """
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not pattern_exists("lm_head_weight*.tensorbin", "LMHead"):
@@ -326,7 +329,9 @@ class TtLMHead(LightweightModule):
 
         Args:
             x: Input tensor [dispatch_group_size, seq_len, emb_dim]
-            global_token_id: The global token position whose logits we need.
+            global_token_id: Which token's logits we need, indexed the way
+                ``global_to_local_token_id`` reads it: ``seq_len`` here is ``x``'s own extent, so in
+                chunked prefill this is a chip-major ROW of ``x``, not a global position.
 
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:

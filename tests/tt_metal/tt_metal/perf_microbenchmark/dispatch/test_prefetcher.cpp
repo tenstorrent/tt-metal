@@ -2767,13 +2767,11 @@ public:
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
 
         // L1 layout on the prefetch_hd core comes straight from the production memmap so SD
-        // mirrors the FD runtime exactly (PREFETCH_Q_RD/PCIE_RD scalar gap is L1-aligned, not 4 B).
+        // mirrors the FD runtime exactly (the PREFETCH_Q_RD slot is L1-aligned, not 4 B).
         // The memmap constructor already asserts scratch_db_base + ringbuffer_size <= l1_size.
         const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
         const uint32_t prefetch_q_rd_ptr_addr =
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
-        const uint32_t prefetch_q_pcie_rd_ptr_addr =
-            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id);
         const uint32_t prefetch_q_base =
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
         const uint32_t prefetch_q_size = memmap.prefetch_q_size();
@@ -2957,7 +2955,6 @@ public:
             prefetch_q_base,
             prefetch_q_size,
             prefetch_q_rd_ptr_addr,
-            prefetch_q_pcie_rd_ptr_addr,
             cmddat_q_base,
             cmddat_q_pages,
             scratch_db_base,

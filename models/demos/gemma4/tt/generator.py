@@ -1591,6 +1591,24 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         # Used by batch-keyed decode traces / async-ahead feedback (mixin).
         self._prev_decode_batch = None
 
+    def _prefill_forward_text_impl(self, *args, sampling_params=None, **kwargs):
+        # Single-user eager and deferred traced lm_head normally gather for the
+        # host consumer. The device sampler needs the same TP shards as decode.
+        # Scope this to each call: nested warmup can request host logits, and
+        # later host-sampling calls must retain their full-vocabulary output.
+        previous = [getattr(model, "_prefill_keep_logits_sharded", False) for model in self.model]
+        for model in self.model:
+            model._prefill_keep_logits_sharded = (
+                sampling_params is not None
+                and getattr(model, "_supports_on_device_sampling", False)
+                and model.sampling is not None
+            )
+        try:
+            return super()._prefill_forward_text_impl(*args, sampling_params=sampling_params, **kwargs)
+        finally:
+            for model, value in zip(self.model, previous):
+                model._prefill_keep_logits_sharded = value
+
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         """Warmup tokens with *unique* per-user page-table rows.
 

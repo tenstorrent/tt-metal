@@ -210,7 +210,14 @@ jobs:
       - name: Verify test timeouts against team time budgets
         uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
         with:
-          args: --comment-file "${{ runner.temp }}/budget-report.md"
+          # The action is pinned to @main so the check logic is always current, but that
+          # means GITHUB_ACTION_PATH resolves inside a separate main-pinned checkout, not
+          # this job's own checkout above. Point it explicitly at $GITHUB_WORKSPACE so it
+          # verifies this branch's test yamls and budget file, not main's.
+          args: >-
+            --tests-dir "$GITHUB_WORKSPACE/tests/pipeline_reorg"
+            --budget-file "$GITHUB_WORKSPACE/.github/time_budget.yaml"
+            --comment-file "${{ runner.temp }}/budget-report.md"
       # Every failure kind gets explained on the PR, not just an over-budget bucket:
       # a missing budget_type or an undeclared bucket is just as opaque to the author.
       # One comment is kept up to date across pushes rather than stacking per run, and

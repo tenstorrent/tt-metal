@@ -5,6 +5,7 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
@@ -109,25 +110,28 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        attn_output = self.post_attention_layernorm.forward(attn_output)
-        hidden_states = ttnn.add(residual, attn_output)
+        act_mc = prefill_short_lived_memcfg()
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
+        hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
         residual.deallocate(True)
         attn_output.deallocate(True)
 
         # 2. Dense MLP block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mlp_output = self.mlp(normed)
         normed.deallocate(True)
 
         hidden_states = mlp_output
 
-        # post_feedforward_layernorm -> residual add
-        normed = self.post_feedforward_layernorm.forward(hidden_states)
-        hidden_states = ttnn.add(residual, normed)
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
+        hidden_states = ttnn.add(
+            residual,
+            normed,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         residual.deallocate(True)
         normed.deallocate(True)
-
-        hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states
