@@ -97,6 +97,7 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
     // this sequence is not preceded by NOC transactions for program configuration data.
     DispatcherSelect dispatcher = DispatcherSelect::DISPATCH_MASTER;
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
+        // Each bit selects the dispatch_s semaphore for one sub-device; this sequence targets only sub_device_index.
         commands.add_notify_dispatch_s_go_signal_cmd(0, static_cast<uint16_t>(1U << sub_device_index));
         dispatcher = DispatcherSelect::DISPATCH_SUBORDINATE;
     }

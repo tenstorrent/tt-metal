@@ -813,7 +813,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -861,7 +861,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     void* dst,
-    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
@@ -1351,27 +1351,35 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
-    enqueue_prefetch_exec_buffer_nolock(
-        trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
+    submit_replay_buffer(trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
     if (blocking) {
         this->finish_nolock();
     }
 }
 
-void FDMeshCommandQueue::enqueue_prefetch_exec_buffer(
+void FDMeshCommandQueue::enqueue_command_list(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
     const std::vector<SubDeviceId>& sub_device_ids,
     const MeshBuffer& buffer,
+    SubDeviceManagerId sub_device_manager_id,
     bool blocking) {
     auto lock = lock_api_function_();
+    TT_FATAL(
+        mesh_device_->get_active_sub_device_manager_id() == sub_device_manager_id,
+        "The active sub-device manager changed after the command list was built");
     in_use_ = true;
-    enqueue_prefetch_exec_buffer_nolock(worker_descriptors, sub_device_ids, buffer);
+    submit_replay_buffer(worker_descriptors, sub_device_ids, buffer);
     if (blocking) {
         this->finish_nolock();
     }
 }
 
-void FDMeshCommandQueue::enqueue_prefetch_exec_buffer_nolock(
+void FDMeshCommandQueue::drain_device_work() {
+    auto lock = lock_api_function_();
+    this->finish_nolock();
+}
+
+void FDMeshCommandQueue::submit_replay_buffer(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
     const std::vector<SubDeviceId>& sub_device_ids,
     const MeshBuffer& buffer) {

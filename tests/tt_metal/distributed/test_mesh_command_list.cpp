@@ -27,10 +27,11 @@
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-namespace tt::tt_metal::distributed::experimental::test {
+namespace tt::tt_metal::experimental::test {
 namespace {
 
 namespace m2 = tt::tt_metal::experimental;
+using namespace tt::tt_metal::distributed;
 
 using m2::test_helpers::BindTensorParameterToKernel;
 using m2::test_helpers::MakeMinimalDFB;
@@ -423,6 +424,9 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     EXPECT_THAT(
         [&] { CommandListBuilder second_builder(*mesh_device_); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Only one CommandListBuilder may exist")));
+    EXPECT_THAT(
+        [&] { mesh_device_->clear_loaded_sub_device_manager(); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder is active")));
 
     // Clearing removes the recording, after which build rejects the empty builder.
     builder.add(workload);
@@ -667,4 +671,4 @@ TEST_F(CommandListMultiCQTest, EnforcesTheCommandQueueUsedAtBuildTime) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::distributed::experimental::test
+}  // namespace tt::tt_metal::experimental::test

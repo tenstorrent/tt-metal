@@ -13,7 +13,11 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::distributed::experimental {
+namespace tt::tt_metal::experimental {
+
+using distributed::MeshCommandQueue;
+using distributed::MeshDevice;
+using distributed::MeshWorkload;
 
 using tt_metal::experimental::KernelSpecName;
 using tt_metal::experimental::NodeCoord;
@@ -75,19 +79,14 @@ struct CmdListArgPatch {
 // throw and no call partially applies.
 class CommandListBuilder {
 public:
-    // Pins the active mesh device and sub-device configurations; builds are
-    // rejected if the device's configuration changes before build() is called.
-    //
-    // Acquires the MeshDevice's Command List builder lock, enforcing a single
-    // CommandListBuilder instance per MeshDevice.
+    // Captures the active sub-device manager. add() and build() require it to
+    // be active.
     explicit CommandListBuilder(MeshDevice& device);
 
-    // Move-only.
     CommandListBuilder(const CommandListBuilder&) = delete;
     CommandListBuilder& operator=(const CommandListBuilder&) = delete;
     CommandListBuilder(CommandListBuilder&&) noexcept;
     CommandListBuilder& operator=(CommandListBuilder&&) noexcept;
-    // Release the MeshDevice's Command List builder lock.
     ~CommandListBuilder();
 
     // Record one workload iteration. Only enqueues exist here: reads, writes,
@@ -120,13 +119,11 @@ public:
 
     MeshDevice& device() const;
 
-    // Clear the queued workloads, resetting the builder to its initial state.
+    // Clears all recorded workloads.
     void clear();
 
-    // Release the MeshDevice's Command List builder lock and invalidate the
-    // CommandListBuilder.
-    // Any usage of this object afterwards throws. This is to support Python
-    // bindings that cannot support RAII patterns.
+    // Releases the builder lock and invalidates the builder. Repeated calls
+    // have no effect.
     void deallocate();
 
 private:
@@ -140,17 +137,14 @@ private:
 // the command list's device buffer and registry.
 class CommandList {
 public:
-    // Cannot be copied
     CommandList(const CommandList&) = delete;
     CommandList& operator=(const CommandList&) = delete;
-    // Movable
     CommandList(CommandList&&) noexcept;
     CommandList& operator=(CommandList&&) noexcept;
-    // RAII deallocation
     ~CommandList();
 
-    // Replay on the CQ this command list was built for. blocking=true waits for the
-    // device to finish; blocking=false returns once the replay is issued.
+    // Replays on the command queue used by build(). The recorded sub-device
+    // manager must be active. If blocking, waits for completion.
     void replay(bool blocking) const;
 
     // Patch registered parameters for future replays. The command list resolves each
@@ -165,21 +159,19 @@ public:
 
     uint8_t cq_id() const;
 
-    // Manually deallocate the command list from device DRAM. The CommandList becomes
-    // invalid after this call, and all other functions will throw. This is
-    // to support Python bindings that cannot support RAII patterns.
+    // Releases device resources and invalidates the handle. Repeated calls
+    // have no effect.
     void deallocate();
 
 private:
-    // Only CommandListBuilder::build() creates instances.
     friend class CommandListBuilder;
     class Impl;
     explicit CommandList(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
 };
 
-// Replicates EnqueueMeshWorkload pattern. Verifies the command list belongs to
-// the passed in cq before executing.
+// Replays command_list on cq, which must match the device and queue used to
+// build it.
 void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
 
-}  // namespace tt::tt_metal::distributed::experimental
+}  // namespace tt::tt_metal::experimental

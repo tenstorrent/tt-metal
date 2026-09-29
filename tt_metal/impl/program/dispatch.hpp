@@ -236,7 +236,7 @@ void for_each_program_command_sequence_chunk(
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
-    const std::function<void(const void*, uint32_t)>& visitor);
+    const std::function<void(const void*, uint32_t)>& process_chunk);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,

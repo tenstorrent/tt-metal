@@ -269,7 +269,7 @@ public:
 
     // Command List builder lifecycle. The lock is device-wide; the active
     // SubDeviceManagerId is captured separately by the builder for validation.
-    void acquire_command_list_builder();
+    SubDeviceManagerId acquire_command_list_builder();
     void release_command_list_builder();
 
     // Only needed to prevent command lists and traces from coexisting

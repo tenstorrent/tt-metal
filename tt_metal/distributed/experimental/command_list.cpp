@@ -10,7 +10,6 @@
 #include <iterator>
 #include <limits>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -32,14 +31,18 @@
 #include "tt_metal/impl/dispatch/launch_message_ring_buffer_state.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/dispatch/simple_trace_allocator.hpp"
+#include "tt_metal/impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/trace/trace_node.hpp"
+#include <internal/service/service_core_manager.hpp>
 
-namespace tt::tt_metal::distributed::experimental {
+namespace tt::tt_metal::experimental {
+using namespace tt::tt_metal::distributed;
+
 namespace {
 
 struct CommandListData {
@@ -118,7 +121,6 @@ struct PatchResolutionCounts {
 struct SerializedRange {
     CommandListData data;
     std::unordered_map<SubDeviceId, TraceWorkerDescriptor> worker_descriptors;
-    std::set<SubDeviceId> used_sub_devices;
 };
 
 struct ScalarPatchTarget {
@@ -270,13 +272,37 @@ FDMeshCommandQueue& as_fd_queue(MeshCommandQueue& cq) {
     return *fd_cq;
 }
 
+void validate_no_service_cores(MeshWorkload& workload, MeshDevice& mesh_device) {
+    auto& service_core_manager = mesh_device.impl().metal_context().get_service_core_manager();
+    if (!service_core_manager.impl().has_any_claims()) {
+        return;
+    }
+    for (auto& [device_range, program] : workload.get_programs()) {
+        const auto logical_cores = program.impl().logical_cores();
+        for (const auto& coord : device_range) {
+            auto* device = mesh_device.impl().get_device(coord);
+            if (device == nullptr) {
+                continue;
+            }
+            for (const auto& per_type : logical_cores) {
+                for (const auto& core : per_type) {
+                    TT_FATAL(
+                        !service_core_manager.impl().is_service_core(device->id(), core),
+                        "Command lists do not support workloads targeting service core {} on device {}",
+                        core,
+                        device->id());
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 class CommandListBuilder::Impl {
 public:
     explicit Impl(MeshDevice& mesh_device) :
-        mesh_device(mesh_device), sub_device_manager_id(mesh_device.get_active_sub_device_manager_id()) {
-        mesh_device.impl().acquire_command_list_builder();
+        mesh_device(mesh_device), sub_device_manager_id(mesh_device.impl().acquire_command_list_builder()) {
         lock_held = true;
     }
     ~Impl() {
@@ -504,13 +530,11 @@ private:
             starting_workers[*sub_device] = worker.num_completion_worker_cores;
         }
 
-        std::set<SubDeviceId> used_sub_devices;
         for (auto& selected : selection.programs) {
             auto& captured = *selected.program;
             auto& node = captured.trace_node;
             auto& staged_node = *selected.staged_node;
             const auto sub_device = node.sub_device_id;
-            used_sub_devices.insert(sub_device);
 
             auto& command_sequence = node.program->get_trace_cached_program_command_sequences().at(
                 *mesh_device.get_active_sub_device_manager_id());
@@ -574,8 +598,7 @@ private:
         bytes.insert(bytes.end(), exec_buf_end.begin(), exec_buf_end.end());
         return {
             .data = {.device_range = range, .data = std::move(bytes)},
-            .worker_descriptors = std::move(worker_descriptors),
-            .used_sub_devices = std::move(used_sub_devices)};
+            .worker_descriptors = std::move(worker_descriptors)};
     }
 
 public:
@@ -596,7 +619,6 @@ public:
         std::memcpy(exec_buf_end.data(), end_command.data(), end_command.size_bytes());
 
         size_t max_command_list_size = 0;
-        std::set<SubDeviceId> used_sub_devices;
         std::optional<std::unordered_map<SubDeviceId, TraceWorkerDescriptor>> overall_worker_descriptors;
 
         for (const auto& range : device_ranges) {
@@ -604,7 +626,6 @@ public:
                 serialize_range(mesh_device, dispatch_state, staged_nodes, range, exec_buf_end, patch_registry);
             max_command_list_size = std::max(max_command_list_size, serialized.data.data.size());
             descriptor.ordered_data.push_back(std::move(serialized.data));
-            used_sub_devices.insert(serialized.used_sub_devices.begin(), serialized.used_sub_devices.end());
             if (!overall_worker_descriptors) {
                 overall_worker_descriptors = std::move(serialized.worker_descriptors);
             } else {
@@ -618,7 +639,11 @@ public:
         if (overall_worker_descriptors) {
             descriptor.worker_descriptors = std::move(*overall_worker_descriptors);
         }
-        descriptor.sub_device_ids.assign(used_sub_devices.begin(), used_sub_devices.end());
+        descriptor.sub_device_ids.reserve(descriptor.worker_descriptors.size());
+        for (const auto& [sub_device_id, _] : descriptor.worker_descriptors) {
+            descriptor.sub_device_ids.push_back(sub_device_id);
+        }
+        std::ranges::sort(descriptor.sub_device_ids, {}, [](SubDeviceId id) { return *id; });
         return {.descriptor = std::move(descriptor), .patch_registry = std::move(patch_registry)};
     }
 
@@ -742,6 +767,7 @@ public:
         TT_FATAL(
             mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
             "The active sub-device manager changed while recording a command list");
+        validate_no_service_cores(workload, mesh_device);
 
         auto& binary_load_cq = mesh_device.mesh_command_queue();
         auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
@@ -813,9 +839,6 @@ private:
     void validate() const {
         TT_FATAL(valid, "CommandList has been deallocated");
         TT_FATAL(mesh_device != nullptr, "CommandList has no MeshDevice");
-        TT_FATAL(
-            mesh_device->get_active_sub_device_manager_id() == sub_device_manager_id,
-            "The active sub-device manager changed after the command list was built");
     }
 
     void release_resources() noexcept {
@@ -839,15 +862,19 @@ public:
         if (!valid) {
             return;
         }
-        mesh_device->mesh_command_queue(bound_cq_id).finish();
+        as_fd_queue(mesh_device->mesh_command_queue(bound_cq_id)).drain_device_work();
         release_resources();
     }
 
     void replay(bool blocking) const {
         validate();
         as_fd_queue(mesh_device->mesh_command_queue(bound_cq_id))
-            .enqueue_prefetch_exec_buffer(
-                descriptor.worker_descriptors, descriptor.sub_device_ids, *command_buffer, blocking);
+            .enqueue_command_list(
+                descriptor.worker_descriptors,
+                descriptor.sub_device_ids,
+                *command_buffer,
+                sub_device_manager_id,
+                blocking);
     }
 
     void update_args(const CmdListArgPatch& patch) {
@@ -1081,4 +1108,4 @@ void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool bl
     command_list.replay(blocking);
 }
 
-}  // namespace tt::tt_metal::distributed::experimental
+}  // namespace tt::tt_metal::experimental
