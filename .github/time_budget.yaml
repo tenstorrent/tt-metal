@@ -152,7 +152,7 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 45
+    bh_p150b_civ2: 60
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
@@ -413,7 +413,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1708
+    bh_sc1: 1750
     bh_sc1_high_power: 388
     bh_sc4: 60
     wh_n150: 500
