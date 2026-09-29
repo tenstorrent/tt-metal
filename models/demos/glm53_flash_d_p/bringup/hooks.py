@@ -32,13 +32,14 @@ def hf_model(spec, num_layers):
 # Device steps of the hybrid model, per block type: each passed its component gate on the device. Every other step
 # runs on the CPU reference.
 DEVICE_STEPS = {
-    "kda_dense": {"attn_hc", "attn_collapse"},
+    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm"},
     "dsa_moe": set(),
     "kda_moe": set(),
 }
 
 _HC_STEPS = {"attn_hc": "attn", "ffn_hc": "ffn"}
 _COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
+_NORM_STEPS = {"attn_norm": "input_layernorm"}
 
 
 def _loader_cfg(spec):
@@ -87,6 +88,22 @@ def _collapse_host_fn(mesh, module, n):
     return fn
 
 
+def _norm_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, H] bf16 (harness boundary: upload bf16, read chip 0)."""
+    import ttnn
+    from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+    def fn(ctx, x):
+        xd = replicate(mesh, x.reshape(1, 1, *x.shape[-2:]).to(torch.bfloat16))
+        yd = module(xd)
+        y = replicated_to_host(yd).reshape(x.shape[-2], -1)
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
 def _device_step(mesh, spec, layer, step, loader, cfg):
     if step in _HC_STEPS:
         from models.demos.glm53_flash_d_p.tt.mhc import build_hc
@@ -96,6 +113,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.collapse import build_collapse
 
         return _collapse_host_fn(mesh, build_collapse(cfg), cfg.hc_mult)
+    if step in _NORM_STEPS:
+        from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
+
+        return _norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, _NORM_STEPS[step]))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
