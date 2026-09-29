@@ -5,7 +5,14 @@ import re
 import time
 from pathlib import Path
 
-_STATUS_FILE = "bringup_status.json"
+# ONE OWNER FOR THE NAME. bringup_plan defines it with the note that "the emitter, the lookup and
+# the already-scaffolded short-circuit must agree on the name" -- so this asks rather than spelling a
+# third copy. Imported lazily at module scope through a guard because trace_gate is imported from
+# inside functions in both directions and a hard import would couple the two at load time.
+try:
+    from .bringup_plan import BRINGUP_STATUS_FILENAME as _STATUS_FILE
+except Exception:  # noqa: BLE001 -- a partial checkout must still gate
+    _STATUS_FILE = "bringup_status.json"
 
 
 def _component_status_dirs(demo_dir):
