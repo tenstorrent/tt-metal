@@ -23,6 +23,9 @@ the 4-chip box can form.
   DRAM bank. One copy core per link writes the chip's own shard into its own output.
   Line: toward p+1 a chip sends shards p, p−1, …, 0; toward p−1 it sends p, …, G−1. Ring: toward p+1 it sends
   G/2 shards (p, p−1, …), toward p−1 the rest.
+  Whatever order a ring travels in, the output holds each chip's shard at its row-major slot (chip (r, c) of the
+  group at r × cols + c): a snake over the mesh travels in snake order but writes row-major, as high_bw_all_gather
+  does.
 - **Placement is found, not configured:** a one-time probe program builds each fabric connection on device and
   reports its router's (translated) coordinates; the host maps them to physical NoC columns with the chip's
   Ethernet harvesting mask, and puts each port core directly below. Worker coordinates are translated too, and with
@@ -140,19 +143,6 @@ late chip's snapshot already holds its neighbours' next-call data (the test fail
 
 `test_fabric_all_gather_subdevice` runs the gather in a 4-column strip that is its own sub-device, with its own and
 with caller-owned semaphores.
-
-## CI
-`tests/pipeline_reorg/ops_unit_tests.yaml`, entry *fabric_all_gather example accuracy + perf (Galaxy, LoudBox)*,
-category `fabric_examples`, SKUs `bh_galaxy` (8 × 4: axis rings on FABRIC_1D_RING; axis rings, snake ring and
-two Hamiltonian cycles on FABRIC_2D_TORUS_XY) and `bh_loudbox` (2 × 4 lines, plus ring / snake where the fabric
-routes them). It is not scheduled; run it with
-
-```bash
-gh workflow run tt-metal-l2-nightly.yaml --ref <branch> -f run_wormhole=false -f additional_test_categories=fabric_examples
-```
-
-Bandwidth there comes from the realtime profiler (`FAG_PROFILER=rt`; CI builds have no device profiler) and is
-reported, not gated.
 
 ## Four neighbours per chip: two Hamiltonian cycles (emulated Galaxy)
 A snake ring over a 2D torus feeds each chip over two of its four neighbours. `scheme="dual_cycles"`

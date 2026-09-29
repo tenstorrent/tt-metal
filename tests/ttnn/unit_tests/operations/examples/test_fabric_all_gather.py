@@ -163,10 +163,8 @@ def test_fabric_all_gather(mesh_device):
         if shape != (rows, cols):
             continue
         topology = getattr(ttnn.Topology, topo)
-        if scheme == "dual_cycles":  # one group over the whole mesh, output in row-major chip order
-            groups = [[(r, c) for r in range(rows) for c in range(cols)]]
-        else:
-            groups = build_groups((rows, cols), cluster_axis)
+        # output slots are in row-major chip order for every scheme (a snake travels in snake order)
+        groups = [sorted(g) for g in build_groups((rows, cols), cluster_axis)]
         G = len(groups[0])
         for num_links, variant in [(l, v) for l in LINKS for v in VARIANTS]:
             balance, desync = "b" in variant and variant != "base", "d" in variant and variant != "base"
@@ -183,14 +181,15 @@ def test_fabric_all_gather(mesh_device):
                 _REPORT.append(f"{tag}  unsupported: {msg}")
                 continue
             ttnn.synchronize_device(mesh_device)
-            got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
-            for grp in groups:
-                parts = [host[r, c].reshape(1, 1, H, W) for r, c in grp]
-                expected = torch.cat(parts, dim=DIM)
+            dev = ttnn.get_device_tensors(out)
+            for grp in groups:  # one chip's output on the host at a time (a Galaxy's outputs are tens of GB)
+                expected = torch.cat([host[r, c].reshape(1, 1, H, W) for r, c in grp], dim=DIM)
                 for r, c in grp:
+                    got = ttnn.to_torch(dev[r * cols + c])
                     assert torch.equal(
-                        got[r * cols + c].reshape(expected.shape).to(expected.dtype), expected
+                        got.reshape(expected.shape).to(expected.dtype), expected
                     ), f"{fabric}/{topo_name}/links={num_links}: chip ({r},{c}) output != gathered shards"
+                    del got
             chips, _ = plan(
                 mesh_device,
                 cluster_axis=cluster_axis,
@@ -295,11 +294,12 @@ def _sharded_inputs(mesh_device, n, H, W):
 
 
 def _check(host, out, groups, cols, H, W, what):
-    got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
+    dev = ttnn.get_device_tensors(out)
     for grp in groups:
         expected = torch.cat([host[r, c].reshape(1, 1, H, W) for r, c in grp], dim=0)
         for r, c in grp:
-            assert torch.equal(got[r * cols + c].reshape(expected.shape), expected), f"{what}: chip ({r},{c}) wrong"
+            got = ttnn.to_torch(dev[r * cols + c])
+            assert torch.equal(got.reshape(expected.shape), expected), f"{what}: chip ({r},{c}) wrong"
 
 
 def _reuse_topos(mesh_device):
@@ -346,7 +346,7 @@ def test_fabric_all_gather_output_reuse(mesh_device):
     hosts, inputs = _sharded_inputs(mesh_device, REUSE_CALLS, H, W)
     for topo_name in _reuse_topos(mesh_device):
         _, cluster_axis, topo = _TOPOS[topo_name]
-        groups = build_groups((rows, cols), cluster_axis)
+        groups = [sorted(g) for g in build_groups((rows, cols), cluster_axis)]
         for num_links, balance in [(l, b) for l in LINKS for b in (False, True)]:
             kw = dict(cluster_axis=cluster_axis, topology=getattr(ttnn.Topology, topo), num_links=num_links)
             try:
@@ -413,7 +413,7 @@ def test_fabric_all_gather_subdevice(mesh_device, external_semaphores):
     try:
         for topo_name in _reuse_topos(mesh_device):
             _, cluster_axis, topo = _TOPOS[topo_name]
-            groups = build_groups((rows, cols), cluster_axis)
+            groups = [sorted(g) for g in build_groups((rows, cols), cluster_axis)]
             for num_links in LINKS:
                 kw = dict(cluster_axis=cluster_axis, topology=getattr(ttnn.Topology, topo), num_links=num_links)
                 kw.update(subdevice_id=sd, sub_core_grid=strip, balance=topo == "Ring")

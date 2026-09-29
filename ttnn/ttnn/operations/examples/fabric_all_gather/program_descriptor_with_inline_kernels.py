@@ -5,7 +5,8 @@
 
 Groups: `cluster_axis` 0 (each mesh column), 1 (each mesh row) or None (one snake over the whole mesh). Every hop
 must be one physical link. Each chip's shard is TILE, interleaved in DRAM; the output concatenates the group's shards
-in group order along dim 0 (or along dim -2 when every leading dim is 1).
+in row-major chip order along dim 0 (or along dim -2 when every leading dim is 1), whatever order the data travels
+in (a snake ring over the whole mesh still writes chip (r, c) at slot r * cols + c).
 
 Per chip, per direction (toward the next / previous chip in the group) and per link there is one *port* core:
   reader (RISCV_1, NoC0): reads its chip's own shard from the input, then the shards it relays, from the output,
@@ -626,7 +627,7 @@ def plan(
     scheme "ring":        one ring (or line) per group, in group order.
     scheme "dual_cycles": one group over the whole mesh (a 2D torus, both sides >= 3) and two rings over it — two
                           edge-disjoint Hamiltonian cycles — each carrying half of every shard (half the DRAM banks).
-    The output concatenates the group's shards in group order (row-major for "dual_cycles")."""
+    The output concatenates the group's shards in row-major chip order, independent of the ring order."""
     import os
 
     mesh_shape = tuple(mesh_device.shape)
@@ -651,7 +652,7 @@ def plan(
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     chips = {}
     for grp, rings in zip(groups, ring_lists):
-        out_idx = {coord: i for i, coord in enumerate(grp)}
+        out_idx = {coord: i for i, coord in enumerate(sorted(grp))}  # output slot = row-major rank in the group
         for coord in grp:
             chips[coord] = dict(out=out_idx[coord], G=G, rings=[])
         for cyc in rings:
@@ -911,7 +912,7 @@ def fabric_all_gather(
     """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
-    topology=Ring); the output is then in row-major chip order.
+    topology=Ring). The output is always in row-major chip order (as high_bw_all_gather's), for snakes too.
 
     output: a preallocated output (the gathered shape, TILE, DRAM interleaved), written in place and returned; it
         can be reused call after call. Calls are fenced: no chip writes into a neighbour's output before the
