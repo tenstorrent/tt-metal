@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 28;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 30;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -63,6 +63,10 @@ struct ReaderCtArgs {
     uint32_t num_untilizers;
     // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
     uint32_t unt_freed_slot;
+    // The routed expert's split between its two passes; decides the order experts are walked in.
+    uint32_t expert_threshold;
+    // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
+    uint32_t expert_table_page_base;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -104,7 +108,9 @@ struct ReaderCtArgs {
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
-        unt_freed_slot(untilizers.my_freed_slot) {
+        unt_freed_slot(untilizers.my_freed_slot),
+        expert_threshold(args.hybrid_token_threshold),
+        expert_table_page_base(plan.expert_table_page_base) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -169,7 +175,9 @@ struct ReaderCtArgs {
             unt_ring_addr,
             unt_ring_batches,
             num_untilizers,
-            unt_freed_slot};
+            unt_freed_slot,
+            expert_threshold,
+            expert_table_page_base};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -202,9 +210,24 @@ struct ReaderCtArgs {
         unt_ring_addr(get_compile_time_arg_val(24)),
         unt_ring_batches(get_compile_time_arg_val(25)),
         num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_slot(get_compile_time_arg_val(27)) {}
+        unt_freed_slot(get_compile_time_arg_val(27)),
+        expert_threshold(get_compile_time_arg_val(28)),
+        expert_table_page_base(get_compile_time_arg_val(29)) {}
 
-    // Hand-placed L1: this op owns these counters and hands the next launch a zeroed set.
+    // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
+    // standalone op places its ring counters in. The framework re-initialises those every launch; the
+    // hand-placed set is this op's to zero.
+#ifdef CMBF2D_OVERLAPPED
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
+    }
+    uint32_t unt_produced_word(uint32_t peer_word) const { return get_semaphore(peer_word); }
+    uint32_t unt_freed_addr_value() const { return get_semaphore(unt_freed_slot); }
+    void reset_produced_counter(volatile tt_l1_ptr uint32_t*) const {}
+#else
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
     }
@@ -214,6 +237,7 @@ struct ReaderCtArgs {
     uint32_t unt_produced_word(uint32_t peer_word) const { return peer_word; }
     uint32_t unt_freed_addr_value() const { return unt_freed_slot; }
     void reset_produced_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
+#endif
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
@@ -233,6 +257,10 @@ struct ReaderCtArgs {
     static constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
     static constexpr auto dram_expert_offsets_args =
         TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
+#ifdef CMBF2D_OVERLAPPED
+    static constexpr auto dram_expert_table_args =
+        TensorAccessorArgs<dram_expert_offsets_args.next_compile_time_args_offset()>();
+#endif
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
