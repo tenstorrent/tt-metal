@@ -360,3 +360,21 @@ hooks: `_residual_host_fn` (x and y uploaded as bf16, hc as fp32, output read ba
 Result (gate): pcc_attn_residual_L00 0.999994. L0: rel 0.0036, ratio [0.9959, 1.0050], worst row 0.0106, both terms
 coef 1.0000 / rel 0.0015. L1: rel 0.0031, ratio [0.9965, 1.0035], terms rel 0.0022.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py`
+
+## S.kda_dense.05 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc + attn_collapse + attn_norm + attention + attn_residual on device, layer 0).
+Rewrote it from swap 04's test. Kept the gated pcc_swap_out, every swap-04 check (incl. the KDA state) and the `_f32`
+cast. Added h_mid checks, because at layer 0 comb^T @ in = in for any column-stochastic comb, so block out cannot see
+comb bugs:
+- vs the CPU residual of the inputs the step actually got (golden in, device attn_hc, device attn_out), and the same
+  module on layer 1's golden. Both use the component test's limits (rel <= 0.01, ratio [0.985, 1.015], per-stream
+  <= 0.015, worst row <= 0.05) plus the per-term coefficient / rel checks.
+- vs golden h_mid, looser (rel 0.015, ratio [0.97, 1.03], per-stream 0.02), because it carries the attention's
+  upstream error.
+No new sensitivity runs: the residual bugs are the component review's; the block-out limits are swap 04's.
+Results: device passes (out PCC 0.999982, rel 0.0064, ratio [0.9828, 1.0078]; h_mid vs golden 0.0084, streams 0/1
+0.0115 (the larger post weight on the attention error); vs CPU same input 0.0017; layer 1 0.0031). Reference passes
+(out rel 0.0017). Stub fails (PCC 0).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_05_attn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
