@@ -57,6 +57,8 @@ from helpers.ulp_sweep import stimuli_format_for, sweep_spec
 pytestmark = pytest.mark.accuracy
 
 DUMP_DIR = os.environ.get("SFPU_REPORT_DUMP")
+#: Optional narrowing, e.g. "Float16_b,Float32": only variants whose input is listed.
+ONLY_FORMATS = {s for s in os.environ.get("SFPU_REPORT_FORMATS", "").split(",") if s}
 OPS = [s for s in os.environ.get("SFPU_REPORT_OPS", "").split(",") if s]
 
 #: (input, output) pairs the report measures: one per format a reviewer reads.
@@ -78,6 +80,7 @@ def _cells():
         for approx in ApproximationMode
         for dest in DestAccumulation
         if not is_format_combination_outlier(in_fmt, out_fmt, dest)
+        and (not ONLY_FORMATS or in_fmt.name in ONLY_FORMATS)
         # A float32 input through a 16-bit Dest is truncated before the SFPU sees
         # it: that measures the Dest, not the kernel.
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
@@ -297,14 +300,29 @@ EXACT_BINARY_OPS = {
 
 #: What the report says about an op's coverage when it is narrower than the format.
 BINARY_COVERAGE_NOTES = {
-    "SfpuLogsigmoid": "x in [-8, 3.9] only: the harness cannot supply the device-computed exp(-x) the x > 4 branch reads",
+    "SfpuLogsigmoid": "x in [-60, 60], with its second operand exp(-x) computed on the host "
+    "(ttnn computes it on the device with a fast exp, so device results can differ slightly)",
 }
+
+#: Ops whose second operand is a function of the first, not an independent input:
+#: op -> in1(x). Their stimuli are x and in1(x), never an independent pair.
+DERIVED_OPERAND = {
+    "SfpuLogsigmoid": lambda x: torch.exp(-x.to(torch.float64)),
+}
+
+
+def _interleave(a, b):
+    """Operands as the binary driver lays them out: tile 2k = in0, tile 2k+1 = in1."""
+    n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    return torch.stack([a.reshape(-1, n), b.reshape(-1, n)], dim=1).flatten()
 
 
 def _binary_cells():
     cells = []
     for op in BINARY_OPS:
         for fmt in BINARY_FORMATS.get(op, []):
+            if ONLY_FORMATS and fmt.name not in ONLY_FORMATS:
+                continue
             for dest in (
                 (DestAccumulation.No, DestAccumulation.Yes)
                 if not fmt.is_integer()
@@ -316,35 +334,36 @@ def _binary_cells():
     return cells or [("none", F16B, DestAccumulation.No)]
 
 
-def binary_special_pairs(fmt):
-    """One tile pair: the cross product of the values a random draw never lands on."""
+def binary_special_values(fmt):
+    """The values a random draw never lands on."""
     if fmt.is_integer():
         lo = -(2**31) if fmt == I32 else 0
         hi = 2**31 - 1 if fmt == I32 else 2**32 - 1
-        values = sorted(
-            {lo, lo + 1, -2, -1, 0, 1, 2, 31, 32, 2**16, hi - 1, hi}
-            & set(range(lo, hi + 1))
-        )
-        dtype = torch.int64
-    else:
-        info = torch.finfo(format_dict[fmt])
-        values = [
-            float("nan"),
-            float("inf"),
-            -float("inf"),
-            0.0,
-            -0.0,
-            info.tiny / 2,
-            -info.tiny / 2,
-            info.tiny,
-            info.max,
-            -info.max,
-            1.0,
-            -1.0,
-            2.0,
-            0.5,
-        ]
-        dtype = torch.float64
+        candidates = {lo, lo + 1, -2, -1, 0, 1, 2, 31, 32, 2**16, hi - 1, hi}
+        return sorted(v for v in candidates if lo <= v <= hi)
+    info = torch.finfo(format_dict[fmt])
+    return [
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        0.0,
+        -0.0,
+        info.tiny / 2,
+        -info.tiny / 2,
+        info.tiny,
+        info.max,
+        -info.max,
+        1.0,
+        -1.0,
+        2.0,
+        0.5,
+    ]
+
+
+def binary_special_pairs(fmt):
+    """One tile pair: the cross product of the special values."""
+    values = binary_special_values(fmt)
+    dtype = torch.int64 if fmt.is_integer() else torch.float64
     pairs = [(a, b) for a in values for b in values]
     n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     pairs = (pairs * (-(-n // len(pairs))))[:n]
@@ -375,16 +394,25 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
     monkeypatch.setattr(fb, "generate_stimuli", capture_generate)
 
     kwargs = {}
+    derived = DERIVED_OPERAND.get(op_name)
+    n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     if kind == "specials":
-        a, b = binary_special_pairs(fmt)
-        override = torch.cat([a, b])
-        kwargs["src_A_override"] = override
+        if derived:
+            a = torch.tensor(binary_special_values(fmt), dtype=torch.float64)
+            a = a.repeat(-(-n // a.numel()))[:n]
+            b = derived(a)
+        else:
+            a, b = binary_special_pairs(fmt)
+        kwargs["src_A_override"] = _interleave(a, b)
+    elif derived:
+        # The functional driver's default size: 16 tile pairs, 8 for a 32-bit format.
+        pairs = 8 if fmt.is_32_bit() else 16
+        a = torch.linspace(-60.0, 60.0, pairs * n, dtype=torch.float64)
+        kwargs["src_A_override"] = _interleave(a, derived(a))
     elif op_name == "SfpuAtan2":
         kwargs["spec_A"] = StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0
         )
-    elif op_name == "SfpuLogsigmoid":
-        kwargs["spec_A"] = fb._logsigmoid_stimuli_spec()
     elif mathop in fb._INT_BINARY_STIMULI:
         low, high = fb._INT_BINARY_STIMULI[mathop]
         kwargs["spec_A"] = StimuliSpec(
@@ -395,7 +423,7 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
 
     fb.sfpu_binary(formats, dest_acc, mathop, **kwargs)
     src = captured["src"].flatten()
-    if kind == "specials":
+    if "src_A_override" in kwargs:
         src = kwargs["src_A_override"].to(src.dtype).flatten()
         src = src.repeat(captured["result"].numel() // src.numel())
     n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
