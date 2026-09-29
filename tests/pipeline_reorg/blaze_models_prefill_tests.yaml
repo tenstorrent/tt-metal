@@ -1565,10 +1565,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the per-section bounds (35 + 35 + 30) plus 10 min margin (up to 2 min timeout -k
-      # grace per section, plus the summary), so a section timeout still leaves the later
-      # sections their full budget.
-      timeout: 110
+      # Exactly the sum of the per-section bounds (35 + 35 + 30), no margin: the models/demo/bh_sc1
+      # time budget bucket is exactly full, so this entry cannot carry any. Worst case (a section
+      # hits its limit plus the 2 min kill grace) the last section may be cut short by this timeout.
+      timeout: 100
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
   budget_type: demo
