@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -36,7 +39,11 @@
 //    blocks keep the full per-core extent along the multicast dimension unless that forces single-tile K steps,
 //    and 1D in0-mcast splits a wide output block into subblock-wide blocks;
 //  - subblocks are the largest that fit DST, two tiles or more on each side unless B's tiles are smaller
-//    than A's.
+//    than A's;
+//  - K depth is then refined by cost estimators (Estimator): the chosen candidate competes with its legal
+//    K-depth neighbours, and the lowest estimate wins, the chosen candidate on ties. The built-in roofline
+//    estimate doesn't depend on K depth, so on its own it keeps the heuristics' choice; estimators that do
+//    (calibrated, measured, simulated) plug in here.
 // Sharded tensors constrain the choice rather than change the rules: a sharded A fixes the family, grid and
 // per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B, block -> 2D), a sharded
 // output (with interleaved inputs) fixes the family (and with a shard spec, the grid and per-core sizes), and
@@ -79,6 +86,12 @@ struct HardwareDesc {
     bool pinned_origin = false;    // the configs must name the grid's cores (a sub-device's) explicitly
     uint32_t l1_cb_budget = 0;     // per-core bytes available for circular buffers
     uint32_t dram_alignment = 32;  // bytes; tiles read from DRAM are padded to this
+    // Nominal rates for the roofline estimate, per core clock cycle (tech_reports/GEMM_FLOPS and
+    // tech_reports/FlashAttention): matrix engine FLOPs at LoFi (8x16 x 16x16 per cycle), divided by the math
+    // fidelity; one NoC link into a core; the chip's DRAM bandwidth.
+    uint32_t matmul_flops_per_cycle = 4096;
+    uint32_t noc_bytes_per_cycle = 32;
+    double dram_bytes_per_cycle = 288.0;  // 288 GB/s at 1 GHz
 
     static HardwareDesc for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget);
 };
@@ -155,11 +168,73 @@ struct Candidate {
 // less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
 uint32_t circular_buffer_bytes(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
 
+// Per-core roofline terms (cycles) of a blocked candidate, from the rates in HardwareDesc. They depend on the
+// output blocks but not on in0_block_w.
+struct RooflineTerms {
+    double compute = 0;  // the busiest core's tile products
+    double noc = 0;      // input bytes the busiest core receives
+    double dram = 0;     // input bytes read from DRAM, chip-wide
+    double cycles() const { return std::max({compute, noc, dram}); }
+};
+RooflineTerms roofline(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
+
+// The program config of a candidate.
+MatmulProgramConfig to_program_config(const Problem& problem, const Candidate& candidate);
+
+// Whether the factories accept `config` for `problem` on `hw`: empty if so, else the first rule it breaks
+// (K and block divisibility, DST capacity, the grid, what each factory's layout requires, and L1). Covers
+// interleaved operands and outputs; a sharded layout's own rules are not checked.
+std::string check(const Problem& problem, const HardwareDesc& hw, const MatmulProgramConfig& config);
+
+// A cost estimate of a candidate, from one Estimator.
+struct Estimate {
+    double cycles = 0;      // estimated device time
+    double confidence = 0;  // how far to trust it for this problem; the most confident estimate is used
+    std::string_view source;
+};
+
+// Estimates a candidate's device time, or returns nullopt when it has no estimate for this problem. Estimators
+// rank candidates; they never create them, so they can't make an illegal choice.
+class Estimator {
+public:
+    virtual ~Estimator() = default;
+    virtual std::string_view name() const = 0;
+    virtual std::optional<Estimate> estimate(
+        const Problem& problem, const HardwareDesc& hw, const Candidate& candidate) const = 0;
+};
+
+// The roofline estimate (the largest RooflineTerms term), confidence 0: every estimator that has an answer
+// outranks it.
+class RooflineEstimator final : public Estimator {
+public:
+    std::string_view name() const override { return "roofline"; }
+    std::optional<Estimate> estimate(
+        const Problem& problem, const HardwareDesc& hw, const Candidate& candidate) const override;
+};
+
+// The estimators choose_candidate uses: the roofline.
+std::span<const Estimator* const> default_estimators();
+
 // The blocked candidate of each family that can run the problem and fits L1, in family order.
 std::vector<Candidate> candidates(const Problem& problem, const HardwareDesc& hw);
 
-// The candidate the heuristics choose, or nullopt if none fits.
+// A candidate's K-depth neighbours: the same candidate at the next deeper and the next shallower in0_block_w
+// dividing K that pass check(). Interleaved problems only (a sharded layout constrains K depth); empty
+// otherwise.
+std::vector<Candidate> k_depth_neighbours(const Problem& problem, const HardwareDesc& hw, const Candidate& candidate);
+
+// The best of `options` by estimate: per option the most confident estimate (the earlier estimator on ties),
+// then the lowest cycles (the earlier option on ties). Options without an estimate lose to those with one.
+const Candidate& best_by_estimate(
+    const Problem& problem,
+    const HardwareDesc& hw,
+    std::span<const Candidate> options,
+    std::span<const Estimator* const> estimators);
+
+// The candidate the heuristics choose, K depth refined by the estimators; nullopt if none fits.
 std::optional<Candidate> choose_candidate(const Problem& problem, const HardwareDesc& hw);
+std::optional<Candidate> choose_candidate(
+    const Problem& problem, const HardwareDesc& hw, std::span<const Estimator* const> estimators);
 
 // The program config for the chosen candidate, or nullopt if the problem is unsupported or nothing fits.
 std::optional<MatmulProgramConfig> select_program_config(const Problem& problem, const HardwareDesc& hw);

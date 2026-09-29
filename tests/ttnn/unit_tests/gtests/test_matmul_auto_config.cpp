@@ -62,90 +62,9 @@ Problem make_problem(
     return p;
 }
 
-// Returns an empty string if `config` is valid for `p` on `hw`, else a description of the first violation.
+// The library's legality check (empty if valid, else the first violated rule)
 std::string check_config(const Problem& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
-    const uint32_t cores = hw.grid.x * hw.grid.y;
-    const uint32_t max_area = (p.dst_full_sync_en ? 16 : 8) / (p.fp32_dest_acc_en ? 2 : 1);
-    return std::visit(
-        [&](const auto& c) -> std::string {
-            using T = std::decay_t<decltype(c)>;
-            constexpr bool selectable = std::is_same_v<T, MatmulMultiCoreReuseProgramConfig> ||
-                                        std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                                        std::is_same_v<T, MatmulMultiCoreReuseMultiCast1DProgramConfig>;
-            if constexpr (!selectable) {
-                return "unexpected config type";
-            } else {
-                if (c.in0_block_w == 0 || p.Kt % c.in0_block_w != 0) {
-                    return fmt::format("Kt {} % in0_block_w {}", p.Kt, c.in0_block_w);
-                }
-                if (c.out_subblock_h * c.out_subblock_w > max_area) {
-                    return "subblock area";
-                }
-                if constexpr (std::is_same_v<T, MatmulMultiCoreReuseProgramConfig>) {
-                    if (c.per_core_N != p.Nt) {
-                        return "reuse per_core_N != Nt";
-                    }
-                    const bool divides = p.Mt % c.per_core_M == 0;
-                    const bool whole_batches = c.per_core_M % p.Mt == 0 && (p.batch_a * p.Mt) % c.per_core_M == 0;
-                    if (!divides && !whole_batches) {
-                        return "reuse per_core_M";
-                    }
-                    if (c.per_core_M % c.out_subblock_h != 0 || c.per_core_N % c.out_subblock_w != 0 ||
-                        p.Mt % c.out_subblock_h != 0) {
-                        return "reuse subblock";
-                    }
-                    if (p.fp32_dest_acc_en && c.out_subblock_h * c.out_subblock_w > 4) {
-                        return "reuse fp32 subblock";
-                    }
-                    Blocking b{c.per_core_M, c.per_core_N, c.in0_block_w, c.per_core_M, c.per_core_N, 0, 0};
-                    if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
-                        return "reuse L1";
-                    }
-                    return "";
-                } else if constexpr (
-                    std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                    std::is_same_v<T, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                    if (c.per_core_M % c.out_block_h != 0 || c.per_core_N % c.out_block_w != 0 ||
-                        c.out_block_h % c.out_subblock_h != 0 || c.out_block_w % c.out_subblock_w != 0) {
-                        return "block divisibility";
-                    }
-                    const uint32_t M = c.fuse_batch ? p.batch_a * p.Mt : p.Mt;
-                    if (c.fuse_batch && p.batch_b > 1) {
-                        return "fuse_batch with batched B";
-                    }
-                    const uint32_t blocks_y = div_up(M, c.per_core_M);
-                    const uint32_t blocks_x = div_up(p.Nt, c.per_core_N);
-                    Family family = Family::Mcast2D;
-                    if constexpr (std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                        if (c.per_core_M > M || blocks_y > hw.grid.y || blocks_x > hw.grid.x) {
-                            return "2d grid";
-                        }
-                    } else {
-                        family = c.mcast_in0 ? Family::Mcast1DIn0 : Family::Mcast1DIn1;
-                        if (blocks_x * blocks_y > cores) {
-                            return "1d core count";
-                        }
-                        if (c.mcast_in0 && blocks_y != 1) {
-                            return "1d in0 rows";
-                        }
-                        if (!c.mcast_in0) {
-                            if (c.per_core_N != p.Nt || c.per_core_M > M) {
-                                return "1d in1 shape";
-                            }
-                            if (blocks_y == 1 && M % c.out_block_h != 0 && c.per_core_M != c.out_block_h) {
-                                return "1d in1 single row";
-                            }
-                        }
-                    }
-                    Blocking b{c.per_core_M, c.per_core_N, c.in0_block_w, c.out_block_h, c.out_block_w, 0, 0};
-                    if (circular_buffer_bytes(p, hw, family, b) > hw.l1_cb_budget) {
-                        return "L1";
-                    }
-                    return "";
-                }
-            }
-        },
-        config);
+    return check(p, hw, config);
 }
 
 struct Shape {
@@ -592,6 +511,108 @@ TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
         EXPECT_EQ(chosen->blocking.per_core_M, 13u);
         EXPECT_EQ(chosen->blocking.per_core_N, 13u);
     }
+}
+
+// Every candidate the heuristics produce for interleaved problems is legal, and so is every K-depth neighbour,
+// which differs from its candidate only in in0_block_w
+TEST(MatmulAutoConfig, CandidatesAndNeighboursPassCheck) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (const auto& s : shapes()) {
+            for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
+                for (bool fp32_acc : {false, true}) {
+                    const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
+                    const auto label = fmt::format(
+                        "{} b={}/{} M={} K={} N={} in1={} fp32={}",
+                        arch.name,
+                        s.batch_a,
+                        s.batch_b,
+                        s.M,
+                        s.K,
+                        s.N,
+                        static_cast<int>(in1),
+                        fp32_acc);
+                    for (const auto& c : candidates(p, hw)) {
+                        EXPECT_EQ(check(p, hw, to_program_config(p, c)), "") << label;
+                        for (const auto& n : k_depth_neighbours(p, hw, c)) {
+                            EXPECT_EQ(check(p, hw, to_program_config(p, n)), "") << label;
+                            EXPECT_NE(n.blocking.in0_block_w, c.blocking.in0_block_w) << label;
+                            auto same = n;
+                            same.blocking.in0_block_w = c.blocking.in0_block_w;
+                            EXPECT_EQ(
+                                fmt::format("{}", to_program_config(p, same)),
+                                fmt::format("{}", to_program_config(p, c)))
+                                << label;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// With the default estimators (the roofline, which doesn't depend on K depth) the refinement keeps the
+// heuristics' choice everywhere
+TEST(MatmulAutoConfig, DefaultEstimatorsKeepHeuristicChoice) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (const auto& s : shapes()) {
+            for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
+                for (bool fp32_acc : {false, true}) {
+                    const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1, fp32_acc);
+                    const auto heuristic = choose_candidate(p, hw, {});
+                    const auto chosen = choose_candidate(p, hw);
+                    ASSERT_EQ(heuristic.has_value(), chosen.has_value());
+                    if (chosen) {
+                        EXPECT_EQ(
+                            fmt::format("{}", to_program_config(p, *chosen)),
+                            fmt::format("{}", to_program_config(p, *heuristic)))
+                            << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The roofline doesn't depend on K depth, so with the default estimators the K-depth refinement keeps the
+// heuristics' choice; a K-aware estimator moves it, and a less confident one doesn't
+TEST(MatmulAutoConfig, EstimatorsRefineKDepth) {
+    struct PreferDeep final : Estimator {
+        double confidence;
+        explicit PreferDeep(double c) : confidence(c) {}
+        std::string_view name() const override { return "prefer_deep"; }
+        std::optional<Estimate> estimate(const Problem&, const HardwareDesc&, const Candidate& c) const override {
+            return Estimate{.cycles = 1.0 / c.blocking.in0_block_w, .confidence = confidence, .source = name()};
+        }
+    };
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    const auto p = make_problem(1, 1, 1024, 8192, 1024);
+    const auto seed = choose_candidate(p, hw, {});
+    ASSERT_TRUE(seed.has_value());
+    const auto neighbours = k_depth_neighbours(p, hw, *seed);
+    ASSERT_FALSE(neighbours.empty());
+    uint32_t deepest = seed->blocking.in0_block_w;
+    for (const auto& n : neighbours) {
+        deepest = std::max(deepest, n.blocking.in0_block_w);
+    }
+    ASSERT_GT(deepest, seed->blocking.in0_block_w);
+
+    const auto by_default = choose_candidate(p, hw);
+    ASSERT_TRUE(by_default.has_value());
+    EXPECT_EQ(by_default->blocking.in0_block_w, seed->blocking.in0_block_w);
+
+    const RooflineEstimator roofline_estimator;
+    const PreferDeep confident(1.0);
+    const PreferDeep doubtful(-1.0);
+    const Estimator* confident_first[] = {&roofline_estimator, &confident};
+    const auto refined = choose_candidate(p, hw, confident_first);
+    ASSERT_TRUE(refined.has_value());
+    EXPECT_EQ(refined->blocking.in0_block_w, deepest);
+    const Estimator* doubtful_first[] = {&roofline_estimator, &doubtful};
+    const auto kept = choose_candidate(p, hw, doubtful_first);
+    ASSERT_TRUE(kept.has_value());
+    EXPECT_EQ(kept->blocking.in0_block_w, seed->blocking.in0_block_w);
 }
 
 // Prints every family's candidate for the test shapes; run with --gtest_also_run_disabled_tests when tuning.

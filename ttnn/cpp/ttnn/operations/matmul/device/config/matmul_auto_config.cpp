@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -179,6 +180,10 @@ HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_c
     hw.grid = grid;
     hw.l1_cb_budget = l1_cb_budget;
     hw.dram_alignment = arch == tt::ARCH::BLACKHOLE ? 64 : 32;
+    if (arch == tt::ARCH::BLACKHOLE) {
+        hw.noc_bytes_per_cycle = 64;
+        hw.dram_bytes_per_cycle = 512.0 / 1.35;  // 512 GB/s at 1.35 GHz
+    }
     return hw;
 }
 
@@ -769,7 +774,18 @@ const Candidate* choose_mcast(const Candidate* two_d, const Candidate* in0, cons
 
 }  // namespace
 
-std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
+namespace {
+
+uint32_t fidelity_multiplier(MathFidelity fidelity) {
+    switch (fidelity) {
+        case MathFidelity::LoFi: return 1;
+        case MathFidelity::HiFi2: return 2;
+        case MathFidelity::HiFi3: return 3;
+        default: return 4;
+    }
+}
+
+std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& hw) {
     const auto all = candidates(p, hw);
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         // The layout already fixed the family
@@ -801,22 +817,69 @@ std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& 
     return std::nullopt;
 }
 
-std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const HardwareDesc& hw) {
-    if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
-        return std::nullopt;
+}  // namespace
+
+// Per-core roofline estimate, in cycles, of a blocked candidate: the largest of
+//  - compute: the busiest core's tile products at the matrix engine's rate for the math fidelity (A tiles
+//    shorter than 8 rows still take a full 8-row pass of the engine);
+//  - NoC: the input bytes the busiest core receives (its rows of A and columns of B, once per output block
+//    that uses them);
+//  - DRAM: the input bytes read from DRAM in total (the mcast layouts read A once per output column block and
+//    B once per output row block; Reuse reads A once and B once per M slice of a batch), over the chip's
+//    bandwidth.
+RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+    const double a_bytes = in0_tile_bytes(p);
+    const double b_bytes = in1_tile_bytes(p);
+    const double engine_share = std::min(p.in0_tile_h, 8u) / 8.0;
+    const double cycles_per_product = 2.0 * p.in0_tile_h * TILE_DIM * p.in1_tile_w *
+                                      fidelity_multiplier(p.math_fidelity) / (hw.matmul_flops_per_cycle * engine_share);
+    const double Kt = p.Kt;
+    double products = 0;  // per core
+    double received = 0;  // bytes per core
+    double a_total = 0;   // tiles read from memory
+    double b_total = 0;
+    if (family == Family::Reuse) {
+        const double cores = hw.grid.x * hw.grid.y;
+        const double blocks = std::ceil(std::ceil(double(p.batch_a) * p.Mt / b.per_core_M) / cores);
+        const double batches_per_block = std::max(1.0, double(b.per_core_M) / p.Mt);
+        products = blocks * b.per_core_M * p.Nt * Kt;
+        received = blocks * (b.per_core_M * Kt * a_bytes + batches_per_block * Kt * p.Nt * b_bytes);
+        a_total = double(p.batch_a) * p.Mt * Kt;
+        b_total = double(p.batch_b) * Kt * p.Nt * div_up(p.Mt, b.per_core_M);
+    } else {
+        // Unfused, the layout loops over the batch; in0 reuse (a broadcast A) keeps A resident across it
+        const double loops = b.fuse_batch ? 1.0 : std::max(p.batch_a, p.batch_b);
+        const double a_passes = double(b.per_core_N) / b.out_block_w;
+        const double b_passes = double(b.per_core_M) / b.out_block_h;
+        products = double(b.per_core_M) * b.per_core_N * Kt * loops;
+        received = b.per_core_M * Kt * a_passes * (broadcasts_a(p) ? 1.0 : loops) * a_bytes +
+                   b.per_core_N * Kt * b_passes * loops * b_bytes;
+        a_total = double(p.batch_a) * p.Mt * Kt * a_passes;
+        b_total = (p.batch_b > 1 ? double(p.batch_b) : loops) * Kt * p.Nt * b_passes;
     }
-    const auto chosen = choose_candidate(p, hw);
-    if (!chosen) {
-        return std::nullopt;
-    }
-    const Family family = chosen->family;
-    const Blocking& b = chosen->blocking;
+    const double dram_bytes = (p.a.in_l1 ? 0.0 : a_total * a_bytes) + (p.b.in_l1 ? 0.0 : b_total * b_bytes);
+    return {products * cycles_per_product, received / hw.noc_bytes_per_cycle, dram_bytes / hw.dram_bytes_per_cycle};
+}
+
+std::optional<Estimate> RooflineEstimator::estimate(
+    const Problem& p, const HardwareDesc& hw, const Candidate& c) const {
+    return Estimate{.cycles = roofline(p, hw, c.family, c.blocking).cycles(), .confidence = 0, .source = name()};
+}
+
+std::span<const Estimator* const> default_estimators() {
+    static const RooflineEstimator roofline_estimator;
+    static const Estimator* const estimators[] = {&roofline_estimator};
+    return estimators;
+}
+
+MatmulProgramConfig to_program_config(const Problem& p, const Candidate& c) {
+    const Blocking& b = c.blocking;
     const std::optional<CoreRangeSet> worker_cores =
-        chosen->worker_cores ? std::optional<CoreRangeSet>(CoreRangeSet(*chosen->worker_cores)) : std::nullopt;
-    switch (family) {
+        c.worker_cores ? std::optional<CoreRangeSet>(CoreRangeSet(*c.worker_cores)) : std::nullopt;
+    switch (c.family) {
         case Family::Mcast2D:
             return MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = chosen->grid,
+                .compute_with_storage_grid_size = c.grid,
                 .in0_block_w = b.in0_block_w,
                 .out_subblock_h = b.out_subblock_h,
                 .out_subblock_w = b.out_subblock_w,
@@ -824,7 +887,7 @@ std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const
                 .out_block_w = b.out_block_w,
                 .per_core_M = b.per_core_M,
                 .per_core_N = b.per_core_N,
-                .transpose_mcast = chosen->transpose_mcast,
+                .transpose_mcast = c.transpose_mcast,
                 .fused_activation = p.activation,
                 .fuse_batch = b.fuse_batch,
                 .allowed_worker_cores = worker_cores,
@@ -832,7 +895,7 @@ std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const
         case Family::Mcast1DIn0:
         case Family::Mcast1DIn1:
             return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-                .compute_with_storage_grid_size = chosen->grid,
+                .compute_with_storage_grid_size = c.grid,
                 .in0_block_w = b.in0_block_w,
                 .out_subblock_h = b.out_subblock_h,
                 .out_subblock_w = b.out_subblock_w,
@@ -843,21 +906,209 @@ std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const
                 .fuse_batch = b.fuse_batch,
                 // in0 reuse (broadcast A) can't fuse the activation; matmul then applies it separately
                 .fused_activation = broadcasts_a(p) && !p.a.sharded() ? std::nullopt : p.activation,
-                .mcast_in0 = family == Family::Mcast1DIn0,
+                .mcast_in0 = c.family == Family::Mcast1DIn0,
                 .allowed_worker_cores = worker_cores,
             };
-        case Family::Reuse:
-            return MatmulMultiCoreReuseProgramConfig{
-                .compute_with_storage_grid_size = chosen->grid,
-                .in0_block_w = b.in0_block_w,
-                .out_subblock_h = b.out_subblock_h,
-                .out_subblock_w = b.out_subblock_w,
-                .per_core_M = b.per_core_M,
-                .per_core_N = b.per_core_N,
-                .allowed_worker_cores = worker_cores,
-            };
+        case Family::Reuse: break;
     }
-    return std::nullopt;
+    return MatmulMultiCoreReuseProgramConfig{
+        .compute_with_storage_grid_size = c.grid,
+        .in0_block_w = b.in0_block_w,
+        .out_subblock_h = b.out_subblock_h,
+        .out_subblock_w = b.out_subblock_w,
+        .per_core_M = b.per_core_M,
+        .per_core_N = b.per_core_N,
+        .allowed_worker_cores = worker_cores,
+    };
+}
+
+std::string check(const Problem& p, const HardwareDesc& hw, const MatmulProgramConfig& config) {
+    const uint32_t cores = hw.grid.x * hw.grid.y;
+    return std::visit(
+        [&](const auto& c) -> std::string {
+            using T = std::decay_t<decltype(c)>;
+            constexpr bool reuse = std::is_same_v<T, MatmulMultiCoreReuseProgramConfig>;
+            constexpr bool two_d = std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig>;
+            constexpr bool one_d = std::is_same_v<T, MatmulMultiCoreReuseMultiCast1DProgramConfig>;
+            if constexpr (!reuse && !two_d && !one_d) {
+                return "not a config type the selector emits";
+            } else {
+                if (c.in0_block_w == 0 || p.Kt % c.in0_block_w != 0) {
+                    return fmt::format("Kt {} is not a multiple of in0_block_w {}", p.Kt, c.in0_block_w);
+                }
+                if (c.per_core_M == 0 || c.per_core_N == 0 || c.out_subblock_h == 0 || c.out_subblock_w == 0) {
+                    return "zero block size";
+                }
+                if constexpr (reuse) {
+                    if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, Family::Reuse)) {
+                        return "subblock exceeds DST";
+                    }
+                    if (c.per_core_N != p.Nt) {
+                        return "Reuse needs per_core_N == Nt";
+                    }
+                    const bool divides = p.Mt % c.per_core_M == 0;
+                    const bool whole_batches = c.per_core_M % p.Mt == 0 && (p.batch_a * p.Mt) % c.per_core_M == 0;
+                    if (!divides && !whole_batches) {
+                        return "Reuse per_core_M neither divides Mt nor covers whole batches";
+                    }
+                    if (c.per_core_M % c.out_subblock_h != 0 || c.per_core_N % c.out_subblock_w != 0 ||
+                        p.Mt % c.out_subblock_h != 0) {
+                        return "Reuse subblock doesn't divide the block";
+                    }
+                    const Blocking b{
+                        c.per_core_M,
+                        c.per_core_N,
+                        c.in0_block_w,
+                        c.per_core_M,
+                        c.per_core_N,
+                        c.out_subblock_h,
+                        c.out_subblock_w};
+                    if (circular_buffer_bytes(p, hw, Family::Reuse, b) > hw.l1_cb_budget) {
+                        return "circular buffers exceed L1";
+                    }
+                    return "";
+                } else {
+                    Family family = Family::Mcast2D;
+                    if constexpr (one_d) {
+                        family = c.mcast_in0 ? Family::Mcast1DIn0 : Family::Mcast1DIn1;
+                    }
+                    if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, family)) {
+                        return "subblock exceeds DST";
+                    }
+                    if (c.out_block_h == 0 || c.out_block_w == 0 || c.per_core_M % c.out_block_h != 0 ||
+                        c.per_core_N % c.out_block_w != 0 || c.out_block_h % c.out_subblock_h != 0 ||
+                        c.out_block_w % c.out_subblock_w != 0) {
+                        return "blocks don't divide";
+                    }
+                    if (c.fuse_batch && p.batch_b > 1) {
+                        return "fuse_batch with a batched B";
+                    }
+                    const uint32_t M = output_rows(p, c.fuse_batch);
+                    const uint32_t blocks_y = div_up(M, c.per_core_M);
+                    const uint32_t blocks_x = div_up(p.Nt, c.per_core_N);
+                    if constexpr (two_d) {
+                        if (c.per_core_M > M || blocks_y > hw.grid.y || blocks_x > hw.grid.x) {
+                            return "2D blocks exceed the grid";
+                        }
+                    } else {
+                        if (blocks_x * blocks_y > cores) {
+                            return "1D blocks exceed the core count";
+                        }
+                        if (c.mcast_in0 && blocks_y != 1) {
+                            return "1D in0-mcast needs one row of blocks";
+                        }
+                        if (!c.mcast_in0) {
+                            if (c.per_core_N != p.Nt || c.per_core_M > M) {
+                                return "1D in1-mcast needs per_core_N == Nt";
+                            }
+                            if (blocks_y == 1 && M % c.out_block_h != 0 && c.per_core_M != c.out_block_h) {
+                                return "1D in1-mcast single row block";
+                            }
+                        }
+                    }
+                    const Blocking b{
+                        c.per_core_M,
+                        c.per_core_N,
+                        c.in0_block_w,
+                        c.out_block_h,
+                        c.out_block_w,
+                        c.out_subblock_h,
+                        c.out_subblock_w,
+                        c.fuse_batch};
+                    if (circular_buffer_bytes(p, hw, family, b) > hw.l1_cb_budget) {
+                        return "circular buffers exceed L1";
+                    }
+                    return "";
+                }
+            }
+        },
+        config);
+}
+
+std::vector<Candidate> k_depth_neighbours(const Problem& p, const HardwareDesc& hw, const Candidate& c) {
+    std::vector<Candidate> result;
+    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+        return result;
+    }
+    auto divisors = divisors_desc(p.Kt);  // largest first
+    auto legal_at = [&](uint32_t k) -> std::optional<Candidate> {
+        Candidate n = c;
+        n.blocking.in0_block_w = k;
+        if (check(p, hw, to_program_config(p, n)).empty()) {
+            return n;
+        }
+        return std::nullopt;
+    };
+    const auto here = std::find(divisors.begin(), divisors.end(), c.blocking.in0_block_w);
+    if (here == divisors.end()) {
+        return result;
+    }
+    // Deeper: the divisors before `here`, nearest first; shallower: those after it
+    for (auto it = std::make_reverse_iterator(here); it != divisors.rend(); ++it) {
+        if (auto n = legal_at(*it)) {
+            result.push_back(*n);
+            break;
+        }
+    }
+    for (auto it = std::next(here); it != divisors.end(); ++it) {
+        if (auto n = legal_at(*it)) {
+            result.push_back(*n);
+            break;
+        }
+    }
+    return result;
+}
+
+const Candidate& best_by_estimate(
+    const Problem& p,
+    const HardwareDesc& hw,
+    std::span<const Candidate> options,
+    std::span<const Estimator* const> estimators) {
+    TT_FATAL(!options.empty(), "best_by_estimate needs at least one option");
+    const Candidate* best = &options.front();
+    std::optional<Estimate> best_estimate;
+    for (const auto& option : options) {
+        std::optional<Estimate> chosen;
+        for (const auto* estimator : estimators) {
+            auto e = estimator->estimate(p, hw, option);
+            if (e && (!chosen || e->confidence > chosen->confidence)) {
+                chosen = e;
+            }
+        }
+        if (chosen && (!best_estimate || chosen->cycles < best_estimate->cycles)) {
+            best = &option;
+            best_estimate = chosen;
+        }
+    }
+    return *best;
+}
+
+std::optional<Candidate> choose_candidate(
+    const Problem& p, const HardwareDesc& hw, std::span<const Estimator* const> estimators) {
+    auto chosen = choose_by_rules(p, hw);
+    if (!chosen) {
+        return std::nullopt;
+    }
+    std::vector<Candidate> options = {*chosen};
+    for (auto& n : k_depth_neighbours(p, hw, *chosen)) {
+        options.push_back(std::move(n));
+    }
+    return best_by_estimate(p, hw, options, estimators);
+}
+
+std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
+    return choose_candidate(p, hw, default_estimators());
+}
+
+std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const HardwareDesc& hw) {
+    if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
+        return std::nullopt;
+    }
+    const auto chosen = choose_candidate(p, hw);
+    if (!chosen) {
+        return std::nullopt;
+    }
+    return to_program_config(p, *chosen);
 }
 
 namespace {
