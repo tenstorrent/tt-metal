@@ -57,6 +57,7 @@ DEVICE_STEPS = {
         "router",
         "experts",
         "shared_expert",
+        "moe_add",
     },
     "kda_moe": set(),
 }
@@ -144,6 +145,24 @@ def _norm_host_fn(mesh, module):
         y = replicated_to_host(yd).reshape(x.shape[-2], -1)
         ttnn.deallocate(xd)
         ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
+def _add_host_fn(mesh, module):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] bf16 (harness boundary: upload bf16, read chip 0)."""
+    import ttnn
+    from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+    def fn(ctx, a, b):
+        s = a.shape[-2]
+        ad = replicate(mesh, a.reshape(1, 1, s, a.shape[-1]).to(torch.bfloat16))
+        bd = replicate(mesh, b.reshape(1, 1, s, b.shape[-1]).to(torch.bfloat16))
+        yd = module(ad, bd)
+        y = replicated_to_host(yd).reshape(s, -1)
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
         return y
 
     return fn
@@ -350,6 +369,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.experts import build_experts
 
         return _experts_host_fn(mesh, build_experts(mesh, loader, cfg, layer, max(_chunks(spec))))
+    if step == "moe_add":
+        from models.demos.glm53_flash_d_p.tt.moe_add import build_moe_add
+
+        return _add_host_fn(mesh, build_moe_add(cfg))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
