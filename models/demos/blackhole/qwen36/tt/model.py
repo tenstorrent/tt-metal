@@ -223,7 +223,9 @@ class Qwen36Model:
         # plain decode path. QWEN36_MTP=1 opts a Blackhole run in for bring-up.
         self.mtp = None
         self._mtp_kv_cache = None
-        _mtp_arch_ok = not is_blackhole() or os.environ.get("QWEN36_MTP") == "1"
+        _mtp_arch_ok = (not is_blackhole() or os.environ.get("QWEN36_MTP") == "1") and not getattr(
+            args, "rope_permuted_enabled", False
+        )
         if _mtp_arch_ok and getattr(args, "has_mtp", False) and "mtp.fc.weight" in state_dict:
             from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP
 
