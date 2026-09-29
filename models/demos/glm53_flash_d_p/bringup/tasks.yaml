@@ -165,6 +165,13 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-29T03:15:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py: d1d678bf016c317c3c48bb7155de8eb7b136375e5044ed1b72c66142c6e2604e
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_dense.01
   title: 'kda_dense block with steps 1-1 on device (last: attn_hc)'
   step: implement
