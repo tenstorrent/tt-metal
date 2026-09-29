@@ -559,33 +559,60 @@ ProgramRunArgs paged_fill_cache_run_args_for_coord(
     const bool noop = paged_fill_cache_noop(operation_attributes, coord);
     const bool use_batch_idx_tensor = tensor_args.batch_idx_tensor_opt.has_value();
 
-    // Same work-split as build_paged_fill_cache_artifacts / compute_paged_fill_cache_cores.
     const auto& input_tensor = tensor_args.input_tensor;
-    const uint32_t input_batch = input_tensor.padded_shape()[0];
-    const uint32_t num_heads = input_tensor.padded_shape()[1];
-    const uint32_t input_seq_len_t = input_tensor.padded_shape()[2] / TILE_HEIGHT;
-    const uint32_t Wt = input_tensor.padded_shape()[3] / TILE_WIDTH;
-    const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
-
     tt_metal::distributed::MeshDevice* device = input_tensor.device();
-    const auto grid = device->compute_with_storage_grid_size();
-    constexpr bool row_major = true;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_blocks_of_work, row_major);
-    (void)all_cores;
-    const auto cores = grid_to_cores(num_cores, grid.x, grid.y, row_major);
 
-    params.kernel_run_args = emit_paged_fill_cache_kernel_run_args(
-        cores,
-        num_cores,
-        core_group_1,
-        core_group_2,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
-        Wt,
-        noop,
-        use_batch_idx_tensor,
-        operation_attributes.batch_idx_fallback);
+    // QUASAR ONLY: re-emit the FULL per-core arg set on every cache hit (start_tile_id / start_row_num /
+    // num_rows), because the partial-update fast path leaves un-supplied args at whatever is on the device
+    // and an interleaved fill_cache of a different shape clobbers that shared per-core state -> a DRAM write
+    // overrun on the reuse. On WH/BH this does not happen (the program retains its own per-core args across a
+    // hit -- identical by construction), so we keep the lighter noop-only re-apply there and leave WH/BH
+    // behavior unchanged.
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Same work-split as build_paged_fill_cache_artifacts / compute_paged_fill_cache_cores.
+        const uint32_t input_batch = input_tensor.padded_shape()[0];
+        const uint32_t num_heads = input_tensor.padded_shape()[1];
+        const uint32_t input_seq_len_t = input_tensor.padded_shape()[2] / TILE_HEIGHT;
+        const uint32_t Wt = input_tensor.padded_shape()[3] / TILE_WIDTH;
+        const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
+
+        const auto grid = device->compute_with_storage_grid_size();
+        constexpr bool row_major = true;
+        auto [num_cores, all_cores, core_group_1, core_group_2, nbpc_1, nbpc_2] =
+            tt::tt_metal::split_work_to_cores(grid, num_blocks_of_work, row_major);
+        (void)all_cores;
+        const auto cores = grid_to_cores(num_cores, grid.x, grid.y, row_major);
+
+        params.kernel_run_args = emit_paged_fill_cache_kernel_run_args(
+            cores,
+            num_cores,
+            core_group_1,
+            core_group_2,
+            nbpc_1,
+            nbpc_2,
+            Wt,
+            noop,
+            use_batch_idx_tensor,
+            operation_attributes.batch_idx_fallback);
+        return params;
+    }
+
+    // WH/BH: only the hash-excluded noop / batch_idx_fallback need re-applying on a cache hit.
+    const auto noop_arg = static_cast<uint32_t>(noop);
+    KernelRunArgs reader_run_args{.kernel = FC_READER};
+    KernelRunArgs writer_run_args{.kernel = FC_WRITER};
+    const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
+    for (const auto& core : cores) {
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"noop", noop_arg}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"noop", noop_arg}});
+        if (!use_batch_idx_tensor) {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"batch_idx_fallback", operation_attributes.batch_idx_fallback}});
+        }
+    }
+    params.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
     return params;
 }
 
