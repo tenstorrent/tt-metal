@@ -1454,15 +1454,33 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
         # harness runs for float MUL -- forces 0 * x = 0 on a bf16 Dest "to match FPU
         # behaviour", so 0 * inf and 0 * NaN come back 0 where IEEE, the fp32 arm and this
         # golden say NaN (packed as inf). Recorded rather than modelled: the asymmetry is review
-        # finding G02-11 and its resolution belongs to the kernel, not to the golden. Strict on
-        # purpose -- a pass here means the kernel changed and this block should go.
+        # finding G02-11 and its resolution belongs to the kernel, not to the golden.
+        #
+        # Only those lanes are expected to fail, so they run on their own: every other
+        # non-finite pair (inf * inf, NaN propagation, result signs, ...) is asserted as usual,
+        # and the 0 * {inf, NaN} pairs are a strict expected failure -- a pass there means the
+        # kernel changed and this block should go.
+        _sfpu_binary_edges(
+            formats,
+            dest_acc,
+            mathop,
+            edge_class,
+            pair_filter=lambda a, b: not _is_zero_times_nonfinite(a, b),
+        )
         try:
-            _sfpu_binary_edges(formats, dest_acc, mathop, edge_class)
+            _sfpu_binary_edges(
+                formats,
+                dest_acc,
+                mathop,
+                edge_class,
+                pair_filter=_is_zero_times_nonfinite,
+            )
         except AssertionError as exc:
             if "Assert against golden failed" not in str(exc):
                 raise
             pytest.xfail(
-                "G02-11: calculate_sfpu_binary_mul forces 0 * inf = 0 * NaN = 0 on a bf16 Dest"
+                "G02-11 (no tracking issue yet): calculate_sfpu_binary_mul "
+                "(ckernel_sfpu_binary.h) forces 0 * inf = 0 * NaN = 0 on a bf16 Dest"
             )
         pytest.fail(
             "MUL bf16 now matches the IEEE golden on 0 * inf / 0 * NaN: G02-11 was resolved in "
@@ -1472,10 +1490,24 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     _sfpu_binary_edges(formats, dest_acc, mathop, edge_class)
 
 
+def _is_zero_times_nonfinite(a, b):
+    """True for a (0, inf/NaN) or (inf/NaN, 0) operand pair, either zero sign."""
+    return (a == 0.0 and not math.isfinite(b)) or (b == 0.0 and not math.isfinite(a))
+
+
 def _sfpu_binary_edges(
-    formats, dest_acc, mathop, edge_class, dst_rounding_mode=DstRoundingMode.Default
+    formats,
+    dest_acc,
+    mathop,
+    edge_class,
+    dst_rounding_mode=DstRoundingMode.Default,
+    pair_filter=None,
 ):
-    """One class of *mathop*'s registered poles through sfpu_binary(), in *dst_rounding_mode*."""
+    """One class of *mathop*'s registered poles through sfpu_binary(), in *dst_rounding_mode*.
+
+    *pair_filter(a, b)*, when given, keeps only the matching pairs of the class (consumer pass
+    only; the compile-producer pass builds the same ELF either way).
+    """
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
     # intact. dest_acc as passed, which is conservative on Blackhole, where it is promoted later.
@@ -1486,6 +1518,8 @@ def _sfpu_binary_edges(
     pairs = _edge_pairs_for_class(
         mathop, formats, edge_class, dest_acc, specials=specials
     )
+    if pair_filter is not None:
+        pairs = [pair for pair in pairs if pair_filter(*pair)]
 
     if not pairs and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         # The compile-producer pass must not skip on a runtime-only axis: one item per compile
