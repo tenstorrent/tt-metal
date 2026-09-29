@@ -1,0 +1,38 @@
+{
+ "about": [
+  "MIXED CAL.effs['4x2']: per op 1 / sum(w_i / eff_i) over tools/cal_effs_ours_4x2_native_w8192.json (w=0.5), tools/cal_effs_ours_4x2_p2t2_native_w8192.json (w=0.5).",
+  "= eff of the weighted mean op time: layers split across the stage kinds and rebalanced (tools/mix_effs.py)."
+ ],
+ "4x2": {
+  "moe": {
+   "norm_ag": 0.46626,
+   "qkv": 0.803097,
+   "idx_branch": 0.066312,
+   "o_proj": 0.662015,
+   "attn_rs": 0.310603,
+   "shared": 0.489349,
+   "router": 0.05978,
+   "dispatch": 0.361678,
+   "experts": 0.747725,
+   "combine": 0.370156,
+   "moe_reduce": 0.1639,
+   "ag_kv": 0.429863,
+   "ag_idx": 0.638012,
+   "indexer": 0.019037,
+   "sparse": 0.038589,
+   "misc": 0.142,
+   "kv_a2a": 0.361678
+  },
+  "dense": {
+   "norm_ag": 0.472641,
+   "qkv": 0.803753,
+   "o_proj": 0.670375,
+   "attn_rs": 0.249686,
+   "dense_mlp": 0.635258,
+   "misc": 0.175716,
+   "ring_c": 0.349806,
+   "ring_scan": 0.015,
+   "kv_a2a": 0.361678
+  }
+ }
+}

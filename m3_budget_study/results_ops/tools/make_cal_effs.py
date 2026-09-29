@@ -65,13 +65,15 @@ def main():
     )
     ap.add_argument("--native", action="store_true", help="4x2: ag_kv = ag_kv_native_est, layer minus the head copies")
     ap.add_argument("--csv", default=None)
+    ap.add_argument("--prefix", default=None, help="run-id prefix (default p0a for 2x4, p<mesh> otherwise), e.g. p2t2")
+    ap.add_argument("--transport", default="1D fabric, v1 dispatch/combine", help="fabric / MoE ops label for 'about'")
     ap.add_argument("--out", default=None)
     ap.add_argument("--detail", action="store_true")
     a = ap.parse_args()
     sp, tp = map(int, a.mesh.split("x"))
     inputs = (a.inputs or ("prose,code" if a.mesh == "2x4" else "prose")).split(",")
     csvf = a.csv or os.path.join(R, "per_op.csv" if a.mesh == "2x4" else f"per_op_{a.mesh}.csv")
-    pre = "p0a" if a.mesh == "2x4" else "p" + a.mesh
+    pre = a.prefix or ("p0a" if a.mesh == "2x4" else "p" + a.mesh)
     runs = {f"{pre}_w{a.W}_h141312_{i}" for i in inputs}
     acc = {"moe": defaultdict(list), "dense": defaultdict(list)}
     with open(csvf) as f:
@@ -130,7 +132,7 @@ def main():
     den["ring_scan"] = 0.015
     den["kv_a2a"] = moe["dispatch"]
     about = [
-        f"CAL.effs['{a.mesh}'] measured on our zone profiles: one ({sp},{tp}) stage, SP={sp} TP={tp} EP=8, layers 0-6 contiguous (real routing), 1D fabric, bf4 experts, M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128, v1 dispatch/combine, bf8 index_k cache.",
+        f"CAL.effs['{a.mesh}'] measured on our zone profiles: one ({sp},{tp}) stage, SP={sp} TP={tp} EP=8, layers 0-6 contiguous (real routing), {a.transport}, bf4 experts, M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128, bf8 index_k cache.",
         f"Condition: W={a.W} single request at h=139264 (the 141312 request aligned down to whole chunks); inputs {'+'.join(inputs)}{' pooled' if len(inputs) > 1 else ''}. moe = mean of sparse layers 3-6, dense = layer 1. Source {os.path.basename(csvf)}.",
         "Formula = sim_core zoneEff: eff = roof / (zone ms - latency floor), clamped to [0.003, 1]. zone ms = MEAN over the 8 chips. Floor 0.04 ms for CCL ops, 0.01 ms otherwise; norm_ag = both all-gathers (roof x2, floor x2).",
         f"Roofline = sim_core roofTok/roofSeg via tools/roofline_ops.js --mesh {a.mesh} --segments {a.W}:139264 --idx bf8, imbalance 1.2 in the experts FLOPs, Tr = W.",
