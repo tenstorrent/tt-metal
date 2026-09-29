@@ -2438,6 +2438,7 @@ class UnarySFPUGolden:
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
+        relu_max_threshold: float = RELU_MAX_THRESHOLD,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         self.data_format = data_format
@@ -2448,6 +2449,8 @@ class UnarySFPUGolden:
         # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
         # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
         self._relu_min_int_threshold = relu_min_int_threshold
+        # Mirrors the SFPU_RELU_MAX_THRESHOLD template parameter; only relu_max reads it.
+        self._relu_max_threshold = relu_max_threshold
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -3105,10 +3108,12 @@ class UnarySFPUGolden:
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
-    def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
+    def _relu_max(self, x):
         # Threshold first, then the relu clamp: that order turns a NaN into the threshold,
-        # where relu-then-threshold would keep it.
-        return sfpu_relu_max(float(x), float(threshold))
+        # where relu-then-threshold would keep it. The threshold comes from
+        # _relu_max_threshold because the threshold sweep drives relu6's 6.0, a zero and a
+        # negative one besides the fixed default.
+        return sfpu_relu_max(float(x), float(self._relu_max_threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         if isinstance(x, int):
