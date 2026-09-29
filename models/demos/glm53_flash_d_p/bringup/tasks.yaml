@@ -2549,8 +2549,8 @@ tasks:
   deps:
   - L.s56320
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
@@ -2592,7 +2592,8 @@ tasks:
       --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py && scripts/run_safe_pytest.sh --run-all
       models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
       --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
-      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --no-precompile
+      --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_attn_residual_L00: '>= 0.99'
       pcc_ffn_residual_L00: '>= 0.99'
@@ -2606,17 +2607,91 @@ tasks:
       device_ms_attn_residual: < 60
       device_ms_ffn_residual: < 60
       device_ms_total: < 500
+- id: P.2
+  title: mHC 4-stream residual split by sequence across the 4 chips instead of replicated
+  step: perf
+  role: perf
+  deps:
+  - P.1
+  device: true
+  paths:
+  - models/demos/glm53_flash_d_p/tt
+  - models/demos/glm53_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'Owner pick (2), after P.1 passed (chunk 528 -> 428 ms). The mHC machinery is replicated: every chip holds the
+      whole [1, 1, S, 4H] residual and computes attn_hc / ffn_hc (coefficients + 20-step Sinkhorn), attn/ffn_collapse, attn/ffn_norm
+      and the attn/ffn_residual mix for all S rows (P.1 profile: about 180 ms of 428 per 5120-token chunk). Keep the residual
+      split by sequence, S/4 rows per chip (row-major over the 2x2 mesh or the SP layout the modules already use), so each
+      chip does these steps for its own rows only; gather or re-partition only where a module needs other rows (KDA takes
+      S/2 per mesh row on axis 0, DSA computes the latent and pooled keys for all S rows and splits queries by S/4, the dense
+      MLP / shared expert / routed experts take their own layouts). Choose the partition that minimises the added CCLs; measure.
+      Same numerics: every component test above and the ladder must pass unchanged. Keep the replicated path behind a switch
+      (e.g. GLM_RESIDUAL_LAYOUT=replicated). Report per-section device ms and the CCLs added.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_collapse.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py &&
+      scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_hc.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_norm.py && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py
+      && BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_attn_hc_L00: '>= 0.99'
+      pcc_attn_hc_L03: '>= 0.99'
+      pcc_attn_hc_L04: '>= 0.99'
+      pcc_attn_collapse_L00: '>= 0.99'
+      pcc_attn_collapse_L03: '>= 0.99'
+      pcc_attn_collapse_L04: '>= 0.99'
+      pcc_attn_norm_L00: '>= 0.99'
+      pcc_attn_norm_L03: '>= 0.99'
+      pcc_attn_norm_L04: '>= 0.99'
+      pcc_attn_residual_L00: '>= 0.99'
+      pcc_attn_residual_L03: '>= 0.99'
+      pcc_attn_residual_L04: '>= 0.99'
+      pcc_ffn_hc_L00: '>= 0.99'
+      pcc_ffn_hc_L03: '>= 0.99'
+      pcc_ffn_hc_L04: '>= 0.99'
+      pcc_ffn_collapse_L00: '>= 0.99'
+      pcc_ffn_collapse_L03: '>= 0.99'
+      pcc_ffn_collapse_L04: '>= 0.99'
+      pcc_ffn_norm_L00: '>= 0.99'
+      pcc_ffn_norm_L03: '>= 0.99'
+      pcc_ffn_norm_L04: '>= 0.99'
+      pcc_ffn_residual_L00: '>= 0.99'
+      pcc_ffn_residual_L03: '>= 0.99'
+      pcc_ffn_residual_L04: '>= 0.99'
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: < 400
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
   - X.2
   - P.1
+  - P.2
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
-      --run-all models/demos/common/bringup/tests/test_positions.py
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
