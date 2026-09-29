@@ -38,7 +38,21 @@ Supported shapes (v1):
   selects every causally valid entry, so the indexer's output is the plain causal block mask and
   no indexer is needed. Past that the indexer + sparse SDPA are required and this module raises
   :class:`NotImplementedError` instead of returning something wrong.
-* ``tp_size == 1`` only (one device / a 1x1 mesh).
+* ``tp_size`` is 1 (one device / a 1x1 mesh) or the width of a 1xTP mesh (TP=4 in the model).
+
+Tensor parallelism (``tp_size > 1``) follows the decode block's split. The hidden chunk arrives
+replicated on every rank, and everything that does not scale with the head count stays replicated:
+``q_a`` (+ its norm), ``kv_proj`` (+ its norm), the compressor and therefore the whole KV state
+(``kv_tail`` / ``compressed_kv`` / the CSA overlap are identical on every rank). The head-dependent
+work is split over ranks:
+
+* ``q_b`` is column-parallel: each rank owns ``H / TP`` contiguous query heads,
+* the per-head attention sinks are sharded the same way, so each rank runs SDPA for its heads
+  against the shared K=V with no collective,
+* ``o_a`` is block-diagonal over ``o_groups``, so each rank owns ``o_groups / TP`` complete groups
+  (its heads are exactly those groups' inputs) and runs them locally,
+* ``o_b`` is row-parallel over the concatenated group outputs: each rank produces a full-``D``
+  partial, and one all-reduce over the TP axis returns the replicated ``[1, 1, T, D]`` output.
 
 Layouts. Compressed-KV state lives ROW_MAJOR so appending a chunk's entries is a plain concat for
 any entry count (a TILE concat needs tile-aligned rows, and a layer has ``E = pos / rate``
@@ -57,6 +71,7 @@ import torch
 import ttnn
 
 from ..common import _HIFI4, DeepSeekV4Module
+from ..decode.moe import _tp_all_reduce
 from ..layers import Linear
 from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -133,6 +148,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     the longest prompt. ``weight_dtype`` is the dtype of the big projections (``q_b``, ``o_a``,
     ``o_b``, ...); the compressor's kv / gate projections stay bf16 because their softmax gate is
     sensitive to weight error and they are small.
+
+    ``tp_size > 1`` expects ``device`` to be a 1xTP mesh with one device per rank, ``num_attention_heads``
+    and ``o_groups`` divisible by ``tp_size``, and a replicated ``[1, 1, T, D]`` hidden chunk; the output
+    is the all-reduced, replicated ``[1, 1, T, D]`` (see the module docstring). Every state tensor is
+    replicated, so read one rank's copy.
     """
 
     def __init__(
@@ -145,16 +165,33 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         cache: Optional[WeightCache] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         tp_size: int = 1,
+        dense_csa: bool = False,
     ):
         """Upload the layer's weights and constants to ``device``.
+
+        ``dense_csa`` lets a CSA layer run past ``index_topk`` compressed entries *without* the lightning
+        indexer: every causally visible compressed entry is attended to, instead of the indexer's top
+        ``index_topk``. That is a superset of what the model selects, so it is NOT numerically the model
+        (the indexer's job is to drop the low-scoring entries); it exists to exercise long prompts end to
+        end until the indexer + sparse SDPA land. Inside the supported regime (at most ``index_topk``
+        entries) it changes nothing.
 
         ``config`` is the HF ``DeepseekV4Config`` (or anything with the same attributes),
         ``layer_idx`` picks the layer type from ``config.layer_types``, ``cache`` is an optional
         :class:`~..weight_cache.WeightCache` namespace for the converted weights (this block's
-        entries carry a ``.prefill`` suffix so they never collide with the decode layouts).
+        entries carry a ``.prefill`` suffix so they never collide with the decode layouts; the
+        rank-sharded ones add ``.tp{tp_size}``).
         """
-        if tp_size != 1:
-            raise NotImplementedError(f"prefill attention is single-device for now, got tp_size={tp_size}")
+        if tp_size < 1:
+            raise ValueError(f"tp_size must be positive, got {tp_size}")
+        if tp_size > 1 and device.get_num_devices() != tp_size:
+            raise ValueError(
+                f"tensor-parallel attention expects one device per TP rank, got tp_size={tp_size} "
+                f"on a {device.get_num_devices()}-device mesh"
+            )
+        self.tp_size = tp_size
+        # Replicates a host tensor onto every rank; ``None`` (plain upload) on one device.
+        self._replicate = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
@@ -169,6 +206,14 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         self.scaling = self.head_dim**-0.5
         if self.num_heads % self.o_groups:
             raise ValueError(f"num_attention_heads {self.num_heads} is not divisible by o_groups {self.o_groups}")
+        if self.num_heads % tp_size:
+            raise ValueError(f"num_attention_heads {self.num_heads} is not divisible by tp_size {tp_size}")
+        if self.o_groups % tp_size:
+            raise ValueError(f"o_groups {self.o_groups} is not divisible by tp_size {tp_size}")
+        # Heads and o_a groups are split over the ranks: rank r owns heads [r*H/TP, (r+1)*H/TP), which
+        # are exactly the inputs of groups [r*g/TP, (r+1)*g/TP).
+        self.local_num_heads = self.num_heads // tp_size
+        self.local_o_groups = self.o_groups // tp_size
         if self.sliding_window % ALIGNMENT:
             raise ValueError(f"sliding_window {self.sliding_window} must be a multiple of {ALIGNMENT}")
 
@@ -178,6 +223,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         if self.rate is not None and ALIGNMENT % self.rate:
             raise ValueError(f"compress rate {self.rate} must divide the chunk alignment {ALIGNMENT}")
         self.index_topk = config.index_topk
+        self.dense_csa = dense_csa
         # Sliding layers use the plain theta table, CSA / HCA the YaRN-scaled one they share
         # with their compressor.
         self.rope_kind = "main" if self.is_sliding else "compress"
@@ -185,8 +231,17 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
 
         cache = _as_cache(cache)
 
-        def linear(name: str, dtype: ttnn.DataType = weight_dtype) -> Linear:
-            return Linear(weights[f"{name}.weight"], device, cache.file(f"{name}.prefill"), dtype=dtype)
+        def linear(name: str, dtype: ttnn.DataType = weight_dtype, shard_dim: Optional[int] = None) -> Linear:
+            """``Linear`` for ``{name}.weight``: replicated over the ranks, or split on ``shard_dim`` of
+            the transposed ``[K, N]`` weight (-1 = column-parallel, -2 = row-parallel) when TP > 1."""
+            if shard_dim is not None and tp_size > 1:
+                mapper = ttnn.ShardTensorToMesh(device, dim=shard_dim)
+                cache_name = f"{name}.prefill.tp{tp_size}"
+            else:
+                # A replicated weight is cached unsharded, so it shares the single-device file.
+                mapper = self._replicate
+                cache_name = f"{name}.prefill"
+            return Linear(weights[f"{name}.weight"], device, cache.file(cache_name), dtype=dtype, mesh_mapper=mapper)
 
         def host(name: str) -> torch.Tensor:
             w = weights[name]
@@ -196,9 +251,9 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             return self._to_device(host(name).reshape(1, 1, 1, -1))
 
         self.q_a_proj = linear("q_a_proj")
-        self.q_b_proj = linear("q_b_proj")
+        self.q_b_proj = linear("q_b_proj", shard_dim=-1)  # column-parallel: this rank's heads
         self.kv_proj = linear("kv_proj")
-        self.o_b_proj = linear("o_b_proj")
+        self.o_b_proj = linear("o_b_proj", shard_dim=-2)  # row-parallel: this rank's groups, then all-reduce
         self.q_a_norm_weight = norm_gamma("q_a_norm.weight")
         self.kv_norm_weight = norm_gamma("kv_norm.weight")
         # The per-head Q norm has no weight in the reference; a ones gamma is the unweighted norm.
@@ -207,17 +262,25 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         # Grouped output projection: block-diagonal over o_groups, run as one batched matmul.
         # The HF weight is [g * o_lora, in_per_group]; the batched matmul wants [1, g, K, N].
         in_per_group = self.num_heads * self.head_dim // self.o_groups
-        o_a_file = cache.file("o_a_proj.prefill")
+        # Under TP each rank keeps ``o_groups / TP`` complete groups (the group axis, dim 1, is split).
+        o_a_file = cache.file(f"o_a_proj.prefill.tp{tp_size}" if tp_size > 1 else "o_a_proj.prefill")
         o_a = _materialize(weights["o_a_proj.weight"], o_a_file, weight_dtype)
         if o_a is not None:
             o_a = o_a.detach().reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).unsqueeze(0)
             o_a = o_a.contiguous()
-        self.o_a_proj = _load_weight(o_a, device, cache_file_name=o_a_file, dtype=weight_dtype)
+        self.o_a_proj = _load_weight(
+            o_a,
+            device,
+            cache_file_name=o_a_file,
+            dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None,
+        )
 
         # The sink joins the softmax denominator un-scaled, but SDPA multiplies ``scale`` into the
-        # QK logits and the sink alike, so pre-divide by the scale to cancel it.
+        # QK logits and the sink alike, so pre-divide by the scale to cancel it. Sharded on the head
+        # axis so each rank's sinks line up with its query heads.
         sinks = host("sinks").reshape(1, self.num_heads, 1, 1) / self.scaling
-        self.sinks = self._to_device(sinks)
+        self.sinks = self._to_device(sinks, shard_dim=1)
 
         self.trans_mat = self._to_device(_rot_transformation_mat())
 
@@ -244,9 +307,18 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
     # small helpers
     # ------------------------------------------------------------------ #
-    def _to_device(self, t: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16) -> ttnn.Tensor:
-        """A host tensor as a TILE, DRAM-interleaved ``dtype`` tensor on the device."""
-        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+    def _to_device(
+        self, t: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16, shard_dim: Optional[int] = None
+    ) -> ttnn.Tensor:
+        """A host tensor as a TILE, DRAM-interleaved ``dtype`` tensor on the device.
+
+        Replicated on every rank under TP, unless ``shard_dim`` splits that axis over the ranks.
+        """
+        if shard_dim is not None and self.tp_size > 1:
+            mapper = ttnn.ShardTensorToMesh(self.device, dim=shard_dim)
+        else:
+            mapper = self._replicate
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=mapper)
 
     def _zeros_rm(self, rows: int, width: Optional[int] = None) -> ttnn.Tensor:
         """A ROW_MAJOR bf16 ``[1, 1, rows, width]`` zero tensor (``width`` defaults to ``Dh``)."""
@@ -255,6 +327,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
+            mesh_mapper=self._replicate,
         )
 
     def new_state(self) -> PrefillAttentionState:
@@ -296,13 +369,17 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     # Q / K=V stems
     # ------------------------------------------------------------------ #
     def _q_stem(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """``[1, 1, T, D]`` -> roped, per-head-normed queries ``[1, H, T, Dh]``."""
+        """``[1, 1, T, D]`` -> roped, per-head-normed queries ``[1, H_local, T, Dh]``.
+
+        ``q_a`` and its norm run replicated; ``q_b`` is column-parallel, so under TP each rank ends up
+        with its own ``H / TP`` heads (all ``H`` on one device).
+        """
         q = self.q_a_proj(hidden)
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.eps)
         q = self.q_b_proj(q)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q,
-            num_heads=self.num_heads,
+            num_heads=self.local_num_heads,
             num_kv_heads=0,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -375,13 +452,18 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         """The "previous window" of a prompt's first CSA window: zero kv and a gate that weighs 0."""
         width = self.rate * self.head_dim
         kv = ttnn.from_torch(
-            torch.zeros(1, 1, 1, width), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            torch.zeros(1, 1, 1, width),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=self._replicate,
         )
         gate = ttnn.from_torch(
             torch.full((1, 1, 1, width), _NO_WINDOW_GATE),
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
+            mesh_mapper=self._replicate,
         )
         return kv, gate
 
@@ -530,15 +612,19 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         return self._rope(attn, cos, ttnn.neg(sin))
 
     def _o_proj(self, attn: ttnn.Tensor) -> ttnn.Tensor:
-        """Grouped output projection: ``[1, H, T, Dh]`` -> ``[1, 1, T, D]``.
+        """Grouped output projection: ``[1, H_local, T, Dh]`` -> ``[1, 1, T, D]``.
 
         Consecutive heads form a group (``H / g`` heads = ``in_per_group`` channels): ``o_a`` maps each
         group to ``o_lora_rank`` independently (one batched matmul), the results are laid side by
         side and ``o_b`` mixes them to the hidden size.
+
+        Under TP a rank holds ``g / TP`` complete groups (its own heads), so ``o_a`` runs locally and
+        ``o_b`` is row-parallel over those groups' outputs: each rank's result is a full-``D`` partial
+        that one all-reduce sums into the replicated output.
         """
         num_tokens = attn.shape[2]
-        g = self.o_groups
-        heads_per_group = self.num_heads // g
+        g = self.local_o_groups
+        heads_per_group = self.num_heads // self.o_groups
         in_per_group = heads_per_group * self.head_dim
 
         x = ttnn.reshape(attn, [g, heads_per_group, num_tokens, self.head_dim])
@@ -549,8 +635,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         grouped = ttnn.concat(
             [ttnn.slice(grouped, [0, gi, 0, 0], [1, gi + 1, num_tokens, self.o_lora_rank]) for gi in range(g)],
             dim=-1,
-        )  # [1, 1, T, g * o_lora_rank]
-        return self.o_b_proj(grouped)
+        )  # [1, 1, T, g_local * o_lora_rank]
+        out = self.o_b_proj(grouped)
+        if self.tp_size > 1:
+            out = _tp_all_reduce(out, self.device)
+        return out
 
     # ------------------------------------------------------------------ #
     # public
@@ -565,7 +654,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             raise ValueError(f"chunk length {num_tokens} must be a positive multiple of {ALIGNMENT}")
         if state.seq_len % ALIGNMENT:
             raise ValueError(f"chunk start {state.seq_len} must be a multiple of {ALIGNMENT}")
-        if self.is_csa:
+        if self.is_csa and not self.dense_csa:
             entries = (state.seq_len + num_tokens) // self.rate
             if entries > self.index_topk:
                 raise NotImplementedError(
@@ -581,6 +670,9 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         ``hidden`` is ``[1, 1, T, D]`` bf16 TILE on the device; ``state`` is this layer's
         :class:`PrefillAttentionState` (``None`` runs a whole prompt from scratch and discards the
         state). The state is advanced in place. Returns ``[1, 1, T, D]`` bf16 TILE.
+
+        Under TP ``hidden`` must be replicated on every rank, and the result is replicated too (after
+        the ``o_b`` all-reduce), as is every tensor in ``state``.
         """
         if state is None:
             state = self.new_state()
