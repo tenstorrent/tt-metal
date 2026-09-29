@@ -50,12 +50,12 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
-  glm52)
-    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MANIFEST="${MANIFEST_DIR}/glm52.json"
+  glm53)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k;"
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -146,14 +146,25 @@ cleanup() {
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
-      python3 -c "import matplotlib" 2>/dev/null \
-        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-        || echo "matplotlib install failed (gantt skipped, non-fatal)"
-      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+      GANTT_PY=python3
+      GANTT_TMP=""
+      if ! python3 -c "import matplotlib" 2>/dev/null; then
+        GANTT_TMP=$(mktemp -d)
+        if UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 120 uv venv --quiet "${GANTT_TMP}/venv" \
+           && UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 180 uv pip install --quiet \
+                --python "${GANTT_TMP}/venv/bin/python" matplotlib; then
+          GANTT_PY="${GANTT_TMP}/venv/bin/python"
+        else
+          echo "matplotlib install failed (gantt skipped, non-fatal)"
+        fi
+      fi
+      "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
+      if [ -n "${GANTT_TMP}" ]; then
+        rm -rf "${GANTT_TMP}"
+      fi
     fi
   fi
   rm -rf "${MR_DIR}"
