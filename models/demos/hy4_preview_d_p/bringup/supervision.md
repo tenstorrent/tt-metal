@@ -14,3 +14,7 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   checkpoint.trim_drop [model.mtp_layers.*]. Owner also had the MiMo checkpoint trimmed to layers 0-5 (023405b50b0).
 - Owner approved the spec ("yes, full BF16 download, go ahead"); intake approved 22:36; ledger --early 9 tasks; run1.
 - Launch waits for the full download (R.1's checkpoint counts and R.2's sanity need every shard).
+- 2026-09-29: owner: keep the MTP layer out of the trim ("we'll see what next"; a possible follow-up would attach the
+  MTP block after the layer subset). Removed checkpoint.trim_drop from the spec; R.4 now keeps layers 0-5, every
+  non-layer tensor and model.mtp_layers.* (~20 GB). The spec edit voided the intake approval; re-approved on the
+  owner's word.
