@@ -437,3 +437,78 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_04_q_a.py
+
+## C.dense_full.indexer test (attempt 1)
+
+What was done
+- Rewrote the rendered component test. Gated metric pcc_indexer_L00 is now the mean per-row set overlap
+  (harness `topk_overlap` on the output with pads normalized to -1), not positional match: the fp32 CPU reference
+  itself scores match 0.789 on the bf16 golden inputs, and the device's topk_large_indices output is unsorted.
+- Extra asserted checks (informational metrics): integer output, S x 2048 elements; pads may be -1 or the uint32
+  sentinel 0xFFFFFFFF; causal (no position > row position); no repeats per row; exactly min(pos + 1, 2048) valid
+  positions per row; worst row overlap >= 0.97; every row selects its own position; and a second call on chunk 0
+  (start 0, golden chunk-0 inputs, device ctx prefix_len 0) that must return exactly [0, pos] per row.
+- Mutation table (CPU, study scripts /tmp/hy4_idx/, outside the repo) in the test docstring.
+
+Gotchas
+- Bugs that pass the 0.99 overlap: causal mask t <= s + 1, own key dropped (t < s), top-2047, a padded last row;
+  the structural checks catch each (verified on the CPU with the test's own helpers). k_norm eps 1e-6 vs 1e-5 is
+  invisible (and harmless).
+- Device precision estimates: bf16 everything with fp32 scores 0.99896 (worst row 0.9961); bf16 scores 0.99699
+  (0.9893); bfp8 q / k / cache as TtIndexer 0.99690; bfp8 + bf16 scores 0.99585 (0.9893). All pass.
+- The implementation is called twice in one test (chunk 1 with the golden prefix, then chunk 0 with an empty
+  prefix); it must take its prefix from each call's device ctx.
+
+Results
+- BRINGUP_IMPL=reference: PASS (overlap 0.999254, worst row 0.99707, self 1.0; chunk 0 exact).
+- BRINGUP_IMPL=stub: FAIL (overlap below 0.99).
+- Gate (device): fails with "no device module for indexer yet", as expected before the implement step.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_indexer.py
+
+## C.dense_full.indexer implement (attempt 1)
+
+What was done
+- `tt/indexer.py:TtHy4Indexer`, adapted from deepseek_v3_d_p TtIndexer (same ops and cache layout):
+  wk K-split (bf16, fp32 partials) -> all_reduce axis 1 -> layer_norm (eps 1e-5, weight + bias) -> bf16 ->
+  rotary_embedding_indexed -> update_padded_kv_cache (bf16 block-cyclic cache striped over the 4 chips, tp_axis 1);
+  q: mesh_partition(q_resid, axis 1) -> wq_b (replicated) -> nlp_create_qkv_heads -> rotary_embedding_indexed
+  (seq_subshard_axis 1); weights_proj K-split fp32 (1/64 folded) -> all_reduce -> mesh_partition -> bf16;
+  high_bw_all_gather (TP-inner slab rebuild) -> ttnn.bringup.ring_indexer_score_dsa (ring over axis 0, HiFi4 + fp32
+  DEST, q 64 x k 32) -> topk_large_indices (k 2048, valid_length end) -> high_bw_all_gather over axis 1.
+  Output [1, 1, S/2, 2048] uint32 per chip, replicated over axis 1. `setup(chunk, max_seq)` builds RoPE tables
+  (block-cyclic), cache and scratch once per geometry; `__call__` has no host work.
+- hooks.py: `_indexer_module`, `_IndexerHostFn` (harness boundary: with a device ctx it reloads the golden prefix
+  each call; in the hybrid its cache persists, `_HybridState` resets / loads the prefix / reads index_key back from
+  the device), "indexer" added to DEVICE_STEPS["dense_full"]; the hybrid also records the top-k in ref._topk for
+  shared layers. `HY4_INDEXER_SCORE=native` selects the source score op (bf16 DEST).
+- Forked `ttnn/cpp/ttnn/operations/experimental/indexer_score` -> `ttnn/ttnn/bringup/indexer_score`: opt-in fp32
+  DEST for DSA scoring + the mask srcA reconfig it needs (CHANGELOG), source selection (tests/source.yaml, baseline
+  128/129 on the fork, the one miss is the upstream "rejects fp32 DEST" test), tests/unit/test_fp32_dest.py.
+
+Decisions
+- rotary_offset=64 instead of the plan's host permutation of wq_b / wk / k_norm rows: the op ropes channels 64..127
+  in place, so the cache is in checkpoint order and read-back needs no un-permute.
+- Fork instead of composition: the source op's logits are rel 0.024 off (truncating bf16 MAC, LoFi-like blocked
+  multiply), overlap 0.9853; k_chunk 32 alone reaches 0.9926 (thin margin); fp32 DEST 0.99708.
+- k_chunk 32: the only kernel path whose gate multiply honours the fidelity; also avoids the L1 overflow of bf16 q/k.
+- all_reduce + mesh_partition for the TP reduces (as TtQa), not reduce_scatter + persistent buffers.
+
+Results (gate command)
+- native, q 64 x k 256: FAIL 0.985320 (L1 overflow first at k 320).
+- native, k 32 (probe): 0.99263. Fork fp32 DEST, k 64/128 before the mask fix: mask broken (0.74).
+- final (fork fp32 DEST, q 64 x k 32): PASS, overlap 0.997077, worst row 0.99072, self 1.0, chunk 0 exact.
+
+Gotchas
+- ring_indexer_score_dsa rejects fp32 DEST upstream; the fork's IndexerScoreProgramConfig is its own type
+  (ttnn.bringup.IndexerScoreProgramConfig), the source op does not accept it and vice versa.
+- fork_op.py rewrote `ttnn::experimental::ccl::` into the fork namespace; fixed by hand (CHANGELOG).
+- Upstream multi-device indexer_score tests open FABRIC_1D / torus: not carried (owner rule).
+- Perf of the k 32 per-column path at 56k is unmeasured.
+- Probes were saved under tests/ttnn/unit_tests/operations/hy4_indexer/ (deleted).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_indexer.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/indexer_score/tests/unit/test_fp32_dest.py
+    PYTHONPATH=$PWD python -m models.demos.common.bringup.testing.fork_source --fork indexer_score

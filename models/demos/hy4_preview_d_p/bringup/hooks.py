@@ -63,7 +63,7 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a"},
+    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer"},
     "moe_full": set(),
     "moe_shared": set(),
 }
@@ -76,6 +76,8 @@ _HC_PRE_STEPS = {"attn_hc_pre"}
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
 # q_a stem (tt/q_a.py:TtQa): K-split q_a_proj -> all_reduce over axis 1 -> q_a_layernorm (eps 1e-6).
 _QA_STEPS = {"q_a"}
+# DSA indexer (tt/indexer.py:TtHy4Indexer), stateful: owns the layer's device index-key cache.
+_INDEXER_STEPS = {"indexer"}
 
 
 def _loader(spec):
@@ -190,6 +192,77 @@ def _qa_host_fn(mesh, module):
     return fn
 
 
+def _indexer_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtHy4Indexer: wq_b replicated (bf16), wk / weights_proj K-split over mesh columns (bf16 / fp32, 1/64 folded),
+    k_norm LayerNorm eps rms_norm_eps (1e-5), RoPE on the last 64 of 128 dims, bf16 block-cyclic key cache."""
+    import os
+
+    from models.demos.hy4_preview_d_p.tt.indexer import TtHy4Indexer
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    p = f"model.layers.{layer}.self_attn.indexer."
+    return TtHy4Indexer(
+        mesh,
+        loader.get(p + "wq_b.weight").float(),
+        loader.get(p + "wk.weight").float(),
+        loader.get(p + "k_norm.weight").float(),
+        loader.get(p + "k_norm.bias").float(),
+        loader.get(p + "weights_proj.weight").float(),
+        n_heads=cfg.index_n_heads,
+        head_dim=cfg.index_head_dim,
+        rope_dim=cfg.qk_rope_head_dim,
+        rope_theta=cfg.rope_theta,
+        eps=cfg.rms_norm_eps,
+        topk=cfg.index_topk,
+        score_impl=os.environ.get("HY4_INDEXER_SCORE", "bringup"),  # "native": ttnn.experimental's score op
+    )
+
+
+class _IndexerHostFn:
+    """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 2048]) -> topk host [S, 2048] int64 (unsorted, -1 pads).
+
+    Harness boundary around TtHy4Indexer. The module keeps the layer's index-key cache on the device. With a device
+    ctx (component / swap tests: ``state_prefix``, ``prefix_len``, ``max_seq`` in ctx.extra) every call reloads the
+    golden prefix. In the hybrid model the cache persists across chunks; the hybrid state calls ``reset`` /
+    ``load_prefix`` / ``read_state``."""
+
+    stateful = True
+
+    def __init__(self, mesh, module):
+        self.mesh, self.mod = mesh, module
+        self.reset()
+
+    def reset(self):
+        self._pending, self._fresh = None, True
+
+    def load_prefix(self, index_key):
+        self._pending, self._fresh = index_key, True
+
+    def read_state(self, length):
+        return self.mod.read_state(length)
+
+    def __call__(self, ctx, x, q_resid):
+        import ttnn
+        from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, row_split_to_device, row_split_to_host
+
+        if "state_prefix" in ctx.extra:
+            self.mod.setup(ctx.length, ctx.extra["max_seq"])
+            self.mod.load_state(ctx.extra["state_prefix"]["index_key"][: ctx.extra["prefix_len"]])
+        else:
+            self.mod.setup(ctx.length, ctx.state.max_seq)
+            if self._fresh:
+                self.mod.load_state(self._pending)
+                self._fresh = False
+        xd = col_split_to_device(self.mesh, x, dtype=ttnn.bfloat16)
+        qd = row_split_to_device(self.mesh, q_resid, dtype=ttnn.bfloat16)
+        od = self.mod(xd, qd, ctx.start)
+        out = row_split_to_host(self.mesh, od).to(torch.int64) & 0xFFFFFFFF
+        ttnn.deallocate(xd)
+        ttnn.deallocate(qd)
+        return torch.where(out == 0xFFFFFFFF, torch.full_like(out, -1), out)
+
+
 def _col_split_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> host [S, H] fp32 for a module on column-split [1, 1, S/2, H/2] tensors (harness
     boundary)."""
@@ -214,6 +287,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _hc_host_fn(mesh, _hc_module(mesh, spec, layer, step, loader, cfg), cfg.hidden_size)
     if step in _QA_STEPS:
         return _qa_host_fn(mesh, _qa_module(mesh, spec, layer, loader, cfg))
+    if step in _INDEXER_STEPS:
+        return _IndexerHostFn(mesh, _indexer_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -222,23 +297,31 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
 
 
 def device_component(mesh, spec, layer, step):
-    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS or step in _QA_STEPS:
+    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS or step in _QA_STEPS or step in _INDEXER_STEPS:
         loader = _loader(spec)
         return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
 class _HybridState:
-    """The CPU reference state (every stateful step still runs on the CPU)."""
+    """The CPU reference state, with the index-key cache of a device indexer (``_IndexerHostFn``) on the device."""
 
-    def __init__(self, ref, max_seq):
+    def __init__(self, ref, max_seq, device_state=None):
         self.ref, self.s = ref, ref.new_state(max_seq)
+        self.dev = device_state or {}  # layer -> _IndexerHostFn
+        for fn in self.dev.values():
+            fn.reset()
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
+        if layer in self.dev:
+            self.dev[layer].load_prefix(tensors["index_key"][:length])
 
     def to_torch(self, layer, length):
-        return self.ref.state_tensors(self.s, layer, length)
+        d = self.ref.state_tensors(self.s, layer, length)
+        if layer in self.dev:
+            d["index_key"] = self.dev[layer].read_state(length)
+        return d
 
 
 class HybridDeviceModel:
@@ -259,10 +342,25 @@ class HybridDeviceModel:
             self.overrides[i] = {s: _device_step_fn(mesh, spec, i, s, loader, self.cfg) for s in steps}
             missing = [s for s, f in self.overrides[i].items() if f is None]
             assert not missing, f"layer {i}: no device module for {missing}"
+            if "indexer" in self.overrides[i]:
+                self.overrides[i]["indexer"] = self._record_topk(i, self.overrides[i]["indexer"])
         self.load_seconds = time.time() - t0
 
+    def _record_topk(self, i, fn):
+        """Keep the reference's top-k record (shared layers read the latest full layer's top-k from it)."""
+
+        def run(ctx, x, qr):
+            tk = fn(ctx, x, qr)
+            self.ref._topk = {k: v for k, v in self.ref._topk.items() if k[1:] == (ctx.start, ctx.length)}
+            self.ref._topk[(i, ctx.start, ctx.length)] = tk
+            return tk
+
+        run.device_fn = fn
+        return run
+
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq)
+        dev = {i: o["indexer"].device_fn for i, o in self.overrides.items() if "indexer" in o}
+        return _HybridState(self.ref, max_seq, dev)
 
     def embed(self, tokens):
         import torch.nn.functional as F
