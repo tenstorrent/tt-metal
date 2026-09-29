@@ -468,6 +468,24 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
     cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
+// The trisc1 bracket only arms when the core runs a compute kernel, so arm here too: a record from a core
+// without one then describes this launch rather than everything since its last readout. An L1 group counts
+// through the shared block under the mux setting in force while it counts, so the mux is set before the start.
+void arm_perf_counters() {
+    for (std::uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            PerfCounterGroup counter_group = counter_group_flags[i].first;
+            if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
+                set_l1_mux_ctrl(counter_group);
+            }
+            volatile tt_reg_ptr std::uint32_t* cntl_reg = reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(
+                get_cntl_register_for_counter_group(counter_group));
+            cntl_reg[2] = 0;
+            cntl_reg[2] = PERF_CNT_START_VALUE;
+        }
+    }
+}
+
 void read_perf_counters() {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
@@ -519,8 +537,10 @@ void read_perf_counters() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
+#define ArmPerfCounters() kernel_profiler::arm_perf_counters();
 #define ReadPerfCounters() kernel_profiler::read_perf_counters();
 #else
+#define ArmPerfCounters()
 #define ReadPerfCounters()
 #endif
 
@@ -529,6 +549,7 @@ void read_perf_counters() {
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
+#define ArmPerfCounters()
 #define ReadPerfCounters()
 #define RecordPerfCounters()
 

@@ -495,6 +495,9 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   model_family: Qwen
@@ -513,6 +516,9 @@
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 3600 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
   model: qwen3.6-35b-a3b
   model_family: Qwen
   skus:
@@ -1191,7 +1197,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 3
-  owner_id: D0B8130N4BW # Dalar Vartanians
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: e2e
 
@@ -1286,14 +1292,16 @@
     # Empty-generation regressions live here, after the perf test has compiled the pipeline they
     # share: 118 s here against 294 s in the unit job.
     pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
-    python models/experimental/xtts/demo/xtts_demo.py
+    pytest models/experimental/xtts/tests/pcc/test_budget_length_generation.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py --seed 0
   model: xtts-v2
   model_family: XTTS
   skus:
     bh_p150b_civ2:
-      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323.
-      # 15 min leaves ~5.5 min for a first-run 1.9 GB weight download on a fresh runner.
-      timeout: 15
+      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323;
+      # 11m00s / 11m18s with test_budget_length_generation (runs 35092523568, 35092533229).
+      # 18 min leaves ~6.5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 18
       tier: 3
       release_ready: false
   owner_id: U087HGJ455E # Sudhanshu Singhal
@@ -1511,14 +1519,12 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    fail=0
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v" || fail=1
+      -k "resolution_480p and t2v" || exit $?
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || fail=1
+      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || exit $?
     pytest --timeout 1700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
-    exit $fail
+      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || exit $?
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1714,18 +1720,24 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    # VBench is OFF in this leg (CLIP gate stays on). With the pipeline fixed the leg reached VBench for the
-    # first time and timed out: the gate pushes 145-frame 1080p clips through CPU RAFT/AMT (~100 min per clip;
-    # the wan2.2 leg spends ~25 min on one 81-frame 720p clip), the pipeline + CLIP already take ~22 of the
-    # leg's 35 min, and the models e2e_tier1/bh_sc1 time budget is at its 335 min cap (verify-time-budgets
-    # rejects a 120 min leg). Re-enable once the budget can hold it (RUN_VBENCH=1; VBENCH_SEEDS=1 fits best).
-    export RUN_VBENCH=0
+    # Keep five seeds and every frame. Appearance metrics use the original clips;
+    # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
+    export RUN_VBENCH=1 VBENCH_SEEDS=5 VBENCH_TEMPORAL_WIDTH=960
+    export VBENCH_EXPORT_DIR="${PIPELINE_DIR:?CI staging directory required}/vbench"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Cover the served shape (1080p / ~6s / 25fps); 153 because 150 fails (num_frames-1) % 8 == 0.
+    # FPS arithmetic is guarded on CPU by models/tt_dit/tests/models/ltx/test_fps_conditioning_ltx.py.
+    export NUM_FRAMES=153 FPS=25
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0" || exit $?
+    # Run in the worker's ML environment after pytest has closed the TT devices.
+    # A worker failure, missing seed, or failed mean threshold fails this same leg.
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "$VBENCH_EXPORT_DIR"
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
@@ -2039,18 +2051,28 @@
   budget_type: e2e
 
 # ── TT-Train (Blackhole Galaxy) ───────────────────────────────────
+# Since mpirun runs in an environment separate from the CI, we cannot
+# pipe the summary data directly to $GITHUB_STEP_SUMMARY. Instead, we use
+# a shared NFS ($PIPELINE_DIR) to hold the markdown file, then pipe that to
+# $GITHUB_STEP_SUMMARY once mpirun exits.
 
 - name: Galaxy TinyLlama 1.1B DDP=32 train e2e tests
   cmd: |
     export HF_HOME=/mnt/models/huggingface
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
+    rc=0
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
       ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
-    '
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tinyllama_1_1b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
+    " || rc=$?
+    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit $rc
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
-    bh_sc1:
-      timeout: 45
+    bh_sc1_high_power:
+      timeout: 40
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2077,14 +2099,20 @@
 - name: Galaxy Qwen 3 1.7B DDP=32 train e2e tests
   cmd: |
     export HF_HOME=/mnt/models/huggingface
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
+    rc=0
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
       ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "qwen3_1_7b_ddp32_shakespeare"
-    '
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames qwen3_1_7b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
+    " || rc=$?
+    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit $rc
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
-    bh_sc1:
-      timeout: 20
+    bh_sc1_high_power:
+      timeout: 25
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2093,13 +2121,19 @@
 
 - name: Galaxy Tiny Deepseek v3 DDP=32 train e2e tests
   cmd: |
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
+    rc=0
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
       ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tiny_deepseek_v3_ddp32_char_shakespeare"
-    '
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tiny_deepseek_v3_ddp32_char_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
+    " || rc=$?
+    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit $rc
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 75
       tier: 3
       release_ready: false

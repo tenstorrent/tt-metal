@@ -214,6 +214,13 @@ inline void start_dm1_dfb_init() {
     *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
 }
 
+// Idle cores still receive the go signal and read the launch slot at launch_msg_rd_ptr, which was not
+// written for this program: enables is 0 but local_cb_mask/local_cb_offset are stale and point at L1 that
+// may have been reused. Such a slot describes no DFBs.
+inline uint32_t get_num_local_dfbs(const launch_msg_t* launch_msg) {
+    return launch_msg->kernel_config.enables ? launch_msg->kernel_config.local_cb_mask : 0;
+}
+
 inline void wait_subordinates() {
     WAYPOINT("NTW");
     // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
@@ -238,14 +245,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
-        // There might be dirty lines in the cache at boot, so we discard them first (so they can't write
-        // back over the zeros) and then write the zeros.
-        constexpr uint32_t sem_words_size = MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE;
-        invalidate_l2_cache_range(MEM_NOC_CAS_RET_BASE, sem_words_size);
-        // Zero these words used for semaphores at boot
-        for (uint32_t w = 0; w < sem_words_size / 4; w++) {
-            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
-        }
+        zero_semaphore_regions();
         // Originally initalized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
@@ -271,6 +271,8 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     device_setup();
+    // NoC command-buffer state is private to each DM and persists across kernel launches.
+    overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
@@ -360,7 +362,6 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -383,9 +384,11 @@ extern "C" uint32_t _start1() {
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
-                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg_address);
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
-                start_dm1_dfb_init();
+                if (num_local_dfbs != 0) {
+                    start_dm1_dfb_init();
+                }
                 WAYPOINT("R");
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
@@ -444,7 +447,7 @@ extern "C" uint32_t _start1() {
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg);
 
         if (hartid == 1) {
             setup_dfb_remapper(dfb_l1_base, num_local_dfbs);
@@ -456,7 +459,6 @@ extern "C" uint32_t _start1() {
 
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
-        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {

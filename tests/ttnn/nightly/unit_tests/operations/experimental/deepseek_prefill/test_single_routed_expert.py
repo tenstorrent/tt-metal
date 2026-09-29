@@ -31,10 +31,12 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     CLAMPED_SILU_GLU_LIMIT,
     TorchExpert,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    TtRoutedExpert,
+    routed_expert_weight_memory_config,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
@@ -66,6 +68,7 @@ def run_single_routed_expert(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = False,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -230,6 +233,9 @@ def run_single_routed_expert(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
         activation=activation,
+        # Both placements are swept explicitly: the module's None default would pick ND-sharded on
+        # Blackhole and leave the interleaved path uncovered.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
 
     # Run TTNN forward
@@ -258,9 +264,21 @@ def run_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
-# Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
+def to_dram_nd_sharded(tensor, mesh_device):
+    """One weight tensor moved into the production ND-sharded placement, its width taken from its own N.
+
+    The spec is the module's (routed_expert_weight_memory_config), not a test-local one: it is what a
+    TtRoutedExpert built with weights_dram_nd_sharded=True hands the ops, so a raw-tensor test measures
+    the layout the module ships rather than one of its own.
+    """
+    return ttnn.to_memory_config(
+        tensor, routed_expert_weight_memory_config(mesh_device, tensor.shape[-1], dram_nd_sharded=True)
+    )
+
+
+# Per-model dims as (id_prefix, config, extended), each run at its own (emb_dim,
 # MOE_INTERMEDIATE_SIZE). DeepSeek V3 is the baseline and runs by default; every other model is
-# gated behind @pytest.mark.extended_model.
+# `extended` is retained for callers that still gate on it; the tests here run every model.
 SINGLE_EXPERT_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("minimax_m27", MiniMaxM27Config, True),
@@ -309,28 +327,25 @@ _ISL_ALLOCATED_TOKENS = 5120
 _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
 
 
 def _isl_params(active_sweep, only_models=None):
     """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
     `active_sweep`, all against the fixed _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so
-    non-baseline models stay gated behind the extended_model marker; `only_models` restricts to a
-    subset of model names."""
+    every model runs; `only_models` restricts to a subset of model names."""
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
-            marks = (pytest.mark.extended_model,) if extended else ()
             params.append(
                 pytest.param(
                     _ISL_ALLOCATED_TOKENS,
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=marks,
                     id=f"{name}-isl-{active}",
                 )
             )
@@ -364,6 +379,9 @@ def test_single_routed_expert_functional(
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
+# of one per tile. Both layouts are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
@@ -372,6 +390,7 @@ def test_single_routed_expert_isl_sweep(
     emb_dim: int,
     hidden_dim: int,
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
     run_single_routed_expert(
         device,
@@ -380,6 +399,7 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )
 
 
@@ -393,7 +413,6 @@ _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Kimi K3 routed expert: SiTU-GLU activation at the post-projection dims.
@@ -442,7 +461,6 @@ _K3_SATURATION_TOKENS = 512
 
 
 @pytest.mark.parametrize("weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _K3_SATURATION_CASES)
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_saturated(
     device, weight_scale: float, weights_dtype, pcc_threshold: float, min_cap_frac: tuple[float, float]
@@ -505,7 +523,6 @@ _DSV4_CLAMP_TOKENS = 512
 # Both layouts: row-major is what production feeds the routed expert, and it tilizes inside the
 # per-chunk loop, between BINARY_ACT_INIT() and the BINARY_ACT_TILE calls.
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="clamped SiLU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_dsv4_clamped(
     device,

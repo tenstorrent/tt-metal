@@ -323,6 +323,7 @@ void fill_target_recipe(jit_server::rpc::TargetRecipe::Builder builder, const ji
         defines.set(i, t.defines[i]);
     }
     builder.setIncludes(t.includes);
+    builder.setPchUmbrella(t.pch_umbrella);
     builder.setCompilerOptLevel(t.compiler_opt_level);
     auto srcs = builder.initSrcs(t.srcs.size());
     for (std::size_t i = 0; i < t.srcs.size(); ++i) {
@@ -349,6 +350,7 @@ jit_build::TargetRecipe read_target_recipe(jit_server::rpc::TargetRecipe::Reader
         t.defines.push_back(d.cStr());
     }
     t.includes = r.getIncludes().cStr();
+    t.pch_umbrella = r.getPchUmbrella().cStr();
     t.compiler_opt_level = r.getCompilerOptLevel().cStr();
     for (auto s : r.getSrcs()) {
         t.srcs.push_back(s.cStr());

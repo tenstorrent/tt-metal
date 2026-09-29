@@ -41,11 +41,6 @@ from ...utils import walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.host_affinity import pin_one_thread_per_core
-
-# First pass at import (before the mesh is opened): narrows the Python/torch side and every pool thread that
-# still carries the full mask; tt-metal's per-device threads are pinned by tt-metal itself to single CPUs of
-# its choosing and are left alone (re-pinning them measured 7.5 s vs 6.2 s under a launch-time taskset).
-pin_one_thread_per_core("LTX pipeline (import)")
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -275,14 +270,16 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: float = 24.0,
         run_warmup: bool = False,
         traced: bool = False,
         audio_only: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
-        # Second pass, after the mesh is open: helpers born before the import-time pass can still have
-        # spawned full-mask threads at device open; tt-metal's own single-CPU placements are left alone.
-        pin_one_thread_per_core("LTX pipeline (post device open)")
+        # Host affinity, explicit (not an import side effect): in a process re-execed by
+        # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
+        # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
+        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -293,6 +290,11 @@ class LTXPipeline:
         # (one per fixed shape "s1"/"s2") live in the @traced_function cache on
         # LTXTransformerModel.inner_step, keyed per (transformer, trace_key); release_traces frees them.
         self._traced = traced
+        # FPS is pipeline-level state, not a per-request argument: it sets the audio latent
+        # length (audio_frames = round(num_frames / fps * 25)) and scales the A/V cross-PE's
+        # temporal axis into seconds. Both are baked into the captured traces, so changing it
+        # per request would silently replay a trace built for a different shape.
+        self.fps = float(fps)
         # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
         # so static inputs are bound once and the latent/timestep buffers refreshed in place.
         self._trace_state: dict[str, LTXTransformerState] = {}
@@ -559,6 +561,7 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: float = 24.0,
         **extra_pipeline_kwargs,
     ) -> "LTXPipeline":
         """Auto-configure mesh-shape defaults and forward into ``__init__``.
@@ -657,6 +660,7 @@ class LTXPipeline:
             num_frames=num_frames,
             height=height,
             width=width,
+            fps=fps,
             run_warmup=run_warmup,
             traced=traced,
             **extra_pipeline_kwargs,
@@ -1436,6 +1440,26 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
+    def _resolve_fps(self, fps: float | None) -> float:
+        """Resolve a per-call ``fps`` against the pipeline's own rate.
+
+        ``None`` means "use the pipeline's rate". A differing value is rejected rather
+        than substituted: FPS sets the audio latent length and scales the A/V cross-PE
+        temporal axis, both of which are baked into the captured traces, so honouring a
+        per-call rate would replay a trace built for another shape while the container
+        claims the requested one -- the desync this plumbing exists to prevent.
+        """
+        if fps is None:
+            return self.fps
+        if float(fps) != self.fps:
+            msg = (
+                f"fps={fps} does not match the pipeline's fps={self.fps}. FPS is fixed at "
+                "pipeline construction (it sets the audio latent length and the A/V cross-PE, "
+                "both baked into the captured traces). Build a pipeline with the desired fps."
+            )
+            raise ValueError(msg)
+        return self.fps
+
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
@@ -1577,7 +1601,7 @@ class LTXPipeline:
                 denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
                 logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
 
-        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=self.fps)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
         audio_N = self._sp_pad_len(audio_N_real)
@@ -1597,6 +1621,7 @@ class LTXPipeline:
             max_pos=self.positional_embedding_max_pos,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=self.fps,
         )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
@@ -1621,6 +1646,7 @@ class LTXPipeline:
             theta=self.positional_embedding_theta,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=self.fps,
         )
         trans_mat = self._prepare_trans_mat()
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -1877,7 +1903,7 @@ class LTXPipeline:
         if self._audio_adapter is not None:
             self._audio_adapter.reload_weights()
 
-    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> None:
+    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float | None = None) -> None:
         """Eager (untraced) audio decode at the real shape: compiles kernels, warms lazy device
         state, and frees back to a deterministic allocator free-list so a later traced decode
         captures cleanly. Required by the adopted ltx-perf audio trace path (the vocoder / mel
@@ -1885,6 +1911,7 @@ class LTXPipeline:
         capture must run on already-warm state). No-op if the audio decoder is not configured."""
         if self.tt_mel_decoder is None or self.tt_vocoder_with_bwe is None:
             return
+        fps = self.fps if fps is None else fps
         mel_d, voc = self.tt_mel_decoder, self.tt_vocoder_with_bwe
         saved = (mel_d.use_trace, voc.use_trace, voc.use_trace_bwe)
         mel_d.use_trace = voc.use_trace = voc.use_trace_bwe = False

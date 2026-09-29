@@ -31,10 +31,13 @@ struct TargetRecipe {
     firmwareIsKernelObject @11 :Bool;
     linkerOptLevel @12 :Text;
 
+    # Source umbrella path; empty means no PCH. Ignored for preprocessed inputs.
+    pchUmbrella @13 :Text;
+
     # Hash of the effective build parameters (JitBuildState::build_state_hash_). Lets an
     # out-of-process prewarm write the .build_state gate file so a cold (e.g. profiler) build_key
     # sees the prewarmed artifacts as HITs instead of forcing a recompile. 0 when not captured.
-    buildStateHash @13 :UInt64;
+    buildStateHash @14 :UInt64;
 }
 
 struct CompileRequest {

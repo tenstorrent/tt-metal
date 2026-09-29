@@ -37,6 +37,9 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     const uint32_t rank = input_tensors[0].logical_shape().rank();
     // ConcatBlockShardedProgramFactory supports concat only on the last two dims (H, W)
     const bool width_concat = is_width_concat(rank, dim);
+    // Height concat has to interleave per leading index (see num_leading_blocks); width concat
+    // appends along the row and needs no block loop.
+    const uint32_t num_blocks = width_concat ? 1u : num_leading_blocks(input_tensors[0]);
 
     ProgramDescriptor desc;
 
@@ -138,6 +141,44 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
 
     const uint32_t out_units_w = to_units_w(output_shard_w);
     const uint32_t dst_stride_bytes = out_units_w * unit_size;
+
+    // Rows each input contributes per leading index, the output rows one leading index spans, and
+    // the output's real flattened height.
+    //
+    // These come from the tensors' own heights, not from input_shard_h * shard_grid_h. That
+    // product is the allocated shard *capacity*, and block sharding lets the last height shard be
+    // part padding -- flattened height 10 across two shards of 6 has a capacity of 12. Dividing
+    // capacity by the block count folds that padding into every block, which shifts each block
+    // after the first. Shard height is still what maps a row to its source core, just below.
+    //
+    // A tensor's flattened height is num_blocks * padded_shape[-2], so the per-block row count is
+    // simply padded_shape[-2].
+    std::vector<uint32_t> input_block_h(num_input_tensors);
+    uint32_t output_block_h = 0;
+    uint32_t out_total_h = 0;
+    if (!width_concat) {
+        for (uint32_t i = 0; i < num_input_tensors; i++) {
+            input_block_h[i] = input_tensors[i].padded_shape()[-2];
+            output_block_h += input_block_h[i];
+        }
+        out_total_h = output_block_h * num_blocks;
+        // Height concat sums the inputs' heights, so this is a restatement of the output spec.
+        TT_FATAL(
+            output_block_h == output.padded_shape()[-2],
+            "Height concat: inputs contribute {} rows per leading index but the output's height is "
+            "{} (shape {}).",
+            output_block_h,
+            output.padded_shape()[-2],
+            output.padded_shape());
+        // The shards have to be able to hold the result; they may hold more (ragged tail).
+        TT_FATAL(
+            output_shard_h * shard_grid_h >= out_total_h,
+            "Height concat: output shards span {} x {} rows, too few for the {} rows of shape {}.",
+            output_shard_h,
+            shard_grid_h,
+            out_total_h,
+            output.padded_shape());
+    }
 
     // --- Circular Buffers ---
     for (uint32_t i = 0; i < num_input_tensors; i++) {
@@ -244,52 +285,68 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                     cum_w += inp_total_w;
                 }
             } else {
-                // Height concat
+                // Height concat.
+                //
+                // The output rows for leading index blk are input 0's block-blk rows, then input
+                // 1's, and so on, so the walk is over (blk, inp_id) segments in output order. One
+                // segment per input would append whole flattened heights, which matches torch only
+                // when every dim before rank-2 is 1 (#55342).
+                //
+                // A segment's output rows are a run of the *output* height; its source rows are a
+                // run of input inp_id's flattened height starting at blk * input_block_h[inp_id].
+                // Those source rows can straddle grid rows, which the src_r loop already splits.
+                // Clipped to the real height: the last height shard can extend past it, and
+                // those rows are padding with no source row to copy from.
                 const uint32_t out_row_start = sh * output_shard_h;
-                const uint32_t out_row_end = out_row_start + output_shard_h;
+                const uint32_t out_row_end = std::min(out_row_start + output_shard_h, out_total_h);
                 const uint32_t copy_width = to_units_w(output_shard_w) * unit_size;
 
-                uint32_t cum_h = 0;
-                uint32_t dst_row_accum_units = 0;
-                for (uint32_t inp_id = 0; inp_id < num_input_tensors; inp_id++) {
-                    const uint32_t inp_total_h = input_shard_h[inp_id] * shard_grid_h;
-                    const uint32_t inp_shard_h_val = input_shard_h[inp_id];
+                for (uint32_t blk = 0; blk < num_blocks; blk++) {
+                    uint32_t cum_h = blk * output_block_h;
+                    for (uint32_t inp_id = 0; inp_id < num_input_tensors; inp_id++) {
+                        const uint32_t block_h = input_block_h[inp_id];
+                        const uint32_t inp_shard_h_val = input_shard_h[inp_id];
 
-                    const uint32_t overlap_start = std::max(out_row_start, cum_h);
-                    const uint32_t overlap_end = std::min(out_row_end, cum_h + inp_total_h);
+                        const uint32_t overlap_start = std::max(out_row_start, cum_h);
+                        const uint32_t overlap_end = std::min(out_row_end, cum_h + block_h);
 
-                    if (overlap_start < overlap_end) {
-                        const uint32_t local_row_start = overlap_start - cum_h;
-                        const uint32_t local_row_end = overlap_end - cum_h;
+                        if (overlap_start < overlap_end) {
+                            // Source rows, in input inp_id's flattened height.
+                            const uint32_t src_block_base = blk * block_h;
+                            const uint32_t flat_row_start = src_block_base + (overlap_start - cum_h);
+                            const uint32_t flat_row_end = src_block_base + (overlap_end - cum_h);
 
-                        const uint32_t first_src_r = local_row_start / inp_shard_h_val;
-                        const uint32_t last_src_r = (local_row_end - 1) / inp_shard_h_val;
+                            const uint32_t first_src_r = flat_row_start / inp_shard_h_val;
+                            const uint32_t last_src_r = (flat_row_end - 1) / inp_shard_h_val;
 
-                        for (uint32_t src_r = first_src_r; src_r <= last_src_r; src_r++) {
-                            const uint32_t src_shard_row_start = src_r * inp_shard_h_val;
-                            const uint32_t needed_row_start = std::max(local_row_start, src_shard_row_start);
-                            const uint32_t needed_row_end =
-                                std::min(local_row_end, src_shard_row_start + inp_shard_h_val);
-                            const uint32_t needed_rows = needed_row_end - needed_row_start;
+                            for (uint32_t src_r = first_src_r; src_r <= last_src_r; src_r++) {
+                                const uint32_t src_shard_row_start = src_r * inp_shard_h_val;
+                                const uint32_t needed_row_start = std::max(flat_row_start, src_shard_row_start);
+                                const uint32_t needed_row_end =
+                                    std::min(flat_row_end, src_shard_row_start + inp_shard_h_val);
+                                const uint32_t needed_rows = needed_row_end - needed_row_start;
 
-                            const uint32_t src_row_off = needed_row_start - src_shard_row_start;
-                            const uint32_t src_stride_bytes = to_units_w(input_shard_w[inp_id]) * unit_size;
-                            const uint32_t src_offset = to_units_h(src_row_off) * src_stride_bytes;
+                                const uint32_t src_row_off = needed_row_start - src_shard_row_start;
+                                const uint32_t src_stride_bytes = to_units_w(input_shard_w[inp_id]) * unit_size;
+                                const uint32_t src_offset = to_units_h(src_row_off) * src_stride_bytes;
 
-                            transfers.push_back(TransferDesc{
-                                .src_physical_core = shard_core(src_r, sw),
-                                .src_cb_id = inp_id,
-                                .src_l1_offset = src_offset,
-                                .src_stride = src_stride_bytes,
-                                .dst_offset = dst_row_accum_units * dst_stride_bytes,
-                                .dst_stride = dst_stride_bytes,
-                                .copy_size = copy_width,
-                                .num_rows = to_units_h(needed_rows),
-                            });
-                            dst_row_accum_units += to_units_h(needed_rows);
+                                // Where this piece lands, as an output row, then made core-local.
+                                const uint32_t dst_row = cum_h + (needed_row_start - src_block_base);
+
+                                transfers.push_back(TransferDesc{
+                                    .src_physical_core = shard_core(src_r, sw),
+                                    .src_cb_id = inp_id,
+                                    .src_l1_offset = src_offset,
+                                    .src_stride = src_stride_bytes,
+                                    .dst_offset = to_units_h(dst_row - out_row_start) * dst_stride_bytes,
+                                    .dst_stride = dst_stride_bytes,
+                                    .copy_size = copy_width,
+                                    .num_rows = to_units_h(needed_rows),
+                                });
+                            }
                         }
+                        cum_h += block_h;
                     }
-                    cum_h += inp_total_h;
                 }
             }
         }
@@ -307,12 +364,46 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     constexpr uint32_t args_overhead = 1;  // num_transfers field
     constexpr uint32_t max_transfers_per_risc = (runtime_args_limit - args_overhead) / args_per_transfer;
     const uint32_t reader_count_max = (max_num_transfers + 1) / 2;
-    TT_FATAL(
-        reader_count_max <= max_transfers_per_risc,
-        "Block-sharded concat: too many transfers per core ({}, max {} per RISC). "
-        "Reduce the number of input tensors or the grid size.",
-        max_num_transfers,
-        max_transfers_per_risc);
+    // Both concat directions share this budget but reach it differently, so each gets the count
+    // that actually drives it and a remedy that helps.
+    //
+    // Height: a core walks only the blocks its *own* output rows cover, roughly
+    // num_blocks / shard_grid_h, so adding grid rows lowers the per-core count and shrinking the
+    // grid is what makes this fire. Measured, 2 inputs at 8 leading indices: 16 transfers per
+    // core on one grid row, 8 on two, 4 on four, 2 on eight.
+    //
+    // Width: flat in the grid. output_shard_w is num_input_tensors * input_shard_w whatever the
+    // grid width, so a core's columns always span about num_input_tensors input shards -- only
+    // the input count moves it. With block-sharded concat capped at 16 inputs this branch cannot
+    // actually reach the budget; it is kept so the failure is attributable if that cap changes.
+    constexpr uint32_t max_transfers_per_core = max_transfers_per_risc * 2;
+    if (width_concat) {
+        TT_FATAL(
+            reader_count_max <= max_transfers_per_risc,
+            "Block-sharded width concat: {} transfers per core, past the {} the runtime-arg budget "
+            "allows ({} per RISC at {} args each). A core's output columns span one transfer per "
+            "input shard they cover, so the {} inputs drive this -- the grid width does not. "
+            "Reduce the number of input tensors.",
+            max_num_transfers,
+            max_transfers_per_core,
+            max_transfers_per_risc,
+            args_per_transfer,
+            num_input_tensors);
+    } else {
+        TT_FATAL(
+            reader_count_max <= max_transfers_per_risc,
+            "Block-sharded height concat: {} transfers per core, past the {} the runtime-arg "
+            "budget allows ({} per RISC at {} args each). A core walks only the leading indices "
+            "its own rows cover -- about {} / {} grid rows -- at {} inputs each, so *more* grid "
+            "rows lowers this. Add grid rows, or reduce the leading dims or the input count.",
+            max_num_transfers,
+            max_transfers_per_core,
+            max_transfers_per_risc,
+            args_per_transfer,
+            num_blocks,
+            shard_grid_h,
+            num_input_tensors);
+    }
 
     // --- Kernel Descriptors ---
     // Both RISCs run the same kernel but with different subsets of transfers,

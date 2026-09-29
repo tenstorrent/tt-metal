@@ -1741,3 +1741,130 @@ def test_ternary_sharded_program_cache_sequence(device):
         golden = golden.to(out_torch.dtype)
         assert_with_ulp(expected_result=golden, actual_result=out_torch)
     assert device.num_program_cache_entries() == 2
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _assert_ternary_shrink_h_or_w(device, result_mc, n_used):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= n_used:
+        pytest.skip(f"Device grid too small to observe shrink (need > {n_used} cores)")
+    grid = result_mc.shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(n_used, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+
+
+def _ternary_addcmul(a, b, c, device, out_mc):
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_c = ttnn.from_torch(c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.addcmul(tt_a, tt_b, tt_c, value=1.0, memory_config=out_mc)
+
+
+def test_ternary_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: shape=(2,2,32,64) TILE → tensor_h=128, shard_h=32 → 4 populated cores."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    c = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = _ternary_addcmul(a, b, c, device, out_mc)
+    _assert_ternary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(expected_result=torch.addcmul(a, b, c, value=1.0), actual_result=ttnn.to_torch(result))
+
+
+def test_ternary_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: shape=(1,1,32,128) TILE → tensor_w=128, shard_w=32 → 4 populated cores."""
+    shape = (1, 1, 32, 128)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    c = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    result = _ternary_addcmul(a, b, c, device, out_mc)
+    _assert_ternary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(expected_result=torch.addcmul(a, b, c, value=1.0), actual_result=ttnn.to_torch(result))
+
+
+def test_ternary_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: 64x96 TILE → n_h=2, n_w=3 → asymmetric 3x2 rectangle pins h↔grid.y, w↔grid.x."""
+    shape = (1, 1, 64, 96)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 3 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 3x2 BLOCK shrink test")
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    c = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    result = _ternary_addcmul(a, b, c, device, out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 6, f"Expected 3x2 = 6 populated cores, got {grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))})
+    assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
+    assert_with_ulp(expected_result=torch.addcmul(a, b, c, value=1.0), actual_result=ttnn.to_torch(result))
+
+
+def test_ternary_specless_sharded_output_grid_multi_range_height(device):
+    """HEIGHT_SHARDED multi-range: shape=(1,1,1088,64) → n_used=34, non-rectangular on WH/BH."""
+    shape = (1, 1, 1088, 64)
+    n_used = 34
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < n_used:
+        pytest.skip(f"Device grid too small (need ≥{n_used} cores, have {compute_grid.x * compute_grid.y})")
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    c = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = _ternary_addcmul(a, b, c, device, out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    assert len(grid.ranges()) > 1, f"Expected multi-range CoreRangeSet, got single range {grid}"
+    assert_with_ulp(expected_result=torch.addcmul(a, b, c, value=1.0), actual_result=ttnn.to_torch(result))
+
+
+# RM-input arm for ternary is unreachable: validate_on_program_cache_miss FATALs at
+# ternary_device_operation.cpp:351-355 on non-sharded RM inputs (binary_ng covers is_tile=false).
+
+
+def test_ternary_specless_sharded_output_tts_scalar(device):
+    """TTS via ttnn.where(pred, tensor, scalar): scalar-arm reach into the synthesizer (compute_output_specs only)."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    cond = torch.randint(0, 2, shape, dtype=torch.bfloat16)
+    t = torch.rand(shape, dtype=torch.bfloat16)
+    f = 3.5
+    tt_cond = ttnn.from_torch(cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.where(tt_cond, tt_t, f, memory_config=out_mc)
+    _assert_ternary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(
+        expected_result=torch.where(cond.bool(), t, torch.tensor(f, dtype=torch.bfloat16)),
+        actual_result=ttnn.to_torch(result),
+    )
+
+
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 1, 32, 0), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ((1, 1, 0, 64), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ((1, 1, 0, 64), ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        ((1, 1, 32, 0), ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+    ids=["tts_height_zero_w_crossover", "tts_width_zero_h_crossover", "tts_block_zero_h", "tts_block_zero_w"],
+)
+def test_ternary_specless_sharded_output_tts_zero_volume_crossover_fatal(device, expect_error, shape, layout):
+    """WHERE_TTS zero-vol reaches synth via compute_broadcasted_output_binary (a==b==0 passes)."""
+    cond = torch.empty(shape, dtype=torch.bfloat16)
+    t = torch.empty(shape, dtype=torch.bfloat16)
+    tt_cond = ttnn.from_torch(cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(layout, ttnn.BufferType.L1)
+    with expect_error(RuntimeError, "zero-volume specless-sharded is only representable"):
+        ttnn.where(tt_cond, tt_t, 3.5, memory_config=out_mc)

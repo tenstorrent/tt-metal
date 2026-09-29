@@ -4,15 +4,18 @@
 
 from typing import List, Tuple
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_a import unpack_a_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
-from fuser.tile_loop import LoopBlockRow, LoopTileByTile, TileLoop
-from helpers.llk_params import DestAccumulation, EltwiseBinaryReuseDestType
+from helpers.llk_params import (
+    DestAccumulation,
+    EltwiseBinaryReuseDestType,
+)
 
 
 def _uses_upk_to_dest_semaphores(config: GlobalConfig) -> bool:
@@ -42,15 +45,17 @@ def _unp_sel(compute_unit: FpuNode) -> str:
 
 
 class UnpackerA(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
+    golden_fn = staticmethod(unpack_a_golden)
+    supports_dest_offset = False
+
     per_block_init = True
 
     def __init__(
         self, reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     ):
-        self.reuse_dest = reuse_dest
         if reuse_dest != EltwiseBinaryReuseDestType.NONE:
-            self.loop = LoopTileByTile()
+            self.granularity = InvocationGranularity.TILE
 
     def get_headers(self) -> List[str]:
         return [
@@ -58,22 +63,6 @@ class UnpackerA(Unpacker):
             "llk_unpack_unary_operand.h",
             "llk_math_common.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_a = self.transpose_golden(tensor_a, config, operation, compute_unit)
-
-        tensor_a, tensor_b = self.reuse_dest_golden(
-            tensor_a, tensor_b, config, operation, compute_unit
-        )
-
-        return tensor_a, tensor_b
 
     def _perf_valid_args(
         self,
@@ -85,8 +74,8 @@ class UnpackerA(Unpacker):
             num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return "true", "true", num_faces
         if config.dest_acc == DestAccumulation.Yes:
-            return "true", "true", block.block_tiles_x
-        return "true", "false", block.block_tiles_x
+            return "true", "true", block.block_cols
+        return "true", "false", block.block_cols
 
     def perf_set_valid(
         self,
@@ -130,11 +119,8 @@ class UnpackerA(Unpacker):
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         transpose_en = compute_unit.transpose_faces.cpp_enum_value
         unp_sel = _unp_sel(compute_unit)
-        num_tiles = (
-            1
-            if compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
-            else block.block_tiles_x
-        )
+        per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
+        num_tiles = 1 if per_tile else block.block_cols
 
         return (
             compute_unit.src_a.bfd_alloc_and_program(engine)
@@ -157,7 +143,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"
-            f"({block.tile_id_global}, {tensor_shape});\n"
+            f"({block.tile_id_src_a}, {tensor_shape});\n"
         )
 
     def uninit(

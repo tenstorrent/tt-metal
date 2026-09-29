@@ -9,6 +9,7 @@
 // 2) instantiate global variables
 
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 
 #include "chlkc_list.h"
 

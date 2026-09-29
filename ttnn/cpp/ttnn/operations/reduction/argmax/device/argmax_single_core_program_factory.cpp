@@ -126,28 +126,27 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    const tt::tt_metal::IDevice* device = &output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
     const bool reduce_all = not dim.has_value();
 
     // Resource names. Declared function-locally: both argmax factories share a unity-build
     // translation unit, and namespace-scope `const` objects would collide by name there.
     const KernelSpecName READER{"reader"};
     const DFBSpecName SRC{"src"};
-    const DFBSpecName DST{"dst"};
+    const ScratchpadSpecName DST{"dst"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
-    const auto grid_size = device->compute_with_storage_grid_size();
+    const auto grid_size = device.compute_with_storage_grid_size();
     const uint32_t num_units = 1;  // single-core
     auto [num_cores, all_cores, unused_1, unused_2, unused_3, unused_4] =
         tt::tt_metal::split_work_to_cores(grid_size, num_units);
 
     TT_FATAL(num_cores > 0, "Argmax single-core split requires at least one core ");
     validate_reduce_op_program_grid(
-        "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
+        "Argmax single-core", all_cores, device.compute_with_storage_grid_size(), nullptr, true, {});
 
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
 
     // Input DFB: one entry holding a whole input page.
@@ -158,12 +157,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
         .data_format_metadata = input_data_format,
     };
 
-    // Output DFB: one entry holding a whole output page.
-    DataflowBufferSpec dfb_dst{
+    // Output scratchpad: private working memory holding a whole output page.
+    ScratchpadSpec scratch_dst{
         .unique_id = DST,
-        .entry_size = dst_page_size,
-        .num_entries = 1,
-        .data_format_metadata = output_data_format,
+        .size_per_node = dst_page_size,
     };
 
     const int32_t rank_i = static_cast<int32_t>(input.logical_shape().size());
@@ -187,9 +184,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                           : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
     }
 
-    // Both DFBs are touched by this one reader and by nothing else: it takes a raw write pointer
-    // into each and never runs a FIFO operation on either. A single toucher cannot present a
-    // producer and a consumer on distinct kernels, so the reader is bound as both.
+    // This reader is the only accessor of both src and dst: it fills and drains each through a raw
+    // pointer and makes no FIFO calls. dst is private scratch, so it is a Scratchpad. src is a
+    // DataflowBuffer because the kernel reads its data format via get_dataformat(dfb::src), which a
+    // Scratchpad does not carry. With a single accessor, src is bound as both producer and consumer.
     KernelSpec reader{
         .unique_id = READER,
         .source = kernel_path,
@@ -197,8 +195,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
             {
                 DFBBinding{.dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER},
                 DFBBinding{.dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{.dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{.dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = DST, .accessor_name = "dst"},
             },
         .tensor_bindings =
             {
@@ -206,13 +206,14 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .compile_time_args = std::move(ctime_args),
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{
         .name = "argmax_single_core",
         .kernels = {std::move(reader)},
-        .dataflow_buffers = {std::move(dfb_src), std::move(dfb_dst)},
+        .dataflow_buffers = {std::move(dfb_src)},
+        .scratchpads = {std::move(scratch_dst)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},

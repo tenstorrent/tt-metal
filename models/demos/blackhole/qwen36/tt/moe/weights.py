@@ -62,19 +62,24 @@ def load_expert_weights(
     tp = config.num_devices
     is_mesh = hasattr(mesh_device, "shape")
 
-    gate_proj = up_proj = down_proj = None
+    gate_up_fused = down_proj = None
     if state_dict:
         if "gate_up_proj" not in state_dict:
             state_dict = _stack_per_expert(state_dict, I)
+        gate_up_fused = state_dict["gate_up_proj"]  # [E, 2I, H]
+        down_proj = state_dict["down_proj"]  # [E, H, I]
 
-        fused = state_dict["gate_up_proj"].to(torch.bfloat16)  # [E, 2I, H]
-        gate_t = fused[:, :I, :]  # [E, I, H]
-        up_t = fused[:, I:, :]  # [E, I, H]
-        # Transpose to ttnn.linear (in, out) convention: [E, I, H] -> [1, E, H, I]
-        gate_proj = gate_t.transpose(-2, -1).unsqueeze(0).contiguous()
-        up_proj = up_t.transpose(-2, -1).unsqueeze(0).contiguous()
-        # down: [E, H, I] -> [1, E, I, H]
-        down_proj = state_dict["down_proj"].to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).contiguous()
+    # The bf16 cast, the gate/up split and the transposes to the ttnn.linear (in, out) convention
+    # ([E, I, H] -> [1, E, H, I], [E, H, I] -> [1, E, I, H]) run as the as_tensor preprocess, i.e.
+    # on a tensor-cache miss only; a cached load never materialises the checkpoint tensors.
+    def _gate(t):
+        return t.to(torch.bfloat16)[:, :I, :].transpose(-2, -1).unsqueeze(0).contiguous()
+
+    def _up(t):
+        return t.to(torch.bfloat16)[:, I:, :].transpose(-2, -1).unsqueeze(0).contiguous()
+
+    def _down(t):
+        return t.to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).contiguous()
 
     if tp > 1:
         assert E % tp == 0, f"expert-parallel needs num_experts ({E}) divisible by tp ({tp})"
@@ -101,22 +106,24 @@ def load_expert_weights(
         return str(tensor_cache_path / f"moe.experts.{name}{tp_suffix}") if tensor_cache_path else None
 
     gate_proj_tt = ttnn.as_tensor(
-        gate_proj,
+        gate_up_fused,
         device=mesh_device,
         dtype=gate_up_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
         cache_file_name=_cache("gate_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocess=_gate,
     )
     up_proj_tt = ttnn.as_tensor(
-        up_proj,
+        gate_up_fused,
         device=mesh_device,
         dtype=gate_up_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
         cache_file_name=_cache("up_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocess=_up,
     )
     down_proj_tt = ttnn.as_tensor(
         down_proj,
@@ -126,6 +133,7 @@ def load_expert_weights(
         mesh_mapper=row_mapper,
         cache_file_name=_cache("down_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocess=_down,
     )
 
     # Fused up|gate along N. Each device holds its expert shard of both at FULL intermediate,

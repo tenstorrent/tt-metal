@@ -251,3 +251,13 @@ def load_conditioning_image(image_path: str, height: int, width: int, crf: int =
 
     tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
     return tensor / 127.5 - 1.0
+
+
+def traced_default(device_params: dict, ltx_traced_env: str | None) -> bool:
+    """Whether an LTX e2e run is traced: ``LTX_TRACED=0/1`` (``ltx_traced_env``) always decides when set;
+    otherwise traced exactly when the mesh param reserves a ``trace_region_size``. The served path is traced
+    and a pure-replay second generation is what catches a corrupted replay, so params that reserve a trace
+    region run it by default; params without one cannot trace and stay eager."""
+    if ltx_traced_env is not None:
+        return ltx_traced_env in ("1", "true", "True")
+    return bool(device_params.get("trace_region_size"))

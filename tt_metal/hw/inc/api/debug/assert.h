@@ -9,11 +9,13 @@
 #include "internal/hw_thread.h"
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/error_handling.h"
-#endif
 
-// assert_and_hang below needs flush_l2_cache_range from here. This header includes us back, so
-// ASSERT must already be defined above.
-#include "risc_common.h"
+#if defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/cache.h"
+#elif defined(COMPILE_FOR_TRISC)
+#include "tensix.h"
+#endif
+#endif
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 

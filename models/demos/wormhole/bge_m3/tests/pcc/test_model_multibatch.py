@@ -9,7 +9,8 @@ time budget. Run this file explicitly for the full multi-batch sweep:
 
     pytest models/demos/wormhole/bge_m3/tests/pcc/test_model_multibatch.py
 
-Gated at PCC_THRESHOLD=0.94 (same as test_model.py). Filter combos with -k,
+Gated at pcc_threshold (tests/test_utils.py): 0.94, and 0.93 for B8/B16 at S512.
+Filter combos with -k,
 e.g. `-k "S512"`, `-k "batch8"`, or `-k "batch8 and S512"`.
 """
 
@@ -21,6 +22,7 @@ import ttnn
 from models.demos.wormhole.bge_m3.tests.test_utils import (
     SEQUENCE_LENGTHS,
     assert_pcc,
+    pcc_threshold,
     require_single_device,
     to_torch,
     to_ttnn_ids,
@@ -30,7 +32,6 @@ from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 MODEL_ID = "BAAI/bge-m3"
 BATCH_SIZE_B32 = 32
 SEQ_LEN_B32 = 512
-PCC_THRESHOLD = 0.94
 
 # bf8_b everywhere on Blackhole; on Wormhole bf8_b up to S4096 and bf16 beyond
 # (the long SDPA reduction accumulates more bf8 error there). Matches test_model.py.
@@ -60,7 +61,7 @@ def model_artifacts(model_location_generator):
 def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
     """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len), bf8_b.
 
-    Gated at PCC_THRESHOLD=0.94.
+    Gated at pcc_threshold(batch_size, seq_len).
     """
     require_single_device(device)
     backbone, state_dict, model_id_or_path = model_artifacts
@@ -99,7 +100,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
     )
     tt_output_torch = to_torch(tt_output, expected_shape=(batch_size, 1, seq_len, model_args.dim))
 
-    assert_pcc(reference_output, tt_output_torch, PCC_THRESHOLD)
+    assert_pcc(reference_output, tt_output_torch, pcc_threshold(batch_size, seq_len))
 
 
 @pytest.mark.slow
@@ -175,4 +176,4 @@ def test_model_full_end_to_end_batch32_seq512_trace_replay(device, model_artifac
         if trace_captured:
             tt_model.release_trace()
 
-    assert_pcc(reference_output, tt_output_torch, PCC_THRESHOLD)
+    assert_pcc(reference_output, tt_output_torch, pcc_threshold(BATCH_SIZE_B32, SEQ_LEN_B32))

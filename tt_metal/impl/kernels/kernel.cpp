@@ -180,12 +180,6 @@ Kernel::Kernel(
     }
     this->core_to_runtime_args_ = {max_x + 1, std::vector<std::vector<uint32_t>>(max_y + 1, std::vector<uint32_t>())};
     this->core_to_runtime_args_data_ = {max_x + 1, std::vector<RuntimeArgsData>(max_y + 1, RuntimeArgsData{})};
-    for (auto& runtime_args_data_x : this->core_to_runtime_args_data_) {
-        for (auto& runtime_args_data : runtime_args_data_x) {
-            runtime_args_data.rt_args_data = nullptr;
-            runtime_args_data.rt_args_count = 0;
-        }
-    }
 }
 
 void Kernel::register_kernel_with_watcher() {
@@ -315,12 +309,14 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_dataflow_buffer_binding_handles(
-    const std::function<void(
-        const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)> callback)
-    const {
+void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
+                                                         const std::string& accessor_name,
+                                                         uint16_t logical_dfb_id,
+                                                         bool is_relay,
+                                                         uint8_t prefetcher_pipe_id,
+                                                         const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id);
+        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
     }
 }
 
@@ -337,17 +333,32 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
-                                                uint32_t num_runtime_field_crta_words)> callback) const {
+                                                uint32_t num_runtime_field_crta_words,
+                                                const LLKMetadata&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+        callback(
+            handle.accessor_name,
+            handle.cta_offset,
+            handle.addr_crta_offset,
+            handle.num_runtime_field_crta_words,
+            handle.llk_metadata);
     }
 }
 
-void Kernel::process_scratchpad_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
-    const {
+void Kernel::process_scratchpad_binding_handles(const std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
+    }
+}
+
+void Kernel::process_prefetcher_pipe_binding_handles(
+    std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)> callback) const {
+    for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
+        callback(handle.accessor_name, handle.prefetcher_pipe_id);
     }
 }
 
@@ -574,11 +585,27 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
+    auto hash_llk_fields = [&hasher](const LLKMetadata& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.format));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_height()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_width()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_face_shape()[0]));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_num_faces()));
+    };
+    auto hash_llk_metadata = [&hasher, &hash_llk_fields](const std::optional<LLKMetadata>& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.has_value()));
+        if (metadata.has_value()) {
+            hash_llk_fields(*metadata);
+        }
+    };
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
         hasher.update(static_cast<uint64_t>(it->second.is_relay ? 1 : 0));
         hasher.update(static_cast<uint64_t>(it->second.prefetcher_pipe_id));
+        if (!it->second.is_relay) {
+            hash_llk_metadata(it->second.llk_metadata);
+        }
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -598,6 +625,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        hash_llk_fields(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
@@ -608,6 +636,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+        hash_llk_metadata(handle.llk_metadata);
+    }
+    // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
+    hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
+    for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.prefetcher_pipe_id));
     }
     // Tensor Binding Sequence: the ordering of the tensor binding matters here, 2 tensor bindings of
     // the same set of members but with different orderings are different tensor binding sequences.
@@ -823,7 +858,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
             user_arg_count,
             runtime_args.size());
         std::memcpy(
-            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
+            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].data(),
             runtime_args.data(),
             runtime_args.size() * sizeof(uint32_t));
     }
@@ -865,8 +900,9 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                     continue;
                 }
 
-                TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
-                core_to_runtime_args_data_[x][y].rt_args_count = count - watcher_count_word_offset_;
+                auto& rta = core_to_runtime_args_data_[x][y];
+                TT_ASSERT(count >= rta.size());
+                rta = RuntimeArgsData{rta.data(), count - watcher_count_word_offset_};
             }
         }
     }
@@ -876,7 +912,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 
     this->common_runtime_args_count_ = count;
-    this->common_runtime_args_data_.rt_args_count = count - watcher_count_word_offset_;
+    this->common_runtime_args_data_ =
+        RuntimeArgsData{this->common_runtime_args_data_.data(), count - watcher_count_word_offset_};
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }

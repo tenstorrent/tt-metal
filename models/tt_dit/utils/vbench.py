@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 
@@ -36,11 +37,11 @@ def vbench_prompt_list(video_path: str, prompt: str | None) -> list[str] | dict[
     return [prompt]
 
 
-def assert_vbench_quality(
+def score_vbench(
     video_path: str,
     *,
     prompt: str | None = None,
-    thresholds: dict[str, float],
+    dimensions: list[str],
     device: str = "cpu",
 ) -> dict[str, float]:
     try:
@@ -58,7 +59,7 @@ def assert_vbench_quality(
 
     torch.serialization.add_safe_globals([typing.OrderedDict])
 
-    dimension_list = list(thresholds.keys())
+    dimension_list = dimensions
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         name = "eval"
@@ -84,15 +85,29 @@ def assert_vbench_quality(
     for metric, score in scores.items():
         logger.info(f"VBench {metric} = {score:.4f}")
 
+    return scores
+
+
+def assert_scores(scores: dict[str, float], thresholds: dict[str, float]) -> None:
     failures = []
     for metric, minimum in thresholds.items():
         if metric not in scores:
             # A requested threshold with no returned score is an ungated dimension, not a pass.
             failures.append(f"{metric}: no score returned (ungated dimension)")
-        elif scores[metric] < minimum:
+        elif not math.isfinite(scores[metric]) or scores[metric] < minimum:
             failures.append(f"{metric} = {scores[metric]:.4f} < {minimum:.4f}")
 
     if failures:
         raise AssertionError("VBench quality gate failed:\n  " + "\n  ".join(failures))
 
+
+def assert_vbench_quality(
+    video_path: str,
+    *,
+    prompt: str | None = None,
+    thresholds: dict[str, float],
+    device: str = "cpu",
+) -> dict[str, float]:
+    scores = score_vbench(video_path, prompt=prompt, dimensions=list(thresholds), device=device)
+    assert_scores(scores, thresholds)
     return scores

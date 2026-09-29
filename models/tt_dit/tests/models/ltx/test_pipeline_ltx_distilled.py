@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -27,6 +28,7 @@ from models.tt_dit.utils.ltx import (
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
+    traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params
@@ -147,16 +149,15 @@ def test_pipeline_distilled(
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     height = int(os.environ.get("HEIGHT", "1088"))
     width = int(os.environ.get("WIDTH", "1920"))
+    # FPS conditions the model (audio latent length + A/V cross-PE temporal scaling), so it is
+    # fixed at create_pipeline. 6s lands on 145f@24 (6.04s) or 153f@25 (6.12s) -- (n-1)%8 == 0
+    # forbids the exact 144/150.
+    fps = float(os.environ.get("FPS", "24"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    # Traced by default wherever the mesh param reserves a trace region: the served path is traced, and
-    # the traced flow (gen #2 pure replay) is what catches a corrupted replay. LTX_TRACED=0/1 overrides.
-    _traced_env = os.environ.get("LTX_TRACED")
-    traced = (
-        _traced_env in ("1", "true", "True")
-        if _traced_env is not None
-        else bool(device_params.get("trace_region_size"))
-    )
+    # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
+    # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
+    traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
@@ -184,22 +185,16 @@ def test_pipeline_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        fps=fps,
+        image_conditioning=bool(image_path),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
-    image_path = os.environ.get("LTX_I2V_IMAGE")
-    images = None
-    if image_path:
-        if not os.path.exists(image_path):
-            pytest.skip(f"LTX_I2V_IMAGE set but file not found: {image_path}")
-        strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
-        images = [(image_path, 0, strength)]
-
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
-        logger.info(f"Config: {height}x{width}, {num_frames} frames")
+        logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
             logger.info(f"I2V: conditioning image {images[0][0]} (strength={images[0][2]})")
 
@@ -215,6 +210,7 @@ def test_pipeline_distilled(
             height=height,
             width=width,
             seed=seed,
+            fps=fps,
         )
         logger.info(f"Saved video to: {output_filename}")
         print_ltx_timing_table(
@@ -274,11 +270,34 @@ def test_pipeline_distilled(
     # RUN_CLIP=0 skips the CLIP prompt-alignment gate; defaults on (mirrors the wan2.2 test).
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
 
-    def check_output_with_vbench(prompt, number):
+    export_dir = os.environ.get("VBENCH_EXPORT_DIR")
+    if export_dir and not run_vbench:
+        raise ValueError("VBENCH_EXPORT_DIR requires RUN_VBENCH=1")
+    # Missing dependencies must fail an enabled gate, including in CI.
+    if run_vbench and not export_dir:
+        __import__("vbench")
+    if run_clip:
+        __import__("decord")
+
+    def check_output_with_vbench(prompt, number, seed=None):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
-        if int(ttnn.distributed_context_get_rank()) == 0:
+        if int(ttnn.distributed_context_get_rank()) != 0:
+            return
+        thresholds = vbench_thresholds_by_height.get(height)
+        if thresholds is None:
+            pytest.skip(f"no VBench thresholds calibrated for height {height}")
+
+        # Gate on the average of VBENCH_SEEDS traced replays (default 5): a single clip's VBench score
+        # is too noisy to gate on — dynamic_degree is near-binary per clip — so score the set together
+        # (VBench averages over a directory). The primary clip (`number`, `seed`) is already rendered;
+        # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
+        # filename) keeps the one-clip path.
+        num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
+        if export_dir and (seed is None or num_seeds != 5 or os.environ.get("OUTPUT_PATH")):
+            raise ValueError("CI VBench export requires five distinct traced seed clips")
+        if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
             if height not in vbench_thresholds_by_height:
                 raise AssertionError(
@@ -287,6 +306,38 @@ def test_pipeline_distilled(
                 )
             thresholds = vbench_thresholds_by_height[height]
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+            return
+
+        cwd = os.path.abspath(os.getcwd())
+
+        with tempfile.TemporaryDirectory() as vbench_dir:
+
+            def _link(idx: int, mp4_number: int) -> None:
+                # The render always lands directly in CWD; resolve the path and confirm it stays there so
+                # the number threaded into the filename can't escape it, and give the link a plain integer
+                # name so nothing dynamic reaches the destination path either.
+                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
+                if os.path.dirname(src) != cwd:
+                    raise ValueError(f"render path escaped the working dir: {src!r}")
+                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
+
+            _link(0, number)
+            for k in range(1, num_seeds):
+                run(prompt=prompt, number=1000 + k, seed=seed + k)
+                _link(k, 1000 + k)
+            logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
+            if export_dir:
+                from models.tt_dit.utils.vbench_bundle import export_bundle
+
+                export_bundle(
+                    vbench_dir,
+                    export_dir,
+                    prompt=prompt,
+                    thresholds=thresholds,
+                    temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
+                )
+            else:
+                assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each

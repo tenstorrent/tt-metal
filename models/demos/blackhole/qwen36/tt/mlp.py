@@ -27,12 +27,17 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
 
     from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
-    gk = gate_w.to(torch.bfloat16).T.contiguous()  # [K=dim, N=hidden]
-    uk = up_w.to(torch.bfloat16).T.contiguous()
-    packed = torch.cat([gk, uk], dim=-1)  # [dim, 2*hidden], gate first
-    il = prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
+    def pack(gate):
+        # Runs only on a tensor-cache miss (as_tensor preprocess), so a cached load never reads
+        # the checkpoint tensors.
+        gk = gate.to(torch.bfloat16).T.contiguous()  # [K=dim, N=hidden]
+        uk = up_w.to(torch.bfloat16).T.contiguous()
+        packed = torch.cat([gk, uk], dim=-1)  # [dim, 2*hidden], gate first
+        return prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
+
     return ttnn.as_tensor(
-        il,
+        gate_w,
+        preprocess=pack,
         dtype=ttnn.bfloat4_b,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
@@ -136,9 +141,9 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
         )
 
     def load(name, dtype):
-        t = state_dict[f"{name}.weight"].T.contiguous()  # [in, out] for ttnn.linear
         return ttnn.as_tensor(
-            t,
+            state_dict[f"{name}.weight"],
+            preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,

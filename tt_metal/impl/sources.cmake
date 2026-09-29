@@ -39,10 +39,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dram_sender_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe_dram_sender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
@@ -173,12 +175,7 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_deferred_mesh_dispatch.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
     )
 endif()

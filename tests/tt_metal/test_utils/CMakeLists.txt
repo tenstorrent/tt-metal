@@ -20,7 +20,7 @@ target_link_libraries(
 # target that doesn't link Metalium can neither validate the .gch (-Winvalid-pch) nor fall back to
 # parsing the header textually. This test links only TT::STL + gtest and includes no Metalium
 # headers; keep it on the common PCH rather than linking Metalium just to satisfy the PCH.
-target_precompile_headers(unit_tests_gha_annotation REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(unit_tests_gha_annotation metal_common_pch)
 set_target_properties(
     unit_tests_gha_annotation
     PROPERTIES

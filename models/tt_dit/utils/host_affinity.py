@@ -7,14 +7,29 @@
 Trace replay keeps the device busy, but the readback and dispatch threads that sit between the
 stages (latent hand-offs, the VAE frame readback, the audio chain) are latency-critical host work.
 On a host with SMT, two of those threads can land on sibling hardware threads of one core and run at
-roughly half speed; on the 32-core/64-thread galaxy host that cost ~0.5 s of a 6.2 s traced
-generation (ring replay 6.6-7.1 s unpinned vs 6.1-6.3 s pinned, 4/4 runs; a thread-count cap alone
-did nothing). Restricting the affinity mask to one sibling per core removes the sharing.
+roughly half speed; on the 32-core/64-thread galaxy host restricting the affinity mask to one sibling
+per core removes the sharing. A thread-count cap alone did nothing.
 
-``LTX_PIN_CORES=0`` disables it; on hosts without SMT (or without the sysfs topology) it is a no-op.
+Two mechanisms are provided:
 
-Apply it BEFORE the mesh is opened: tt-metal places its dispatch and reader threads at device open from
-the mask it sees then; re-pinning those threads afterwards measured worse than not pinning at all.
+1. :func:`pin_one_thread_per_core` narrows the affinity mask of full-mask threads in the running
+   process. This is a best-effort safety net: torch/OMP thread pools and tt-metal dispatch/reader
+   threads are already spawned (at import and at device open) across both sibling sets before the LTX
+   pipeline __init__ runs, so ``sched_setaffinity`` after the fact cannot migrate them. In-process
+   pinning measured ~6.7-7.5 s on the galaxy ring traced replay. It is called explicitly from
+   ``LTXPipeline.__init__`` (never as an import side effect) and, in an already-narrowed process, only
+   caps torch's intra-op pool to the mask.
+
+2. :func:`reexec_pinned_before_torch` sets the affinity mask and ``os.execv`` re-execs the python
+   process BEFORE torch is imported. The re-execed process inherits the pinned mask from PID start, so
+   torch/OMP pools and tt-metal device threads land inside the chosen cores -- equivalent to launching
+   under ``taskset`` but fully in-process. This is the mechanism that reaches the taskset-class
+   numbers: galaxy ring traced replay 6.2 s re-execed (measured, no taskset) vs 6.6-6.7 s without.
+   The LTX test conftest calls it from the earliest pytest hook by default (``LTX_PIN_PREIMPORT=0``
+   skips it); any other entry point (a server, a script) should call it as its first statement, before
+   importing torch or ttnn and before any device is opened (re-exec after device open risks a wedge).
+
+``LTX_PIN_CORES=0`` disables both; on hosts without SMT (or without the sysfs topology) both are no-ops.
 """
 
 from __future__ import annotations
@@ -22,12 +37,77 @@ from __future__ import annotations
 import glob
 import os
 import re
+import sys
 from pathlib import Path
 
 from loguru import logger
 
 _SYSFS_CPU = "/sys/devices/system/cpu"
 _applied: set[int] | None = None
+
+
+def _chosen_cores() -> set[int] | None:
+    """The core set the pin targets: one hardware thread per physical core within the current mask.
+
+    Pure host topology read (sysfs); does NOT import torch/ttnn and does NOT open the device.
+    Returns ``None`` when there is nothing to narrow (no SMT / no topology / mask already narrow).
+    """
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        current = set(os.sched_getaffinity(0))
+    except OSError:
+        return None
+    chosen = one_thread_per_core(allowed=current)
+    if not chosen:
+        return None
+    chosen_set = set(chosen)
+    if chosen_set == current:
+        return None
+    return chosen_set
+
+
+def reexec_pinned_before_torch(reason: str = "LTX pipeline (pre-import re-exec)") -> None:
+    """Pin to the chosen cores and re-exec this python process so torch/ttnn inherit the mask.
+
+    Must be called as early as possible (before torch/ttnn import and before any device is opened).
+    ``os.execv`` replaces the current process image; the re-execed process inherits the affinity mask
+    from PID start, so torch/OMP thread pools and tt-metal dispatch/reader threads all land inside the
+    chosen cores -- the taskset-equivalent placement, fully in-process.
+
+    No-op (returns without re-exec) when:
+      * ``LTX_PIN_CORES=0`` (pinning globally disabled), or
+      * ``_LTX_REEXECED`` is already set (we are the re-execed child -- prevents an infinite loop), or
+      * the current affinity mask already equals the chosen core set (nothing to do), or
+      * the host has no SMT / no readable topology (``_chosen_cores`` returns ``None``).
+
+    Importable and callable without torch/ttnn present; it never imports them and never opens a device.
+    """
+    if os.environ.get("LTX_PIN_CORES", "1") in ("0", "false", "False"):
+        return
+    if os.environ.get("_LTX_REEXECED"):
+        return
+    if not hasattr(os, "sched_getaffinity"):
+        return
+    chosen = _chosen_cores()
+    if not chosen:
+        return
+    try:
+        current = set(os.sched_getaffinity(0))
+    except OSError:
+        return
+    if current == chosen:
+        return
+    try:
+        os.sched_setaffinity(0, chosen)
+    except OSError:
+        return
+    os.environ["_LTX_REEXECED"] = "1"
+    logger.info(
+        f"host affinity: {reason}: re-exec pinned to {len(chosen)} cores {sorted(chosen)} "
+        f"(was {len(current)} CPUs); torch/ttnn will inherit this mask (LTX_PIN_CORES=0 disables)"
+    )
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def _parse_cpu_list(text: str) -> list[int]:
@@ -93,7 +173,16 @@ def pin_one_thread_per_core(reason: str = "LTX pipeline") -> list[int] | None:
     except OSError:
         return None
     chosen = _applied if _applied is not None else set(one_thread_per_core(allowed=full) or [])
-    if not chosen or chosen == full:
+    if not chosen:
+        return None
+    if chosen == full:
+        # Already one thread per core (the process re-execed by ``reexec_pinned_before_torch``, or a launch-time
+        # taskset): nothing to narrow. torch's pool is deliberately left alone here even though the test conftest
+        # sizes it from ``os.cpu_count()`` (64 threads on a 32-CPU mask): capping it to the mask was measured on
+        # the galaxy ring traced replay at 6.4 s and 6.7 s vs 6.2 s with the 64-thread pool (jobs 917/918 vs
+        # 919, 2026-09-18) -- the host-side stages got slower, not faster.
+        if _applied is None:
+            _set_applied(chosen, full)
         return None
     narrowed = 0
     for tid in _thread_ids():
@@ -136,11 +225,13 @@ def _cap_torch_threads(n: int) -> None:
     """torch sizes its intra-op pool from the CPU count it saw at import; cap it to the pinned cores."""
     try:
         import torch
-
+    except ImportError:
+        return  # torch absent: nothing to cap
+    try:
         if torch.get_num_threads() > n:
             torch.set_num_threads(n)
-    except Exception:  # torch absent or pool already fixed: nothing to do
-        return
+    except RuntimeError:
+        return  # pool already fixed: torch refuses once parallel work has started
 
 
 def _thread_ids() -> list[int]:

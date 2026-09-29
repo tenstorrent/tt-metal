@@ -44,7 +44,7 @@ def apply_glu_activation(
 ) -> torch.Tensor:
     """Combine a GLU pair into one activated tensor.
 
-    ``silu``: ``silu(gate) * up`` -- the DeepSeek / Kimi-K2.6 SwiGLU.
+    ``silu``: ``silu(gate) * up`` -- the DeepSeek / Kimi-K2.7 SwiGLU.
 
     ``clamped_silu_glu``: DeepSeek-V4's ``silu(min(gate, L)) * clamp(up, -L, L)``, matching
     ``DeepseekV4Experts._apply_gate``. The gate half clamps only from above and the up half
