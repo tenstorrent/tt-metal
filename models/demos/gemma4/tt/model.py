@@ -2468,6 +2468,10 @@ class Gemma4Model:
         full vocab.
         """
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        if lane_sharded:
+            # Callers pass the per-model batch (32); the reassembled host
+            # tensor carries every lane's rows in lane-major order.
+            B = B * self.mesh_config.lanes
 
         def _lane_shards():
             # Row-major device order over (rows, cols): row 0 holds one device
