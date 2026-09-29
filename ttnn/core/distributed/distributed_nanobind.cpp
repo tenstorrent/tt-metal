@@ -47,6 +47,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
+#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 
 namespace {
 
@@ -1592,6 +1593,28 @@ void py_module(nb::module_& mod) {
         )doc");
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
     ttnn::pipeline_module::bind_pipeline_builder(m_experimental);
+    // Experimental: a parent mesh and its unit submeshes used in one process (see unit_mesh_utils.hpp).
+    mod.def(
+        "unit_mesh_view_pages",
+        [](const Tensor& tensor, MeshDevice* mesh_device, uint64_t page_offset, const ttnn::Shape& shape) {
+            return ttnn::experimental::unit_mesh::view_pages(tensor, mesh_device, page_offset, shape);
+        },
+        nb::arg("tensor"),
+        nb::arg("mesh_device"),
+        nb::arg("page_offset"),
+        nb::arg("shape"),
+        R"doc(Non-owning view of an interleaved device tensor's pages [page_offset, ...) on mesh_device (its own
+        mesh, its parent or a unit submesh). page_offset must be a multiple of the bank count. Experimental.)doc");
+    mod.def(
+        "reserve_allocator_regions",
+        [](MeshDevice* target, MeshDevice* source) {
+            return ttnn::experimental::unit_mesh::reserve_allocator_regions(target, source);
+        },
+        nb::arg("target"),
+        nb::arg("source"),
+        R"doc(Reserve in target's allocator every region source's allocator has allocated and target has free
+        (DRAM, L1, L1_SMALL, TRACE). For a parent mesh and its submeshes, whose allocators are independent.
+        Returns bytes reserved per bank. Experimental.)doc");
 }
 
 }  // namespace ttnn::distributed

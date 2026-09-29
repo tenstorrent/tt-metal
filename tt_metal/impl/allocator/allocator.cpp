@@ -416,6 +416,28 @@ void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
     l1_manager_->mark_deallocated(AllocatorID{0}, address);
 }
 
+DeviceAddr AllocatorImpl::reserve_regions_of(const AllocatorImpl& other) {
+    TT_FATAL(&other != this, "reserve_regions_of: source and target allocator are the same");
+    const AllocatorState other_state = other.extract_state();
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    DeviceAddr reserved = 0;
+    for (const auto& [buffer_type, type_state] : other_state.get_states_per_buffer_type()) {
+        BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: break;
+        }
+        if (manager != nullptr && !type_state.allocated_regions.empty()) {
+            reserved += manager->reserve_free_parts_of(AllocatorID{0}, type_state.allocated_regions);
+        }
+    }
+    return reserved;
+}
+
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocated_buffers_;
@@ -813,6 +835,10 @@ void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*
         merged_state.merge(source->impl().extract_state());
     }
     target->impl().override_state(merged_state);
+}
+
+DeviceAddr reserve_allocator_regions(Allocator* target, const Allocator* source) {
+    return target->impl().reserve_regions_of(source->impl());
 }
 
 }  // namespace tt::tt_metal::experimental

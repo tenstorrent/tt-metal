@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -150,6 +151,71 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     }
 
     return result;
+}
+
+ttnn::Tensor view_pages(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t page_offset,
+    const ttnn::Shape& shape) {
+    using namespace tt::tt_metal;
+    TT_FATAL(mesh_device != nullptr, "view_pages: mesh_device is null");
+    TT_FATAL(tensor.device() != nullptr, "view_pages: tensor must be on device");
+    const auto& src_buffer = tensor.mesh_buffer();
+    const auto& local_config = src_buffer.device_local_config();
+    TT_FATAL(
+        local_config.buffer_type == BufferType::DRAM || local_config.buffer_type == BufferType::L1,
+        "view_pages: DRAM or L1 buffers only");
+    TT_FATAL(!tensor.memory_config().is_sharded(), "view_pages: interleaved tensors only");
+    const TensorSpec spec(shape, TensorLayout(tensor.dtype(), PageConfig(tensor.layout()), tensor.memory_config()));
+    const auto page_size = spec.compute_page_size_bytes();
+    TT_FATAL(
+        page_size == local_config.page_size,
+        "view_pages: view page size {} != source page size {}",
+        page_size,
+        local_config.page_size);
+    const auto num_banks = mesh_device->allocator()->get_num_banks(local_config.buffer_type);
+    const auto alignment = mesh_device->allocator()->get_alignment(local_config.buffer_type);
+    TT_FATAL(
+        page_offset % num_banks == 0,
+        "view_pages: page_offset {} is not a multiple of {} banks",
+        page_offset,
+        num_banks);
+    const uint64_t src_pages =
+        tensor.tensor_spec().compute_packed_buffer_size_bytes() / std::max<uint64_t>(1, local_config.page_size);
+    const uint64_t view_bytes = spec.compute_packed_buffer_size_bytes();
+    const uint64_t view_pages = view_bytes / page_size;
+    TT_FATAL(
+        page_offset + view_pages <= src_pages,
+        "view_pages: pages [{}, {}) exceed the source's {} pages",
+        page_offset,
+        page_offset + view_pages,
+        src_pages);
+    const uint64_t aligned_page = ((page_size + alignment - 1) / alignment) * alignment;
+    const DeviceAddr address = src_buffer.address() + (page_offset / num_banks) * aligned_page;
+
+    auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+        tt::tt_metal::distributed::ReplicatedBufferConfig{.size = view_bytes}, local_config, mesh_device, address);
+    if (mesh_device->shape().mesh_size() == 1 && mesh_device->get_parent_mesh() != nullptr) {
+        return Tensor(MeshTensor::from_buffer(std::move(*mesh_buffer), spec));
+    }
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
+        coords.push_back(coord);
+    }
+    auto topology = (tensor.device() == mesh_device)
+                        ? tensor.tensor_topology()
+                        : TensorTopology::create_sharded_tensor_topology(
+                              tt::tt_metal::distributed::MeshShape(mesh_device->shape().mesh_size()), /*shard_dim=*/0);
+    MeshTensor mesh_tensor = mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), spec, topology);
+    return Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+}
+
+uint64_t reserve_allocator_regions(
+    tt::tt_metal::distributed::MeshDevice* target, tt::tt_metal::distributed::MeshDevice* source) {
+    TT_FATAL(target != nullptr && source != nullptr, "reserve_allocator_regions: null mesh device");
+    return tt::tt_metal::experimental::reserve_allocator_regions(target->allocator().get(), source->allocator().get());
 }
 
 }  // namespace ttnn::experimental::unit_mesh

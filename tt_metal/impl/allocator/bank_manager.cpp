@@ -842,6 +842,61 @@ void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_
     invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
+DeviceAddr BankManager::reserve_free_parts_of(
+    AllocatorDependencies::AllocatorID allocator_id, const std::vector<std::pair<DeviceAddr, DeviceAddr>>& regions) {
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
+    auto sorted_regions = regions;
+    std::sort(sorted_regions.begin(), sorted_regions.end());
+    DeviceAddr reserved = 0;
+    for (const auto& [start, end] : sorted_regions) {
+        if (end <= start) {
+            continue;
+        }
+        // This allocator's own occupied ranges (refreshed per region: earlier reservations count too).
+        auto own = alloc->allocated_addresses();
+        std::sort(own.begin(), own.end());
+        auto try_reserve = [&](DeviceAddr a, DeviceAddr b) {
+            if (b <= a) {
+                return;
+            }
+            if (alloc->allocate_at_address(a, b - a).has_value()) {
+                allocated_buffers_[allocator_id.get()].insert(a);
+                reserved += b - a;
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "reserve_free_parts_of: could not reserve [{}, {}) ({} B) in {} allocator",
+                    a,
+                    b,
+                    b - a,
+                    enchantum::to_string(buffer_type_));
+            }
+        };
+        DeviceAddr cur = start;
+        for (const auto& [os, oe] : own) {
+            if (oe <= cur) {
+                continue;
+            }
+            if (os >= end) {
+                break;
+            }
+            if (os > cur) {
+                try_reserve(cur, os);
+            }
+            cur = std::max(cur, oe);
+            if (cur >= end) {
+                break;
+            }
+        }
+        if (cur < end) {
+            try_reserve(cur, end);
+        }
+    }
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+    return reserved;
+}
+
 void BankManager::apply_state(
     const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
     // Validate compatibility

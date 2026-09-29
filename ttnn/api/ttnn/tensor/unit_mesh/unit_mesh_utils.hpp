@@ -27,4 +27,21 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors);
 // Returns a vector of tensors, one per submesh, all sharing the same buffer address.
 std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor);
 
+// Non-owning view of an interleaved (DRAM / L1) device tensor's pages on `mesh_device` (the tensor's own mesh, its
+// parent mesh, or one of its unit submeshes -- they share physical memory): a tensor of logical `shape` (same dtype,
+// layout, memory config and page size as `tensor`) whose page 0 is page `page_offset` of `tensor`. `page_offset`
+// must be a multiple of the number of banks (so page p of the view lands in the same bank as page p + page_offset
+// of `tensor`). The view does not keep `tensor` alive and is not known to any allocator: the caller must keep the
+// source allocated (and, across meshes, reserved) for the view's lifetime. Experimental.
+ttnn::Tensor view_pages(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t page_offset,
+    const ttnn::Shape& shape);
+
+// Reserve in `target`'s allocator every region `source`'s allocator has allocated (DRAM, L1, L1_SMALL, TRACE) that
+// `target` has free (see tt::tt_metal::experimental::reserve_allocator_regions). Returns bytes reserved per bank.
+uint64_t reserve_allocator_regions(
+    tt::tt_metal::distributed::MeshDevice* target, tt::tt_metal::distributed::MeshDevice* source);
+
 }  // namespace ttnn::experimental::unit_mesh

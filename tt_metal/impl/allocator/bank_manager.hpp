@@ -145,6 +145,11 @@ public:
     // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
     void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
     void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address);
+    // Reserve (mark allocated) every part of the given regions that this allocator currently has free,
+    // leaving its own allocations untouched. Used to make an independent allocator (e.g. a parent mesh
+    // vs its submeshes, which share physical memory) avoid another allocator's regions. Returns bytes reserved.
+    DeviceAddr reserve_free_parts_of(
+        AllocatorDependencies::AllocatorID allocator_id, const std::vector<std::pair<DeviceAddr, DeviceAddr>>& regions);
 
     // AllocatorState Methods
     // Extracts the state of the given allocator.

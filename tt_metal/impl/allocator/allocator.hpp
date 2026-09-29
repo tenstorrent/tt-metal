@@ -151,6 +151,11 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
+    // Reserve in this allocator every region `other` has allocated (DRAM, L1, L1_SMALL, TRACE) that this
+    // allocator has free, without touching this allocator's own allocations (unlike override_state).
+    // For independent allocators over the same physical memory (parent mesh vs submeshes). Returns bytes reserved.
+    DeviceAddr reserve_regions_of(const AllocatorImpl& other);
+
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
     const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
