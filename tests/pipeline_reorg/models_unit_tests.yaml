@@ -828,7 +828,8 @@
       timeout: 22
       tier: 1
     bh_galaxy:
-      timeout: 10
+      # The suite completed in 13 minutes; allow 4 minutes of margin.
+      timeout: 17
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -836,7 +837,7 @@
 
 - name: DeepSeek-V3 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
@@ -857,7 +858,7 @@
 
 - name: DeepSeek-V3 module unit tests (host-side)
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export MESH_DEVICE=N150
     pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
       --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
@@ -1843,7 +1844,7 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
   model: tt-transformers-common

@@ -261,7 +261,7 @@ class ttMLA:
         ttMLA._convert_and_cache_weights(
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
-        # GLM-5.2 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
+        # GLM-5.3 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
         # top-k) -> build the MLA cache only, skip the indexer tensorbins.
         resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
         if resolved_has_indexer and not indexer_layer_is_reused(config, layer_idx):
@@ -598,7 +598,7 @@ class ttMLA:
                 dtype=self.sparse_kv_cache_format.storage_dtype,
                 layout=self.sparse_kv_cache_format.storage_layout,
             )
-        # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
+        # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
         # "full" -> current behavior, unchanged.
@@ -1377,7 +1377,9 @@ class ttMLA:
         cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
         update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
         already folded its single-shot onto the block-cyclic update_padded write)."""
+        declared_topology = kvpe_cache.storage.tensor_topology()
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
+        kvpe_cache.storage.update_tensor_topology(declared_topology)
 
     def _update_kv_cache(
         self,
@@ -1581,7 +1583,7 @@ class ttMLA:
         # index_topk the indexer top-k simply selects all available causal keys, so sparse is numerically
         # equal to dense there.) The indexer's forward also writes its K-cache (a no-op on the dense
         # null-indexer), so no separate warm-up write is needed.
-        # GLM-5.2 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
+        # GLM-5.3 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
         selection_state = None
         if indexer_indices is not None:
@@ -1649,7 +1651,7 @@ class ttMLA:
         out = self._o_proj_epilogue(attn_out, seq_len_local, hidden_states=hidden_states)
         ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
-        # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
+        # for a "full" layer to hand to downstream "shared" layers (GLM-5.3 reuse).
         if return_kv_intermediates and return_indexer_indices:
             return out, kv_intermediates, indices
         if return_kv_intermediates:
