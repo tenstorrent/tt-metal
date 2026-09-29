@@ -214,12 +214,15 @@ def test_addalpha_subalpha(device, ttnn_op, alpha):
     result = flush_subnormal_values_to_zero(result)
     golden = flush_subnormal_values_to_zero(golden)
 
-    # SFPU scale underflow: |alpha| < 1 can flush alpha*b to 0 while b is still
-    # a normal, so the device returns a. Torch multiplies first and the sum can
-    # be a subnormal that flushes to 0.
+    # SFPU scale underflow: 0 < |alpha| < 1 can flush alpha*b to 0 while b is
+    # still a normal, so the device returns a. Torch multiplies first and the
+    # sum can be a subnormal that flushes to 0.
     #   a = -1.249e-38, b = 1.175e-38, alpha = 0.5
     #   torch a + 0.5*b ≈ -6.6e-39 → 0; device 0.5*b → 0, then a + 0 = a.
-    if abs(alpha) < 1:
+    # alpha == 0 is excluded: |b| * 0 is below the bound for every b, so the
+    # mask would replace the whole grid with the golden and the identity
+    # (a ± 0) would never reach the ULP check.
+    if 0.0 < abs(alpha) < 1:
         scale_underflow = (input_b != 0) & (input_b.abs().to(torch.float32) * abs(alpha) < 2.0**-126)
         assert scale_underflow.any(), "expected the SFPU scale of b to underflow on this grid"
         result = torch.where(scale_underflow, golden, result)

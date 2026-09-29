@@ -586,23 +586,26 @@ def _run_scalar(device, ttnn_op, values, scalar):
     return input_a, golden, result
 
 
-def _check_ldexp_scalar(golden, result, desc):
-    overflow_to_zero = torch.isinf(golden) & (result == 0)
-    result = torch.where(overflow_to_zero, golden, result)
-    overflow_to_inf = (
-        (golden.abs() == MAX_BF16) & torch.isinf(result) & (torch.signbit(golden) == torch.signbit(result))
-    )
-    result = torch.where(overflow_to_inf, golden, result)
+def _check_ldexp_scalar(golden, result, desc, scalar):
+    # scalar == 127 is the only value in this sweep whose product overflows the
+    # FPU multiply (golden ±inf, device +0). scalar == -126 and scalar == 1 do
+    # not, and none of the three hit overflow-to-inf (golden at ±max bf16,
+    # device ±inf). Those empty masks are not rewritten: a rewrite would hide
+    # a saturation this sweep does not have.
+    if scalar == 127.0:
+        overflow_to_zero = torch.isinf(golden) & (result == 0)
+        assert overflow_to_zero.any(), f"{desc}: expected the FPU overflow-to-zero pairs in this sweep"
+        result = torch.where(overflow_to_zero, golden, result)
     _assert_nonfinite_match(golden, result, desc)
     finite = torch.isfinite(golden)
     underflow = finite & (golden.abs() < UNDERFLOW_BAND)
     kept = finite & ~underflow
     assert kept.any(), f"{desc}: expected some results outside the underflow band"
+    assert underflow.any(), f"{desc}: expected the underflow band to be non-empty"
     assert_with_ulp(expected_result=golden[kept], actual_result=result[kept], ulp_threshold=COMPOSITE_INTERMEDIATE_ULP)
-    if underflow.any():
-        assert_allclose(
-            expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=4 * SMALLEST_NORMAL_BF16
-        )
+    assert_allclose(
+        expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=4 * SMALLEST_NORMAL_BF16
+    )
 
 
 def _check_logaddexp_scalar(golden, result, desc, ulp_threshold, small_atol):
@@ -694,7 +697,7 @@ def test_tensor_scalar(device, ttnn_op, kind, scalar):
     input_a, golden, result = _run_scalar(device, ttnn_op, domains[kind], scalar)
     desc = f"{ttnn_op.__name__}(tensor, {scalar})"
     if kind == "ldexp":
-        _check_ldexp_scalar(golden, result, desc)
+        _check_ldexp_scalar(golden, result, desc, scalar)
     elif kind == "logaddexp":
         _check_logaddexp_scalar(golden, result, desc, ulp_threshold=1, small_atol=2.0**-6)
     elif kind == "logaddexp2":
