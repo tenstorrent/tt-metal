@@ -33,6 +33,20 @@ NoC column of its Ethernet core; with the two cores side by side, shared NoC lin
 before a header is reused; measure the router payload for your fabric config instead of taking the maximum;
 place each link's sender/landing core directly below its Ethernet core (its column is in a NoC trace); compare your op's per-link rate with this example's number for the same config.
 
+## ⭐⭐ T2 — [`fabric_gather_pair`](fabric_gather_pair/README.md)
+**Concepts:** packing interleaved DRAM pages into fabric packets (bank runs), and which NoC the local copy uses, in a
+two-chip DRAM → DRAM all-gather (one core per link: reader + sender, both directions at once).
+**Situation:** your multi-chip op reads tensor pages from DRAM and writes them into a neighbour's output, and it runs
+far below the link's bare-stream rate.
+**Measured result** (Blackhole 4× p150a, FABRIC_1D, 14,336 B payload, 64 MiB per chip): one tile per packet caps a link
+at **12.8 GB/s**; runs of 7 tiles that sit consecutively in one DRAM bank (interleaved pages p, p+B, p+2B, …) give
+**32.6 GB/s (2.5×)**. Visiting a link's banks round-robin instead of one bank at a time is **1.7×** (20.0 → 33.7). At one
+link, issuing the local copy on NoC0 instead of the fabric sender's NoC1 adds **+24%** (→ 40.3 GB/s; the bare link
+is 48.5). At two links the op reaches 57 GB/s per chip each way (28.7 per link), and the NoC0 local copy then loses 10%.
+**Gist:** read and send whole bank runs (`noc_async_read(acc.get_noc_addr(p), l1, k * page)` covers pages p, p+B, …,
+p+(k−1)B), sized to the fabric payload; interleave banks; keep the local copy off the NoC that carries your packets
+when one link is in use, and measure it again at more links.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
