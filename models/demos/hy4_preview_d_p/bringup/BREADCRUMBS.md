@@ -2625,3 +2625,32 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
+
+## C.moe_shared.attention.test.1 (test review)
+
+What
+- Rewrote test_c_moe_shared_attention.py from test_c_moe_full_attention.py at LAYER = 2, with the same four checks:
+  golden chunk 1, golden chunk 0 (empty prefix, -1 pads), a probe topk (64 random causal keys per row) vs the CPU
+  step, and attn_norm x 1e-3 vs the CPU step (the eps probe). topk is a graph input (the topk_shared output), so the
+  test does not need ctx.extra["shared_topk"].
+- Added a float64 global scale coefficient check (<got, want> / <want, want> within 0.004 of 1) to every check.
+
+Decisions
+- Re-ran the layer-1 mutation study on layer 2 (/tmp/hy4_c_attn2/mut.py, CPU only). Sink passed raw to sparse_sdpa
+  passes the layer-1 limits on chunk 1, so checks 1-3 are tightened to rel 0.012, ratio [0.99, 1.01], worst row
+  0.025. The device has 2x / 5x / 3x margin on them.
+- The device is noisier on the eps probe at layer 2 (rel 0.0119, worst row 0.0206), so that check has its own limits:
+  rel 0.03, ratio [0.99, 1.01], worst row 0.05. The eps mutations score rel >= 0.127 there.
+- Every mutation in the docstring tables fails at least one check.
+
+Results
+- BRINGUP_IMPL=reference: PASS (golden rel 0.0020, worst row 0.0022).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device, the existing TtHy4Attention with layer-2 weights): PASS. pcc_attention_L02 0.999981. golden rel
+  0.00613 / [0.9980, 1.0012] / 0.0081 / coef 0.99970. chunk0 0.00592. probe 0.00538. scaled 0.0119 / 0.0206. The
+  numbers are identical across three runs.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py
