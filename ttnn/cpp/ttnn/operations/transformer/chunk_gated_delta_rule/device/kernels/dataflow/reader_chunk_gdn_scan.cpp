@@ -194,20 +194,22 @@ void kernel_main() {
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
 
-    // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once by
-    // this RISC, never popped; the fence orders the stores before the push.
+    // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
+    // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC
+    // store loop), then this RISC writes the 32 diagonal ones after the zero barrier; the fence orders
+    // those stores before the push.
     {
-        cb_reserve_back(cb_eye, 1);
-        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_eye));
-        for (uint32_t i = 0; i < 1024; i++) {
-            p[i] = 0u;
-        }
+        CircularBuffer eye(cb_eye);
+        eye.reserve_back(1);
+        noc.async_write_zeros(eye, eye.get_tile_size());
+        noc.write_zeros_l1_barrier();
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr());
         for (uint32_t r = 0; r < 32; r++) {
             p[(r < 16) ? r * 17 : 768 + (r - 16) * 17] =
                 0x3F800000u;  // 1.0f at (r, r): faces 0 and 3 carry the diagonal
         }
         asm volatile("fence");
-        cb_push_back(cb_eye, 1);
+        eye.push_back(1);
     }
 
 #if defined(GDN_MCAST_SENDER)
