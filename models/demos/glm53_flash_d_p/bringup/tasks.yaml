@@ -1289,6 +1289,13 @@ tasks:
     kind: norm
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T10:33:33'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py: 0383e92956c5115d35ba535a4b305e3956badedc3e2e22af77192f183a1f40be
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.10
   title: 'dsa_moe block with steps 1-10 on device (last: ffn_norm)'
   step: implement
