@@ -136,15 +136,20 @@ LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
 LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
 
 
-def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of_layer=None):
+def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of_layer=None, slot_layer_ids=None):
     """`num_layers` and `ack_idx_of_layer` are in ACK space; see the routing block in main().
 
     The callback is handed a GLOBAL layer index, and `layer_idx` stays global in the pushed record
     because the router addresses the KV stage with it. Only `seq` is translated.
+    With `slot_layer_ids` (an adapter with `acks_in_kv_slot_space`), the callback is handed the KV-slot
+    index instead; it is the ack index, and `slot_layer_ids[slot]` is the global layer for the record.
     """
 
     def on_layer_complete(layer_idx: int, request_id: int) -> None:
-        ack_idx = layer_idx if ack_idx_of_layer is None else ack_idx_of_layer[layer_idx]
+        if slot_layer_ids is not None:
+            ack_idx, layer_idx = layer_idx, slot_layer_ids[layer_idx]
+        else:
+            ack_idx = layer_idx if ack_idx_of_layer is None else ack_idx_of_layer[layer_idx]
         seq = request_id * num_layers + ack_idx
         if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
             return
@@ -785,6 +790,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 source_rank=rank,
                 num_layers=num_ack_layers,
                 ack_idx_of_layer=ack_idx_of_layer,
+                slot_layer_ids=(
+                    ack_layer_ids
+                    if ack_layer_ids is not None and getattr(ADAPTER, "acks_in_kv_slot_space", False)
+                    else None
+                ),
             )
         )
         source_desc = "host on_layer_complete callback"

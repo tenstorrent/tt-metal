@@ -62,9 +62,12 @@ class TtMLA:
         w_uv = kv_b[:, self.dqk :].transpose(1, 2).reshape(1, self.nh, self.r, self.dv)
         self.w_uv = replicate(mesh, w_uv.contiguous().to(torch.bfloat16))
         self.w_o = up(w["o_proj"])  # [64 * 256, 4096]
-        self.cache = ttnn.zeros(
-            (1, 1, max_seq, self.r), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=MC
-        )
+        self.cache = latent_cache(mesh, cfg, max_seq)
+
+    def bind_cache(self, cache: ttnn.Tensor) -> None:
+        """Read and write another latent cache of the same shape (latent_cache; one per serving slot)."""
+        assert tuple(cache.shape) == tuple(self.cache.shape), (cache.shape, self.cache.shape)
+        self.cache = cache
 
     def _local_rows(self, t: ttnn.Tensor) -> ttnn.Tensor:
         a = ttnn.mesh_partition(t, dim=-2, cluster_axis=0, memory_config=MC)
@@ -175,6 +178,17 @@ class TtMLA:
         """The latent cache [max_seq, 512] (chip 0's copy; replicated)."""
         t = ttnn.to_torch(ttnn.get_device_tensors(self.cache)[0])
         return {"kv_latent": t.reshape(self.max_seq, self.r).float()}
+
+
+def latent_cache(mesh, cfg, max_seq: int) -> ttnn.Tensor:
+    """The replicated latent cache [1, 1, max_seq, 512] bf16 ROW_MAJOR, zeroed."""
+    return ttnn.zeros(
+        (1, 1, max_seq, cfg.kv_lora_rank),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=MC,
+    )
 
 
 def idx_to_device(mesh, topk: torch.Tensor) -> ttnn.Tensor:

@@ -135,6 +135,10 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # With ``kv_slot_layer_ids`` (a hybrid stack): True if the runtime calls the layer-completion sink with the
+    # layer's KV-slot index (the address table's layer) rather than its global layer index; the runner then maps
+    # the slot back to the global layer for the record (``build_layer_completion_sink``).
+    acks_in_kv_slot_space: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
     # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
@@ -313,6 +317,8 @@ ADAPTER_PATHS = {
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
+    # GLM-5.3-Flash: KDA linear attention + DSA sparse MLA (NoPE, pooled-key indexer), mHC; 2x2 BH mesh.
+    "glm53_flash_d_p": "models.demos.glm53_flash_d_p.tt.runners.adapter:Glm53FlashPrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Hy4 Preview (layers subset): gated DSA sparse MLA + sinks + indexer sharing, iHC, 256-expert MoE; 2x2 BH mesh.
