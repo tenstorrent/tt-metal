@@ -963,3 +963,61 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_10_ffn_norm.py
+
+## C.dense_full.mlp test (attempt 1)
+
+What was done
+- Reviewed the rendered component test for mlp (layer 0, HF HYV4MLP: down(silu(gate(x)) * up(x)), 18432, unclamped;
+  swiglu_limit applies to the routed experts only). Kept the gated pcc_mlp_L00 (0.99, PCC on the bf16 golden) and
+  added, vs the golden: finite, element count, rel L2 <= 0.008, row norm ratio in [0.993, 1.007], worst row
+  <= 0.015. Asserts the module is not a CPU bridge. Added a second run on ffn_norm x 30 (bf16) vs the CPU mlp on the
+  same input: rel <= 0.006, ratio in [0.993, 1.007], worst row <= 0.012.
+- CPU mutation study in /tmp/hy4_mlp/study{,2}.py (outside the repo); tables in the test docstring.
+
+Decisions and why
+- Passing PCC 0.99 on the golden: gelu_tanh (0.9937), HiFi2-like truncation (0.99999, rel 0.024, ratio ~0.976),
+  x 1.01 / 1.03, last row / last 32 rows zeroed (0.9912), input x 0.5 (0.996). The added golden checks catch all of
+  them; device noise estimate (bf16 gate/up/h, fp32 acc) is 0.0029 / [0.998, 1.002] / 0.0038.
+- On the golden gate is in [-1.11, 0.42]: a clamp at 10 (ClampedSiluGlu reused from the experts) is invisible. At
+  x 30 gate reaches 12.5 and the clamp shows as worst row 0.021 vs noise 0.0029, hence the 0.012 limit.
+- bfp8 weights would score rel 0.0061 on the golden and pass; the plan says bf16 weights anyway.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00238, ratio [0.99961, 1.00038], worst row 0.00254; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): FAIL, NotImplementedError "no device module for mlp yet" (expected before implement).
+
+Gotcha for implement
+- The module is called twice (golden, then x 30). Its input is ffn_norm [S, 6144] on the host boundary (device
+  ffn_norm output is replicated over columns); output mlp_out [S, 6144] (reduce_scatter to [S/2, 3072] per chip on
+  the device, per plan). No clamp. Scaled outputs reach row norms ~6300, fine in bf16/fp32.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py
+
+## C.dense_full.mlp implement (attempt 1)
+
+What was done
+- `tt/mlp.py:TtDenseMLP` (new, from `mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP`): TP=2 over axis 1. Chip column c
+  holds gate / up W^T columns and down W^T rows [9216c, 9216c + 9216), replicated over the rows. The weights are bf16
+  as stored (`ShardTensor2dMesh dims=(None, 3)` / `(None, 2)`), 340 MB per chip. Forward: `ttnn.linear` gate and
+  up (fp32 out) -> `ttnn.multiply(input_tensor_a_activations=[SILU], dtype=fp32)` -> `ttnn.linear` down (fp32
+  partial [S/2, 6144]) -> `ttnn.reduce_scatter(dim=3, cluster_axis=1)` -> mlp_out [1, 1, S/2, 3072] fp32, the
+  residual's column split (the same epilogue as the attention's o_proj). Every matmul runs HiFi4 + fp32 dest. There
+  is no clamp and no host work in `__call__`.
+- `bringup/hooks.py`: `_MLP_STEPS`, `_mlp_module`, and the harness boundary `_row_in_col_out_host_fn` (bf16
+  `row_split_to_device` in, the TtGatheredRmsNorm output layout; `col_split_to_host` out). The step is routed in
+  `_device_step_fn` / `device_component`, and "mlp" is added to `DEVICE_STEPS["dense_full"]`. `HY4_MLP_MID=bf16`
+  selects bf16 gate / up / h for comparison.
+
+Decisions
+- fp32 intermediates and HiFi4, per components.yaml and known issues. With them the device matches the fp32 CPU
+  reference on the golden (rel 0.00247 vs the reference's own 0.00238).
+
+Results
+- Gate: PASS. pcc_mlp_L00 0.999997. Golden: rel 0.00247, row ratio [0.99907, 0.99986], worst row 0.00267. Scaled
+  x30 vs CPU: rel 0.00069, ratio [0.99944, 0.99950], worst row 0.00075.
+- The "FAIL pcc ... 0.000000" line at the top of the log comes from the stubbed precompile collect pass.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py
