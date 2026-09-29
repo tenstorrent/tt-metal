@@ -16,6 +16,8 @@ namespace active_att_program = quasar_aether_2x3_att_program;
 #elif defined(NOC_ATT_CONFIG_GRENDEL_QSR1)
 #include "internal/tt-2xx/quasar/noc/att/temporary_programming/grendel_qsr1_att_data.h"
 namespace active_att_program = grendel_qsr1_att_program;
+#elif defined(NOC_ATT_CONFIG_HORIZON_2X3)
+#error "The horizon_2x3 map is programmed by UMD before DM startup; unset TT_METAL_ATT_PROGRAM_FOR_TEST"
 #else
 #error "Temporary ATT programming requires an explicit NOC ATT configuration"
 #endif

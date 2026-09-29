@@ -375,8 +375,11 @@ public:
                 defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
             } else if (map == "quasar_aether_2x3") {
                 defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else if (map == "horizon_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_HORIZON_2X3");
             } else {
-                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+                TT_THROW(
+                    "Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1, quasar_aether_2x3 or horizon_2x3)", map);
             }
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
             // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
