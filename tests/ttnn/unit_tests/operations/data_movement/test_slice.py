@@ -2133,3 +2133,39 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+def test_slice_nd_sharded_rescale(device):
+    torch.manual_seed(0)
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 64, 64]),
+        grid,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    input_shape = (1, 1, 256, 64)
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+
+    # Slice height 256 -> 128 with no explicit output memory_config: must inherit from the
+    # ND-sharded input and rescale, not reuse the stale (larger) shard shape as-is.
+    sliced = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 128, 64], [1, 1, 1, 1])
+
+    out_mem_config = sliced.memory_config()
+    assert out_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+    assert out_mem_config.nd_shard_spec is not None
+
+    # num_shards_along_dim (4) is preserved from the input; the shard extent along the sliced
+    # dimension shrinks from 64 -> 32 (128 / 4, rounded up to the 32-row tile boundary) instead of
+    # staying stuck at the input's 64.
+    assert list(out_mem_config.nd_shard_spec.shard_shape) == [1, 1, 32, 64]
+    assert out_mem_config.nd_shard_spec.grid == grid
+
+    torch_expected = torch_input[:, :, :128, :]
+    assert torch.equal(ttnn.to_torch(sliced), torch_expected)
