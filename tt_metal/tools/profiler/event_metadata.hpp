@@ -59,7 +59,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_MULTICAST_ATOMIC_INC = 38,
         FABRIC_UNICAST_SCATTER_WRITE = 39,
         FABRIC_ROUTING_FIELDS_1D = 40,
-        FABRIC_ROUTING_METADATA_UNAVAILABLE_2D = 41,
+        FABRIC_ROUTING_FIELDS_2D = 41,
 
         UNSUPPORTED = 42,
     };
@@ -140,17 +140,19 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FabricPacketType routing_fields_type : 4;
     };
 
-    // Represents fabric routing metadata that follows a FabricNoCEvent.
+    // represents a fabric routing fields event; follows a FabricNoCEvent
     struct FabricRoutingFields1D {
         NocEventType noc_xfer_type;
         uint32_t routing_fields_value;
     } __attribute__((packed));
 
-    struct FabricRoutingMetadataUnavailable2D {
+    struct FabricRoutingFields2D {
         NocEventType noc_xfer_type;
-        uint8_t reserved[7];
+        uint8_t ns_hops;
+        uint8_t e_hops;
+        uint8_t w_hops;
+        bool is_mcast;
     } __attribute__((packed));
-    static_assert(sizeof(FabricRoutingMetadataUnavailable2D) == sizeof(uint64_t));
 
     struct RawEvent {
         NocEventType noc_xfer_type;
@@ -165,7 +167,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
-        FabricRoutingMetadataUnavailable2D fabric_routing_metadata_unavailable_2d;
+        FabricRoutingFields2D fabric_routing_fields_2d;
     } data{};
 
     KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF}} {}
@@ -184,17 +186,17 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
                event_type <= NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
-    static bool isFabricRoutingMetadata(NocEventType event_type) {
+    static bool isFabricRoutingFields(NocEventType event_type) {
         return event_type == NocEventType::FABRIC_ROUTING_FIELDS_1D ||
-               event_type == NocEventType::FABRIC_ROUTING_METADATA_UNAVAILABLE_2D;
+               event_type == NocEventType::FABRIC_ROUTING_FIELDS_2D;
     }
 
     static bool isFabricRoutingFields1D(NocEventType event_type) {
         return event_type == NocEventType::FABRIC_ROUTING_FIELDS_1D;
     }
 
-    static bool isFabricRoutingMetadataUnavailable2D(NocEventType event_type) {
-        return event_type == NocEventType::FABRIC_ROUTING_METADATA_UNAVAILABLE_2D;
+    static bool isFabricRoutingFields2D(NocEventType event_type) {
+        return event_type == NocEventType::FABRIC_ROUTING_FIELDS_2D;
     }
 
     static bool isFabricUnicastEventType(NocEventType event_type) {
@@ -228,12 +230,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     // Getter to return the correct variant based on the tag (noc_xfer_type)
-    std::variant<
-        LocalNocEvent,
-        FabricNoCEvent,
-        FabricNoCScatterEvent,
-        FabricRoutingFields1D,
-        FabricRoutingMetadataUnavailable2D>
+    std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
     getContents() const {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
@@ -244,8 +241,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         if (isFabricRoutingFields1D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_1d;
         }
-        if (isFabricRoutingMetadataUnavailable2D(data.raw_event.noc_xfer_type)) {
-            return data.fabric_routing_metadata_unavailable_2d;
+        if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
+            return data.fabric_routing_fields_2d;
         }
         return data.local_event;
     }

@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "concatenate_heads_program_factory.hpp"
+#include "concatenate_heads_device_operation.hpp"
 
 #include "concatenate_heads_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::experimental::prim {
@@ -16,7 +17,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt;
 
-ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory::create(
+ProgramDescriptor ConcatenateHeadsDeviceOperation::create_descriptor(
     const ConcatenateHeadsParams& operation_attributes, const ConcatenateHeadsInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& ashape = a.padded_shape();
@@ -59,16 +60,16 @@ ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory:
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
     uint32_t num_cores_r = core_range.y;
 
-    CoreRange all_cores(
+    CoreRangeSet all_cores(CoreRange(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
+        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1}));
 
     std::vector<uint32_t> reader_compile_time_args = {
         // READER COMPILE TIME ARGS
@@ -84,83 +85,61 @@ ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory:
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_concat_heads.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
+        "reader_tm_tile_layout_concat_heads.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
-        "writer_tm_tile_layout_concat_heads.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        "writer_tm_tile_layout_concat_heads.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = per_core_tiles * 2;  // double buffer
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             uint32_t in0_tensor_tile_id = (core_idx_x * in0_w_tiles) + (core_idx_y * in0_CHtWt);
 
-            std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
-                in0_tensor_tile_id,                    // in0_tensor_tile_id
-            };
-            std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)out_buffer->address(),                      // out_tensor_addr
-                (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // out_tensor_tile_id
-            };
-
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            reader_desc.emplace_runtime_args(
+                core,
+                {
+                    in0_buffer,          // in0_tensor_addr
+                    in0_tensor_tile_id,  // in0_tensor_tile_id
+                });
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    out_buffer,                                                // out_tensor_addr
+                    (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // out_tensor_tile_id
+                });
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id = */ reader_kernel_id,
-         /* writer_kernel_id = */ writer_kernel_id,
-         /* num_cores_r      = */ num_cores_r,
-         /* num_cores_c      = */ num_cores_c}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void ConcatenateHeadsProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatenateHeadsParams& /*operation_attributes*/,
-    const ConcatenateHeadsInputs& tensor_args,
-    Tensor& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    auto* src_dram_buffer = tensor_args.input.buffer();
-    auto* dst_dram_buffer = output.buffer();
-
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-
-    for (int core_idx_y = 0; core_idx_y < shared_vars.num_cores_r; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < shared_vars.num_cores_c; core_idx_x++) {
-            CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-            }
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-            }
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

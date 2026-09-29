@@ -5,6 +5,7 @@ set(HW_JIT_API_HEADERS
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
+    inc/api/semaphore.h
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
@@ -27,6 +28,7 @@ set(HW_JIT_API_HEADERS
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
     inc/api/kernel_thread_globals.h
+    inc/api/llk_operand_from_tokens.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/tensor_binding_token.h
@@ -163,6 +165,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_sub_custom.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore.h
+    inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
     inc/api/compute/experimental/sum_reduce_scalar.h
@@ -173,6 +176,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/isclose.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
+    inc/api/compute/logaddexp.h
+    inc/api/compute/logaddexp2.h
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
@@ -217,6 +222,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
+    inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
@@ -242,6 +248,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/prefetcher_pipe_init.h
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
+    inc/internal/llk_metadata.h
     inc/internal/mod_div_lib.h
     inc/internal/pch.h
     inc/internal/risc_attribs.h

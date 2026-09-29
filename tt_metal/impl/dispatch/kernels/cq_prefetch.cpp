@@ -76,7 +76,6 @@ constexpr uint32_t pcie_size = PCIE_SIZE;
 constexpr uintptr_t prefetch_q_base = PREFETCH_Q_BASE;
 constexpr uint32_t prefetch_q_size = PREFETCH_Q_SIZE;
 constexpr uintptr_t prefetch_q_rd_ptr_addr = PREFETCH_Q_RD_PTR_ADDR;
-constexpr uintptr_t prefetch_q_pcie_rd_ptr_addr = PREFETCH_Q_PCIE_RD_PTR_ADDR;
 
 constexpr uintptr_t cmddat_q_base = CMDDAT_Q_BASE;
 constexpr uint32_t cmddat_q_size = CMDDAT_Q_SIZE;
@@ -560,7 +559,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
-    *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 

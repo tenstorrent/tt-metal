@@ -1,0 +1,44 @@
+name: "Resolve Galaxy SKUs"
+description: >-
+  Maps the wormhole / blackhole dispatch checkboxes to a comma-separated enabled-skus list.
+  A scheduled run covers both Galaxies regardless of the inputs. The list may be empty; the
+  caller decides whether that is an error.
+
+inputs:
+  wormhole:
+    description: "Cover wh_galaxy on a dispatch"
+    required: false
+    default: "true"
+  blackhole:
+    description: "Cover bh_galaxy on a dispatch"
+    required: false
+    default: "false"
+  event-name:
+    description: "github.event_name of the caller"
+    required: true
+
+outputs:
+  enabled-skus:
+    description: "Comma-separated Galaxy SKUs, possibly empty"
+    value: ${{ steps.resolve.outputs.enabled-skus }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        EVENT: ${{ inputs.event-name }}
+        WORMHOLE: ${{ inputs.wormhole }}
+        BLACKHOLE: ${{ inputs.blackhole }}
+      run: |
+        skus=()
+        if [[ "$EVENT" == "schedule" ]]; then
+          skus=(wh_galaxy bh_galaxy)
+        else
+          [[ "$WORMHOLE" == "true" ]] && skus+=(wh_galaxy)
+          [[ "$BLACKHOLE" == "true" ]] && skus+=(bh_galaxy)
+        fi
+        joined=$(IFS=,; echo "${skus[*]}")
+        echo "enabled-skus=$joined" >> "$GITHUB_OUTPUT"
+        echo "Galaxy SKUs: ${joined:-<none>}"

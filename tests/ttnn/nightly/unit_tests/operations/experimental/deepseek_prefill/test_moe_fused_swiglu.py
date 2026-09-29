@@ -294,7 +294,7 @@ def _isl_params(active_sweep, only_models=None):
     7168 -> 3584 first, so EMB_SIZE would run it at 2x its real K. Its case is separate below.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
@@ -304,7 +304,6 @@ def _isl_params(active_sweep, only_models=None):
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )

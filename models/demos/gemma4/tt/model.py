@@ -1333,11 +1333,19 @@ class Gemma4Model:
         layer, shape == the forward's hidden). When given, taps are ttnn.copy'd
         into them (allocation-free — safe inside a metal trace); otherwise taps
         are cloned (untraced paths only).
+
+        ``keep_last``: retain the clones of at most this many forwards; a
+        chunked prefill fires the hook once per chunk, and the drafter needs
+        only the chunks that cover its context window. Older groups are freed
+        as newer ones arrive.
         """
         self._dflash_tap_layers = set(layer_ids) if layer_ids is not None else None
         self._dflash_taps = []
         self._dflash_tap_idx = 0
         self._dflash_tap_buffers = buffers
+        self._dflash_tap_keep = (
+            int(keep_last) * len(self._dflash_tap_layers) if keep_last and self._dflash_tap_layers else None
+        )
 
     def pop_dflash_taps(self):
         """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""

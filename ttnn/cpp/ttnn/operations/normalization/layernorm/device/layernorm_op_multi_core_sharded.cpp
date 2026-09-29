@@ -91,7 +91,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     uint32_t block_ht = 0;
     uint32_t block_wt = 0;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
@@ -102,7 +101,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 block_ht = program_config.block_h;
                 block_wt = program_config.block_w;
                 legacy_reduction = program_config.legacy_reduction;
-                legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
             }
         },
@@ -119,7 +117,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -348,12 +346,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .tile_width = tile_width,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .legacy_reduction = legacy_reduction,
-        .legacy_rsqrt = legacy_rsqrt,
         .eps = eps,
         .per_core_recip_lut_size = block_w,
         .reader_noc = reader_noc,
         .writer_noc = writer_noc,
-        .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .compute_hw = to_compute_hardware_config(compute_kernel_config),
     };
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
@@ -402,7 +399,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // The write-back segment block's length is measured per node while the run args are built, and
     // the kernel specs declare it, so the run args come first.
     auto [run_args, writer_num_varargs] =
-        build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
+        build_run_args(cores, rt_ctx, config, *device, a, b, gamma, beta, stats, recip_tensor, output);
     add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
 
     return ttnn::device_operation::ProgramArtifacts{

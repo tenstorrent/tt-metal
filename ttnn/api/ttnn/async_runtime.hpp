@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tt-metalium/mesh_event.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operation.hpp"
 #include "types.hpp"
