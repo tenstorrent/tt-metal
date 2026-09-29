@@ -865,8 +865,11 @@ fi # bh-ring-stress
 #    pinnings removed, so the mapper places every mesh free of the audio-tray constraint. The pinned
 #    variant of the same graph stays in bh-subtorus.
 # 3. subtorus_4x4_pipeline_8stage_unpinned on the SC4 revC aisleC single-pod mock: the 8-stage 4x4
-#    ring without corner pinnings, so the mapper may reorient each stage. The pinned copy stays in
-#    bh-subtorus.
+#    ring without corner pinnings, so the mapper may reorient each stage. Because each 4x4 stage is
+#    half a galaxy, an unpinned single-galaxy placement can rotate and land its 2x4 rank groups on a
+#    tray pair other than {1,2}/{3,4} -- a valid solution the layout check would wrongly reject. So
+#    this stage runs the pipeline-builder check (rotation-invariant: the ring must resolve) instead
+#    of the layout check. The pinned copy stays in bh-subtorus.
 #
 # Layout checks validate the resulting control plane: host topology vs runtime plus per-host
 # rank-group tray/asic checks.
@@ -889,7 +892,7 @@ for mock in \
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 done
 
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_PIPELINE_BUILDER_CHECK}"
 
 fi # bh-heterogeneous
 
