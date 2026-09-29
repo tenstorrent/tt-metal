@@ -146,8 +146,8 @@ void MoeAgUntilizeActiveDeviceOperation::validate_on_program_cache_miss(
     const uint32_t H = t.y.logical_shape()[-1], W = args.tiles_per_block;
     TT_FATAL(W >= 1 && H % (32 * W) == 0, "{}: hidden {} must be a multiple of 32 x tiles_per_block {}", op, H, W);
     // the writer stores whole 32-row tiles: a ragged row count would let the last tile run past the output
-    TT_FATAL(
-        t.y.logical_volume() / H % 32 == 0, "{}: y rows {} must be a multiple of 32", op, t.y.logical_volume() / H);
+    // (per matrix: the tiles of each leading-dim slice are padded separately, the reader walks them as one matrix)
+    TT_FATAL(t.y.logical_shape()[-2] % 32 == 0, "{}: y rows {} must be a multiple of 32", op, t.y.logical_shape()[-2]);
     // counts / regions / the slot map are read to L1 at NG x 4 B strides: Blackhole DRAM reads need the L1 and DRAM
     // offsets equal modulo 64 B, so NG x 4 must be a multiple of 64
     TT_FATAL(NG % 16 == 0, "{}: the number of global experts {} must be a multiple of 16", op, NG);
