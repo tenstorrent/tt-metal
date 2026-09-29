@@ -35,6 +35,10 @@ def _conv2d_stride(device):
     _conv2d(device, stride=(0, 1))
 
 
+def _conv2d_stride_with_kernel_folding(device):
+    _conv2d(device, stride=(0, 2), conv_config=ttnn.Conv2dConfig(enable_kernel_stride_folding=True))
+
+
 def _conv2d_act_block_w_div(device):
     config = ttnn.Conv2dConfig(act_block_w_div=0, shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED)
     _conv2d(device, in_channels=256, out_channels=64, conv_config=config)
@@ -95,6 +99,7 @@ def _conv3d_groups(device):
     "run, message",
     [
         (_conv2d_stride, "stride must be greater than 0"),
+        (_conv2d_stride_with_kernel_folding, "stride must be greater than 0"),
         (_conv2d_act_block_w_div, "act_block_w_div must be greater than 0"),
         (_conv2d_act_block_h_override, r"act_block_h_override \(16\) must be a multiple of 32"),
         (_conv_transpose2d_stride, "stride must be greater than 0"),
@@ -103,6 +108,7 @@ def _conv3d_groups(device):
     ],
     ids=[
         "conv2d_stride",
+        "conv2d_stride_kernel_folding",
         "conv2d_act_block_w_div",
         "conv2d_act_block_h_override",
         "conv_transpose2d_stride",
