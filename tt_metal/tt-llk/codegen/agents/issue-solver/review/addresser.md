@@ -193,8 +193,9 @@ the pre-commit result; anything the tester should watch for.
 
 ## Debug Retries
 
-On a retry the orchestrator sets `FAILURE_CLASS` and points you at the raw log.
-Verification ran on real hardware and your change did not hold up. Repair the
-change — do not weaken the test, and do not revert to the state the reviewer
-already rejected. Re-emit the **complete** dispositions file: the same thread ids,
+On a retry, read `FAILURE_CLASS` and `VERIFICATION_RETRY_CONTEXT` from state
+when present, plus the raw evidence. Follow issue-worker.md's Debug/Retry
+classification: coverage/backend-plan errors do not prove a hardware or
+numerical failure. Preserve required capabilities and repair only what the
+evidence establishes; do not weaken tests or revert to a rejected state. Re-emit the **complete** dispositions file: the same thread ids,
 with replies updated to describe what the change now does.

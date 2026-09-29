@@ -11,7 +11,8 @@
 #   ./codegen/scripts/setup_worktree.sh {create|cleanup|prune|list} [ARG]
 #
 # Env:
-#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: /proj_sw/user_dev/llk-codegen-worktrees)
+#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: beside the base clone when
+#                            it is on a local disk, else /proj_sw/user_dev/llk-codegen-worktrees)
 #   CODEGEN_KEEP_WORKTREE  — "false" (default) removes the worktree after the run;
 #                            "true" keeps the live checkout
 #   CODEGEN_BASE_COMMIT    — optional full commit SHA to use instead of origin/main
@@ -31,7 +32,32 @@ LLK_REL="${LLK_ROOT#"$REPO_ROOT/"}"
 GIT_USER="llk_code_gen"
 
 # Prepare paths
-CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-/proj_sw/user_dev/llk-codegen-worktrees}"
+#
+# A worktree is only usable on the host that holds its git database, so place
+# it on the same filesystem. When the base clone is on a local disk (e.g.
+# /localdev), worktrees go beside the clone: creating one there took 19.6s,
+# against 6-14 min of pre-run setup on weka, and every later git and file
+# operation in the solve is local too. Card hosts never read the worktree --
+# they receive the candidate as a diff and build in their own clone -- so
+# nothing else needs it on shared storage. A clone on weka, NFS or anything
+# unrecognised keeps the historical shared default unchanged.
+_default_worktree_root() {
+  local common clone parent fs
+  common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+  clone="$(dirname "$common")"
+  parent="$(dirname "$clone")"
+  fs="$(stat -f -c %T "$clone" 2>/dev/null || true)"
+  case "$fs" in
+    xfs | ext2/ext3 | ext4 | btrfs)
+      if [ -n "$common" ] && [ -w "$parent" ]; then
+        echo "$parent/llk-codegen-worktrees"
+        return
+      fi
+      ;;
+  esac
+  echo /proj_sw/user_dev/llk-codegen-worktrees
+}
+CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-$(_default_worktree_root)}"
 CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-dir)"
 
 CODEGEN_SETUP_LOCK="${CODEGEN_GIT_DIR}/codegen-worktree-setup.lock"
@@ -123,7 +149,7 @@ setup_worktree() {
 
   # A resume is an explicit import from one immutable, reconciled checkpoint.
   # Revalidate the dashboard contract before creating any branch or worktree.
-  local resume_requested=false resume_env_present resume_name
+  local resume_requested=false resume_env_present resume_name resume_patch
   local -a resume_names=(
     CODEGEN_RESUME_RUN_DIR CODEGEN_RESUME_RUN_ID CODEGEN_RESUME_ATTEMPT_ID
     CODEGEN_RESUME_CHECKPOINT_DIGEST CODEGEN_RESUME_PATCH_SHA256
@@ -138,7 +164,7 @@ setup_worktree() {
         return 1
       fi
     done
-    python - "$base_ref" "$task_id" <<'PY'
+    resume_patch="$(python - "$base_ref" "$task_id" <<'PY'
 import hashlib
 import json
 import os
@@ -178,16 +204,17 @@ if (checkpoint.get("attempt_id") or source.get("attempt_id")) != source_attempt:
 if source_attempt == os.environ["CODEGEN_ATTEMPT_ID"]:
     raise SystemExit("[worktree] resume requires a distinct new attempt identity")
 if (source.get("status") != "failed" or not source.get("end_time")
-        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost"}):
+        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost", "wall_timeout"}):
     raise SystemExit("[worktree] resume source was not terminally reconciled")
 
 source_base = checkpoint.get("base_commit") or source.get("base_commit")
 if source_base != expected_base or not re.fullmatch(r"[0-9a-f]{40}", str(source_base or "")):
     raise SystemExit("[worktree] resume source base mismatch")
 patch_digest = str(checkpoint.get("patch_sha256") or "")
-patch_path = source_dir / "generated.patch"
-if checkpoint.get("artifact_patch") != "generated.patch" or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
+artifact = checkpoint.get("artifact_patch")
+if artifact not in {"generated.patch", "supervisor-checkpoint.patch"} or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
     raise SystemExit("[worktree] resume checkpoint patch identity is missing")
+patch_path = source_dir / artifact
 try:
     actual_patch_digest = hashlib.sha256(patch_path.read_bytes()).hexdigest()
 except OSError as exc:
@@ -200,13 +227,16 @@ expected_reason = "attempt_identity_changed" if checkpoint.get("completed_result
 if (os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"] != expected_reuse
         or os.environ["CODEGEN_RESUME_INVALIDATION_REASON"] != expected_reason):
     raise SystemExit("[worktree] resume verification disposition mismatch")
+print(patch_path)
 PY
+)" || return 1
     resume_requested=true
   fi
 
   # Reserve a unique branch + dir under a lock (concurrency-safe).
   local lock_fd
-  exec {lock_fd}>"$CODEGEN_SETUP_LOCK"
+  # This file is only a flock inode; append-open also works under bash noclobber.
+  exec {lock_fd}>>"$CODEGEN_SETUP_LOCK"
   flock "$lock_fd"
 
   local version
@@ -302,9 +332,10 @@ PY
     echo "[worktree] No test requirements found — using ambient python"
   fi
 
-  # Fetch only the arch-specific SFPI toolchain per worktree (setup_testing_env.sh
-  # is idempotent: skips if already at the pinned version). test_config resolves it
-  # at tests/sfpi/ relative to each worktree, so it cannot be shared.
+  # Use the versioned toolchain-only entrypoint with this worktree's pinned
+  # sfpi-info.sh and destination. Historical setup scripts install shared Git
+  # hooks; never run that installation from a disposable worktree. Existing
+  # commit hooks remain enabled and unchanged.
   echo "[worktree] Fetching SFPI toolchain in worktree"
   (
     cd "${wt_llk}/tests"
@@ -314,7 +345,7 @@ PY
       export CHIP_ARCH=quasar
     fi
     [[ -f .venv/bin/activate ]] && source .venv/bin/activate
-    ./setup_testing_env.sh
+    bash "${LLK_ROOT}/tests/setup_testing_env.sh" --toolchain-only "${wt_llk}/tests"
   )
 
   cat >> "${wt_llk}/.gitignore" <<'GITIGNORE'
@@ -335,8 +366,11 @@ GITIGNORE
   # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json):
   # the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
-  # its own appended lines stay hidden too.)
-  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh .claude/scripts/llk_triage.py; do
+  # its own appended lines stay hidden too.) codegen/CLAUDE.md and
+  # codegen/__init__.py are symlinked above too; leaving them out made every
+  # fresh worktree fail validate_input's clean check unless the agent patched
+  # the index by hand.
+  for rel in CLAUDE.md .mcp.json .gitignore codegen/CLAUDE.md codegen/__init__.py .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh .claude/scripts/llk_triage.py; do
     p="${LLK_REL}/${rel}"
     if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
@@ -364,7 +398,6 @@ print(json.dumps({
 PY
 
   if [[ "$resume_requested" == "true" ]]; then
-    local resume_patch="${CODEGEN_RESUME_RUN_DIR}/generated.patch"
     local resume_error="" candidate_digest=""
     if ! git -C "$WORKTREE_DIR" apply --check "$resume_patch"; then
       resume_error="retained checkpoint patch does not apply to the exact base"
@@ -420,30 +453,40 @@ cleanup_worktree() {
     return 0
   fi
 
-  if [[ -n "${WORKTREE_DIR:-}" ]]; then
-    # Normal path: only this run's worktree.
-    echo "[worktree] Removing worktree at $WORKTREE_DIR (fix preserved on branch + patch)"
-    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
-    [[ -d "$WORKTREE_DIR" ]] && rm -rf "$WORKTREE_DIR"
-  else
-    # Standalone admin (no WORKTREE_DIR): remove all of this task's worktrees
-    # (may hit a concurrent same-task run — prefer `prune` for routine GC).
-    echo "[worktree] WORKTREE_DIR unset — removing ALL worktrees for '$task_id' (may affect a concurrent same-task run)."
-    local wt
-    while IFS= read -r wt; do
-      case "$wt" in
-        "${CODEGEN_WORKTREE_ROOT}/${task_id}-v"*)
-          echo "[worktree] Removing worktree at $wt"
-          git worktree remove --force "$wt" 2>/dev/null || true
-          [[ -d "$wt" ]] && rm -rf "$wt" ;;
-      esac
-    done < <(codegen_worktree_dirs)
+  # Cleanup is per-attempt. Missing ownership must never turn into a task-wide
+  # search, especially when several retries of the same issue are still live.
+  if [[ -z "${WORKTREE_DIR:-}" || -z "${WORKTREE_BRANCH:-}" ]]; then
+    echo "[worktree] Cleanup requires this attempt's WORKTREE_DIR and WORKTREE_BRANCH" >&2
+    return 1
   fi
-  git worktree prune 2>/dev/null || true
+  local root wt suffix branch common expected_common
+  root="$(realpath -e -- "$CODEGEN_WORKTREE_ROOT")" || return 1
+  wt="$(realpath -e -- "$WORKTREE_DIR")" || return 1
+  case "$wt" in
+    "$root/$task_id-v"*) suffix="${wt#"$root/$task_id-v"}" ;;
+    *) echo "[worktree] Cleanup target does not belong to task '$task_id'" >&2; return 1 ;;
+  esac
+  if [[ ! "$suffix" =~ ^[1-9][0-9]*$ || -L "$WORKTREE_DIR" ]]; then
+    echo "[worktree] Cleanup requires a concrete versioned worktree" >&2
+    return 1
+  fi
+  branch="$(git -C "$wt" symbolic-ref --quiet --short HEAD)" || return 1
+  common="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  expected_common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  if [[ "$(git -C "$wt" rev-parse --show-toplevel)" != "$wt" \
+        || "$(realpath -e -- "$common")" != "$(realpath -e -- "$expected_common")" \
+        || "$branch" != "$WORKTREE_BRANCH" \
+        || "$branch" != "$GIT_USER/$task_id-v$suffix" ]]; then
+    echo "[worktree] Cleanup target repository or branch does not match this attempt" >&2
+    return 1
+  fi
+  echo "[worktree] Removing worktree at $wt (fix preserved on branch + patch)"
+  # Honor Git locks and errors. Do not recursively delete a target Git rejected.
+  git worktree remove --force -- "$wt" || return 1
 
-  if [[ "$delete_branch" == "true" && -n "${WORKTREE_BRANCH:-}" ]]; then
-    echo "[worktree] Deleting branch $WORKTREE_BRANCH"
-    git branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  if [[ "$delete_branch" == "true" ]]; then
+    echo "[worktree] Deleting branch $branch"
+    git branch -D -- "$branch" || return 1
   fi
 
   echo "[worktree] Cleanup complete for $task_id"
@@ -511,7 +554,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       echo "  issue-123                  — for issue solving"
       echo "  generate-gelu-quasar       — for kernel generation"
       echo ""
-      echo "Env: CODEGEN_WORKTREE_ROOT (default /proj_sw/user_dev/llk-codegen-worktrees),"
+      echo "Env: CODEGEN_WORKTREE_ROOT (default beside a local-disk clone, else /proj_sw/user_dev/llk-codegen-worktrees),"
       echo "     CODEGEN_KEEP_WORKTREE (default false)"
       [[ -z "$cmd" ]] && exit 1 || { [[ "$cmd" == "--help" || "$cmd" == "-h" ]] && exit 0 || exit 1; }
       ;;

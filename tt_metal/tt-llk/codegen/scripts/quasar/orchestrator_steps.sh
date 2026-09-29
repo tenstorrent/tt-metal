@@ -808,7 +808,7 @@ _perf_eval() {
     local cur="$1" ref="$2" out="$3" regress="$4" metric kn
     metric="$(sg PERF_METRIC)"; kn="$(sg KERNEL_NAME)"
     python "$_ORCH_SCRIPTS/perf_eval.py" --current "$cur" --baseline "$ref" --op "$kn" \
-        --metric "$metric" --regress-pct "$regress" --improve-pct "$regress" \
+        --metric "$metric" --regress-rule worst --regress-pct "$regress" --improve-pct "$regress" \
         --goal no_regress --json-out "$out" >/dev/null 2>&1 || true
     _perf_summary "$out"
 }

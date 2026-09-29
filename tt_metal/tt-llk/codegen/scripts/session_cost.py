@@ -18,6 +18,11 @@ transcript (``<sessionId>/subagents/agent-*.jsonl`` — stored flat, one file pe
 agent regardless of spawn depth), optionally filtered to entries after
 ``--since``, and applies per-model Anthropic pricing to compute ``cost_usd``.
 
+When --log-dir contains session_registry.json, explicitly linked standalone
+sessions are included, with each root using its own native OTEL cost or transcript
+estimate. Missing registered sessions are reported in cost_accounting; they are
+never replaced with an unrelated active session.
+
 Interactive codegen runs (the orchestrator inside ``claude``) have no
 ``cli_output.json`` to read from — this script is the live source of truth
 for tokens + cost. Batch runs get an authoritative ``cli_output.json`` at
@@ -49,12 +54,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
-# Anthropic public list prices (USD per 1M tokens), verified 2026-08-06 against
+# Anthropic public list prices (USD per 1M tokens), verified 2026-09-21 against
 # https://platform.claude.com/docs/en/about-claude/pricing
 PRICING = {
     "fable": {  # Claude Fable 5 / Mythos 5
@@ -71,7 +77,14 @@ PRICING = {
         "cache_creation": 6.25,
         "cache_creation_1h": 10.00,
     },
-    "sonnet": {  # Sonnet 5 (standard) / 4.6 / 4.5 / 4
+    "sonnet5": {
+        "input": 2.00,
+        "output": 10.00,
+        "cache_read": 0.20,
+        "cache_creation": 2.50,
+        "cache_creation_1h": 4.00,
+    },
+    "sonnet": {  # Sonnet 4.6 / 4.5 / 4
         "input": 3.00,
         "output": 15.00,
         "cache_read": 0.30,
@@ -94,6 +107,8 @@ def _tier(model_str: str | None) -> str:
         return "fable"
     if "opus" in m:
         return "opus"
+    if "sonnet-5" in m:
+        return "sonnet5"
     if "sonnet" in m:
         return "sonnet"
     if "haiku" in m:
@@ -220,10 +235,10 @@ def _collect(
     """Read one transcript's assistant turns into the shared totals.
 
     Claude Code writes each response a few times as it streams, with the token
-    counts growing each time — so per requestId we keep the largest (the final,
-    complete write). Keying by requestId also avoids double-counting a turn that
-    shows up in more than one transcript. Turns with no requestId are separate
-    calls, collected in `noreq`.
+    counts growing each time — so per message.id (falling back to requestId or
+    transcript uuid) we keep the largest complete write. This also deduplicates
+    turns copied between transcripts. Entries lacking every identity are kept
+    separately in `noreq`.
 
     cache_creation may be split into 5-minute and 1-hour buckets (priced
     differently); when there is no split, count it all as 5-minute.
@@ -242,6 +257,8 @@ def _collect(
                 continue
             msg = d.get("message") or {}
             usage = msg.get("usage")
+            if msg.get("model") == "<synthetic>":
+                continue
             if not usage:
                 continue
             if since_dt is not None:
@@ -264,8 +281,10 @@ def _collect(
                 c5,
                 c1h,
             ]
-            model = override_model or msg.get("model")
-            req = d.get("requestId")
+            # The orchestrator's model is only a fallback: delegated agents may
+            # use cheaper models, and their transcript records the actual model.
+            model = msg.get("model") or override_model
+            req = msg.get("id") or d.get("requestId") or d.get("uuid")
             if req:
                 prev = by_req.get(req)
                 if prev is None:
@@ -353,6 +372,168 @@ def _otel_cost(
     return total if hit and total > 0 else None
 
 
+def _linked_sessions(log_dir: Path, root_session_id: str) -> list[dict]:
+    """Read explicit, run-bound session links; never infer them from cwd/time."""
+    path = log_dir / "session_registry.json"
+    if not path.exists():
+        return []
+    registry = json.loads(path.read_text())
+    run = json.loads((log_dir / "run.json").read_text())
+    if (
+        not isinstance(registry, dict)
+        or registry.get("schema") != "issue-solver.session-registry"
+        or registry.get("version") != 1
+    ):
+        raise ValueError("invalid session_registry.json schema/version")
+    if (
+        not isinstance(run, dict)
+        or not run.get("run_id")
+        or registry.get("run_id") != run["run_id"]
+    ):
+        raise ValueError("session registry run_id does not match run.json")
+    entries = registry.get("sessions")
+    if not isinstance(entries, list):
+        raise ValueError("session registry sessions must be a list")
+    linked = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("session registry entry must be an object")
+        sid = entry.get("session_id")
+        if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+            raise ValueError("invalid linked session_id")
+        if sid == root_session_id:
+            continue
+        cwd = entry.get("project_cwd")
+        if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+            raise ValueError(f"linked session {sid} needs an absolute project_cwd")
+        if not isinstance(entry.get("parent_session_id"), str):
+            raise ValueError(f"linked session {sid} needs a parent_session_id")
+        normalized = dict(
+            session_id=sid,
+            project_cwd=cwd,
+            parent_session_id=entry.get("parent_session_id"),
+            kind=entry.get("kind") or "linked",
+        )
+        if sid in linked and linked[sid] != normalized:
+            raise ValueError(f"conflicting registrations for session {sid}")
+        linked[sid] = normalized
+    # Reject disconnected links/cycles rather than silently pricing another run.
+    for sid in linked:
+        visited = set()
+        current = sid
+        while current != root_session_id:
+            if current in visited or current not in linked:
+                raise ValueError(f"session {sid} is not linked to the main session")
+            visited.add(current)
+            current = linked[current]["parent_session_id"]
+    return list(linked.values())
+
+
+def _sum_usage(rows: list) -> dict:
+    totals = dict(
+        input=0, output=0, cache_read=0, cache_creation=0, total=0, cost_usd=0.0
+    )
+    for model, u_in, u_out, u_cr, u_c5, u_c1h in rows:
+        totals["input"] += u_in
+        totals["output"] += u_out
+        totals["cache_read"] += u_cr
+        totals["cache_creation"] += u_c5 + u_c1h
+        p = PRICING[_tier(model)]
+        totals["cost_usd"] += (
+            u_in * p["input"]
+            + u_out * p["output"]
+            + u_cr * p["cache_read"]
+            + u_c5 * p["cache_creation"]
+            + u_c1h * p["cache_creation_1h"]
+        ) / 1_000_000.0
+    totals["total"] = totals["input"] + totals["output"]
+    return totals
+
+
+def _aggregate_roots(
+    roots: list,
+    since_dt: datetime | None,
+    fallback_model: str | None,
+    sink_path: str | None,
+    log_dir: Path | None,
+) -> dict:
+    """Account each linked root once, preferring its native cost independently.
+
+    Root cli_output.json covers only the main CLI tree. In particular it must
+    not replace the aggregate and discard standalone debug sessions.
+    """
+    collected = []
+    seen_sessions = set()
+    global_messages = {}
+    global_noreq = []
+    for sid, main_jsonl, subs_dir, kind in roots:
+        if sid in seen_sessions:
+            continue
+        seen_sessions.add(sid)
+        by_req, noreq = {}, []
+        files = [main_jsonl, *sorted(subs_dir.glob("agent-*.jsonl"))]
+        for path in files:
+            _collect(path, since_dt, fallback_model, by_req, noreq)
+        native = _otel_cost(sink_path, sid, since_dt)
+        source = "otel" if native is not None else "transcript"
+        if native is None and kind == "main" and log_dir:
+            native = _authoritative_cost(log_dir)
+            if native is not None:
+                source = "cli_output"
+        present = any(path.exists() for path in files)
+        if native is None and not present:
+            source = "missing"
+        collected.append(
+            dict(
+                session_id=sid,
+                kind=kind,
+                source=source,
+                native=native,
+                messages=by_req,
+                noreq=noreq,
+                transcript_available=present,
+            )
+        )
+        for key, row in by_req.items():
+            if key not in global_messages:
+                global_messages[key] = row.copy()
+            else:
+                old = global_messages[key]
+                for i in range(1, len(row)):
+                    old[i] = max(old[i], row[i])
+        global_noreq.extend(noreq)
+    totals = _sum_usage(list(global_messages.values()) + global_noreq)
+    # If a transcript turn appears in more than one linked tree, assign it once.
+    # Prefer a tree whose native cost already covers it over fallback estimates.
+    claimed = set()
+    costs = {}
+    for group in sorted(collected, key=lambda x: x["native"] is None):
+        unique = [global_messages[k] for k in group["messages"] if k not in claimed]
+        claimed.update(group["messages"])
+        estimate = _sum_usage(unique + group["noreq"])["cost_usd"]
+        costs[group["session_id"]] = (
+            group["native"] if group["native"] is not None else estimate
+        )
+    totals["cost_usd"] = round(sum(costs.values()), 6)
+    totals["cost_accounting"] = {
+        "schema": "issue-solver.cost-accounting",
+        "version": 1,
+        "complete": all(g["source"] != "missing" for g in collected),
+        "tokens_complete": all(g["transcript_available"] for g in collected),
+        "sessions": [
+            dict(
+                session_id=g["session_id"],
+                kind=g["kind"],
+                source=g["source"],
+                cost_usd=round(costs[g["session_id"]], 6),
+                transcript_available=g["transcript_available"],
+            )
+            for g in collected
+        ],
+    }
+    return totals
+
+
 def _patch_run_json(log_dir: Path, totals: dict) -> None:
     run_json = log_dir / "run.json"
     if not run_json.exists():
@@ -367,6 +548,7 @@ def _patch_run_json(log_dir: Path, totals: dict) -> None:
         "cost_usd": totals["cost_usd"],
     }
     doc["cost_usd"] = totals["cost_usd"]
+    doc["cost_accounting"] = totals["cost_accounting"]
     fd, tmp = tempfile.mkstemp(prefix=".run.json.", suffix=".tmp", dir=str(log_dir))
     try:
         with os.fdopen(fd, "w") as f:
@@ -392,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--model",
         default=None,
-        help="Override model tier: opus|sonnet|haiku|fable (default: derived per message).",
+        help="Fallback model when a transcript message has no model (normally derived per message).",
     )
     ap.add_argument(
         "--session-pid",
@@ -449,10 +631,12 @@ def main(argv: list[str] | None = None) -> int:
         main_jsonl, subs_dir = found_by_id
         discovered_sid = session_id
         discovered_cwd = args.project_cwd or os.getcwd()
-    elif args.session_id and args.project_cwd:
-        main_jsonl, subs_dir = _build_paths(args.session_id, args.project_cwd)
-        discovered_sid = args.session_id
-        discovered_cwd = args.project_cwd
+    elif session_id:
+        # An explicit identity must never fall back to somebody else's active
+        # session when its transcript has not appeared or has been removed.
+        discovered_sid = session_id
+        discovered_cwd = args.project_cwd or os.getcwd()
+        main_jsonl, subs_dir = _build_paths(session_id, discovered_cwd)
     else:
         found = _discover_session(args.session_pid)
         if not found:
@@ -495,52 +679,24 @@ def main(argv: list[str] | None = None) -> int:
         print(_last_model(main_jsonl) or "")
         return 0
 
-    # Read the main jsonl + every subagent transcript, keep the max per requestId,
-    # then price once. Subagents are flat files (subagents/agent-*.jsonl) — spawn
-    # depth is in each agent-*.meta.json, not in folders — so one glob finds them all.
-    # Match agent-*.jsonl (same as extract_run_transcripts.py) so no unrelated .jsonl
-    # is counted as usage.
-    by_req: dict = {}
-    noreq: list = []
-    _collect(main_jsonl, since_dt, args.model, by_req, noreq)
-    if subs_dir.is_dir():
-        for sub in sorted(subs_dir.glob("agent-*.jsonl")):
-            _collect(sub, since_dt, args.model, by_req, noreq)
-
-    inp = out = cr = cc = 0
-    cost = 0.0
-    for model, u_in, u_out, u_cr, u_c5, u_c1h in list(by_req.values()) + noreq:
-        inp += u_in
-        out += u_out
-        cr += u_cr
-        cc += u_c5 + u_c1h
-        p = PRICING[_tier(model)]
-        cost += (
-            u_in * p["input"]
-            + u_out * p["output"]
-            + u_cr * p["cache_read"]
-            + u_c5 * p["cache_creation"]
-            + u_c1h * p["cache_creation_1h"]
-        ) / 1_000_000.0
-    totals = dict(
-        input=inp,
-        output=out,
-        cache_read=cr,
-        cache_creation=cc,
-        total=inp + out,
-        cost_usd=round(cost, 6),
+    try:
+        linked = (
+            _linked_sessions(Path(args.log_dir), discovered_sid) if args.log_dir else []
+        )
+    except (ValueError, OSError) as exc:
+        print(f"session_cost: {exc}", file=sys.stderr)
+        return 2
+    roots = [(discovered_sid, main_jsonl, subs_dir, "main")]
+    for entry in linked:
+        child_main, child_subs = _build_paths(entry["session_id"], entry["project_cwd"])
+        roots.append((entry["session_id"], child_main, child_subs, entry["kind"]))
+    totals = _aggregate_roots(
+        roots,
+        since_dt,
+        args.model,
+        args.otel_sink,
+        Path(args.log_dir) if args.log_dir else None,
     )
-
-    # Use a real cost if we have one, otherwise fall back to the token estimate.
-    # Order: OTEL telemetry first (works for interactive runs), then a headless
-    # run's cli_output.json. The token counts stay as summed either way (info only).
-    otel = _otel_cost(args.otel_sink, discovered_sid, since_dt)
-    if otel is not None:
-        totals["cost_usd"] = round(otel, 6)
-    elif args.log_dir:
-        auth = _authoritative_cost(Path(args.log_dir))
-        if auth is not None:
-            totals["cost_usd"] = round(auth, 6)
 
     if args.log_dir:
         _patch_run_json(Path(args.log_dir), totals)

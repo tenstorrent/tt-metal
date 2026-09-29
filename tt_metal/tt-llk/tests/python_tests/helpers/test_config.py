@@ -81,7 +81,7 @@ from .test_variant_parameters import (
     RuntimeParameter,
     TemplateParameter,
 )
-from .utils import create_directories, run_shell_command
+from .utils import build_lock_path, create_directories, run_shell_command
 
 TEMP_DIR = Path(tempfile.gettempdir())
 
@@ -1187,7 +1187,7 @@ class TestConfig:
                 )
 
     def collect_hash(self):
-        lock_file = TEMP_DIR / "tt-llk-build-print.lock"
+        lock_file = Path(build_lock_path("tt-llk-build-print"))
         lock_file.touch(exist_ok=True)
 
         with open(lock_file, "w") as lock:
@@ -1381,7 +1381,7 @@ class TestConfig:
 
         shared_obj_dir = TestConfig.SHARED_OBJ_DIR
         shared_elf_dir = TestConfig.SHARED_ELF_DIR
-        lock_file = TEMP_DIR / "tt-llk-build-shared.lock"
+        lock_file = build_lock_path("tt-llk-build-shared")
 
         done_marker = shared_obj_dir / ".shared_complete"
 

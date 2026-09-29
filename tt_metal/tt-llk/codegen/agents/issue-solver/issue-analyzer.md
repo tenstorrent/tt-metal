@@ -60,8 +60,8 @@ whether a suite reaches the changed code.
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 ```
 
-Read `.claude/CLAUDE.md`. Parse `TARGET_ARCHES_JSON` as JSON for multi-arch
-runs; otherwise use `TARGET_ARCH`.
+Read `.claude/CLAUDE.md`. Parse `TARGET_ARCHES_JSON` as JSON for
+multi-arch runs; otherwise use `TARGET_ARCH`.
 
 ## Analysis Process
 
@@ -82,7 +82,13 @@ runs; otherwise use `TARGET_ARCH`.
    These styles describe how to inspect code; neither permits dropping distinct
    requirements from a multi-part issue.
 4. Set `perf_intent` to `optimize` only when the issue explicitly requires a
-   speedup; otherwise use `maintain`.
+   speedup; use `measure` when the requested deliverable is benchmark infrastructure
+   or establishing measurements without a required speedup. Otherwise use `maintain`.
+   Measurement intent still requires functional correctness and actual cycle evidence.
+For host-only checks, predeclare `execution: host` only for explicitly
+`pytest.mark.llk_host` modules/nodes. Device execution remains the default; host
+checks cannot replace hardware requirements or cycle measurements.
+
 5. Determine `fix_layer` from `.claude/references/metal-integration.md`:
 
    | Value | Scope |
@@ -214,7 +220,7 @@ arch_scope:
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
 llk_area: unpack|math|pack|SFPU|sync/reconfig|test_harness|metal_integration|runtime_integration
-perf_intent: optimize|maintain
+perf_intent: optimize|maintain|measure
 scope_style: sweep|targeted
 
 ## Verification
@@ -277,9 +283,9 @@ module separately; hypothesis confidence or later refutation does not waive it.
 
 ## Self-Log
 
-Before returning, write `${LOG_DIR}/agent_issue_analyzer.md` with searches,
-files inspected, and unresolved uncertainty. If `LOG_DIR` is empty, report
-that the self-log was skipped.
+Write `${LOG_DIR}/agent_issue_analyzer.md` with the analysis path and unresolved
+uncertainty only. Keep requirements and evidence in the analysis; do not repeat
+its content or transcript file/search inventories. Skip when `LOG_DIR` is empty.
 
 Suite `architectures` must follow fixture/device support, not copy the issue scope.
 Quasar supports Metal tests through Aether; a setup failure does not make a

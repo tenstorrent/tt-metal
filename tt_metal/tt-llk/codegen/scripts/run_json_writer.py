@@ -71,7 +71,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
+import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -237,6 +240,9 @@ def _merge_patch(doc: dict[str, Any], patch: dict[str, Any]) -> None:
 def cmd_init(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     start_time = args.start_time or _utcnow()
+    executor = os.environ.get("CODEGEN_FUNCTIONAL_EXECUTOR") or None
+    if executor not in (None, "sealed-llk-v1"):
+        raise ValueError("unsupported CODEGEN_FUNCTIONAL_EXECUTOR")
 
     doc: dict[str, Any] = {
         "run_id": args.run_id,
@@ -282,6 +288,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             if os.environ.get("CODEGEN_RESUME_RUN_ID")
             else None
         ),
+        "solver_plugins": json.loads(os.environ.get("CODEGEN_SOLVER_PLUGINS", "{}")),
         "git_commit": args.git_commit,
         "git_branch": args.git_branch,
         "description": args.description or None,
@@ -357,6 +364,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     patch = _json_arg(args.patch_json, {})
     _merge_patch(doc, patch)
 
+    doc.pop("functional_execution", None)
+    doc.pop("functional_executor", None)
+    if executor:
+        doc["functional_executor"] = executor
     _atomic_write(log_dir, doc)
     print(f"init: wrote {_run_json_path(log_dir)}")
 
@@ -522,6 +533,12 @@ def cmd_failure(args: argparse.Namespace) -> None:
 def cmd_metric(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     patch = _json_arg(args.patch_json, {})
+    if any(
+        next((part for part in key.split(".") if part), "")
+        in {"functional_executor", "functional_execution"}
+        for key in patch
+    ):
+        raise ValueError("functional execution identity belongs to init/executor")
     with _run_json_transaction(log_dir) as doc:
         _merge_patch(doc, patch)
     print(f"metric: patched {sorted(patch)}")
@@ -593,9 +610,27 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     now = args.end_time or _utcnow()
     patch = _json_arg(args.patch_json, {})
+    if not isinstance(patch, dict):
+        raise ValueError("finalize patch must be a JSON object")
+    # Identity and evidence belong to init/review/reduction, never a final
+    # metadata patch. Include dotted aliases accepted by _merge_patch.
+    protected = {
+        "run_id",
+        "attempt_id",
+        "runner_pool",
+        "required_verification",
+        "verification_reduction",
+        "functional_executor",
+        "functional_execution",
+        "review",
+    }
+    for key in patch:
+        parts = [part for part in key.split(".") if part]
+        if parts and parts[0] in protected:
+            raise ValueError(f"finalize patch cannot change {parts[0]}")
 
     with _run_json_transaction(log_dir) as doc:
-        _validate_audit_success(log_dir, doc, args)
+        _merge_patch(doc, patch)
 
         history = doc.setdefault("step_history", [])
         if history and history[-1].get("result") == "in_progress":
@@ -619,12 +654,13 @@ def cmd_finalize(args: argparse.Namespace) -> None:
             args.final_message or doc.get("current_step_message") or ""
         )
 
-        _merge_patch(doc, patch)
-
-        # Apply typed --solver-state last so it cannot be silently overridden by
-        # --patch-json (argparse choices otherwise bypass it via that escape hatch).
+        # Typed terminal flags are authoritative over the metadata patch.
         if args.solver_state is not None:
             doc["solver_state"] = args.solver_state
+
+        # Validate exactly the final record, while the transaction still holds
+        # the lock and before any write. Failure leaves the old record intact.
+        _validate_audit_success(log_dir, doc, args)
 
     print(f"finalize: status={args.status}")
 
@@ -681,7 +717,11 @@ def _canonical_digest(value: Any) -> str:
 
 
 def _candidate_patch_digest(worktree: Path, base: str) -> str:
-    """Hash all candidate content while preserving setup-owned index exclusions."""
+    """Hash full-index transport bytes, preserving setup-owned index exclusions.
+
+    Legacy abbreviated review/checkpoint digests are not identity aliases;
+    their owning contexts must be regenerated before reuse.
+    """
     if not worktree.is_dir() or not _SHA40_RE.fullmatch(base):
         raise ValueError("candidate patch requires a worktree and exact base SHA")
     worktree = Path(
@@ -728,7 +768,15 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
             delete=False,
         ) as temporary:
             temporary_index = temporary.name
-            temporary.write(Path(index).read_bytes())
+            with open(index, "rb") as source_index:
+                index_stat = os.fstat(source_index.fileno())
+                temporary.write(source_index.read())
+        # Git uses the index timestamp to detect potentially racy-clean entries.
+        # A fresh timestamp can hide same-size edits behind cached file stats.
+        os.utime(
+            temporary_index,
+            ns=(index_stat.st_atime_ns, index_stat.st_mtime_ns),
+        )
         env = {**os.environ, "GIT_INDEX_FILE": temporary_index}
         subprocess.run(
             ["git", "-C", str(worktree), "add", "-A", "--", "."],
@@ -738,7 +786,17 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
             timeout=120,
         )
         patch = subprocess.run(
-            ["git", "-C", str(worktree), "diff", "--cached", "--binary", base, "--"],
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+                "--",
+            ],
             check=True,
             capture_output=True,
             env=env,
@@ -748,6 +806,119 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
         if temporary_index:
             Path(temporary_index).unlink(missing_ok=True)
     return hashlib.sha256(patch).hexdigest()
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Bind the existing reviewer handoff to the run, manifest and candidate."""
+    log_dir = Path(args.log_dir)
+    run = _load(log_dir)
+    context_path = log_dir / "review_context.json"
+    result_path = log_dir / "review_result.json"
+    identity = {
+        "run_id": run["run_id"],
+        "attempt_id": run.get("attempt_id"),
+        "verification_attempt_id": (run.get("required_verification") or {}).get(
+            "attempt_id"
+        ),
+        "run_kind": args.run_kind or "issue",
+        "base_commit": args.expected_base_sha,
+        "patch_sha256": _candidate_patch_digest(
+            Path(args.worktree), args.expected_base_sha
+        ),
+    }
+    if args.action == "prepare":
+        identity["review_id"] = uuid.uuid4().hex
+        result_path.unlink(missing_ok=True)
+        _atomic_write(log_dir, identity, destination=context_path)
+        return
+    # A disposition-only round has no candidate code to review. Compute this
+    # from Git, never from the agent's changed-file list.
+    if (
+        args.action == "check"
+        and args.run_kind == "review"
+        and identity["patch_sha256"] == hashlib.sha256(b"").hexdigest()
+    ):
+        return
+    context = json.loads(context_path.read_text())
+    if any(context.get(key) != value for key, value in identity.items()):
+        raise ValueError("review context is stale: run, verification or patch changed")
+    review = json.loads(result_path.read_text())
+    if not isinstance(review, dict) or review.get("identity") != context:
+        raise ValueError("review result is missing the current review identity")
+    if review.get("reviewed") is not True:
+        raise ValueError("reviewed must be true")
+    findings = review.get("findings")
+    unresolved = review.get("unresolved")
+    if not isinstance(findings, list) or not isinstance(unresolved, list):
+        raise ValueError("review findings and unresolved must be arrays")
+    severities = {
+        "completeness",
+        "correctness",
+        "hazard",
+        "propagation",
+        "parity",
+        "style",
+        "cleanup",
+    }
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or type(finding.get("blocking")) is not bool
+            or finding.get("severity") not in severities
+            or any(
+                not isinstance(finding.get(key), str) or not finding[key].strip()
+                for key in ("file", "line", "title", "comment")
+            )
+        ):
+            raise ValueError("malformed review finding")
+    if any(not isinstance(item, str) or not item.strip() for item in unresolved):
+        raise ValueError("unresolved entries must name the missing evidence")
+    blockers = sum(finding["blocking"] for finding in findings)
+    for key, expected in (
+        ("findings_total", len(findings)),
+        ("blocking_total", blockers),
+    ):
+        if type(review.get(key)) is not int or review[key] != expected:
+            raise ValueError(f"review {key} does not match actual findings")
+    if review.get("verdict") != ("changes_requested" if blockers else "clean"):
+        raise ValueError("review verdict does not match actual findings")
+    if (args.run_kind != "review" and "requirements_complete" not in review) or (
+        review.get("requirements_complete") is not None
+        and type(review["requirements_complete"]) is not bool
+    ):
+        raise ValueError("review requirements_complete must be boolean or null")
+    skills = review.get("skills_used")
+    if not isinstance(skills, list) or any(
+        not isinstance(skill, str) for skill in skills
+    ):
+        raise ValueError("review skills_used must be an array of skill names")
+    if (run.get("solver_plugins") or {}).get(
+        "tt-review-skills"
+    ) and "tt-review-core" not in skills:
+        raise ValueError("configured review plugin was not consumed")
+    if args.action == "validate":
+        # Schema/identity validation is separate from acceptance: a legitimate
+        # review may request changes or identify evidence still needed.
+        return
+    if args.action == "check":
+        if (
+            (
+                args.run_kind != "review"
+                and review.get("requirements_complete") is not True
+            )
+            or blockers
+            or unresolved
+        ):
+            raise ValueError(
+                "issue requirements or review evidence incomplete: "
+                + str(review.get("summary", ""))
+            )
+        return
+    _atomic_write(
+        log_dir, review, destination=log_dir / "reviews" / f"{uuid.uuid4().hex}.json"
+    )
+    run["review"] = review
+    _atomic_write(log_dir, run)
 
 
 def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
@@ -1038,7 +1209,7 @@ def _required_measurements(item: dict) -> list[str]:
         values = json.loads(raw)
     except ValueError as exc:
         raise ValueError("required_measurements must be a JSON string array") from exc
-    allowed = {"cycle_comparison", "repeatability"}
+    allowed = {"cycle_comparison", "cycle_measurement", "repeatability"}
     if (
         not isinstance(values, list)
         or not values
@@ -1240,7 +1411,7 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
         not isinstance(doc, dict)
         or set(doc) != fields
         or doc.get("schema") != "tt.issue-solver.required-verification"
-        or doc.get("version") != 1
+        or doc.get("version") not in (1, 2)
         or doc.get("manifest_id")
         != _canonical_digest(
             {key: value for key, value in doc.items() if key != "manifest_id"}
@@ -1286,7 +1457,10 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
     }
     identities = set()
     for requirement in doc["requirements"]:
-        if not isinstance(requirement, dict) or set(requirement) != requirement_fields:
+        if not isinstance(requirement, dict) or set(requirement) not in (
+            requirement_fields,
+            requirement_fields | {"measurement_contract"},
+        ):
             raise ValueError("required-verification requirement schema is invalid")
         identity = requirement["requirement_id"]
         if not isinstance(identity, str) or not identity or identity in identities:
@@ -1296,8 +1470,17 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("required-verification architecture is invalid")
         if requirement["suite"] not in {"llk", "metal", "ttnn", "perf"}:
             raise ValueError("required-verification suite is invalid")
-        if requirement["backend"] not in {"silicon", "ttsim", "quasar", "local"}:
+        if requirement["backend"] not in (
+            {"silicon", "ttsim", "quasar", "local"}
+            | ({"host"} if doc["version"] == 2 else set())
+        ):
             raise ValueError("required-verification backend is invalid")
+        if requirement["backend"] == "host" and (
+            requirement["suite"] != "llk" or requirement["required_measurements"]
+        ):
+            raise ValueError(
+                "host verification is an LLK functional check, not device measurement"
+            )
         selector = requirement["selector"]
         if (
             not isinstance(selector, dict)
@@ -1318,12 +1501,29 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
         if (
             not isinstance(measurements, list)
             or any(
-                value not in {"cycle_comparison", "repeatability"}
+                not isinstance(value, str)
+                or value
+                not in {"cycle_comparison", "cycle_measurement", "repeatability"}
                 for value in measurements
             )
             or len(set(measurements)) != len(measurements)
         ):
             raise ValueError("required-verification measurements are invalid")
+        if "cycle_measurement" in measurements:
+            if (
+                doc["version"] != 2
+                or requirement["suite"] != "perf"
+                or requirement["backend"] != "silicon"
+                or "cycle_comparison" in measurements
+            ):
+                raise ValueError(
+                    "cycle_measurement requires a v2 silicon perf leaf without comparison"
+                )
+            from perf_eval import validate_measurement_contract
+
+            validate_measurement_contract(requirement.get("measurement_contract"))
+        elif "measurement_contract" in requirement:
+            raise ValueError("measurement_contract requires cycle_measurement")
     if not isinstance(doc["waivers"], list):
         raise ValueError("required-verification waivers must be an array")
     waiver_fields = {
@@ -1543,6 +1743,14 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         requirements.append(requirement)
         return requirement
 
+    for item in [*plan_tests, *candidates]:
+        if item.get("execution", "device") not in {"device", "host"}:
+            raise ValueError("test execution must be device|host")
+        if item.get("execution") == "host" and _is_performance_selector(
+            item.get("test", "")
+        ):
+            raise ValueError("performance verification cannot execute on host")
+
     if llk_applicable:
         source_items = llk_plan or applicable_candidates
         for arch in arches:
@@ -1557,7 +1765,11 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 add_requirement(
                     arch,
                     "llk",
-                    _verification_backend(args.backend, arch),
+                    (
+                        "host"
+                        if item.get("execution") == "host"
+                        else _verification_backend(args.backend, arch)
+                    ),
                     _normalize_pytest_selector(item["test"], arch, worktree),
                     _requirement_count(item, "minimum_selected"),
                     _requirement_count(item, "minimum_executed"),
@@ -1656,7 +1868,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             measurements = _required_measurements(item) or ["cycle_comparison"]
             if deterministic and "repeatability" not in measurements:
                 measurements.append("repeatability")
-            add_requirement(
+            requirement = add_requirement(
                 arch,
                 "perf",
                 backend,
@@ -1665,6 +1877,25 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 max([*repetitions, _requirement_count(item, "minimum_executed")]),
                 measurements,
             )
+            if "cycle_measurement" in measurements:
+                if _markdown_scalar(analysis, "perf_intent") != "measure":
+                    raise ValueError(
+                        "cycle_measurement requires predeclared perf_intent: measure"
+                    )
+                try:
+                    from perf_eval import canonical_measurement_contract
+
+                    requirement["measurement_contract"] = (
+                        canonical_measurement_contract(
+                            json.loads(item.get("measurement_contract", ""))
+                        )
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "measurement_contract must be a valid JSON measurement contract"
+                    ) from exc
+            elif item.get("measurement_contract"):
+                raise ValueError("measurement_contract requires cycle_measurement")
 
     if not args.performance_only and verify_required == "yes":
         uncovered = set(arches) - {r["architecture"] for r in requirements}
@@ -1708,6 +1939,30 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             )
         if not args.supersedes_reason:
             raise ValueError("a superseding manifest requires --supersedes-reason")
+        from perf_eval import canonical_measurement_contract
+
+        for prior in previous["requirements"]:
+            matches = [
+                r
+                for r in requirements
+                if all(r[k] == prior[k] for k in ("architecture", "suite", "selector"))
+            ]
+            if "cycle_measurement" in prior["required_measurements"] and (
+                len(matches) != 1
+                or matches[0].get("measurement_contract")
+                != canonical_measurement_contract(prior["measurement_contract"])
+                or "cycle_measurement" not in matches[0]["required_measurements"]
+            ):
+                raise ValueError(
+                    "cannot remove or change a predeclared measurement contract"
+                )
+            if matches and (
+                "cycle_comparison" in prior["required_measurements"]
+                and "cycle_measurement" in matches[0]["required_measurements"]
+            ):
+                raise ValueError(
+                    "cannot downgrade a sealed comparison to measurement-only"
+                )
 
     def apply_waiver_policies(
         policies: list[dict[str, Any]], policy_sha256: str, policy_path: str
@@ -1845,7 +2100,15 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     revision = int(previous["revision"]) + 1 if previous else 1
     doc = {
         "schema": "tt.issue-solver.required-verification",
-        "version": 1,
+        "version": (
+            2
+            if any(
+                "measurement_contract" in r or r["backend"] == "host"
+                for r in requirements
+            )
+            or (previous and previous["version"] == 2)
+            else 1
+        ),
         "manifest_id": "0" * 64,
         "run_id": args.run_id,
         "attempt_id": f"attempt-{revision:03d}",
@@ -2028,7 +2291,7 @@ def _load_local_manifest(path: Path, artifact_root: Path) -> dict[str, Any]:
 
 
 def _classify_verification(
-    collection: dict[str, int], execution: dict[str, Any]
+    collection: dict[str, int], execution: dict[str, Any], *, host: bool = False
 ) -> tuple[str, list[str]]:
     markers = execution["infrastructure_markers"]
     collection_nonzero = collection["returncode"] != 0 and not (
@@ -2064,6 +2327,12 @@ def _classify_verification(
         and execution["xpassed"] == 0
         and execution["passed"] == execution["executed"]
     ):
+        if host and (
+            execution["executed"] != collection["selected"]
+            or execution["skipped"]
+            or execution["xfailed"]
+        ):
+            return "coverage_error", ["host_execution_outcome_incomplete"]
         return "success", []
     if execution["returncode"] == 1 and execution["failed"] > 0:
         return "candidate_failure", ["test_failure"]
@@ -2074,8 +2343,113 @@ def _classify_verification(
     return "infra_error", ["execution_nonzero_exit"]
 
 
-def cmd_verification_result(args: argparse.Namespace) -> int:
-    collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
+def _host_dependencies() -> dict[str, Any]:
+    """Identity of the Python runtime and installed distributions actually used."""
+    import importlib.metadata
+
+    return {
+        "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
+        "python_version": sys.version,
+        "distributions": sorted(
+            (d.metadata["Name"], d.version) for d in importlib.metadata.distributions()
+        ),
+    }
+
+
+def _host_inputs(args: argparse.Namespace, source: str, patch: str) -> dict[str, Any]:
+    llk_root = Path(__file__).resolve().parents[2]
+    harness = {
+        name: hashlib.sha256((llk_root / name).read_bytes()).hexdigest()
+        for name in (
+            "tests/python_tests/helpers/llk_pytest_plugin.py",
+            ".claude/scripts/run_test.sh",
+            "codegen/scripts/run_json_writer.py",
+        )
+    }
+    return {
+        "source_tree_sha256": source,
+        "harness_sha256": _canonical_digest(harness),
+        "dependencies_sha256": _canonical_digest(_host_dependencies()),
+        "expected_base_sha": args.expected_base_sha,
+        "actual_base_sha": args.actual_base_sha,
+        "patch_sha256": patch,
+        "run_id": args.run_id,
+        "attempt_id": args.attempt_id,
+        "requirement_id": args.requirement_id,
+        "architecture": args.architecture,
+        "selector": {"test": args.test, "test_id": args.test_id, "k": args.k},
+    }
+
+
+def cmd_host_input_manifest(args: argparse.Namespace) -> None:
+    inputs = _host_inputs(args, args.host_source_sha256, args.patch_sha256)
+    document = {
+        "schema": "tt.issue-solver.host-inputs",
+        "version": 1,
+        "inputs": inputs,
+        "inputs_sha256": _canonical_digest(inputs),
+    }
+    destination = Path(args.output)
+    _atomic_write(destination.parent, document, destination=destination)
+
+
+def _host_provenance(
+    args: argparse.Namespace, collection: dict, markers: list, counts: dict
+) -> dict:
+    document = json.loads(Path(args.host_input_manifest).read_text())
+    if (
+        set(document) != {"schema", "version", "inputs", "inputs_sha256"}
+        or document["schema"] != "tt.issue-solver.host-inputs"
+        or document["version"] != 1
+        or document["inputs_sha256"] != _canonical_digest(document["inputs"])
+    ):
+        raise ValueError("invalid host input manifest")
+    current = _host_inputs(args, args.host_source_sha256, args.patch_sha256)
+    if document["inputs"] != current:
+        markers.append("host_inputs_mutated_during_execution")
+    nodeids = collection.get("nodeids")
+    observed = []
+    junit_path = Path(args.junit)
+    if junit_path.is_file():
+        try:
+            root = ET.parse(junit_path).getroot()
+            for testcase in root.iter("testcase"):
+                nodes = [
+                    prop.get("value")
+                    for prop in testcase.findall("./properties/property")
+                    if prop.get("name") == "codegen_nodeid"
+                ]
+                if len(nodes) != 1 or not nodes[0]:
+                    markers.append("host_junit_node_identity_missing")
+                else:
+                    observed.append(nodes[0])
+        except ET.ParseError:
+            markers.append("result_report_missing_or_invalid")
+    if len(observed) != counts["executed"] + counts["skipped"] + counts["xfailed"]:
+        markers.append("host_junit_count_mismatch")
+    if sorted(observed) != sorted(nodeids):
+        markers.append("host_selected_nodes_not_observed")
+    return {
+        "expected_base_sha": args.expected_base_sha,
+        "actual_base_sha": args.actual_base_sha,
+        "patch_sha256": args.patch_sha256,
+        "host_inputs": document["inputs"],
+        "host_inputs_sha256": document["inputs_sha256"],
+        "executed_inputs_sha256": _canonical_digest(current),
+        "collection_sha256": hashlib.sha256(
+            Path(args.collection_json).read_bytes()
+        ).hexdigest(),
+        "junit_sha256": (
+            hashlib.sha256(junit_path.read_bytes()).hexdigest()
+            if junit_path.is_file()
+            else None
+        ),
+        "selected_nodeids": nodeids,
+        "observed_nodeids": observed,
+    }
+
+
+def _validate_collection(collection: dict, *, host: bool) -> dict:
     expected_collection = {
         "schema",
         "version",
@@ -2084,12 +2458,13 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "errors",
         "returncode",
     }
+    if host:
+        expected_collection.add("nodeids")
     if not isinstance(collection, dict) or set(collection) != expected_collection:
         raise ValueError("collection result does not match the exact schema")
-    if (
-        collection["schema"] != "tt.issue-solver.pytest-collection"
-        or collection["version"] != 1
-    ):
+    if collection["schema"] != "tt.issue-solver.pytest-collection" or collection[
+        "version"
+    ] != (2 if host else 1):
         raise ValueError("unsupported collection-result schema")
     for field in ("selected", "collected", "errors", "returncode"):
         value = collection[field]
@@ -2101,6 +2476,23 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
             raise ValueError(f"collection {field} is invalid")
     if collection["collected"] < collection["selected"]:
         raise ValueError("collection selected count exceeds collected count")
+
+    if host:
+        nodeids = collection.get("nodeids")
+        if (
+            not isinstance(nodeids, list)
+            or len(nodeids) != collection["selected"]
+            or any(not isinstance(n, str) or not n for n in nodeids)
+            or len(set(nodeids)) != len(nodeids)
+        ):
+            raise ValueError("invalid exact host collection nodeids")
+    return collection
+
+
+def cmd_verification_result(args: argparse.Namespace) -> int:
+    collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
+    host = args.backend == "host"
+    _validate_collection(collection, host=host)
 
     marker_codes = list(args.infrastructure_code or [])
     output = ""
@@ -2127,11 +2519,28 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         }
         marker_codes.append("result_report_missing_or_invalid")
 
-    manifest = _load_local_manifest(
-        Path(args.artifact_manifest), Path(args.artifact_root)
-    )
-    if manifest["artifact_mutated"]:
-        marker_codes.append("artifact_mutated_during_execution")
+    if host:
+        if args.suite != "llk" or args.artifact_manifest or args.artifact_root:
+            raise ValueError("host verification must not use device artifact evidence")
+        if not args.host_input_manifest or not args.host_source_sha256:
+            raise ValueError("host input manifest and current source digest required")
+        provenance = _host_provenance(args, collection, marker_codes, counts)
+    else:
+        if not args.artifact_manifest or not args.artifact_root:
+            raise ValueError("device artifact manifest and root required")
+        manifest = _load_local_manifest(
+            Path(args.artifact_manifest), Path(args.artifact_root)
+        )
+        if manifest["artifact_mutated"]:
+            marker_codes.append("artifact_mutated_during_execution")
+        provenance = {
+            "expected_base_sha": args.expected_base_sha,
+            "actual_base_sha": args.actual_base_sha,
+            "patch_sha256": args.patch_sha256,
+            "manifest_id": manifest["manifest_id"],
+            "artifact_set_sha256": manifest["artifact_set_sha256"],
+            "executed_artifact_sha256": manifest["executed_artifact_sha256"],
+        }
     marker_codes = list(dict.fromkeys(marker_codes))
     signal_number = args.signal
     if signal_number is None and 129 <= args.returncode <= 255:
@@ -2161,7 +2570,9 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
     ):
         raise ValueError("signal number does not match the execution return code")
 
-    classification, reasons = _classify_verification(normalized_collection, execution)
+    classification, reasons = _classify_verification(
+        normalized_collection, execution, host=host
+    )
 
     for field, pattern in (
         ("expected_base_sha", _SHA40_RE),
@@ -2184,7 +2595,7 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
             raise ValueError(f"{field} must be non-empty")
     result = {
         "schema": "tt.issue-solver.verification-result",
-        "version": 2,
+        "version": 3 if host else 2,
         "result_id": "0" * 64,
         "requirement_id": args.requirement_id,
         "run_id": args.run_id,
@@ -2194,14 +2605,7 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "suite": args.suite,
         "backend": args.backend,
         "selector": {"test": args.test, "test_id": args.test_id, "k": args.k},
-        "provenance": {
-            "expected_base_sha": args.expected_base_sha,
-            "actual_base_sha": args.actual_base_sha,
-            "patch_sha256": args.patch_sha256,
-            "manifest_id": manifest["manifest_id"],
-            "artifact_set_sha256": manifest["artifact_set_sha256"],
-            "executed_artifact_sha256": manifest["executed_artifact_sha256"],
-        },
+        "provenance": provenance,
         "collection": normalized_collection,
         "execution": execution,
         "classification": classification,
@@ -2220,6 +2624,110 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "infra_error": 3,
         "timed_out": 5,
     }[classification]
+
+
+def _validate_host_provenance(result: dict) -> None:
+    if result["backend"] != "host" or result["suite"] != "llk":
+        raise ValueError("v3 host evidence cannot represent silicon or performance")
+    p = result["provenance"]
+    fields = {
+        "expected_base_sha",
+        "actual_base_sha",
+        "patch_sha256",
+        "host_inputs",
+        "host_inputs_sha256",
+        "executed_inputs_sha256",
+        "collection_sha256",
+        "junit_sha256",
+        "selected_nodeids",
+        "observed_nodeids",
+    }
+    if not isinstance(p, dict) or set(p) != fields:
+        raise ValueError("host provenance schema is invalid")
+    for field in ("expected_base_sha", "actual_base_sha"):
+        if not isinstance(p[field], str) or not _SHA40_RE.fullmatch(p[field]):
+            raise ValueError("host base identity is invalid")
+    for field in (
+        "patch_sha256",
+        "host_inputs_sha256",
+        "executed_inputs_sha256",
+        "collection_sha256",
+    ):
+        if not isinstance(p[field], str) or not _SHA256_RE.fullmatch(p[field]):
+            raise ValueError("host digest is invalid: " + field)
+    inputs = p["host_inputs"]
+    input_fields = {
+        "source_tree_sha256",
+        "harness_sha256",
+        "dependencies_sha256",
+        "expected_base_sha",
+        "actual_base_sha",
+        "patch_sha256",
+        "run_id",
+        "attempt_id",
+        "requirement_id",
+        "architecture",
+        "selector",
+    }
+    if (
+        not isinstance(inputs, dict)
+        or set(inputs) != input_fields
+        or _canonical_digest(inputs) != p["host_inputs_sha256"]
+    ):
+        raise ValueError("host pre-execution input identity is invalid")
+    for field in (
+        "source_tree_sha256",
+        "harness_sha256",
+        "dependencies_sha256",
+        "patch_sha256",
+    ):
+        if not isinstance(inputs[field], str) or not _SHA256_RE.fullmatch(
+            inputs[field]
+        ):
+            raise ValueError("host input digest is invalid")
+    for field in ("expected_base_sha", "actual_base_sha"):
+        if not isinstance(inputs[field], str) or not _SHA40_RE.fullmatch(inputs[field]):
+            raise ValueError("host input base is invalid")
+    for field in ("run_id", "attempt_id", "requirement_id", "architecture", "selector"):
+        if inputs[field] != result[field]:
+            raise ValueError("host input identity mismatch: " + field)
+    if inputs["expected_base_sha"] != p["expected_base_sha"]:
+        raise ValueError("host expected base changed")
+    markers = result["execution"]["infrastructure_markers"]
+    mutated = p["host_inputs_sha256"] != p["executed_inputs_sha256"]
+    if mutated != ("host_inputs_mutated_during_execution" in markers):
+        raise ValueError("host mutation marker contradicts input evidence")
+    if not mutated and any(
+        inputs[f] != p[f] for f in ("actual_base_sha", "patch_sha256")
+    ):
+        raise ValueError("host source identity contradicts input evidence")
+    if p["junit_sha256"] is None:
+        if "result_report_missing_or_invalid" not in markers:
+            raise ValueError("host JUnit evidence is missing")
+    elif not isinstance(p["junit_sha256"], str) or not _SHA256_RE.fullmatch(
+        p["junit_sha256"]
+    ):
+        raise ValueError("host JUnit digest is invalid")
+    for field in ("selected_nodeids", "observed_nodeids"):
+        nodes = p[field]
+        if (
+            not isinstance(nodes, list)
+            or any(not isinstance(n, str) or not n for n in nodes)
+            or len(nodes) != len(set(nodes))
+        ):
+            raise ValueError("host node identities are invalid")
+    counts = result["execution"]
+    if (
+        len(p["observed_nodeids"])
+        != counts["executed"] + counts["skipped"] + counts["xfailed"]
+    ) != ("host_junit_count_mismatch" in markers):
+        raise ValueError("host JUnit counts contradict node evidence")
+    if len(p["selected_nodeids"]) != result["collection"]["selected"]:
+        raise ValueError("host selected nodes contradict collection")
+    if (sorted(p["selected_nodeids"]) != sorted(p["observed_nodeids"])) != (
+        "host_selected_nodes_not_observed" in markers
+    ):
+        raise ValueError("host exact-node coverage contradicts evidence")
 
 
 def _load_verification_result(path: Path) -> dict[str, Any]:
@@ -2242,17 +2750,22 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
         "classification",
         "reason_codes",
     }
+    perf_receipt = isinstance(result, dict) and result.get("version") == 4
+    if perf_receipt:
+        fields.add("measurement_artifacts")
     if (
         not isinstance(result, dict)
         or set(result) != fields
         or result["schema"] != "tt.issue-solver.verification-result"
-        or result["version"] != 2
+        or result["version"] not in (2, 3, 4)
         or result["result_id"]
         != _canonical_digest(
             {key: value for key, value in result.items() if key != "result_id"}
         )
     ):
-        raise ValueError("verification result does not match the exact v2 schema")
+        raise ValueError(
+            "verification result does not match its exact versioned schema"
+        )
     for field in (
         "result_id",
         "requirement_id",
@@ -2267,6 +2780,25 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
             raise ValueError(f"verification result {field} must be nonempty")
     if not _SHA256_RE.fullmatch(result["result_id"]):
         raise ValueError("verification result result_id is invalid")
+    if perf_receipt:
+        if result["backend"] != "silicon" or result["suite"] != "perf":
+            raise ValueError("v4 measurement receipts require silicon perf")
+        artifacts = result["measurement_artifacts"]
+        if not isinstance(artifacts, dict) or set(artifacts) != {
+            "current",
+            "raw_current",
+        }:
+            raise ValueError("measurement artifact schema is invalid")
+        for artifact in artifacts.values():
+            if (
+                not isinstance(artifact, dict)
+                or set(artifact) != {"sha256", "size"}
+                or not isinstance(artifact["sha256"], str)
+                or not _SHA256_RE.fullmatch(artifact["sha256"])
+                or type(artifact["size"]) is not int
+                or artifact["size"] <= 0
+            ):
+                raise ValueError("measurement artifact hash/size is invalid")
     selector = result["selector"]
     if (
         not isinstance(selector, dict)
@@ -2280,30 +2812,33 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
     ):
         raise ValueError("verification result selector is invalid")
     provenance = result["provenance"]
-    if not isinstance(provenance, dict) or set(provenance) != {
-        "expected_base_sha",
-        "actual_base_sha",
-        "patch_sha256",
-        "manifest_id",
-        "artifact_set_sha256",
-        "executed_artifact_sha256",
-    }:
-        raise ValueError("verification result provenance is invalid")
-    for field in ("expected_base_sha", "actual_base_sha"):
-        if not isinstance(provenance[field], str) or not _SHA40_RE.fullmatch(
-            provenance[field]
+    if result["version"] != 3:
+        if result["backend"] == "host":
+            raise ValueError("host execution requires a v3 result")
+        if not isinstance(provenance, dict) or set(provenance) != {
+            "expected_base_sha",
+            "actual_base_sha",
+            "patch_sha256",
+            "manifest_id",
+            "artifact_set_sha256",
+            "executed_artifact_sha256",
+        }:
+            raise ValueError("verification result provenance is invalid")
+        for field in ("expected_base_sha", "actual_base_sha"):
+            if not isinstance(provenance[field], str) or not _SHA40_RE.fullmatch(
+                provenance[field]
+            ):
+                raise ValueError(f"verification result provenance.{field} is invalid")
+        for field in (
+            "patch_sha256",
+            "manifest_id",
+            "artifact_set_sha256",
+            "executed_artifact_sha256",
         ):
-            raise ValueError(f"verification result provenance.{field} is invalid")
-    for field in (
-        "patch_sha256",
-        "manifest_id",
-        "artifact_set_sha256",
-        "executed_artifact_sha256",
-    ):
-        if not isinstance(provenance[field], str) or not _SHA256_RE.fullmatch(
-            provenance[field]
-        ):
-            raise ValueError(f"verification result provenance.{field} is invalid")
+            if not isinstance(provenance[field], str) or not _SHA256_RE.fullmatch(
+                provenance[field]
+            ):
+                raise ValueError(f"verification result provenance.{field} is invalid")
     collection = result["collection"]
     if not isinstance(collection, dict) or set(collection) != {
         "selected",
@@ -2378,7 +2913,11 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
         > collection["selected"]
     ):
         raise ValueError("verification result outcomes exceed selected count")
-    classification, reasons = _classify_verification(collection, execution)
+    if result["version"] == 3:
+        _validate_host_provenance(result)
+    classification, reasons = _classify_verification(
+        collection, execution, host=result["version"] == 3
+    )
     if result["classification"] != classification or result["reason_codes"] != reasons:
         raise ValueError("verification result classification contradicts evidence")
     return result
@@ -2616,6 +3155,1027 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
     return reduction
 
 
+def cmd_verification_retry_context(args: argparse.Namespace) -> None:
+    """Describe a current failed reduction; never authorize success or a waiver."""
+    log_dir = Path(args.log_dir)
+    run = _load(log_dir)
+    manifest = _load_required_manifest(log_dir / "required_verification_manifest.json")
+    reduction_path = log_dir / "verification_reduction.json"
+    reduction = _load_verification_reduction(reduction_path)
+    if run.get("run_id") != manifest["run_id"]:
+        raise ValueError("retry manifest belongs to another run")
+    for field in ("run_id", "attempt_id", "manifest_id", "expected_base_sha"):
+        if reduction[field] != manifest[field]:
+            raise ValueError(f"retry reduction {field} mismatch")
+    current = run.get("required_verification") or {}
+    if any(current.get(key) != manifest[key] for key in ("manifest_id", "attempt_id")):
+        raise ValueError("retry manifest is not the current sealed attempt")
+    if (run.get("verification_reduction") or {}).get("reduction_id") != reduction[
+        "reduction_id"
+    ]:
+        raise ValueError("retry reduction is not current in run.json")
+    if run.get("base_commit") and run["base_commit"] != manifest["expected_base_sha"]:
+        raise ValueError("retry base differs from current run")
+    if reduction["scope"] != "functional":
+        raise ValueError("test retry requires the current functional reduction")
+    requirements = {
+        item["requirement_id"]: item
+        for item in manifest["requirements"]
+        if item["suite"] in {"llk", "metal", "ttnn"}
+    }
+    if {leaf["requirement_id"] for leaf in reduction["leaves"]} != set(requirements):
+        raise ValueError("retry reduction does not cover current functional leaves")
+    failed = []
+    for leaf in reduction["leaves"]:
+        requirement = requirements[leaf["requirement_id"]]
+        if any(leaf[key] != requirement[key] for key in ("architecture", "suite")):
+            raise ValueError("retry leaf identity differs from manifest")
+        if leaf["classification"] != "success":
+            failed.append(
+                {
+                    **{
+                        key: leaf[key]
+                        for key in (
+                            "requirement_id",
+                            "classification",
+                            "reason_codes",
+                            "result_id",
+                            "result_classification",
+                            "selected",
+                            "executed",
+                            "failed",
+                            "skipped",
+                            "xfailed",
+                            "xpassed",
+                        )
+                    },
+                    "architecture": requirement["architecture"],
+                    "suite": requirement["suite"],
+                    "backend": requirement["backend"],
+                    "selector": requirement["selector"],
+                }
+            )
+    # A missing/untrusted receipt is an evidence problem, not proof that the
+    # worker must invent a test. Genuine failures take precedence over skips.
+    coverage_reasons = {
+        "zero_selected",
+        "zero_executed",
+        "minimum_selected_not_met",
+        "minimum_executed_not_met",
+        "required_case_not_executed",
+    }
+    if reduction["classification"] in {"infra_error", "partial"} or any(
+        not leaf["result_id"]
+        or leaf["classification"] not in {"candidate_failure", "coverage_error"}
+        or (
+            leaf["classification"] == "coverage_error"
+            and not set(leaf["reason_codes"]) <= coverage_reasons
+        )
+        for leaf in failed
+    ):
+        failure_class, retry = "ENV_ERROR", False
+    elif not failed or reduction["classification"] == "success":
+        failure_class, retry = None, False
+    elif any(
+        leaf["failed"]
+        or leaf["xpassed"]
+        or leaf["result_classification"] == "candidate_failure"
+        for leaf in failed
+    ):
+        failure_class, retry = "TESTS_FAILED", True
+    elif all(leaf["selected"] == 0 for leaf in failed):
+        failure_class, retry = "MISSING_TEST_COVERAGE", True
+    else:
+        failure_class, retry = "VERIFICATION_PLAN_ERROR", True
+    print(
+        json.dumps(
+            {
+                "failure_class": failure_class,
+                "retry_allowed": retry,
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "manifest_id": manifest["manifest_id"],
+                "reduction_id": reduction["reduction_id"],
+                "reduction_path": str(reduction_path),
+                "results_dir": str(log_dir / "verification-results"),
+                "reason_codes": reduction["reason_codes"],
+                "leaves": failed,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def _dispatch_cmd(state: dict[str, Any]) -> str:
+    """The silicon-queue client, from run state or the inherited environment.
+
+    ``worker.py`` exports this as an environment variable for the solve process
+    and never writes it into state.json, which is also how every tester
+    playbook consumes it. Reading state alone meant the sealed executors found
+    no dispatcher and fell back with ``sealed_dispatch_unavailable`` on every
+    real run -- invisible until now because the no-model replay wrote the key
+    into its fixture state by hand. State still wins when present, so a sealed
+    run can pin a specific client.
+    """
+    return state.get("HW_TEST_DISPATCH_CMD") or os.environ.get(
+        "HW_TEST_DISPATCH_CMD", ""
+    )
+
+
+def _sealed_execution_identity(
+    log_dir: Path, worktree: Path, scope: str
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any], Path, dict[str, Any]] | None:
+    """Bind run, state, bootstrap, worktree and sealed manifest to one identity.
+
+    Returns ``None`` when this run has not opted into deterministic execution.
+    Shared by every deterministic executor so the functional and measurement
+    routes cannot drift apart on the checks that keep a leaf attributable to
+    exactly one candidate.
+    """
+    run = _load(log_dir)
+    if (
+        run.get("functional_executor") != "sealed-llk-v1"
+        or run.get("runner_pool") != "audit"
+    ):
+        return None
+    log_dir, worktree = log_dir.resolve(strict=True), worktree.resolve(strict=True)
+    state = json.loads((log_dir / "state.json").read_text())
+    bootstrap = json.loads(
+        (worktree / "tt_metal/tt-llk/.codegen_run_state.json").read_text()
+    )
+    for data in (state, bootstrap):
+        if (
+            data.get("RUN_ID") != run["run_id"]
+            or Path(data.get("LOG_DIR") or "").resolve() != log_dir
+        ):
+            raise ValueError(f"{scope} execution run/bootstrap identity mismatch")
+    if Path(state.get("WORKTREE_DIR") or "").resolve() != worktree or (
+        run.get("worktree_dir") and Path(run["worktree_dir"]).resolve() != worktree
+    ):
+        raise ValueError(f"{scope} execution worktree identity mismatch")
+    if run.get("status") != "running":
+        raise ValueError(f"{scope} execution requires a running attempt")
+    manifest_path = Path(state["REQUIRED_VERIFICATION_MANIFEST"]).resolve(strict=True)
+    if not manifest_path.is_relative_to(log_dir):
+        raise ValueError(f"{scope} manifest must belong to this run")
+    manifest = _load_required_manifest(manifest_path)
+    current = run.get("required_verification") or {}
+    if (
+        manifest["run_id"] != run["run_id"]
+        or run.get("base_commit") != manifest["expected_base_sha"]
+        or state.get("GIT_COMMIT") != manifest["expected_base_sha"]
+        or any(
+            current.get(key) != manifest[key] for key in ("manifest_id", "attempt_id")
+        )
+        or state.get("REQUIRED_VERIFICATION_MANIFEST_ID") != manifest["manifest_id"]
+        or state.get("REQUIRED_VERIFICATION_ATTEMPT_ID") != manifest["attempt_id"]
+    ):
+        raise ValueError(f"{scope} manifest is not the current sealed run/attempt/base")
+    return log_dir, worktree, run, state, manifest_path, manifest
+
+
+def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
+    """Preflight the whole supported route before executing any sealed leaf."""
+    bound = _sealed_execution_identity(log_dir, worktree, "functional")
+    if bound is None:
+        return {"supported": False, "reason": "not_opted_in_audit"}
+    log_dir, worktree, run, state, manifest_path, manifest = bound
+    leaves = [r for r in manifest["requirements"] if r["suite"] != "perf"]
+    # metal and ttnn leaves reach silicon only through the sealed dispatcher,
+    # which owns their selector and build contracts; only llk has a host path.
+    if (
+        not leaves
+        or manifest["waivers"]
+        or any(
+            r["suite"] not in {"llk", "metal", "ttnn"}
+            or r["architecture"] not in {"blackhole", "wormhole"}
+            or r["backend"] not in {"silicon", "host"}
+            or (r["suite"] != "llk" and r["backend"] != "silicon")
+            or r["required_measurements"]
+            for r in leaves
+        )
+    ):
+        return {"supported": False, "reason": "unsupported_functional_route"}
+    dispatch = (
+        shlex.split(_dispatch_cmd(state))
+        if any(r["backend"] == "silicon" for r in leaves)
+        else []
+    )
+    if any(r["backend"] == "silicon" for r in leaves) and not dispatch:
+        return {"supported": False, "reason": "sealed_dispatch_unavailable"}
+    # The dispatcher rejects a metal/ttnn leaf without its dispatch mode. Fall
+    # back before executing any leaf rather than part-way through the route.
+    for suite in ("metal", "ttnn"):
+        if any(r["suite"] == suite for r in leaves) and state.get(
+            f"{suite.upper()}_DISPATCH"
+        ) not in ("slow", "fast"):
+            return {"supported": False, "reason": f"sealed_{suite}_dispatch_unset"}
+    llk = worktree / "tt_metal/tt-llk"
+    wrapper = Path(__file__).resolve().parents[2] / ".claude/scripts/run_test.sh"
+    commands = []
+    for leaf in leaves:
+        identity = leaf["requirement_id"]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", identity):
+            raise ValueError("unsafe functional requirement identity")
+        selector = leaf["selector"]
+        if leaf["suite"] == "llk":
+            test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
+            if (
+                not test_path.is_relative_to(llk / "tests/python_tests")
+                or not test_path.is_file()
+                or (
+                    selector["test_id"] is not None
+                    and not selector["test_id"].startswith(selector["test"] + "::")
+                )
+            ):
+                raise ValueError("functional selector is not a current contained test")
+        elif leaf["suite"] == "metal":
+            # A gtest filter, not a path: the dispatcher rejects a metal leaf
+            # carrying a pytest node or -k expression.
+            if (
+                not selector["test"]
+                or selector["test_id"] is not None
+                or selector["k"] is not None
+            ):
+                raise ValueError("metal selector must be a bare gtest filter")
+        else:
+            # ttnn tests live in the tt-metal tree, which the dispatcher
+            # resolves against the candidate worktree it transports.
+            ttnn_path = (worktree / selector["test"].split("::")[0]).resolve()
+            if not ttnn_path.is_relative_to(worktree) or not ttnn_path.is_file():
+                raise ValueError("ttnn selector is not a current contained test")
+        result = (
+            log_dir
+            / "verification-results"
+            / manifest["attempt_id"]
+            / f"{identity}.json"
+        )
+        env = {
+            "CODEGEN_RUN_ID": run["run_id"],
+            "CODEGEN_ATTEMPT_ID": manifest["attempt_id"],
+            "CODEGEN_REQUIREMENT_ID": identity,
+            "CODEGEN_VERIFICATION_SUITE": leaf["suite"],
+            "CODEGEN_VERIFICATION_BACKEND": leaf["backend"],
+            "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+            "CODEGEN_BASE_COMMIT": manifest["expected_base_sha"],
+        }
+        if leaf["backend"] == "silicon":
+            argv = dispatch + [
+                "--log-dir",
+                str(log_dir),
+                "--requirement-id",
+                identity,
+                "--result-json-out",
+                str(result),
+            ]
+        else:
+            argv = [
+                "bash",
+                str(wrapper),
+                "host",
+                "--worktree",
+                str(llk),
+                "--arch",
+                leaf["architecture"],
+                "--test",
+                selector["test"],
+                "--log-dir",
+                str(log_dir),
+                "--result-json-out",
+                str(result),
+            ]
+            for field, flag in (("test_id", "--test-id"), ("k", "--k")):
+                if selector[field] is not None:
+                    argv.extend([flag, selector[field]])
+        commands.append({"leaf": leaf, "argv": argv, "env": env, "result": str(result)})
+    return {
+        "supported": True,
+        "run_id": run["run_id"],
+        "manifest_id": manifest["manifest_id"],
+        "attempt_id": manifest["attempt_id"],
+        "base": manifest["expected_base_sha"],
+        "patch_sha256": _candidate_patch_digest(
+            worktree, manifest["expected_base_sha"]
+        ),
+        "manifest": str(manifest_path),
+        "commands": commands,
+        "dispatch": dispatch,
+    }
+
+
+def cmd_execute_functional(args: argparse.Namespace) -> int:
+    """Opt-in audit adapter over existing executors, never a success finalizer."""
+    log_dir, worktree = Path(args.log_dir).resolve(), Path(args.worktree).resolve()
+    plan = _functional_execution_plan(log_dir, worktree)
+    if not plan["supported"]:
+        print("functional-execution fallback: " + plan["reason"])
+        return 20
+    identity = {
+        k: plan[k] for k in ("run_id", "manifest_id", "attempt_id", "patch_sha256")
+    }
+    previous = _load(log_dir).get("functional_execution") or {}
+    if previous.get("manifest_id") == plan["manifest_id"]:
+        # Never submit a possibly still-running job or repeat a completed leaf.
+        if not all(previous.get(k) == v for k, v in identity.items()):
+            raise ValueError(
+                "recorded functional attempt belongs to a different candidate"
+            )
+        print("functional-execution already recorded; no leaf will be resubmitted")
+        if previous.get("status") != "success":
+            return 1
+        cmd_reduce_verification(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                manifest=plan["manifest"],
+                results_dir=str(log_dir / "verification-results"),
+                scope="functional",
+                worktree=str(worktree),
+                perf_result=None,
+                output=None,
+            )
+        )
+        reduction = _load_verification_reduction(
+            log_dir / "verification_reduction.json"
+        )
+        if reduction["classification"] != "success":
+            with _run_json_transaction(log_dir) as run:
+                run["functional_execution"]["status"] = "failed"
+            return 1
+        return 0
+    existing_results = log_dir / "verification-results"
+    if existing_results.exists():
+        for path in existing_results.rglob("*.json"):
+            receipt = _load_verification_result(path)
+            if all(receipt[key] == plan[key] for key in ("run_id", "attempt_id")):
+                raise ValueError(
+                    "current-attempt receipts already exist; inspect them without resubmitting"
+                )
+    if args.timeout <= 0 or not args.timeout < float("inf"):
+        raise ValueError("functional timeout must be finite and positive")
+    # Check the complete executor interface and host fixture eligibility before
+    # any test body or queue submission. Collection may import Python modules.
+    if plan["dispatch"]:
+        help_result = subprocess.run(
+            plan["dispatch"] + ["--help"], capture_output=True, text=True, timeout=10
+        )
+        if help_result.returncode or any(
+            flag not in help_result.stdout
+            for flag in ("--requirement-id", "--describe", "--result-json-out")
+        ):
+            print("functional-execution fallback: dispatcher lacks sealed interface")
+            return 20
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        argv = command["argv"] + (
+            ["--describe"] if leaf["backend"] == "silicon" else ["--collect-only"]
+        )
+        try:
+            proc = subprocess.run(
+                argv,
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+                timeout=10 if leaf["backend"] == "silicon" else None,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            if _functional_execution_plan(log_dir, worktree) != plan:
+                raise ValueError(
+                    "functional identity changed during preflight"
+                ) from exc
+            print(
+                f"functional-execution preflight unavailable: {leaf['requirement_id']}: {exc}"
+            )
+            return 20
+        if _functional_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("functional identity changed during preflight")
+        if proc.returncode:
+            print(
+                f"functional-execution preflight failed: {leaf['requirement_id']}: {proc.stderr}"
+            )
+            return 20  # No leaf has executed: the existing tester owns diagnosis.
+        document = json.loads(proc.stdout)
+        if leaf["backend"] == "silicon":
+            expected = {
+                "run_id": plan["run_id"],
+                "attempt_id": plan["attempt_id"],
+                "manifest_id": plan["manifest_id"],
+                "requirement_id": leaf["requirement_id"],
+                "arch": leaf["architecture"],
+                "kind": leaf["suite"],
+                "base": plan["base"],
+                "worktree": str(worktree),
+                "runner_pool": "audit",
+                "copy_result_json": True,
+                "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                "test_filter": leaf["selector"]["k"],
+                "result_json_out": command["result"],
+            }
+            if any(document.get(k) != v for k, v in expected.items()):
+                raise ValueError(
+                    "sealed dispatcher description changed functional identity"
+                )
+        elif (
+            _validate_collection(document, host=True)["errors"] != 0
+            or document["returncode"] != 0
+            or document["selected"]
+            < max(leaf["minimum_selected"], leaf["minimum_executed"])
+        ):
+            print(
+                f"functional-execution fallback: host selection incomplete: {leaf['requirement_id']}"
+            )
+            return 20
+    if _functional_execution_plan(log_dir, worktree) != plan:
+        raise ValueError("functional identity changed during preflight")
+    record = {**identity, "status": "running", "leaves": []}
+    with _run_json_transaction(log_dir) as run:
+        if (run.get("functional_execution") or {}).get("manifest_id") == plan[
+            "manifest_id"
+        ]:
+            raise ValueError("functional attempt was already claimed")
+        run["functional_execution"] = record
+    cmd_advance(
+        argparse.Namespace(
+            log_dir=str(log_dir),
+            now=None,
+            new_step="tester",
+            new_message="Executing sealed functional requirements",
+            prev_result="success",
+            prev_message="Fix applied; full functional route preflight passed",
+            agent=None,
+        )
+    )
+    # Leaves on different cards run concurrently, one lane per architecture. A
+    # lane stays sequential because its leaves share a builder, a card and a
+    # node-local workspace. Running every leaf in turn
+    # meant the wormhole metal build only started once the blackhole one had
+    # executed, though the two build on different hosts. Every mutation of the
+    # shared record, and every run.json write, happens under one lock, and the
+    # leaves are kept in plan order so the record does not depend on timing.
+    lock = threading.Lock()
+    halted = threading.Event()
+    stop_reasons: list[str] = []
+    order = {c["leaf"]["requirement_id"]: i for i, c in enumerate(plan["commands"])}
+
+    def publish(message: str | None = None) -> None:
+        record["leaves"].sort(key=lambda e: order[e["requirement_id"]])
+        with _run_json_transaction(log_dir) as run:
+            run["functional_execution"] = record
+            if message:
+                run["current_step_message"] = message
+
+    def halt(reason: str) -> None:
+        with lock:
+            stop_reasons.append(reason)
+        halted.set()
+
+    def run_leaf(command: dict[str, Any]) -> None:
+        leaf = command["leaf"]
+        evidence_log = (
+            log_dir / f"functional-{plan['attempt_id']}-{leaf['requirement_id']}.log"
+        )
+        entry = {
+            "requirement_id": leaf["requirement_id"],
+            "status": "running",
+            "log": str(evidence_log),
+            "result": command["result"],
+            "invocation_started": False,
+        }
+        try:
+            if _functional_execution_plan(log_dir, worktree) != plan:
+                raise ValueError("functional identity changed before next leaf")
+            with lock:
+                record["leaves"].append(entry)
+                publish(f"Verifying sealed leaf {leaf['requirement_id']}")
+            argv = command["argv"] + (
+                ["--timeout", str(args.timeout)] if leaf["backend"] == "silicon" else []
+            )
+            with evidence_log.open("w") as output:
+                with lock:
+                    entry["invocation_started"] = True
+                    publish()
+                proc = subprocess.run(
+                    argv,
+                    cwd=worktree / "tt_metal/tt-llk",
+                    env={**os.environ, **command["env"]},
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+            marker_lines = re.findall(
+                r"^HW_TEST_RESULT .*$", evidence_log.read_text(), re.MULTILINE
+            )
+            markers = [
+                dict(
+                    part.split("=", 1) for part in shlex.split(line)[1:] if "=" in part
+                )
+                for line in marker_lines
+            ]
+            marker = markers[-1] if markers else {}
+            job_id = marker.get("job") if marker.get("job") != "-" else None
+            with lock:
+                entry.update(
+                    returncode=proc.returncode,
+                    queue_job_id=job_id,
+                    failure_stage=marker.get("failure_stage"),
+                    summary=marker.get("summary"),
+                )
+            receipt = _load_verification_result(Path(command["result"]))
+            if leaf["backend"] == "silicon" and (
+                len(markers) != 1
+                or receipt["job_id"] != job_id
+                or marker.get("arch") != leaf["architecture"]
+            ):
+                raise ValueError("executor receipt does not match its dispatched job")
+            if (
+                any(receipt[k] != plan[k] for k in ("run_id", "attempt_id"))
+                or any(
+                    receipt[k] != leaf[k]
+                    for k in (
+                        "requirement_id",
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                    )
+                )
+                or receipt["provenance"]["patch_sha256"] != plan["patch_sha256"]
+                or any(
+                    receipt["provenance"][k] != plan["base"]
+                    for k in ("expected_base_sha", "actual_base_sha")
+                )
+            ):
+                raise ValueError(
+                    "executor receipt does not match sealed candidate/leaf"
+                )
+            with lock:
+                entry.update(status="recorded", result_id=receipt["result_id"])
+            if proc.returncode and receipt["classification"] == "success":
+                raise ValueError("executor failed despite a success-shaped receipt")
+            if receipt["classification"] in {"infra_error", "timed_out"}:
+                halt(
+                    "executor infrastructure failure: "
+                    + ", ".join(receipt["reason_codes"])
+                )
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            with lock:
+                entry.update(status="unresolved", error=str(exc))
+                if entry not in record["leaves"]:
+                    record["leaves"].append(entry)
+            halt(str(exc))
+        finally:
+            with lock:
+                publish()
+
+    def run_lane(commands: list[dict[str, Any]]) -> None:
+        # A halt stops each lane before its next leaf. A leaf already running
+        # in another lane finishes, since its queue job cannot be withdrawn.
+        for command in commands:
+            if halted.is_set():
+                return
+            try:
+                run_leaf(command)
+            except BaseException:
+                # Anything run_leaf does not classify must still stop the other
+                # lanes before it propagates, as it stopped the old serial loop.
+                halted.set()
+                raise
+
+    # Lanes are per architecture, host leaves included, so each arch keeps the
+    # serial stop semantics: a failure there leaves that arch's remaining leaves
+    # deterministically unstarted rather than racing them.
+    lanes: dict[str, list[dict[str, Any]]] = {}
+    for command in plan["commands"]:
+        lanes.setdefault(command["leaf"]["architecture"], []).append(command)
+    with ThreadPoolExecutor(max_workers=len(lanes) or 1) as pool:
+        for future in [pool.submit(run_lane, lane) for lane in lanes.values()]:
+            future.result()
+    stopped = "; ".join(stop_reasons) or None
+    try:
+        if _functional_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("functional identity changed after execution")
+        cmd_reduce_verification(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                manifest=plan["manifest"],
+                results_dir=str(log_dir / "verification-results"),
+                scope="functional",
+                worktree=str(worktree),
+                perf_result=None,
+                output=None,
+            )
+        )
+        reduction = _load_verification_reduction(
+            log_dir / "verification_reduction.json"
+        )
+        record["status"] = (
+            "success"
+            if not stopped and reduction["classification"] == "success"
+            else "failed"
+        )
+        record["reduction_id"] = reduction["reduction_id"]
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        stopped = f"{stopped}; reduction failed: {exc}" if stopped else str(exc)
+        record["status"] = "failed"
+    record["error"] = stopped
+    record["unstarted"] = [
+        c["leaf"]["requirement_id"]
+        for c in plan["commands"]
+        if not any(
+            r["requirement_id"] == c["leaf"]["requirement_id"]
+            and r["invocation_started"]
+            for r in record["leaves"]
+        )
+    ]
+    with _run_json_transaction(log_dir) as run:
+        run["functional_execution"] = record
+    print(
+        "functional-execution: "
+        + record["status"]
+        + (f": {stopped}" if stopped else "")
+    )
+    return 0 if record["status"] == "success" else 1
+
+
+def _measurement_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
+    """Preflight every sealed current-only measurement before dispatching one."""
+    bound = _sealed_execution_identity(log_dir, worktree, "measurement")
+    if bound is None:
+        return {"supported": False, "reason": "not_opted_in_audit"}
+    log_dir, worktree, run, state, manifest_path, manifest = bound
+    perf = [r for r in manifest["requirements"] if r["suite"] == "perf"]
+    leaves = [r for r in perf if r["required_measurements"] == ["cycle_measurement"]]
+    if (
+        not leaves
+        or manifest["waivers"]
+        # A comparison owns a detached baseline tree, so its run keeps the agent
+        # rather than splitting perf ownership across two executors.
+        or len(leaves) != len(perf)
+        or manifest["version"] != 2
+        or any(
+            r["backend"] != "silicon"
+            or r["architecture"] not in {"blackhole", "wormhole"}
+            or not isinstance(r.get("measurement_contract"), dict)
+            for r in leaves
+        )
+    ):
+        return {"supported": False, "reason": "unsupported_measurement_route"}
+    dispatch = shlex.split(_dispatch_cmd(state))
+    if not dispatch:
+        return {"supported": False, "reason": "sealed_dispatch_unavailable"}
+    llk = worktree / "tt_metal/tt-llk"
+    evaluator = Path(__file__).resolve().parent / "perf_eval.py"
+    if not evaluator.is_file():
+        return {"supported": False, "reason": "sealed_evaluator_unavailable"}
+    attempt = manifest["attempt_id"]
+    commands = []
+    for leaf in leaves:
+        identity = leaf["requirement_id"]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", identity):
+            raise ValueError("unsafe measurement requirement identity")
+        selector = leaf["selector"]
+        test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
+        if (
+            not test_path.is_relative_to(llk / "tests/python_tests")
+            or not test_path.is_file()
+            or (
+                selector["test_id"] is not None
+                and not selector["test_id"].startswith(selector["test"] + "::")
+            )
+        ):
+            raise ValueError("measurement selector is not a current contained test")
+        result = log_dir / "verification-results" / attempt / f"{identity}.json"
+        # The dispatcher derives these destinations from the same run identity;
+        # naming them here lets the preflight prove agreement before execution.
+        current = log_dir / f"perf_current_{identity}.post.csv"
+        raw = log_dir / f"perf_current_{identity}.csv"
+        commands.append(
+            {
+                "leaf": leaf,
+                "argv": dispatch
+                + ["--log-dir", str(log_dir), "--requirement-id", identity],
+                "env": {
+                    "CODEGEN_RUN_ID": run["run_id"],
+                    "CODEGEN_ATTEMPT_ID": attempt,
+                    "CODEGEN_REQUIREMENT_ID": identity,
+                    "CODEGEN_VERIFICATION_SUITE": "perf",
+                    "CODEGEN_VERIFICATION_BACKEND": "silicon",
+                    "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+                    "CODEGEN_BASE_COMMIT": manifest["expected_base_sha"],
+                },
+                "result": str(result),
+                "current": str(current),
+                "raw": str(raw),
+                # Reuse the reviewed evaluator: it re-derives the verdict from the
+                # exact CSV bytes the receipt attests and owns normalization. It
+                # is resolved next to this deployed script, never from the
+                # candidate worktree, so a candidate cannot grade its own
+                # measurement by editing its copy of the evaluator.
+                "evaluate": [
+                    sys.executable,
+                    str(evaluator),
+                    "--goal",
+                    "measure",
+                    "--current",
+                    str(current),
+                    "--raw-current",
+                    str(raw),
+                    "--required-manifest",
+                    str(manifest_path),
+                    "--requirement-id",
+                    identity,
+                    "--verification-result",
+                    str(result),
+                    "--json-out",
+                    str(log_dir / "perf_results" / attempt / f"{identity}.json"),
+                    "--results-out",
+                    str(log_dir / "perf_result.json"),
+                ],
+            }
+        )
+    return {
+        "supported": True,
+        "run_id": run["run_id"],
+        "manifest_id": manifest["manifest_id"],
+        "attempt_id": attempt,
+        "base": manifest["expected_base_sha"],
+        "patch_sha256": _candidate_patch_digest(
+            worktree, manifest["expected_base_sha"]
+        ),
+        "manifest": str(manifest_path),
+        "commands": commands,
+        "dispatch": dispatch,
+    }
+
+
+def cmd_execute_perf(args: argparse.Namespace) -> int:
+    """Measure sealed current-only perf leaves; never a success finalizer.
+
+    Runs as soon as the functional gate is green, so an independent review no
+    longer sits between a green candidate and its hardware measurement. It does
+    not reduce all requirements, grant success, or replace review.
+    """
+    log_dir, worktree = Path(args.log_dir).resolve(), Path(args.worktree).resolve()
+    plan = _measurement_execution_plan(log_dir, worktree)
+    if not plan["supported"]:
+        print("measurement-execution fallback: " + plan["reason"])
+        return 20
+    identity = {
+        k: plan[k] for k in ("run_id", "manifest_id", "attempt_id", "patch_sha256")
+    }
+    previous = _load(log_dir).get("measurement_execution") or {}
+    if previous.get("manifest_id") == plan["manifest_id"]:
+        # Never resubmit a possibly still-running job or repeat a measured leaf.
+        if not all(previous.get(k) == v for k, v in identity.items()):
+            # Because measurement now runs before review, a review-driven code
+            # change can land under an unchanged manifest. Hand the whole leaf
+            # set back to the existing perf tester rather than guess whether a
+            # stale receipt may be replaced; a slower path is not a wrong one.
+            print(
+                "measurement-execution fallback: recorded attempt belongs to a "
+                "different candidate under this manifest"
+            )
+            return 20
+        print("measurement-execution already recorded; no leaf will be resubmitted")
+        return 0 if previous.get("status") == "success" else 1
+    for command in plan["commands"]:
+        if Path(command["result"]).exists():
+            raise ValueError(
+                "current-attempt measurement receipts already exist; inspect them without resubmitting"
+            )
+    if args.timeout <= 0 or not args.timeout < float("inf"):
+        raise ValueError("measurement timeout must be finite and positive")
+    help_result = subprocess.run(
+        plan["dispatch"] + ["--help"], capture_output=True, text=True, timeout=10
+    )
+    if help_result.returncode or any(
+        flag not in help_result.stdout
+        for flag in ("--requirement-id", "--describe", "--artifact-out")
+    ):
+        print("measurement-execution fallback: dispatcher lacks sealed interface")
+        return 20
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        try:
+            proc = subprocess.run(
+                command["argv"] + ["--describe"],
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            if _measurement_execution_plan(log_dir, worktree) != plan:
+                raise ValueError(
+                    "measurement identity changed during preflight"
+                ) from exc
+            print(
+                f"measurement-execution preflight unavailable: {leaf['requirement_id']}: {exc}"
+            )
+            return 20
+        if _measurement_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("measurement identity changed during preflight")
+        if proc.returncode:
+            print(
+                f"measurement-execution preflight failed: {leaf['requirement_id']}: {proc.stderr}"
+            )
+            return 20  # Nothing dispatched: the existing perf tester owns diagnosis.
+        document = json.loads(proc.stdout)
+        expected = {
+            "run_id": plan["run_id"],
+            "attempt_id": plan["attempt_id"],
+            "manifest_id": plan["manifest_id"],
+            "requirement_id": leaf["requirement_id"],
+            "arch": leaf["architecture"],
+            "kind": "perf",
+            "base": plan["base"],
+            "worktree": str(worktree),
+            "runner_pool": "audit",
+            "measurement": True,
+            "copy_result_json": True,
+            "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+            "test_filter": leaf["selector"]["k"],
+            "result_json_out": command["result"],
+            "artifact_out": command["current"],
+            "raw_artifact_out": command["raw"],
+        }
+        if any(document.get(k) != v for k, v in expected.items()):
+            raise ValueError(
+                "sealed dispatcher description changed measurement identity"
+            )
+    if _measurement_execution_plan(log_dir, worktree) != plan:
+        raise ValueError("measurement identity changed during preflight")
+    record = {**identity, "status": "running", "leaves": []}
+    with _run_json_transaction(log_dir) as run:
+        if (run.get("measurement_execution") or {}).get("manifest_id") == plan[
+            "manifest_id"
+        ]:
+            raise ValueError("measurement attempt was already claimed")
+        run["measurement_execution"] = record
+    cmd_advance(
+        argparse.Namespace(
+            log_dir=str(log_dir),
+            now=None,
+            new_step="perf",
+            new_message="Measuring sealed performance requirements",
+            prev_result="success",
+            prev_message="Functional gate passed; measurement route preflight passed",
+            agent=None,
+        )
+    )
+    stopped = None
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        evidence_log = (
+            log_dir / f"measurement-{plan['attempt_id']}-{leaf['requirement_id']}.log"
+        )
+        entry = {
+            "requirement_id": leaf["requirement_id"],
+            "status": "running",
+            "log": str(evidence_log),
+            "result": command["result"],
+            "invocation_started": False,
+        }
+        try:
+            if _measurement_execution_plan(log_dir, worktree) != plan:
+                raise ValueError("measurement identity changed before next leaf")
+            record["leaves"].append(entry)
+            with _run_json_transaction(log_dir) as run:
+                run["measurement_execution"] = record
+                run["current_step_message"] = (
+                    f"Measuring sealed leaf {leaf['requirement_id']}"
+                )
+            with evidence_log.open("w") as output:
+                entry["invocation_started"] = True
+                with _run_json_transaction(log_dir) as run:
+                    run["measurement_execution"] = record
+                proc = subprocess.run(
+                    command["argv"] + ["--timeout", str(args.timeout)],
+                    cwd=worktree / "tt_metal/tt-llk",
+                    env={**os.environ, **command["env"]},
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+            entry["returncode"] = proc.returncode
+            marker_lines = re.findall(
+                r"^HW_TEST_RESULT .*$", evidence_log.read_text(), re.MULTILINE
+            )
+            markers = [
+                dict(
+                    part.split("=", 1) for part in shlex.split(line)[1:] if "=" in part
+                )
+                for line in marker_lines
+            ]
+            marker = markers[-1] if markers else {}
+            entry["queue_job_id"] = (
+                marker.get("job") if marker.get("job") != "-" else None
+            )
+            entry["failure_stage"] = marker.get("failure_stage")
+            entry["summary"] = marker.get("summary")
+            receipt = _load_verification_result(Path(command["result"]))
+            if (
+                len(markers) != 1
+                or receipt["job_id"] != entry["queue_job_id"]
+                or marker.get("arch") != leaf["architecture"]
+            ):
+                raise ValueError("executor receipt does not match its dispatched job")
+            if (
+                any(receipt[k] != plan[k] for k in ("run_id", "attempt_id"))
+                or any(
+                    receipt[k] != leaf[k]
+                    for k in (
+                        "requirement_id",
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                    )
+                )
+                or receipt["provenance"]["patch_sha256"] != plan["patch_sha256"]
+                or any(
+                    receipt["provenance"][k] != plan["base"]
+                    for k in ("expected_base_sha", "actual_base_sha")
+                )
+            ):
+                raise ValueError(
+                    "executor receipt does not match sealed candidate/leaf"
+                )
+            entry.update(status="executed", result_id=receipt["result_id"])
+            if proc.returncode and receipt["classification"] == "success":
+                raise ValueError("executor failed despite a success-shaped receipt")
+            if receipt["classification"] in {"infra_error", "timed_out"}:
+                stopped = "executor infrastructure failure: " + ", ".join(
+                    receipt["reason_codes"]
+                )
+                break
+            if receipt["classification"] != "success":
+                stopped = "measurement hardware execution failed: " + ", ".join(
+                    receipt["reason_codes"]
+                )
+                break
+            # Only now can the evaluator bind CSV bytes to an attested receipt.
+            evaluation = subprocess.run(
+                command["evaluate"],
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+            )
+            entry["evaluate_returncode"] = evaluation.returncode
+            if evaluation.returncode:
+                stopped = (
+                    f"measurement evidence rejected for {leaf['requirement_id']}: "
+                    + (evaluation.stderr or evaluation.stdout).strip()
+                )
+                entry["status"] = "unmeasured"
+                break
+            entry["status"] = "measured"
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            stopped = str(exc)
+            entry.update(status="unresolved", error=stopped)
+            if entry not in record["leaves"]:
+                record["leaves"].append(entry)
+            break
+        finally:
+            with _run_json_transaction(log_dir) as run:
+                run["measurement_execution"] = record
+    measured = [e for e in record["leaves"] if e["status"] == "measured"]
+    record["status"] = (
+        "success"
+        if not stopped and len(measured) == len(plan["commands"])
+        else "failed"
+    )
+    record["error"] = stopped
+    record["unstarted"] = [
+        c["leaf"]["requirement_id"]
+        for c in plan["commands"]
+        if not any(
+            r["requirement_id"] == c["leaf"]["requirement_id"]
+            and r["invocation_started"]
+            for r in record["leaves"]
+        )
+    ]
+    results = log_dir / "perf_result.json"
+    if record["status"] == "success" and results.is_file():
+        # Publish exactly what the evaluator wrote, so the existing all-scope
+        # reduction at finalization validates measurements it can already parse.
+        cmd_metric(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                now=None,
+                patch_json=json.dumps({"perf": json.loads(results.read_text())}),
+            )
+        )
+    with _run_json_transaction(log_dir) as run:
+        run["measurement_execution"] = record
+    print(
+        "measurement-execution: "
+        + record["status"]
+        + (f": {stopped}" if stopped else "")
+    )
+    return 0 if record["status"] == "success" else 1
+
+
 def cmd_reduce_verification(args: argparse.Namespace) -> int:
     """Reduce sealed leaves into deterministic suite/architecture/final state."""
     log_dir = Path(args.log_dir)
@@ -2697,23 +4257,38 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
     latest_perf = _load_perf_measurements(
         Path(args.perf_result) if args.perf_result else None
     )
-    perf_by_arch: dict[str, dict[str, Any]] = {}
+    perf_by_requirement: dict[str, dict[str, Any]] = {}
+
+    def retain_perf(document):
+        if not isinstance(document, dict):
+            return
+        if document.get("schema") == "tt.issue-solver.perf-results":
+            if (
+                set(document) != {"schema", "version", "results"}
+                or document.get("version") != 1
+                or not isinstance(document.get("results"), dict)
+            ):
+                global_reasons.append("malformed_perf_results")
+                return
+            for identity, result in document["results"].items():
+                if (
+                    not isinstance(result, dict)
+                    or result.get("requirement_id") != identity
+                ):
+                    global_reasons.append("malformed_perf_result_identity")
+                    continue
+                perf_by_requirement[identity] = result
+        elif isinstance(document.get("requirement_id"), str):
+            # Legacy single result retains its explicit requirement identity.
+            perf_by_requirement[document["requirement_id"]] = document
+
     if _run_json_path(log_dir).is_file():
         run_evidence = _load(log_dir)
-        top_level_perf = run_evidence.get("perf")
-        if isinstance(top_level_perf, dict) and isinstance(
-            top_level_perf.get("arch"), str
-        ):
-            perf_by_arch[top_level_perf["arch"]] = top_level_perf
-        for architecture, arch_result in (
-            run_evidence.get("arch_results") or {}
-        ).items():
-            if isinstance(arch_result, dict) and isinstance(
-                arch_result.get("perf"), dict
-            ):
-                perf_by_arch[architecture] = arch_result["perf"]
-    if isinstance(latest_perf.get("arch"), str):
-        perf_by_arch[latest_perf["arch"]] = latest_perf
+        retain_perf(run_evidence.get("perf"))
+        for arch_result in (run_evidence.get("arch_results") or {}).values():
+            if isinstance(arch_result, dict):
+                retain_perf(arch_result.get("perf"))
+    retain_perf(latest_perf)
     leaves = []
     patch_digests = set()
     for requirement in requirements:
@@ -2760,7 +4335,13 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                 mismatch_fields.append("expected_base_sha")
             if result["provenance"]["actual_base_sha"] != manifest["expected_base_sha"]:
                 mismatch_fields.append("actual_base_sha")
-            if (
+            if result["backend"] == "host":
+                if (
+                    result["provenance"]["host_inputs_sha256"]
+                    != result["provenance"]["executed_inputs_sha256"]
+                ):
+                    mismatch_fields.append("executed_inputs_sha256")
+            elif (
                 result["provenance"]["artifact_set_sha256"]
                 != result["provenance"]["executed_artifact_sha256"]
             ):
@@ -2803,7 +4384,7 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
             patch_digests.add(result["provenance"]["patch_sha256"])
 
         if classification == "success" and requirement["required_measurements"]:
-            perf = perf_by_arch.get(requirement["architecture"], {})
+            perf = perf_by_requirement.get(identity, {})
             if (
                 perf.get("outcome") != "PERF_OK"
                 or perf.get("measured") is not True
@@ -2828,6 +4409,49 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                     classification = "coverage_error"
                     reasons.append(f"required_measurement_missing:{measurement}")
                     continue
+                if measurement == "cycle_measurement":
+                    try:
+                        from perf_eval import evaluate_bound_measurement
+
+                        paths = []
+                        for prefix in ("current", "raw_current"):
+                            path = Path(perf[f"{prefix}_source"]).resolve()
+                            if (
+                                not path.is_relative_to(log_dir.resolve())
+                                or not path.is_file()
+                            ):
+                                raise ValueError(
+                                    "measurement artifact must belong to this run"
+                                )
+                            if (
+                                hashlib.sha256(path.read_bytes()).hexdigest()
+                                != perf[f"{prefix}_sha256"]
+                            ):
+                                raise ValueError("measurement artifact digest mismatch")
+                            paths.append(path)
+                        if (
+                            perf.get("verification_result_id")
+                            != selected_result["result_id"]
+                            or perf.get("job_id") != selected_result["job_id"]
+                        ):
+                            raise ValueError(
+                                "measurement does not belong to selected hardware receipt"
+                            )
+                        checked = evaluate_bound_measurement(
+                            paths[0],
+                            paths[1],
+                            requirement["measurement_contract"],
+                            selected_result,
+                        )
+                        if (
+                            perf.get("goal") != "measure"
+                            or perf.get("verdict") != "measured"
+                            or checked["exit_code"] != 0
+                        ):
+                            raise ValueError("measurement contract was not satisfied")
+                    except (KeyError, TypeError, ValueError, OSError):
+                        classification = "coverage_error"
+                        reasons.append("cycle_measurement_contract_not_met")
                 if measurement == "repeatability" and (
                     isinstance(evidence.get("executions"), bool)
                     or not isinstance(evidence.get("executions"), int)
@@ -3316,8 +4940,10 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--collection-json", required=True)
     result.add_argument("--junit", required=True)
     result.add_argument("--output-log", default=None)
-    result.add_argument("--artifact-manifest", required=True)
-    result.add_argument("--artifact-root", required=True)
+    result.add_argument("--artifact-manifest", default=None)
+    result.add_argument("--artifact-root", default=None)
+    result.add_argument("--host-input-manifest", default=None)
+    result.add_argument("--host-source-sha256", default=None)
     result.add_argument("--requirement-id", required=True)
     result.add_argument("--run-id", required=True)
     result.add_argument("--attempt-id", required=True)
@@ -3325,7 +4951,9 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--architecture", required=True)
     result.add_argument("--suite", required=True)
     result.add_argument(
-        "--backend", required=True, choices=["silicon", "ttsim", "quasar", "local"]
+        "--backend",
+        required=True,
+        choices=["silicon", "ttsim", "quasar", "local", "host"],
     )
     result.add_argument("--test", required=True)
     result.add_argument("--test-id", default=None)
@@ -3338,6 +4966,26 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--timed-out", action="store_true")
     result.add_argument("--infrastructure-code", action="append", default=[])
     result.set_defaults(func=cmd_verification_result)
+
+    host_input = sub.add_parser(
+        "host-input-manifest", help="Seal source/runtime identity before host execution"
+    )
+    for field in (
+        "output",
+        "host-source-sha256",
+        "patch-sha256",
+        "expected-base-sha",
+        "actual-base-sha",
+        "run-id",
+        "attempt-id",
+        "requirement-id",
+        "architecture",
+        "test",
+    ):
+        host_input.add_argument("--" + field, required=True)
+    host_input.add_argument("--test-id", default=None)
+    host_input.add_argument("--k", default=None)
+    host_input.set_defaults(func=cmd_host_input_manifest)
 
     reduce_result = sub.add_parser(
         "reduce-verification",
@@ -3355,6 +5003,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="candidate worktree used to reopen base-tracked waiver policy",
     )
     reduce_result.set_defaults(func=cmd_reduce_verification)
+
+    retry_context = sub.add_parser(
+        "verification-retry-context",
+        help="Read current functional failure routing evidence",
+    )
+    _add_common(retry_context)
+    retry_context.set_defaults(func=cmd_verification_retry_context)
+
+    functional = sub.add_parser(
+        "execute-functional",
+        help="Opt-in sealed audit LLK execution; exit20 means unsupported before submission",
+    )
+    _add_common(functional)
+    functional.add_argument("--worktree", required=True)
+    functional.add_argument("--timeout", type=float, default=1800)
+    functional.set_defaults(func=cmd_execute_functional)
+
+    measurement = sub.add_parser(
+        "execute-perf",
+        help="Opt-in sealed current-only measurement; exit20 means unsupported before submission",
+    )
+    _add_common(measurement)
+    measurement.add_argument("--worktree", required=True)
+    measurement.add_argument("--timeout", type=float, default=1800)
+    measurement.set_defaults(func=cmd_execute_perf)
+
+    review = sub.add_parser(
+        "review", help="Prepare, record or check a candidate-bound review"
+    )
+    _add_common(review)
+    review.add_argument(
+        "--action", required=True, choices=["prepare", "validate", "record", "check"]
+    )
+    review.add_argument("--run-kind", default="issue", choices=["issue", "review", ""])
+    review.add_argument("--worktree", required=True)
+    review.add_argument("--expected-base-sha", required=True)
+    review.set_defaults(func=cmd_review)
 
     return p
 

@@ -1444,7 +1444,8 @@ def test_verification_reducer_is_repeatable_for_fixed_random_attempt_trees(
     assert choices == [replay.choice(cases) for _ in requirements]
 
 
-def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
+@pytest.fixture
+def audit_finalize_candidate(tmp_path):
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     subprocess.run(["git", "init", "-q", str(worktree)], check=True)
@@ -1521,6 +1522,13 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
         "--worktree",
         str(worktree),
     ]
+    return finalize_args, worktree, source
+
+
+def test_audit_finalize_accepts_current_and_rejects_changed_patch(
+    tmp_path, audit_finalize_candidate
+):
+    finalize_args, worktree, source = audit_finalize_candidate
     finalized = subprocess.run(
         finalize_args, check=False, capture_output=True, text=True
     )
@@ -1538,12 +1546,164 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
     assert (tmp_path / "run.json").read_bytes() == finalized_bytes
 
 
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"run_id": "different-run"},
+        {".run_id.": "different-run"},
+        {"attempt_id": "different-attempt"},
+        {"runner_pool": "prod"},
+        {"required_verification.manifest_id": "f" * 64},
+        {"verification_reduction": {"reduction_id": "f" * 64}},
+        {"review": {"requirements_complete": True}},
+    ],
+)
+def test_audit_finalize_rejects_identity_and_evidence_patch(
+    tmp_path, audit_finalize_candidate, patch
+):
+    finalize_args, _, _ = audit_finalize_candidate
+    original = (tmp_path / "run.json").read_bytes()
+    result = subprocess.run(
+        [*finalize_args, "--patch-json", json.dumps(patch)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "finalize patch cannot change" in result.stderr
+    assert (tmp_path / "run.json").read_bytes() == original
+
+
+def test_audit_finalize_accepts_packaging_metrics(tmp_path, audit_finalize_candidate):
+    finalize_args, worktree, _ = audit_finalize_candidate
+    patch = {
+        "base_commit": json.loads(
+            (tmp_path / "required_verification_manifest.json").read_text()
+        )["expected_base_sha"],
+        "artifact_patch": "generated.patch",
+        "worktree_dir": str(worktree),
+        "debug_cycles": 2,
+        "arch_results": {"blackhole": {"perf": {"measured": False}}},
+    }
+    result = subprocess.run(
+        [*finalize_args, "--patch-json", json.dumps(patch)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["status"] == "success"
+    assert run["artifact_patch"] == "generated.patch"
+    assert run["debug_cycles"] == 2
+    assert run["arch_results"]["blackhole"]["perf"] == {"measured": False}
+
+
+@pytest.mark.parametrize("dotted", [False, True])
+def test_finalize_typed_outcome_cannot_be_promoted_by_patch(tmp_path, dotted):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "audit-promotion",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "working",
+        "--start-time",
+        "2026-09-21T10:00:00Z",
+        "--patch-json",
+        '{"runner_pool":"audit"}',
+    )
+    values = {
+        "status": "success",
+        "final_result": "success",
+        "final_message": "passed",
+        "end_time": "2099-01-01T00:00:00Z",
+        "duration_seconds": 99999,
+        "solver_state": "working",
+    }
+    patch = {
+        key + (".override" if dotted else ""): value for key, value in values.items()
+    }
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "failed",
+        "--final-result",
+        "test_failure",
+        "--final-message",
+        "compile failed",
+        "--solver-state",
+        "not_working",
+        "--end-time",
+        "2026-09-21T10:01:00Z",
+        "--patch-json",
+        json.dumps(patch),
+    )
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["status"] == "failed"
+    assert run["final_result"] == "test_failure"
+    assert run["final_message"] == "compile failed"
+    assert run["solver_state"] == "not_working"
+    assert run["end_time"] == "2026-09-21T10:01:00Z"
+    assert run["duration_seconds"] == 60
+    assert run["step_history"][-1]["result"] == "test_failure"
+    assert not (tmp_path / "required_verification_manifest.json").exists()
+
+
+@pytest.mark.parametrize("patch", [[], None, "wrong-shape"])
+def test_finalize_rejects_non_object_patch_without_mutation(tmp_path, patch):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "working",
+    )
+    original = (tmp_path / "run.json").read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "finalize",
+            "--log-dir",
+            str(tmp_path),
+            "--status",
+            "failed",
+            "--final-result",
+            "test_failure",
+            "--patch-json",
+            json.dumps(patch),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "finalize patch must be a JSON object" in result.stderr
+    assert (tmp_path / "run.json").read_bytes() == original
+
+
 def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_path):
     worktree = tmp_path / "worktree"
     llk = worktree / "tt_metal" / "tt-llk"
     llk.mkdir(parents=True)
     (llk / "llk.txt").write_text("base llk\n")
     (worktree / "metal.txt").write_text("base metal\n")
+    (worktree / "setup-owned.txt").write_text("original infrastructure\n")
     subprocess.run(["git", "init", "-q", str(worktree)], check=True)
     subprocess.run(
         ["git", "-C", str(worktree), "config", "user.name", "test"], check=True
@@ -1562,7 +1722,49 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
     ).stdout.strip()
     (llk / "llk.txt").write_bytes(b"changed\x00llk\n")
     (worktree / "metal.txt").write_text("changed metal\n")
+    (worktree / "metal.txt").chmod(0o755)
     (worktree / "new-untracked.txt").write_text("new candidate input\n")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "update-index",
+            "--skip-worktree",
+            "setup-owned.txt",
+        ],
+        check=True,
+    )
+    (worktree / "setup-owned.txt").write_text("local infrastructure overlay\n")
+    index = (worktree / ".git/index").read_bytes()
+    transport_index = tmp_path / "transport-index"
+    transport_index.write_bytes(index)
+    transport_env = {**os.environ, "GIT_INDEX_FILE": str(transport_index)}
+    subprocess.run(
+        ["git", "-C", str(worktree), "add", "-A", "--", "."],
+        env=transport_env,
+        check=True,
+    )
+    # Exact hardware-transport Git serialization, independently of the helper.
+    transport_patch = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "diff",
+            "--cached",
+            "--binary",
+            "--full-index",
+            base,
+            "--",
+        ],
+        env=transport_env,
+    )
+    assert b"GIT binary patch" in transport_patch
+    assert b"new-untracked.txt" in transport_patch
+    assert b"new mode 100755" in transport_patch
+    assert b"setup-owned.txt" not in transport_patch
+    expected = hashlib.sha256(transport_patch).hexdigest()
 
     def digest(path):
         return subprocess.run(
@@ -1580,10 +1782,91 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
             text=True,
         ).stdout.strip()
 
-    assert digest(llk) == digest(worktree)
+    for abbrev in ("7", "12"):
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "core.abbrev", abbrev], check=True
+        )
+        assert digest(llk) == digest(worktree) == expected
+        assert (worktree / ".git/index").read_bytes() == index
+        assert (worktree / "new-untracked.txt").is_file()
+        assert not list((worktree / ".git").glob(".candidate-index-*"))
     run_test_source = RUN_TEST.read_text(encoding="utf-8")
     assert "candidate-patch-digest" in run_test_source
     assert "tt-llk-local-patch-v1" not in run_test_source
+
+
+def test_candidate_patch_digest_rehashes_racy_same_size_binary(
+    tmp_path, reviewed_candidate, monkeypatch
+):
+    import importlib.util
+
+    wt, logs, git, review, result = reviewed_candidate
+    git("config", "core.trustctime", "false")
+    fixed_ns = 1_700_000_000_000_000_000
+    binary = wt / "binary.dat"
+    binary.write_bytes(b"\x00old")
+    os.utime(binary, ns=(fixed_ns, fixed_ns))
+    git("add", "-A")
+    git("commit", "-qm", "binary base")
+    base = git("rev-parse", "HEAD")
+    index = wt / ".git/index"
+    os.utime(index, ns=(fixed_ns, fixed_ns))
+    original_index = index.read_bytes()
+    binary.write_bytes(b"\x00new")
+    os.utime(binary, ns=(fixed_ns, fixed_ns))
+
+    # Deterministic control: newer copied-index mtime defeats Git's racy-clean
+    # protection and reuses the old blob despite the changed binary bytes.
+    naive_index = tmp_path / "naive-index"
+    naive_index.write_bytes(original_index)
+    os.utime(naive_index, ns=(fixed_ns + 10**10, fixed_ns + 10**10))
+    env = {**os.environ, "GIT_INDEX_FILE": str(naive_index)}
+    subprocess.run(["git", "-C", str(wt), "add", "-A"], env=env, check=True)
+    assert (
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(wt),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+            ],
+            env=env,
+        )
+        == b""
+    )
+
+    spec = importlib.util.spec_from_file_location("racy_index_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    real_run = subprocess.run
+    captured = []
+
+    def capture_diff(*args, **kwargs):
+        process = real_run(*args, **kwargs)
+        if "--binary" in args[0]:
+            captured.append(process.stdout)
+        return process
+
+    monkeypatch.setattr(writer.subprocess, "run", capture_diff)
+    digest = writer._candidate_patch_digest(wt, base)
+    assert len(captured) == 1
+    patch = captured[0]
+    assert b"GIT binary patch" in patch
+    assert digest == hashlib.sha256(patch).hexdigest()
+    assert index.read_bytes() == original_index
+    assert index.stat().st_mtime_ns == fixed_ns
+    assert not list((wt / ".git").glob(".candidate-index-*"))
+
+    # Check actual reconstructed bytes, not just agreement between two hashes.
+    replay = tmp_path / "replay"
+    git("worktree", "add", "--detach", "-q", str(replay), base)
+    subprocess.run(["git", "-C", str(replay), "apply", "-"], input=patch, check=True)
+    assert (replay / "binary.dat").read_bytes() == b"\x00new"
+    assert binary.read_bytes() == b"\x00new"
 
 
 def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
@@ -2196,13 +2479,26 @@ resolve_worktree_base
     assert "queued launch requires an exact CODEGEN_BASE_COMMIT" in result.stderr
 
 
-def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
+@pytest.mark.parametrize(
+    "artifact", ["generated.patch", "supervisor-checkpoint.patch", "../escaped.patch"]
+)
+@pytest.mark.parametrize("timeout_classification", ["outer_timeout", "wall_timeout"])
+@pytest.mark.parametrize("legacy_abbreviated_patch", [False, True])
+def test_setup_worktree_records_exact_base_before_bootstrap(
+    tmp_path, timeout_classification, legacy_abbreviated_patch, artifact
+):
     repo = tmp_path / "repo"
     llk_tests = repo / "tt_metal" / "tt-llk" / "tests"
     llk_tests.mkdir(parents=True)
     setup_env = llk_tests / "setup_testing_env.sh"
     setup_env.write_text("#!/bin/bash\nexit 0\n")
     setup_env.chmod(0o755)
+    # Versioned bootstrap reads the pinned worktree SFPI metadata and output.
+    sfpi_info = llk_tests / "sfpi-info.sh"
+    sfpi_info.write_text("#!/bin/bash\necho sfpi_version=fixture\n")
+    sfpi_info.chmod(0o755)
+    (llk_tests / "sfpi").mkdir()
+    (llk_tests / "sfpi/sfpi.version").write_text("fixture\n")
     (repo / "tt_metal" / "tt-llk" / ".gitignore").write_text("*.pyc\n")
     (repo / "source.txt").write_text("base\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -2219,8 +2515,19 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
         text=True,
     ).stdout.strip()
     (repo / "source.txt").write_text("resumed candidate\n")
+    subprocess.run(["git", "-C", str(repo), "config", "core.abbrev", "7"], check=True)
     patch = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--binary", base, "--", "source.txt"],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "--binary",
+            *([] if legacy_abbreviated_patch else ["--full-index"]),
+            base,
+            "--",
+            "source.txt",
+        ],
         check=True,
         capture_output=True,
     ).stdout
@@ -2229,12 +2536,12 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
     source_attempt = "source-attempt"
     source_dir = tmp_path / source_run_id
     source_dir.mkdir()
-    (source_dir / "generated.patch").write_bytes(patch)
+    (source_dir / artifact).write_bytes(patch)
     checkpoint = {
         "run_id": source_run_id,
         "attempt_id": source_attempt,
         "base_commit": base,
-        "artifact_patch": "generated.patch",
+        "artifact_patch": artifact,
         "patch_sha256": hashlib.sha256(patch).hexdigest(),
         "completed_results": {"tests_total": 1, "tests_passed": 1},
     }
@@ -2255,7 +2562,7 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
                 "issue": {"number": 5},
                 "status": "failed",
                 "end_time": "2026-08-07T01:00:00Z",
-                "timeout_classification": "outer_timeout",
+                "timeout_classification": timeout_classification,
                 "base_commit": base,
                 "last_checkpoint": checkpoint,
             }
@@ -2300,9 +2607,22 @@ setup_worktree "${5:-issue-5}"
         capture_output=True,
         text=True,
     )
+    worktree = worktrees / "issue-5-v1"
+    if artifact == "../escaped.patch":
+        assert proc.returncode != 0
+        assert "checkpoint patch identity is missing" in proc.stderr
+        assert not worktree.exists()
+        return
+    if legacy_abbreviated_patch:
+        assert proc.returncode != 0
+        assert (
+            "imported candidate differs from the retained checkpoint patch"
+            in proc.stderr
+        )
+        assert not worktree.exists()
+        return
     assert proc.returncode == 0, proc.stderr
 
-    worktree = worktrees / "issue-5-v1"
     state = json.loads(
         (worktree / "tt_metal" / "tt-llk" / ".codegen_run_state.json").read_text()
     )
@@ -2346,7 +2666,7 @@ setup_worktree "${5:-issue-5}"
     assert "checkpoint digest mismatch" in bad_digest.stderr
     assert not (worktrees / "issue-5-v2").exists()
 
-    (source_dir / "generated.patch").write_bytes(patch + b"\nmutation\n")
+    (source_dir / artifact).write_bytes(patch + b"\nmutation\n")
     bad_patch = subprocess.run(
         [
             "bash",
@@ -2366,7 +2686,7 @@ setup_worktree "${5:-issue-5}"
     assert bad_patch.returncode != 0
     assert "patch digest mismatch" in bad_patch.stderr
     assert not (worktrees / "issue-5-v2").exists()
-    (source_dir / "generated.patch").write_bytes(patch)
+    (source_dir / artifact).write_bytes(patch)
 
     subprocess.run(
         ["git", "-C", str(repo), "commit", "--allow-empty", "-qm", "later base"],
@@ -3236,3 +3556,3676 @@ def test_local_pytest_target_preserves_node_and_filter(
     )
     assert proc.returncode == 0, proc.stderr
     assert summary in proc.stdout
+
+
+@pytest.fixture
+def reviewed_candidate(tmp_path):
+    wt = tmp_path / "candidate"
+    wt.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(wt), *args], text=True).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    (wt / "kernel.h").write_text("base\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (wt / "kernel.h").write_text("fix\n")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "attempt_id": "queue-1",
+                "required_verification": {"attempt_id": "attempt-001"},
+            }
+        )
+    )
+
+    def review(action):
+        return _run(
+            logs,
+            "review",
+            "--action",
+            action,
+            "--worktree",
+            str(wt),
+            "--expected-base-sha",
+            base,
+        )
+
+    review("prepare")
+    result = {
+        "identity": json.loads((logs / "review_context.json").read_text()),
+        "reviewed": True,
+        "findings": [],
+        "findings_total": 0,
+        "blocking_total": 0,
+        "verdict": "clean",
+        "requirements_complete": True,
+        "unresolved": [],
+        "skills_used": [],
+    }
+    (logs / "review_result.json").write_text(json.dumps(result))
+    return wt, logs, git, review, result
+
+
+@pytest.mark.parametrize(
+    "mutation", ["staged", "untracked", "committed", "manifest", "run"]
+)
+def test_review_rejects_stale_candidate(reviewed_candidate, mutation):
+    wt, logs, git, review, result = reviewed_candidate
+    review("record")
+    if mutation in {"staged", "untracked", "committed"}:
+        (wt / "new.h").write_text("new fix\n")
+        if mutation != "untracked":
+            git("add", "-A")
+        if mutation == "committed":
+            git("commit", "-qm", "changed")
+    else:
+        run = json.loads((logs / "run.json").read_text())
+        if mutation == "manifest":
+            run["required_verification"]["attempt_id"] = "attempt-002"
+        else:
+            run["run_id"] = "different-run"
+        (logs / "run.json").write_text(json.dumps(run))
+    with pytest.raises(subprocess.CalledProcessError):
+        review("check")
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"reviewed": False},
+        {"blocking_total": False},
+        {"findings_total": 1},
+        {"identity": {}},
+        {"verdict": "changes_requested"},
+        {"findings": [{}]},
+        {"requirements_complete": 1},
+        {"unresolved": [None]},
+    ],
+)
+def test_review_rejects_malformed_success(reviewed_candidate, patch):
+    wt, logs, git, review, result = reviewed_candidate
+    (logs / "review_result.json").write_text(json.dumps({**result, **patch}))
+    with pytest.raises(subprocess.CalledProcessError):
+        review("record")
+
+
+def test_review_preserves_index_and_accepts_packaging_commit(reviewed_candidate):
+    wt, logs, git, review, result = reviewed_candidate
+    index = (wt / ".git/index").read_bytes()
+    review("record")
+    assert (wt / ".git/index").read_bytes() == index
+    git("add", "-A")
+    git("commit", "-qm", "package")
+    review("check")
+    assert len(list((logs / "reviews").glob("*.json"))) == 1
+    review("prepare")
+    assert not (logs / "review_result.json").exists()
+
+
+def test_review_abbreviated_legacy_identity_requires_reprepare(reviewed_candidate):
+    wt, logs, git, review, result = reviewed_candidate
+    context = result["identity"]
+    canonical_digest = context["patch_sha256"]
+    git("config", "core.abbrev", "7")
+    legacy_patch = subprocess.check_output(
+        ["git", "-C", str(wt), "diff", "--binary", context["base_commit"], "--"]
+    )
+    context["patch_sha256"] = hashlib.sha256(legacy_patch).hexdigest()
+    assert context["patch_sha256"] != canonical_digest
+    (logs / "review_context.json").write_text(json.dumps(context))
+    (logs / "review_result.json").write_text(json.dumps(result))
+    for action in ("validate", "record", "check"):
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            review(action)
+        assert "review context is stale" in error.value.stderr
+    review("prepare")
+    assert not (logs / "review_result.json").exists()
+    assert (
+        json.loads((logs / "review_context.json").read_text())["patch_sha256"]
+        == canonical_digest
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"requirements_complete": None}, {"unresolved": ["Need SRCB state evidence"]}],
+)
+def test_review_records_pending_evidence_but_cannot_succeed(reviewed_candidate, patch):
+    wt, logs, git, review, result = reviewed_candidate
+    (logs / "review_result.json").write_text(json.dumps({**result, **patch}))
+    review("record")
+    with pytest.raises(subprocess.CalledProcessError):
+        review("check")
+
+
+@pytest.mark.parametrize("blocking", [False, True])
+def test_review_validate_accepts_pending_review_without_mutation(
+    reviewed_candidate, blocking
+):
+    wt, logs, git, review, result = reviewed_candidate
+    # Preserve an existing accepted record/archive as well as the new handoff.
+    review("record")
+    if blocking:
+        result.update(
+            findings=[
+                {
+                    "severity": "correctness",
+                    "blocking": True,
+                    "file": "kernel.h",
+                    "line": "1",
+                    "title": "Unsupported architecture",
+                    "comment": "Gate the new pool on the supported architecture.",
+                }
+            ],
+            findings_total=1,
+            blocking_total=1,
+            verdict="changes_requested",
+        )
+    result["unresolved"] = ["Need the Blackhole dependency-stall rule"]
+    (logs / "review_result.json").write_text(json.dumps(result))
+    snapshot = {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    index = (wt / ".git/index").read_bytes()
+    status = git("status", "--porcelain", "-uall")
+
+    review("validate")
+
+    assert snapshot == {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    assert (wt / ".git/index").read_bytes() == index
+    assert git("status", "--porcelain", "-uall") == status
+    assert not list((wt / ".git").glob(".candidate-index-*"))
+    with pytest.raises(subprocess.CalledProcessError, match="returned non-zero"):
+        review("check")
+
+
+@pytest.mark.parametrize(
+    "mutation, expected_error",
+    [
+        ("unresolved_object", "unresolved entries must name the missing evidence"),
+        ("identity", "review result is missing the current review identity"),
+        ("candidate", "review context is stale"),
+    ],
+)
+def test_review_validate_rejects_bad_handoff_without_mutation(
+    reviewed_candidate, mutation, expected_error
+):
+    wt, logs, git, review, result = reviewed_candidate
+    if mutation == "unresolved_object":
+        result["unresolved"] = [{"item": "SFPMUL", "evidence_needed": "ISA rule"}]
+    elif mutation == "identity":
+        result["identity"]["run_id"] = "another-run"
+    else:
+        (wt / "kernel.h").write_text("another fix\n")
+    (logs / "review_result.json").write_text(json.dumps(result))
+    snapshot = {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    index = (wt / ".git/index").read_bytes()
+
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        review("validate")
+
+    assert expected_error in error.value.stderr
+    assert snapshot == {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    assert (wt / ".git/index").read_bytes() == index
+
+
+@pytest.mark.parametrize("ending", ["exit 0", "exit 1", "sleep 30"])
+def test_autodebug_launcher_is_bounded_and_archives_report(
+    tmp_path, monkeypatch, ending
+):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    package = tmp_path / "plugin"
+    launcher = package / "skills/autodebug/scripts/autodebug.sh"
+    launcher.parent.mkdir(parents=True)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text("#!/bin/sh\nexit 97\n")
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.delenv("CODEGEN_AUTODEBUG_BUDGET_USD", raising=False)
+    launcher.write_text(
+        'test -z "${CLAUDECODE:-}" || exit 9\nprintf "diagnosis" > AUTODEBUG.md\n'
+        + ending
+        + "\n"
+    )
+    (logs / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "bounded-launcher",
+                "solver_plugins": {"tt-autodebug": {"path": str(package)}},
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_UTILS),
+            "autodebug",
+            "--worktree",
+            str(wt),
+            "--log-dir",
+            str(logs),
+            "--problem",
+            "test failure",
+            "--timeout",
+            "1",
+        ],
+        env={**os.environ, "CLAUDECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) == (ending == "exit 0")
+    assert not (wt / "AUTODEBUG.md").exists()
+    assert [p.read_text() for p in logs.glob("autodebug-*/AUTODEBUG.md")] == [
+        "diagnosis"
+    ]
+    (wt / "AUTODEBUG.md").write_text("unrelated")
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_UTILS),
+            "autodebug",
+            "--worktree",
+            str(wt),
+            "--log-dir",
+            str(logs),
+            "--problem",
+            "failure",
+        ],
+        capture_output=True,
+    )
+    assert refused.returncode != 0
+    assert (wt / "AUTODEBUG.md").read_text() == "unrelated"
+
+
+@pytest.fixture
+def autodebug_sandbox(tmp_path, monkeypatch):
+    """Execute the real launcher/shim against a fake Claude executable only."""
+    import argparse
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("isolated_run_utils", RUN_UTILS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    logs, worktree, fake_bin = (tmp_path / n for n in ("logs", "worktree", "fake-bin"))
+    for p in (logs, worktree, fake_bin):
+        p.mkdir()
+    package = tmp_path / "plugin"
+    launcher = package / "skills/autodebug/scripts/autodebug.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        'test -z "${CLAUDECODE:-}" || exit 9\nclaude --print "diagnose"\n'
+    )
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(
+        "#!" + sys.executable + "\nimport json,os,sys,time\n"
+        "from pathlib import Path\n"
+        'registry=json.loads(Path(os.environ["FAKE_REGISTRY"]).read_text())\n'
+        'sid=sys.argv[sys.argv.index("--session-id")+1]\n'
+        'assert any(row["session_id"]==sid for row in registry["sessions"])\n'
+        'Path("claude-argv.json").write_text(json.dumps(sys.argv[1:]))\n'
+        'Path("AUTODEBUG.md").write_text("partial diagnosis")\n'
+        'time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))\n'
+    )
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("FAKE_REGISTRY", str(logs / "session_registry.json"))
+    monkeypatch.delenv("CODEGEN_AUTODEBUG_BUDGET_USD", raising=False)
+    run = {
+        "run_id": "isolated-run",
+        "solver_plugins": {"tt-autodebug": {"path": str(package)}},
+    }
+    (logs / "run.json").write_text(json.dumps(run))
+    state = {
+        "RUN_ID": "isolated-run",
+        "SESSION_ID": "00000000-0000-4000-8000-000000000001",
+    }
+    (logs / "state.json").write_text(json.dumps(state))
+    exports = []
+
+    def fake_export(argv, **kwargs):
+        assert Path(argv[1]).name == "extract_run_transcripts.py"
+        exports.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_export)
+    args = argparse.Namespace(
+        log_dir=str(logs), worktree=str(worktree), problem="exact failure", timeout=2
+    )
+    return module, args, logs, worktree, exports
+
+
+def test_autodebug_pins_child_identity_budget_and_exports(
+    autodebug_sandbox, monkeypatch
+):
+    import uuid
+
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "12.50")
+    module.cmd_autodebug(args)
+    registry = json.loads((logs / "session_registry.json").read_text())
+    assert registry["run_id"] == "isolated-run"
+    assert len(registry["sessions"]) == 1
+    child = registry["sessions"][0]
+    assert str(uuid.UUID(child["session_id"])) == child["session_id"]
+    assert child["parent_session_id"] == "00000000-0000-4000-8000-000000000001"
+    assert child["project_cwd"] == str(worktree)
+    assert child["allocated_budget_usd"] == 12.5
+    argv = json.loads((worktree / "claude-argv.json").read_text())
+    assert argv[:4] == ["--session-id", child["session_id"], "--max-budget-usd", "12.5"]
+    assert len(exports) == 1 and exports[0][-4:] == [
+        "--session-id",
+        child["session_id"],
+        "--project-cwd",
+        str(worktree),
+    ]
+    assert (
+        Path(child["artifact_dir"]) / "AUTODEBUG.md"
+    ).read_text() == "partial diagnosis"
+    assert not (worktree / "AUTODEBUG.md").exists()
+
+
+def test_autodebug_timeout_retains_registry_report_and_exports(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    args.timeout = 0.3
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "30")
+    with pytest.raises(subprocess.TimeoutExpired):
+        module.cmd_autodebug(args)
+    child = json.loads((logs / "session_registry.json").read_text())["sessions"][0]
+    assert (
+        Path(child["artifact_dir"]) / "AUTODEBUG.md"
+    ).read_text() == "partial diagnosis"
+    assert len(exports) == 1
+    assert child["session_id"] in exports[0]
+    assert not (worktree / "AUTODEBUG.md").exists()
+
+
+def test_autodebug_export_failure_preserves_success(autodebug_sandbox, monkeypatch):
+    module, args, logs, worktree, _ = autodebug_sandbox
+
+    def export_failure(*a, **kw):
+        raise subprocess.TimeoutExpired("exporter", 30)
+
+    monkeypatch.setattr(module.subprocess, "run", export_failure)
+    module.cmd_autodebug(args)
+    assert any(logs.glob("autodebug-*/AUTODEBUG.md"))
+    assert (
+        "Transcript export unavailable"
+        in next(logs.glob("autodebug-*/launcher.log")).read_text()
+    )
+
+
+@pytest.mark.parametrize("cap", ["0", "0.009"])
+def test_autodebug_exhausted_budget_never_launches(autodebug_sandbox, monkeypatch, cap):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", cap)
+    with pytest.raises(SystemExit, match="exhausted"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+    assert not exports
+    assert not (logs / "session_registry.json").exists()
+
+
+def test_autodebug_allocated_budget_cannot_be_reused(autodebug_sandbox, monkeypatch):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "2")
+    module.cmd_autodebug(args)
+    with pytest.raises(SystemExit, match="exhausted"):
+        module.cmd_autodebug(args)
+    assert (
+        len(json.loads((logs / "session_registry.json").read_text())["sessions"]) == 1
+    )
+    assert len(exports) == 1
+
+
+def test_autodebug_rejects_foreign_registry_before_launch(autodebug_sandbox):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    original = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "other",
+        "sessions": [],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(original))
+    with pytest.raises(SystemExit, match="another run"):
+        module.cmd_autodebug(args)
+    assert json.loads((logs / "session_registry.json").read_text()) == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_rejects_foreign_state_before_launch(autodebug_sandbox):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    (logs / "state.json").write_text(json.dumps({"RUN_ID": "another-run"}))
+    with pytest.raises(SystemExit, match="run"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_rejects_duplicate_child_identity(autodebug_sandbox, monkeypatch):
+    import uuid
+
+    module, args, logs, worktree, exports = autodebug_sandbox
+    child_id = "00000000-0000-4000-8000-000000000002"
+    monkeypatch.setattr(module.uuid, "uuid4", lambda: uuid.UUID(child_id))
+    original = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [{"session_id": child_id, "kind": "autodebug"}],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(original))
+    with pytest.raises(SystemExit, match="session|duplicate"):
+        module.cmd_autodebug(args)
+    assert json.loads((logs / "session_registry.json").read_text()) == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_transcript_export_explicit_missing_session_never_discovers_another(
+    tmp_path, monkeypatch
+):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "isolated_transcript_export", RUN_UTILS.with_name("extract_run_transcripts.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_find_by_session_id", lambda sid: None)
+
+    def forbidden_discovery(pid):
+        pytest.fail(
+            "explicit session identity must never fall back to a different live session"
+        )
+
+    monkeypatch.setattr(module, "_discover_session", forbidden_discovery)
+    assert (
+        module.run(
+            str(tmp_path / "logs"), "00000000-0000-4000-8000-000000000099", None, None
+        )
+        != 0
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"schema": "another-registry"},
+        {"version": 99},
+        {"sessions": {}},
+        {"sessions": [{"session_id": "duplicate"}, {"session_id": "duplicate"}]},
+    ],
+)
+def test_autodebug_rejects_invalid_registry_without_rewriting(autodebug_sandbox, patch):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    registry = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [],
+        **patch,
+    }
+    original = json.dumps(registry)
+    (logs / "session_registry.json").write_text(original)
+    with pytest.raises(SystemExit, match="schema|identity"):
+        module.cmd_autodebug(args)
+    assert (logs / "session_registry.json").read_text() == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_negative_allocation_cannot_expand_budget(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "2")
+    registry = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [
+            {
+                "session_id": "00000000-0000-4000-8000-000000000003",
+                "allocated_budget_usd": -10,
+            }
+        ],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(registry))
+    with pytest.raises(SystemExit, match="budget|allocation"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+@pytest.mark.parametrize("cap", ["-1", "nan", "inf"])
+def test_autodebug_nonfinite_or_negative_budget_rejected(
+    autodebug_sandbox, monkeypatch, cap
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", cap)
+    with pytest.raises(SystemExit, match="finite and nonnegative"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_export_failure_does_not_mask_launcher_timeout(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    args.timeout = 0.3
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "30")
+
+    def failed_export(*a, **kw):
+        raise OSError("synthetic export failure")
+
+    monkeypatch.setattr(module.subprocess, "run", failed_export)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        module.cmd_autodebug(args)
+    assert caught.value.timeout == 0.3
+    assert any(logs.glob("autodebug-*/AUTODEBUG.md"))
+
+
+@pytest.fixture
+def issue_bootstrap_sandbox(tmp_path):
+    worktree = tmp_path / "source"
+    llk = worktree / "tt_metal" / "tt-llk"
+    version = llk / "codegen" / "agents" / "issue-solver" / "VERSION"
+    version.parent.mkdir(parents=True)
+    version.write_text("2.5.0\n")
+    for command in (
+        ["git", "init", "-q", "-b", "fixture-base", str(worktree)],
+        ["git", "-C", str(worktree), "add", "-A"],
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ):
+        subprocess.run(command, check=True, capture_output=True)
+    linked = tmp_path / "worktree"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "worktree",
+            "add",
+            "-qb",
+            "issue-bootstrap",
+            str(linked),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    worktree = linked
+    llk = worktree / "tt_metal" / "tt-llk"
+    issue = {
+        "number": 123,
+        "title": "'Quoted' \"title\" $(touch SHOULD_NOT_EXIST)\n\n",
+        "body": "Unicode λ, `code`, $HOME, quotes '\"\nsecond line\n\n",
+        "labels": [{"name": "bug, regression"}, {"name": "wormhole"}],
+        "comments": [
+            {
+                "id": "IC_123",
+                "author": {"login": "someone"},
+                "createdAt": "2026-09-20T00:00:00Z",
+                "body": "Comment '\"`$()\nverbatim\n\n",
+            }
+        ],
+        "url": "https://github.com/example/project/issues/123",
+    }
+    snapshot = tmp_path / "issue.json"
+    snapshot.write_text(json.dumps(issue, ensure_ascii=False, indent=2) + "\n")
+    bootstrap = llk / ".codegen_run_state.json"
+    bootstrap.write_text(json.dumps({"QUEUE_ATTEMPT_ID": "preserved-admission"}))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['GH_MARKER']).write_text(json.dumps(sys.argv[1:]))\n"
+        "sys.stdout.write(pathlib.Path(os.environ['GH_FIXTURE']).read_text())\n"
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CODEGEN_", "TTSIM_", "CLAUDE_"))
+    }
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "HOME": str(tmp_path / "empty-home"),
+            "CODEGEN_ISSUE_SNAPSHOT": str(snapshot),
+            "CODEGEN_LOGS_ROOT": str(tmp_path / "logs"),
+            "LOG_DIR": str(tmp_path / "unrelated-log-dir"),
+            "GH_FIXTURE": str(snapshot),
+            "GH_MARKER": str(tmp_path / "gh-called"),
+        }
+    )
+    command = [
+        sys.executable,
+        str(SCRIPT.parent / "load_issue.py"),
+        "123",
+        "--seed-state",
+        "--worktree-dir",
+        str(worktree),
+        "--worktree-branch",
+        "issue-bootstrap",
+        "--arches",
+        "bh",
+        "--test-backend",
+        "local",
+        "--create-local-branch",
+        "yes",
+        "--create-pr",
+        "no",
+    ]
+    return worktree, issue, snapshot, bootstrap, env, command
+
+
+@pytest.mark.parametrize("legacy_labels", [False, True])
+def test_issue_bootstrap_snapshot_preserved_through_setup_run(
+    issue_bootstrap_sandbox, legacy_labels
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    result = subprocess.run(
+        command, env=env, text=True, capture_output=True, check=True
+    )
+    assert json.loads(result.stdout)["target_arches"] == ["blackhole"]
+    seeded = json.loads(bootstrap.read_text())
+    assert seeded["QUEUE_ATTEMPT_ID"] == "preserved-admission"
+    assert seeded["TARGET_ARCH"] == "blackhole"  # Explicit arch beats label.
+    assert not Path(env["GH_MARKER"]).exists()
+    assert not Path(env["LOG_DIR"]).exists()
+    if legacy_labels:
+        # Older routers stored only a comma-separated string; retain support.
+        seeded.pop("ISSUE_LABELS_JSON")
+        seeded["ISSUE_LABELS"] = "bug,wormhole"
+        bootstrap.write_text(json.dumps(seeded))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_setup_run && execute_step_write_initial_run_json',
+            "bootstrap-test",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=worktree / "tt_metal" / "tt-llk",
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    logs = Path(json.loads(bootstrap.read_text())["LOG_DIR"])
+    final = json.loads((logs / "state.json").read_text())
+    for state in (seeded, final):
+        assert state["ISSUE_TITLE"] == issue["title"]
+        assert state["ISSUE_BODY"] == issue["body"]
+        assert json.loads(state["ISSUE_COMMENTS"]) == issue["comments"]
+        if not legacy_labels:
+            assert state["ISSUE_LABELS_JSON"] == [
+                label["name"] for label in issue["labels"]
+            ]
+    run = json.loads((logs / "run.json").read_text())
+    assert run["issue"]["title"] == issue["title"]
+    assert run["issue"]["labels"] == (
+        ["bug", "wormhole"]
+        if legacy_labels
+        else [label["name"] for label in issue["labels"]]
+    )
+    assert final["QUEUE_ATTEMPT_ID"] == "preserved-admission"
+    assert not (worktree / "SHOULD_NOT_EXIST").exists()
+
+
+def test_issue_bootstrap_live_fetch_and_snapshot_print_compatibility(
+    issue_bootstrap_sandbox,
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    printed = subprocess.run(
+        command[:3], env=env, text=True, capture_output=True, check=True
+    )
+    assert printed.stdout == snapshot.read_text()
+    assert not Path(env["GH_MARKER"]).exists()
+    del env["CODEGEN_ISSUE_SNAPSHOT"]
+    subprocess.run(
+        command + ["--repo", "example/project"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    assert json.loads(Path(env["GH_MARKER"]).read_text()) == [
+        "issue",
+        "view",
+        "123",
+        "--json",
+        "number,title,body,labels,comments,url",
+        "--repo",
+        "example/project",
+    ]
+    assert (
+        json.loads(json.loads(bootstrap.read_text())["ISSUE_COMMENTS"])
+        == issue["comments"]
+    )
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--arches", "not-an-arch"),
+        ("--arches", "[]"),
+        ("--arches", '["bh", 2]'),
+        ("--test-backend", "silicon"),
+        ("--worktree-branch", "different-branch"),
+        ("--test-backend", "ttsim"),
+    ],
+)
+def test_issue_bootstrap_invalid_inputs_do_not_mutate(
+    issue_bootstrap_sandbox, option, value
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    before = bootstrap.read_bytes()
+    command[command.index(option) + 1] = value
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+    assert not Path(env["GH_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("mismatch", ["snapshot", "bootstrap", "bound"])
+def test_issue_bootstrap_identity_conflicts_do_not_mutate(
+    issue_bootstrap_sandbox, mismatch
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    if mismatch == "snapshot":
+        issue["number"] = 456
+        snapshot.write_text(json.dumps(issue))
+    elif mismatch == "bootstrap":
+        bootstrap.write_text(json.dumps({"ISSUE_NUMBER": "456"}))
+    else:
+        bootstrap.write_text(json.dumps({"RUN_ID": "existing-run"}))
+    before = bootstrap.read_bytes()
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+
+
+def test_issue_bootstrap_multi_simulator_and_no_push(issue_bootstrap_sandbox):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    bh = snapshot.parent / "libbh.so"
+    wh = snapshot.parent / "libwh.so"
+    bh.touch()
+    wh.touch()
+    command[command.index("--arches") + 1] = '["bh", "wh", "bh"]'
+    command[command.index("--test-backend") + 1] = "ttsim"
+    command[command.index("--create-local-branch") + 1] = "no"
+    command[command.index("--create-pr") + 1] = "yes"
+    env["CODEGEN_NO_PUSH"] = "1"
+    before = bootstrap.read_bytes()
+    result = subprocess.run(
+        command + ["--ttsim-so-paths", json.dumps({"bh": str(bh)})],
+        env=env,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+    subprocess.run(
+        command + ["--ttsim-so-paths", json.dumps({"bh": str(bh), "wh": str(wh)})],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    state = json.loads(bootstrap.read_text())
+    assert state["RUN_MODE"] == "multi"
+    assert json.loads(state["TARGET_ARCHES"]) == ["blackhole", "wormhole"]
+    assert json.loads(state["TTSIM_SO_PATHS"]) == {
+        "blackhole": str(bh),
+        "wormhole": str(wh),
+    }
+    assert state["CREATE_LOCAL_BRANCH"] == "yes"
+    assert state["CREATE_PR"] == "no"
+    assert "TARGET_ARCH" not in state
+
+
+def test_issue_bootstrap_rejects_main_checkout(issue_bootstrap_sandbox):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    main_checkout = snapshot.parent / "source"
+    command[command.index("--worktree-dir") + 1] = str(main_checkout)
+    command[command.index("--worktree-branch") + 1] = "fixture-base"
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "linked worktree" in result.stderr
+    assert not (main_checkout / "tt_metal/tt-llk/.codegen_run_state.json").exists()
+
+
+def test_setup_lock_reuses_existing_file_with_inherited_noclobber(
+    tmp_path, monkeypatch
+):
+    original_run = subprocess.run
+    lock_paths = {}
+    sentinel = b"existing shared flock inode; do not truncate\n"
+
+    def run_with_noclobber(argv, *args, **kwargs):
+        if (
+            isinstance(argv, list)
+            and argv[:2] == ["bash", "-c"]
+            and "setup_worktree " in argv[2]
+        ):
+            repo = Path(argv[5])
+            lock_path = repo / ".git" / "codegen-worktree-setup.lock"
+            if lock_path not in lock_paths:
+                lock_path.write_bytes(sentinel)
+                lock_paths[lock_path] = lock_path.stat().st_ino
+            argv = [argv[0], "-C", *argv[1:]]
+        return original_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_with_noclobber)
+    # Reuse the real-Git setup/import fixture, including failed resume rejection
+    # and a subsequent ordinary setup on the same pre-existing lock file.
+    test_setup_worktree_records_exact_base_before_bootstrap(
+        tmp_path, "outer_timeout", False, "supervisor-checkpoint.patch"
+    )
+    assert lock_paths
+    assert all(
+        path.read_bytes() == sentinel and path.stat().st_ino == inode
+        for path, inode in lock_paths.items()
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [None, "unset", "wrong_task", "wrong_branch", "foreign_repo", "locked", "symlink"],
+)
+def test_cleanup_removes_only_owned_attempt(tmp_path, invalid):
+    """Real Git: missing/mismatched identity and locks cannot delete either run."""
+    repo = tmp_path / "repo"
+    script = repo / "tt_metal/tt-llk/codegen/scripts/setup_worktree.sh"
+    script.parent.mkdir(parents=True)
+    script.write_bytes(SETUP_WORKTREE.read_bytes())
+
+    def git(*args, cwd=repo):
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    root = tmp_path / "worktrees"
+    own, other = root / "issue-5-v1", root / "issue-5-v2"
+    for wt, version in [(own, 1), (other, 2)]:
+        git("worktree", "add", "-b", f"llk_code_gen/issue-5-v{version}", str(wt))
+        (wt / "uncommitted.txt").write_text(f"attempt {version}")
+    env = dict(
+        os.environ,
+        CODEGEN_WORKTREE_ROOT=str(root),
+        CODEGEN_KEEP_WORKTREE="false",
+        WORKTREE_DIR=str(own),
+        WORKTREE_BRANCH="llk_code_gen/issue-5-v1",
+    )
+    task = "issue-5"
+    if invalid == "unset":
+        env.pop("WORKTREE_DIR")
+    elif invalid == "wrong_task":
+        task = "issue-6"
+    elif invalid == "wrong_branch":
+        env["WORKTREE_BRANCH"] = "llk_code_gen/issue-5-v2"
+    elif invalid == "locked":
+        git("worktree", "lock", str(own))
+    elif invalid == "symlink":
+        link = root / "alias"
+        link.symlink_to(own, target_is_directory=True)
+        env["WORKTREE_DIR"] = str(link)
+    elif invalid == "foreign_repo":
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        git("init", "-q", cwd=foreign)
+        git("config", "user.name", "test", cwd=foreign)
+        git("config", "user.email", "test@example.com", cwd=foreign)
+        git("commit", "--allow-empty", "-qm", "foreign", cwd=foreign)
+        foreign_wt = root / "issue-5-v3"
+        git(
+            "worktree",
+            "add",
+            "-b",
+            "llk_code_gen/issue-5-v3",
+            str(foreign_wt),
+            cwd=foreign,
+        )
+        env.update(
+            WORKTREE_DIR=str(foreign_wt), WORKTREE_BRANCH="llk_code_gen/issue-5-v3"
+        )
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; cleanup_worktree "$2"', "_", str(script), task],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is (invalid is None), result.stdout + result.stderr
+    assert own.exists() is (invalid is not None)
+    assert (other / "uncommitted.txt").read_text() == "attempt 2"
+    assert git("rev-parse", "--verify", "llk_code_gen/issue-5-v1")
+    if invalid == "foreign_repo":
+        assert foreign_wt.exists()
+
+
+def _measurement_plan():
+    contract = {
+        "primary_metric": "mean(L1_TO_L1)",
+        "marker": "TILE_LOOP",
+        "normalization": "loop_factor*tile_cnt",
+        "variants": [
+            {
+                "mathop": "copy",
+                "marker": "TILE_LOOP",
+                "loop_factor": "16",
+                "tile_cnt": "8",
+            }
+        ],
+    }
+    analysis = """## Scope
+arch_scope:
+  blackhole: in_scope
+perf_intent: measure
+## Verification
+fix_layer: llk_lib
+verification_required: yes
+verifiable_in_llk_suite: yes
+llk_coverage: existing
+"""
+    plan = (
+        """## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: test_reduce.py
+regression_tests:
+- arch: blackhole
+  test: perf_reduce.py
+  required_measurements: ["cycle_measurement"]
+  measurement_contract: """
+        + json.dumps(contract)
+        + "\n"
+    )
+    return analysis, plan, contract
+
+
+def test_measurement_intent_seals_v2_and_cannot_reinterpret_v1(tmp_path):
+    analysis, plan, contract = _measurement_plan()
+    _, output = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(output.read_text())
+    assert manifest["version"] == 2
+    assert manifest["requirements"][-1]["measurement_contract"] == contract
+    manifest["version"] = 1
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    output.write_text(json.dumps(manifest))
+    with pytest.raises(subprocess.CalledProcessError):
+        _reduce(tmp_path, output)
+
+
+@pytest.mark.parametrize("intent", ["maintain", "optimize", ""])
+def test_measurement_intent_cannot_be_inferred_or_replace_comparison(tmp_path, intent):
+    analysis, plan, _ = _measurement_plan()
+    analysis = analysis.replace("perf_intent: measure", f"perf_intent: {intent}")
+    proc, _ = _required_manifest(tmp_path, analysis, plan, check=False)
+    assert proc.returncode != 0
+    assert "predeclared perf_intent" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "wrong_variant",
+        "normalization",
+        "missing_raw",
+        "modified_artifact",
+        "outside_run",
+        "wrong_goal",
+        "fake_flag",
+        "rehashed_forgery",
+        "wrong_job",
+        "raw_swapped",
+    ],
+)
+def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, defect):
+    _, _, contract = _measurement_plan()
+    requirement = _requirement(
+        suite="perf",
+        selector={"test": "perf_reduce.py", "test_id": None, "k": None},
+        required_measurements=["cycle_measurement"],
+        measurement_contract=contract,
+    )
+    manifest, path = _reducer_manifest(tmp_path, [requirement])
+    manifest["version"] = 2
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    path.write_text(json.dumps(manifest))
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    receipt = _sealed_result(manifest, requirement)
+    (results / "perf.json").write_text(json.dumps(receipt))
+    header = "mathop,marker,loop_factor,tile_cnt,mean(L1_TO_L1)\n"
+    current = tmp_path / "current.post.csv"
+    raw = tmp_path / "current.csv"
+    current.write_text(header + "copy,TILE_LOOP,16,8,2.5\n")
+    raw.write_text(header + "copy,TILE_LOOP,16,8,320\n")
+    receipt["version"] = 4
+    receipt["measurement_artifacts"] = {
+        name: {
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "size": artifact.stat().st_size,
+        }
+        for name, artifact in (("current", current), ("raw_current", raw))
+    }
+    receipt["result_id"] = _content_id(receipt, {"result_id"})
+    (results / "perf.json").write_text(json.dumps(receipt))
+    output = tmp_path / "perf_result.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT.parent / "perf_eval.py"),
+            "--goal",
+            "measure",
+            "--current",
+            str(current),
+            "--raw-current",
+            str(raw),
+            "--required-manifest",
+            str(path),
+            "--requirement-id",
+            requirement["requirement_id"],
+            "--verification-result",
+            str(results / "perf.json"),
+            "--json-out",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    perf = json.loads(output.read_text())
+    assert perf["verdict"] == "measured"
+    assert "delta_pct_median" not in perf and "baseline_source" not in perf
+    perf.update(outcome="PERF_OK", patch_sha256=receipt["provenance"]["patch_sha256"])
+    if defect == "wrong_variant":
+        current.write_text(header + "other,TILE_LOOP,16,8,2.5\n")
+        perf["current_sha256"] = hashlib.sha256(current.read_bytes()).hexdigest()
+    elif defect == "normalization":
+        current.write_text(header + "copy,TILE_LOOP,16,8,320\n")
+        perf["current_sha256"] = hashlib.sha256(current.read_bytes()).hexdigest()
+    elif defect == "missing_raw":
+        raw.unlink()
+    elif defect == "modified_artifact":
+        current.write_text(header + "copy,TILE_LOOP,16,8,3\n")
+    elif defect == "outside_run":
+        perf["current_source"] = str(tmp_path.parent / "outside.csv")
+    elif defect == "wrong_goal":
+        perf["goal"] = "improve"
+    elif defect == "fake_flag":
+        perf["measurements"]["cycle_measurement"]["measured"] = False
+    elif defect == "rehashed_forgery":
+        current.write_text(header + "copy,TILE_LOOP,16,8,5\n")
+        raw.write_text(header + "copy,TILE_LOOP,16,8,640\n")
+        for prefix, artifact in (("current", current), ("raw_current", raw)):
+            perf[f"{prefix}_sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    elif defect == "wrong_job":
+        perf["job_id"] = "different-hardware-job"
+    elif defect == "raw_swapped":
+        perf["current_source"], perf["raw_current_source"] = (
+            perf["raw_current_source"],
+            perf["current_source"],
+        )
+        perf["current_sha256"], perf["raw_current_sha256"] = (
+            perf["raw_current_sha256"],
+            perf["current_sha256"],
+        )
+    output.write_text(json.dumps(perf))
+    _reduce(tmp_path, path, perf_result=output)
+    reduced = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduced["classification"] == (
+        "success" if defect is None else "coverage_error"
+    )
+    assert bool(reduced["success_token"]) == (defect is None)
+
+
+def test_sealed_comparison_cannot_be_downgraded_to_measurement(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    comparison_plan = "\n".join(
+        line
+        for line in plan.replace(
+            '"cycle_measurement"', '"cycle_comparison"'
+        ).splitlines()
+        if "measurement_contract:" not in line
+    )
+    _required_manifest(
+        tmp_path,
+        analysis.replace("perf_intent: measure", "perf_intent: optimize"),
+        comparison_plan,
+    )
+    proc, _ = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "no baseline", check=False
+    )
+    assert proc.returncode != 0
+    assert "cannot downgrade a sealed comparison" in proc.stderr
+
+
+@pytest.mark.parametrize("change", ["variant", "remove", "selector"])
+def test_measurement_contract_cannot_shrink_or_change_after_execution(tmp_path, change):
+    analysis, plan, _ = _measurement_plan()
+    _required_manifest(tmp_path, analysis, plan)
+    if change == "variant":
+        plan = plan.replace('"tile_cnt": "8"', '"tile_cnt": "4"')
+    elif change == "remove":
+        plan = plan[: plan.index("regression_tests:")]
+    else:
+        plan = plan.replace("test: perf_reduce.py", "test: perf_reduce.py::test_reduce")
+    proc, _ = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "observed output", check=False
+    )
+    assert proc.returncode != 0
+    assert "cannot remove or change a predeclared measurement contract" in proc.stderr
+
+
+def _host_worktree(tmp_path, body):
+    """Real pytest + real Git; no model, device, compiler, or mocked outcomes."""
+    import shutil
+
+    tree = tmp_path / "worktree/tt_metal/tt-llk"
+    tests = tree / "tests/python_tests"
+    tests.mkdir(parents=True)
+    (tests / "conftest.py").write_bytes(LLK_CONFTEST.read_bytes())
+    (tests / "helpers").mkdir()
+    (tests / "helpers/llk_pytest_plugin.py").write_bytes(LLK_PLUGIN.read_bytes())
+    # The plugin infers LLK_HOME from a tt_llk_* sibling of tests/.
+    (tree / "tt_llk_blackhole").mkdir()
+    (tests / "test_host.py").write_text(body)
+    (tests / "test_device.py").write_text("def test_device(): pass\n")
+    scripts = tree / "codegen/scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(SCRIPT, scripts / SCRIPT.name)
+    shutil.copy(SCRIPT.parent / "nng_channel.sh", scripts / "nng_channel.sh")
+    wrapper = tree / ".claude/scripts/run_test.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy(RUN_TEST, wrapper)
+    (tree / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "host@test.invalid"],
+        ["config", "user.name", "Host Test"],
+        ["add", "-A"],
+        ["commit", "-qm", "base"],
+    ):
+        subprocess.run(["git", "-C", str(tree.parents[1]), *args], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(tree), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return tree, wrapper, base
+
+
+def _host_run(tmp_path, body, *, extra=(), env_extra=None, prepare=None):
+    tree, wrapper, base = _host_worktree(tmp_path, body)
+    if prepare is not None:
+        prepare(tree)
+    result = tmp_path / "result.json"
+    env = {
+        **os.environ,
+        "TT_LLK_LOCAL_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+        "CODEGEN_BASE_COMMIT": base,
+        "CODEGEN_RUN_ID": "host-run",
+        "CODEGEN_ATTEMPT_ID": "attempt-001",
+        "CODEGEN_HOST_TIMEOUT_SECS": "10",
+        **(env_extra or {}),
+    }
+    for name in (
+        "CODEGEN_REQUIRED_VERIFICATION_MANIFEST",
+        "CODEGEN_VERIFICATION_BACKEND",
+        "CODEGEN_PATCH_SHA256",
+        "CODEGEN_VERIFICATION_SUITE",
+    ):
+        env.pop(name, None)
+    proc = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_host.py",
+            "--result-json-out",
+            str(result),
+            *extra,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc, json.loads(result.read_text()) if result.exists() else None, tree
+
+
+def test_host_wrapper_real_pytest_no_device_import_or_elf(tmp_path):
+    proc, result, tree = _host_run(
+        tmp_path,
+        """import sys, pytest
+pytestmark = pytest.mark.llk_host
+@pytest.mark.parametrize("value", [1, 2, 3])
+def test_schema(value):
+    assert value > 0
+    assert "ttexalens" not in sys.modules
+    assert "helpers.test_config" not in sys.modules
+""",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["version"] == 3 and result["backend"] == "host"
+    assert result["execution"]["passed"] == 3
+    assert result["classification"] == "success"
+    assert (
+        result["provenance"]["selected_nodeids"]
+        == result["provenance"]["observed_nodeids"]
+    )
+    assert "artifact_set_sha256" not in result["provenance"]
+    assert not (tree / "tests/sfpi").exists()
+    assert not list(tmp_path.rglob("*.elf"))
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("host_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    assert writer._load_verification_result(tmp_path / "result.json") == result
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            "import pytest\npytestmark=pytest.mark.llk_host\ndef test_bad(): assert False\n",
+            "candidate_failure",
+        ),
+        (
+            'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.mark.skip(reason="no")\ndef test_skip(): pass\n',
+            "coverage_error",
+        ),
+        ("def test_unmarked(): pass\n", "infra_error"),
+        (
+            'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef device(): raise AssertionError("DEVICE SETUP RAN")\n@pytest.fixture\ndef hidden(device): return device\ndef test_bad(hidden): pass\n',
+            "infra_error",
+        ),
+        ("import missing_host_dependency\n", "infra_error"),
+    ],
+)
+def test_host_wrapper_fails_closed_with_structured_evidence(tmp_path, body, expected):
+    proc, result, _ = _host_run(tmp_path, body)
+    assert proc.returncode != 0, proc.stderr
+    assert result is not None, proc.stderr
+    assert result["classification"] == expected
+    assert "DEVICE SETUP RAN" not in proc.stderr
+
+
+def test_host_wrapper_zero_selected_and_timeout(tmp_path):
+    zero = tmp_path / "zero"
+    zero.mkdir()
+    proc, result, _ = _host_run(
+        zero,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_one(): pass\n",
+        extra=("--k", "missing"),
+    )
+    assert proc.returncode != 0 and result["classification"] != "success"
+    timed = tmp_path / "timed"
+    timed.mkdir()
+    proc, result, _ = _host_run(
+        timed,
+        "import time,pytest\npytestmark=pytest.mark.llk_host\ndef test_slow(): time.sleep(10)\n",
+        env_extra={"CODEGEN_HOST_TIMEOUT_SECS": "1", "GRACE_SECS": "1"},
+    )
+    assert proc.returncode == 5, proc.stderr
+    assert result["classification"] == "timed_out"
+
+
+def test_host_wrapper_rejects_source_mutation(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\nfrom pathlib import Path\npytestmark=pytest.mark.llk_host\ndef test_mutation(): Path(__file__).write_text("# changed\\n")\n',
+    )
+    assert proc.returncode == 3, proc.stderr
+    assert result["classification"] == "infra_error"
+    assert "host_inputs_mutated_during_execution" in result["reason_codes"]
+
+
+def test_sealed_host_and_silicon_require_independent_evidence(tmp_path):
+    tree, wrapper, base = _host_worktree(
+        tmp_path,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+    )
+    analysis = tmp_path / "analysis.md"
+    analysis.write_text(
+        "## Verification\nverification_required: yes\nverifiable_in_llk_suite: yes\nllk_coverage: existing\n"
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n  test: test_host.py\n  execution: host\nregression_tests:\n- arch: blackhole\n  test: test_device.py\n"
+    )
+    manifest_path = tmp_path / "required_verification_manifest.json"
+    cmd = [
+        sys.executable,
+        str(SCRIPT),
+        "required-verification",
+        "--log-dir",
+        str(tmp_path),
+        "--analysis",
+        str(analysis),
+        "--plan",
+        str(plan),
+        "--worktree",
+        str(tree.parents[1]),
+        "--run-id",
+        "host-run",
+        "--expected-base-sha",
+        base,
+        "--architectures-json",
+        '["blackhole"]',
+        "--backend",
+        "local",
+        "--output",
+        str(manifest_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["version"] == 2
+    assert [r["backend"] for r in manifest["requirements"]] == ["host", "silicon"]
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    env = {
+        **os.environ,
+        "TT_LLK_LOCAL_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+        "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+        "CODEGEN_RUN_ID": "host-run",
+        "CODEGEN_ATTEMPT_ID": "attempt-001",
+    }
+    proc = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_host.py",
+            "--result-json-out",
+            str(results / "host.json"),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    host = json.loads((results / "host.json").read_text())
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "partial"
+    assert reduction["success_token"] is None
+    device = _sealed_result(
+        manifest,
+        manifest["requirements"][1],
+        patch_sha256=host["provenance"]["patch_sha256"],
+    )
+    device["provenance"]["actual_base_sha"] = base
+    device["result_id"] = _content_id(device, {"result_id"})
+    (results / "device.json").write_text(json.dumps(device))
+    _reduce(tmp_path, manifest_path)
+    assert (
+        json.loads((tmp_path / "verification_reduction.json").read_text())[
+            "classification"
+        ]
+        == "success"
+    )
+    # A host result cannot claim the silicon leaf, even with a recomputed receipt hash.
+    fake = json.loads(json.dumps(host))
+    fake["backend"] = "silicon"
+    fake["result_id"] = _content_id(fake, {"result_id"})
+    (results / "host.json").write_text(json.dumps(fake))
+    _reduce(tmp_path, manifest_path)
+    assert (
+        json.loads((tmp_path / "verification_reduction.json").read_text())[
+            "classification"
+        ]
+        == "infra_error"
+    )
+    # Existing wrapper entry points cannot route the host leaf through a device compile.
+    rejected = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_device.py",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert rejected.returncode == 3
+    assert "host/device execution must match" in rejected.stderr
+    # A later revision cannot silently downgrade the manifest's version.
+    plan.write_text(plan.read_text().replace("  execution: host\n", ""))
+    subprocess.run(
+        [*cmd, "--supersedes-reason", "explicit route revision"],
+        check=True,
+        capture_output=True,
+    )
+    assert json.loads(manifest_path.read_text())["version"] == 2
+
+
+@pytest.mark.parametrize("execution", ["gpu", "HOST", "silicon"])
+def test_host_plan_requires_typed_execution(tmp_path, execution):
+    proc, _ = _required_manifest(
+        tmp_path,
+        "## Verification\nverification_required: yes\nverifiable_in_llk_suite: yes\nllk_coverage: existing\n",
+        "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n  test: test_reduce.py\n  execution: "
+        + execution
+        + "\n",
+        check=False,
+    )
+    assert proc.returncode != 0 and "execution must be device|host" in proc.stderr
+
+
+def test_host_versioned_harness_does_not_import_pinned_device_conftest(tmp_path):
+    def prepare(tree):
+        writer = tree / "codegen/scripts/run_json_writer.py"
+        writer.unlink()
+        writer.symlink_to(SCRIPT)
+        (tree / "tests/python_tests/conftest.py").write_text(
+            'raise AssertionError("PINNED DEVICE HARNESS LOADED")\n'
+        )
+
+    proc, result, _ = _host_run(
+        tmp_path,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+        prepare=prepare,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["execution"]["passed"] == 1
+    assert "PINNED DEVICE HARNESS LOADED" not in proc.stderr
+    assert result["provenance"]["host_inputs"]["harness_sha256"]
+
+
+@pytest.fixture(scope="module")
+def host_success_receipt(tmp_path_factory):
+    proc, result, _ = _host_run(
+        tmp_path_factory.mktemp("host-receipt"),
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    return result
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_id",
+        "attempt_id",
+        "selector",
+        "expected_base_sha",
+        "patch_sha256",
+        "source_tree_sha256",
+        "dependencies_sha256",
+        "observed_nodeids",
+        "junit_sha256",
+        "version",
+    ],
+)
+def test_host_receipt_rejects_rehashed_identity_or_evidence_tampering(
+    tmp_path, host_success_receipt, field
+):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("host_validator", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    record = json.loads(json.dumps(host_success_receipt))
+    if field in {"run_id", "attempt_id"}:
+        record[field] += "-other"
+    elif field == "selector":
+        record[field]["test"] = "other.py"
+    elif field == "version":
+        record[field] = 2
+    elif field in {"source_tree_sha256", "dependencies_sha256"}:
+        record["provenance"]["host_inputs"][field] = "0" * 64
+        if field == "dependencies_sha256":
+            record["provenance"]["host_inputs_sha256"] = writer._canonical_digest(
+                record["provenance"]["host_inputs"]
+            )
+    elif field == "observed_nodeids":
+        record["provenance"][field] = ["test_host.py::other"]
+    elif field == "junit_sha256":
+        record["provenance"][field] = None
+    else:
+        record["provenance"][field] = "0" * (40 if field == "expected_base_sha" else 64)
+    record["result_id"] = _content_id(record, {"result_id"})
+    path = tmp_path / "forged.json"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError):
+        writer._load_verification_result(path)
+
+
+def test_host_skips_cannot_certify_complete_coverage(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\npytestmark=pytest.mark.llk_host\ndef test_ok(): pass\n@pytest.mark.skip(reason="missing")\ndef test_missing(): pass\n',
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert result["execution"]["passed"] == 1 and result["execution"]["skipped"] == 1
+    assert result["classification"] == "coverage_error"
+    assert result["reason_codes"] == ["host_execution_outcome_incomplete"]
+
+
+def test_device_manifest_still_rejects_empty_artifact_root(tmp_path):
+    root = tmp_path / "empty"
+    root.mkdir()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "artifact-manifest",
+            "--output",
+            str(tmp_path / "manifest.json"),
+            "--artifact-root",
+            str(root),
+            "--owner-id",
+            "owner",
+            "--build-input-digest",
+            "1" * 64,
+            "--source-tree-sha256",
+            "2" * 64,
+            "--compiler-sha256",
+            "3" * 64,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0 and "artifact root contains no files" in proc.stderr
+    assert not (tmp_path / "manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import pytest\n@pytest.mark.llk_host\ndef test_pure(): pass\ndef test_device(): pass\n",
+        'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef tmp_path(): raise AssertionError("DEVICE FIXTURE RAN")\ndef test_masked(tmp_path): pass\n',
+        'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef device(): raise AssertionError("DEVICE FIXTURE RAN")\ndef test_dynamic(request): request.getfixturevalue("device")\n',
+    ],
+)
+def test_host_rejects_mixed_and_hidden_fixture_execution(tmp_path, body):
+    proc, result, _ = _host_run(tmp_path, body)
+    assert proc.returncode != 0, proc.stderr
+    assert result is not None and result["classification"] != "success"
+    assert "DEVICE FIXTURE RAN" not in proc.stderr
+
+
+def test_host_approved_pytest_fixture_and_exact_node_selection(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\npytestmark=pytest.mark.llk_host\ndef test_safe(tmp_path,monkeypatch):\n    monkeypatch.setenv("HOST_CHECK","1")\n    (tmp_path/"x").write_text("ok")\ndef test_not_selected(): assert False\n',
+        extra=("--test-id", "test_host.py::test_safe"),
+        env_extra={
+            "PYTEST_PLUGINS": "missing_unsafe_plugin",
+            "PYTEST_ADDOPTS": "--run-simulator",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["selector"]["test_id"] == "test_host.py::test_safe"
+    assert result["provenance"]["observed_nodeids"] == ["test_host.py::test_safe"]
+
+
+def test_measurement_counts_are_canonical_before_manifest_hash(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    plan = plan.replace('"tile_cnt": "8"', '"tile_cnt": "8.0"').replace(
+        '"loop_factor": "16"', '"loop_factor": "16.0"'
+    )
+    _, path = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(path.read_text())
+    variant = manifest["requirements"][-1]["measurement_contract"]["variants"][0]
+    assert variant["tile_cnt"] == "8" and variant["loop_factor"] == "16"
+    assert manifest["manifest_id"] == _content_id(manifest, {"manifest_id"})
+
+
+def test_legacy_v2_integer_spelling_load_and_reseal_preserve_old_manifest(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    _, path = _required_manifest(tmp_path, analysis, plan)
+    old = json.loads(path.read_text())
+    old["requirements"][-1]["measurement_contract"]["variants"][0]["tile_cnt"] = "8.0"
+    old["manifest_id"] = _content_id(old, {"manifest_id"})
+    old_bytes = (json.dumps(old) + "\n").encode()
+    revision = tmp_path / "required_verification_manifests/revision-001.json"
+    path.write_bytes(old_bytes)
+    revision.write_bytes(old_bytes)
+    _reduce(tmp_path, path)
+    assert path.read_bytes() == old_bytes
+    _, output = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "retry unchanged scope"
+    )
+    resealed = json.loads(output.read_text())
+    assert resealed["parent_manifest_id"] == old["manifest_id"]
+    assert (
+        resealed["requirements"][-1]["measurement_contract"]["variants"][0]["tile_cnt"]
+        == "8"
+    )
+    assert revision.read_bytes() == old_bytes
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("custom_hooks", [False, True])
+def test_worktree_toolchain_setup_preserves_live_shared_hooks(
+    tmp_path, cached, custom_hooks
+):
+    """Actual Git hooks survive setup and deletion; SFPI stays pinned to the child."""
+    import tarfile
+
+    repo = tmp_path / "repo"
+    tests = repo / "tt_metal/tt-llk/tests"
+    tests.mkdir(parents=True)
+    (tests.parent / ".gitignore").write_text("tests/sfpi/\n*.observed\n")
+    # An old base setup would install into the common Git directory. The caller
+    # must select the versioned toolchain entrypoint instead of executing this.
+    (tests / "setup_testing_env.sh").write_text("#!/bin/bash\npre-commit install\n")
+    (tests / "setup_testing_env.sh").chmod(0o755)
+    payload = tmp_path / "payload"
+    (payload / "sfpi").mkdir(parents=True)
+    (payload / "sfpi/compiler").write_text("pinned compiler\n")
+    archive = tmp_path / "pinned.txz"
+    with tarfile.open(archive, "w:xz") as output:
+        output.add(payload / "sfpi", arcname="sfpi")
+    sfpi = tests / "sfpi-info.sh"
+    sfpi.write_text(
+        "#!/bin/bash\n"
+        'printf "%s\\n" "$CHIP_ARCH:$*" > "$(dirname "$0")/sfpi.observed"\n'
+        f"echo sfpi_version=pinned-fixture sfpi_hash={hashlib.sha256(archive.read_bytes()).hexdigest()} "
+        "sfpi_hashtype=sha256 sfpi_url=https://fixture.invalid sfpi_filename=pinned.txz\n"
+    )
+    sfpi.chmod(0o755)
+    git = lambda *args: subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.invalid")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    # Cached case is provided by a tracked fixture path; real Git setup creates
+    # the child before this existing metadata check, just as retained SFPI does.
+    if cached:
+        git("add", "-f", "tt_metal/tt-llk/tests/sfpi-info.sh")
+        (tests / "sfpi").mkdir()
+        (tests / "sfpi/sfpi.version").write_text("pinned-fixture\n")
+        (tests / "sfpi/compiler").write_text("pinned compiler\n")
+        git("add", "-f", "tt_metal/tt-llk/tests/sfpi")
+        git("commit", "-qm", "cached fixture only")
+        base = git("rev-parse", "HEAD").stdout.strip()
+    hooks = tmp_path / "human-hooks" if custom_hooks else repo / ".git/hooks"
+    hooks.mkdir(exist_ok=True)
+    if custom_hooks:
+        git("config", "core.hooksPath", str(hooks))
+    hook = hooks / "pre-commit"
+    hook_bytes = b'#!/bin/sh\nprintf "human-hook\\n" >> "$HOOK_LOG"\n'
+    hook.write_bytes(hook_bytes)
+    hook.chmod(0o755)
+    hook_log = tmp_path / "hook.log"
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    installer = fakebin / "pre-commit"
+    installer.write_text(
+        "#!/bin/bash\n"
+        'printf "#!/deleted/worktree/python\\n" > "$(git rev-parse --git-path hooks)/pre-commit"\n'
+        'touch "$INSTALL_MARKER"\n'
+    )
+    installer.chmod(0o755)
+    wget = fakebin / "wget"
+    wget.write_text('#!/bin/bash\ncp "$SFPI_ARCHIVE" "$3/pinned.txz"\n')
+    wget.chmod(0o755)
+    worktrees = tmp_path / "worktrees"
+    child = worktrees / "issue-hooks-v1"
+    env = {
+        **os.environ,
+        "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+        "INSTALL_MARKER": str(tmp_path / "installed"),
+        "HOOK_LOG": str(hook_log),
+        "SFPI_ARCHIVE": str(archive),
+        "CHIP_ARCH": "blackhole",
+    }
+    command = r"""
+source "$1"
+REPO_ROOT="$2"
+LLK_REL="tt_metal/tt-llk"
+CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+CODEGEN_SETUP_LOCK="$CODEGEN_GIT_DIR/codegen-worktree-setup.lock"
+CODEGEN_WORKTREE_ROOT="$3"
+CODEGEN_BASE_COMMIT="$4"
+setup_worktree issue-hooks
+"""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            base,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not Path(env["INSTALL_MARKER"]).exists()
+    assert hook.read_bytes() == hook_bytes
+    child_tests = child / "tt_metal/tt-llk/tests"
+    assert (child_tests / "sfpi/sfpi.version").read_text().strip() == "pinned-fixture"
+    assert (child_tests / "sfpi/compiler").read_text() == "pinned compiler\n"
+    expected_arch = "blackhole" if Path("/dev/tenstorrent").exists() else "quasar"
+    assert (
+        child_tests / "sfpi.observed"
+    ).read_text().strip() == f"{expected_arch}:SHELL txz"
+    assert (child_tests / "setup_testing_env.sh").read_bytes() == (
+        tests / "setup_testing_env.sh"
+    ).read_bytes()
+    assert not (tests / "sfpi.observed").exists()
+    if not cached:
+        assert not (tests / "sfpi").exists()
+    subprocess.run(
+        ["git", "-C", str(child), "commit", "--allow-empty", "-qm", "child"],
+        env=env,
+        check=True,
+    )
+    git("worktree", "remove", "--force", str(child))
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "human after cleanup",
+        ],
+        env=env,
+        check=True,
+    )
+    assert hook.read_bytes() == hook_bytes
+    assert hook_log.read_text().splitlines() == ["human-hook", "human-hook"]
+
+
+def test_testing_setup_default_still_installs_hooks_and_rejects_bad_mode(tmp_path):
+    import shutil
+
+    source = SETUP_WORKTREE.parents[2] / "tests/setup_testing_env.sh"
+    repo = tmp_path / "human"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    tmp_path = repo / "tests"
+    tmp_path.mkdir()
+    script = tmp_path / "setup_testing_env.sh"
+    shutil.copyfile(source, script)
+    (tmp_path / "sfpi").mkdir()
+    (tmp_path / "sfpi/sfpi.version").write_text("fixture\n")
+    metadata = tmp_path / "sfpi-info.sh"
+    metadata.write_text("#!/bin/bash\necho sfpi_version=fixture\n")
+    metadata.chmod(0o755)
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    installer = fakebin / "pre-commit"
+    installer.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n')
+    installer.chmod(0o755)
+    log = tmp_path / "install.log"
+    env = {
+        **os.environ,
+        "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+        "INSTALL_LOG": str(log),
+    }
+    default = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True
+    )
+    assert default.returncode == 0, default.stderr
+    assert log.read_text() == "install\n"
+    for args in [
+        ["--toolchain-only"],
+        ["--skip-hooks", str(tmp_path)],
+        ["--toolchain-only", str(tmp_path / "absent")],
+    ]:
+        invalid = subprocess.run(
+            ["bash", str(script), *args], env=env, capture_output=True, text=True
+        )
+        assert invalid.returncode == 2
+        assert "Usage:" in invalid.stderr
+    assert log.read_text() == "install\n"
+
+
+def _retry_context_fixture(tmp_path, outcomes):
+    requirements = [_requirement(index=i + 1) for i in range(len(outcomes))]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        manifest["run_id"],
+        "--kernel",
+        "issue_5",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "verify",
+    )
+    run_path = tmp_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["base_commit"] = manifest["expected_base_sha"]
+    run["required_verification"] = {
+        key: manifest[key] for key in ("manifest_id", "attempt_id")
+    }
+    run_path.write_text(json.dumps(run))
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    for requirement, outcome in zip(requirements, outcomes):
+        if outcome is not None:
+            receipt = _sealed_result(manifest, requirement, **outcome)
+            (results / f"{requirement['requirement_id']}.json").write_text(
+                json.dumps(receipt)
+            )
+    _reduce(tmp_path, manifest_path, scope="functional")
+    return manifest
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "failure_class", "retry"),
+    [
+        (
+            [{"selected": 48, "executed": 35, "passed": 35, "skipped": 13}],
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        (
+            [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}],
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        ([{"selected": 0, "executed": 0, "passed": 0}], "MISSING_TEST_COVERAGE", True),
+        ([{"passed": 0, "failed": 1, "returncode": 1}], "TESTS_FAILED", True),
+        (
+            [
+                {
+                    "selected": 48,
+                    "executed": 35,
+                    "passed": 34,
+                    "failed": 1,
+                    "skipped": 13,
+                    "returncode": 1,
+                }
+            ],
+            "TESTS_FAILED",
+            True,
+        ),
+        (
+            [
+                {"selected": 2, "executed": 1, "passed": 1, "skipped": 1},
+                {"passed": 0, "failed": 1, "returncode": 1},
+            ],
+            "TESTS_FAILED",
+            True,
+        ),
+        ([{}, {"patch_sha256": "e" * 64}], "ENV_ERROR", False),
+        ([None], "ENV_ERROR", False),
+        ([{"markers": ["tt_fatal"]}], "ENV_ERROR", False),
+        ([{"selected": 2, "executed": 1, "passed": 1}], "ENV_ERROR", False),
+        ([{}], None, False),
+    ],
+)
+def test_verification_retry_context_preserves_failure_kind(
+    tmp_path, outcomes, failure_class, retry
+):
+    manifest = _retry_context_fixture(tmp_path, outcomes)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    context = json.loads(_run(tmp_path, "verification-retry-context").stdout)
+    assert context["failure_class"] == failure_class
+    assert context["retry_allowed"] is retry
+    assert context["manifest_id"] == manifest["manifest_id"]
+    assert context["attempt_id"] == manifest["attempt_id"]
+    assert context["results_dir"] == str(tmp_path / "verification-results")
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert context["reason_codes"] == reduction["reason_codes"]
+    assert len(context["leaves"]) == sum(
+        leaf["classification"] != "success" for leaf in reduction["leaves"]
+    )
+    assert all(p.read_bytes() == contents for p, contents in before.items())
+
+
+@pytest.mark.parametrize(
+    "changed", ["run", "attempt", "manifest", "reduction_pointer", "scope"]
+)
+def test_verification_retry_context_rejects_stale_evidence(tmp_path, changed):
+    _retry_context_fixture(
+        tmp_path, [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}]
+    )
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    if changed == "run":
+        run["run_id"] = "another"
+    elif changed == "attempt":
+        run["required_verification"]["attempt_id"] = "attempt-002"
+    elif changed == "manifest":
+        run["required_verification"]["manifest_id"] = "f" * 64
+    elif changed == "reduction_pointer":
+        run["verification_reduction"]["reduction_id"] = "f" * 64
+    else:
+        _reduce(tmp_path, tmp_path / "required_verification_manifest.json", scope="all")
+        run = json.loads(path.read_text())
+    path.write_text(json.dumps(run))
+    before = path.read_bytes()
+    with pytest.raises(subprocess.CalledProcessError):
+        _run(tmp_path, "verification-retry-context")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("outcome", "advance"),
+    [
+        ({"selected": 48, "executed": 35, "passed": 35, "skipped": 13}, True),
+        (None, False),
+    ],
+)
+@pytest.mark.parametrize("review_round", [False, True])
+def test_feedback_wrapper_uses_typed_coverage_and_blocks_missing_receipts(
+    tmp_path, outcome, advance, review_round
+):
+    _retry_context_fixture(tmp_path, [outcome])
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "PR_NUMBER": "9",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+            }
+        )
+    )
+    command = (
+        'execute_step_review_round_feedback tester "observed failure"'
+        if review_round
+        else 'execute_step_debug_feedback "observed failure"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'source "$1"; {command}', "bash", str(ORCHESTRATOR_STEPS)],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is advance, result.stdout + result.stderr
+    run = json.loads((tmp_path / "run.json").read_text())
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == (
+        "VERIFICATION_PLAN_ERROR" if advance else "ENV_ERROR"
+    )
+    assert state["VERIFICATION_RETRY_CONTEXT"]["leaves"][0]["reason_codes"]
+    assert run["current_step"] == ("fix_tests" if advance else "tester")
+
+
+def test_feedback_wrapper_preserves_legacy_without_reduction(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "legacy",
+        "--kernel",
+        "issue_5",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "verify",
+    )
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+                "FAILURE_CLASS": "COMPILE_ERROR",
+                "VERIFICATION_RETRY_CONTEXT": {"stale": True},
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "compiler error"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        json.loads((tmp_path / "run.json").read_text())["current_step"] == "fix_tests"
+    )
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == "COMPILE_ERROR"
+    assert state["VERIFICATION_RETRY_CONTEXT"] == {}
+
+
+def test_feedback_wrapper_rejects_missing_audit_reduction(tmp_path):
+    _retry_context_fixture(
+        tmp_path, [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}]
+    )
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool"] = "audit"
+    path.write_text(json.dumps(run))
+    before = path.read_bytes()
+    (tmp_path / "verification_reduction.json").unlink()
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps({"ISSUE_NUMBER": "5", "DEBUG_CYCLES": 0, "MAX_DEBUG_CYCLES": 3})
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "missing evidence"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("review_round", [False, True])
+@pytest.mark.parametrize("receipt", ["absent", "missing", "numerical"])
+def test_feedback_wrapper_preserves_explicit_pre_execution_compile_retry(
+    tmp_path, receipt, review_round
+):
+    outcome = (
+        {"selected": 2, "executed": 2, "passed": 1, "failed": 1}
+        if receipt == "numerical"
+        else None
+    )
+    _retry_context_fixture(tmp_path, [outcome])
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool"] = "audit"
+    path.write_text(json.dumps(run))
+    if receipt == "absent":
+        (tmp_path / "verification_reduction.json").unlink()
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "PR_NUMBER": "9",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+            }
+        )
+    )
+    (tmp_path / "compile.log").write_text("error: unknown type name\n")
+    # Same suite record emitted by the tester before entering the debug loop.
+    _run(
+        tmp_path,
+        "metric",
+        "--patch-json",
+        json.dumps(
+            {
+                "arch_results": {
+                    "blackhole": {
+                        "suite_results": {
+                            "llk": {
+                                "status": "done",
+                                "verdict": "COMPILE_FAILED",
+                                "tests_total": 0,
+                                "tests_passed": 0,
+                                "queue_jobs": [],
+                                "obstacle": str(tmp_path / "compile.log"),
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+    )
+    command = (
+        'execute_step_review_round_feedback tester "compile.log: unknown type" COMPILE_FAILED'
+        if review_round
+        else 'execute_step_debug_feedback "compile.log: unknown type" COMPILE_FAILED'
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'source "$1"; {command}', "bash", str(ORCHESTRATOR_STEPS)],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == (
+        "TESTS_FAILED" if receipt == "numerical" else "COMPILE_ERROR"
+    )
+    assert bool(state["VERIFICATION_RETRY_CONTEXT"]) is (receipt == "numerical")
+    run = json.loads(path.read_text())
+    assert run["current_step"] == "fix_tests"
+    assert run["status"] != "success"
+
+
+# Real Git, host pytest and strict reducer; only silicon dispatch is faked.
+def _functional_fixture(tmp_path, monkeypatch, requirements=None, host_body=None):
+    import argparse
+    import importlib.util
+
+    tree, _, base = _host_worktree(
+        tmp_path,
+        host_body
+        or """import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.mark.parametrize("value", range(19))
+def test_host(value): assert value >= 0
+""",
+    )
+    root, logs = tree.parents[1], tmp_path / "logs"
+    logs.mkdir()
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    device = _requirement(
+        index=2,
+        selector={
+            "test": "test_device.py",
+            "test_id": "test_device.py::test_device",
+            "k": None,
+        },
+        minimum_selected=35,
+        minimum_executed=35,
+    )
+    manifest, path = _reducer_manifest(logs, requirements or [host, device])
+    manifest.update(version=2, expected_base_sha=base)
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    path.write_text(json.dumps(manifest))
+    state = {
+        "RUN_ID": manifest["run_id"],
+        "LOG_DIR": str(logs),
+        "WORKTREE_DIR": str(root),
+        "GIT_COMMIT": base,
+        "REQUIRED_VERIFICATION_MANIFEST": str(path),
+        "REQUIRED_VERIFICATION_MANIFEST_ID": manifest["manifest_id"],
+        "REQUIRED_VERIFICATION_ATTEMPT_ID": manifest["attempt_id"],
+        "HW_TEST_DISPATCH_CMD": "sealed-dispatch-fixture",
+    }
+    (logs / "state.json").write_text(json.dumps(state))
+    (tree / ".codegen_run_state.json").write_text(
+        json.dumps({"RUN_ID": manifest["run_id"], "LOG_DIR": str(logs)})
+    )
+    (logs / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": manifest["run_id"],
+                "status": "running",
+                "runner_pool": "audit",
+                "base_commit": base,
+                "functional_executor": "sealed-llk-v1",
+                "required_verification": {
+                    "manifest_id": manifest["manifest_id"],
+                    "attempt_id": manifest["attempt_id"],
+                },
+            }
+        )
+    )
+    spec = importlib.util.spec_from_file_location("sealed_functional_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    monkeypatch.setenv("TT_LLK_LOCAL_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CODEGEN_HOST_TIMEOUT_SECS", "10")
+    monkeypatch.delenv("CODEGEN_PATCH_SHA256", raising=False)
+    return (
+        writer,
+        argparse.Namespace(log_dir=str(logs), worktree=str(root), timeout=30),
+        manifest,
+        tree,
+    )
+
+
+def _fake_functional_dispatch(
+    monkeypatch,
+    writer,
+    args,
+    manifest,
+    *,
+    outcomes=None,
+    mutate=None,
+    bad_description=None,
+    missing=False,
+    job_mismatch=False,
+):
+    real_run, calls = subprocess.run, []
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    commands = {c["leaf"]["requirement_id"]: c for c in plan["commands"]}
+
+    def fake(argv, **kwargs):
+        if argv[0] != "sealed-dispatch-fixture":
+            return real_run(argv, **kwargs)
+        calls.append(list(argv))
+        if "--help" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, "--requirement-id --describe --result-json-out", ""
+            )
+        identity = argv[argv.index("--requirement-id") + 1]
+        command = commands[identity]
+        leaf = command["leaf"]
+        if "--describe" in argv:
+            context = {
+                "run_id": plan["run_id"],
+                "attempt_id": plan["attempt_id"],
+                "manifest_id": plan["manifest_id"],
+                "requirement_id": identity,
+                "arch": leaf["architecture"],
+                "kind": leaf["suite"],
+                "base": plan["base"],
+                "worktree": args.worktree,
+                "runner_pool": "audit",
+                "copy_result_json": True,
+                "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                "test_filter": leaf["selector"]["k"],
+                "result_json_out": command["result"],
+            }
+            context.update(bad_description or {})
+            return subprocess.CompletedProcess(argv, 0, json.dumps(context), "")
+        assert kwargs["env"].items() >= command["env"].items()
+        assert kwargs["cwd"] == Path(args.worktree) / "tt_metal/tt-llk"
+        assert argv[-2:] == ["--timeout", "30"]
+        job_id = "job-device" if leaf["architecture"] == "blackhole" else "job-wormhole"
+        kwargs["stdout"].write(
+            f'HW_TEST_RESULT arch={leaf["architecture"]} ok=true ran=true passed=true job={job_id} failure_stage=build summary="fixture build output"\n'
+        )
+        if not missing:
+            counts = {"selected": 35, "executed": 35, "passed": 35, **(outcomes or {})}
+            result = _sealed_result(
+                manifest,
+                leaf,
+                patch_sha256=plan["patch_sha256"],
+                job_id="wrong-job" if job_mismatch else job_id,
+                **counts,
+            )
+            output = Path(command["result"])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(result))
+        if mutate:
+            mutate()
+        return subprocess.CompletedProcess(argv, 1 if missing else 0)
+
+    monkeypatch.setattr(writer.subprocess, "run", fake)
+    return calls
+
+
+def _submitted(calls):
+    return [c for c in calls if "--help" not in c and "--describe" not in c]
+
+
+def test_sealed_functional_executes_real_host_and_exact_device_once(
+    tmp_path, monkeypatch
+):
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    log = Path(args.log_dir)
+    run = json.loads((log / "run.json").read_text())
+    reduction = json.loads((log / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["tests_total"] == reduction["tests_passed"] == 54
+    assert reduction["scope"] == "functional" and reduction["success_token"] is None
+    assert run["status"] == "running" and run["current_step"] == "tester"
+    assert [r["requirement_id"] for r in run["functional_execution"]["leaves"]] == [
+        r["requirement_id"] for r in manifest["requirements"]
+    ]
+    assert len(_submitted(calls)) == 1
+    before = list(calls)
+    assert writer.cmd_execute_functional(args) == 0 and calls == before
+    Path(run["functional_execution"]["leaves"][0]["result"]).unlink()
+    assert writer.cmd_execute_functional(args) == 1 and calls == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def test_unmarked(): pass\n",
+        "import not_a_real_host_dependency\n",
+        """import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.fixture
+def device(): raise AssertionError("device executed")
+def test_device(device): pass
+""",
+    ],
+)
+def test_sealed_functional_unsupported_host_preflights_whole_route(
+    tmp_path, monkeypatch, body, capsys
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [device, host], body
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 20 and not _submitted(calls)
+    assert "preflight failed" in capsys.readouterr().out
+    assert "functional_execution" not in json.loads(
+        (Path(args.log_dir) / "run.json").read_text()
+    )
+    assert not (Path(args.log_dir) / "verification-results").exists()
+
+
+@pytest.mark.parametrize(
+    "defect", ["prod", "disabled", "metal", "simulator", "dispatch"]
+)
+def test_sealed_functional_unsupported_plan_never_executes(
+    tmp_path, monkeypatch, defect
+):
+    requirements = [
+        _requirement(selector={"test": "test_device.py", "test_id": None, "k": None})
+    ]
+    if defect == "metal":
+        requirements.append(_requirement(suite="metal"))
+    if defect == "simulator":
+        requirements[0]["backend"] = "ttsim"
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    logs = Path(args.log_dir)
+    if defect in {"prod", "disabled"}:
+        run = json.loads((logs / "run.json").read_text())
+        run["runner_pool" if defect == "prod" else "functional_executor"] = (
+            "prod" if defect == "prod" else None
+        )
+        (logs / "run.json").write_text(json.dumps(run))
+    if defect == "dispatch":
+        state = json.loads((logs / "state.json").read_text())
+        state["HW_TEST_DISPATCH_CMD"] = ""
+        (logs / "state.json").write_text(json.dumps(state))
+    calls = []
+    monkeypatch.setattr(writer.subprocess, "run", lambda *a, **k: calls.append(a))
+    assert writer.cmd_execute_functional(args) == 20 and calls == []
+
+
+@pytest.mark.parametrize(
+    "defect", ["run", "attempt", "worktree", "base", "description"]
+)
+def test_sealed_functional_rejects_foreign_identity_before_dispatch(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        bad_description={"run_id": "wrong"} if defect == "description" else None,
+    )
+    state_path = Path(args.log_dir) / "state.json"
+    state = json.loads(state_path.read_text())
+    if defect == "run":
+        state["RUN_ID"] = "wrong"
+    if defect == "attempt":
+        state["REQUIRED_VERIFICATION_ATTEMPT_ID"] = "wrong"
+    if defect == "worktree":
+        state["WORKTREE_DIR"] = str(tree)
+    if defect == "base":
+        state["GIT_COMMIT"] = "0" * 40
+    state_path.write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="identity|current sealed"):
+        writer.cmd_execute_functional(args)
+    assert not _submitted(calls)
+
+
+@pytest.mark.parametrize(
+    "defect", ["skips", "numerical", "missing", "wrong_job", "mutation"]
+)
+def test_sealed_functional_preserves_partial_and_never_falls_back(
+    tmp_path, monkeypatch, defect
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, [device, host]
+    )
+    counts = (
+        {"executed": 22, "passed": 22, "skipped": 13}
+        if defect == "skips"
+        else (
+            {"passed": 34, "failed": 1, "returncode": 1}
+            if defect == "numerical"
+            else {}
+        )
+    )
+    mutate = (
+        (
+            lambda: (tree / "tests/python_tests/test_device.py").write_text(
+                "def test_device(): assert False\n"
+            )
+        )
+        if defect == "mutation"
+        else None
+    )
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        outcomes=counts,
+        missing=defect == "missing",
+        job_mismatch=defect == "wrong_job",
+        mutate=mutate,
+    )
+    assert writer.cmd_execute_functional(args) == 1
+    logs = Path(args.log_dir)
+    record = json.loads((logs / "run.json").read_text())["functional_execution"]
+    assert record["status"] == "failed" and len(_submitted(calls)) == 1
+    if defect in {"missing", "wrong_job", "mutation"}:
+        assert record["leaves"][0]["queue_job_id"] == "job-device" and record["error"]
+        assert record["leaves"][0]["failure_stage"] == "build"
+        assert record["leaves"][0]["summary"] == "fixture build output"
+        assert record["unstarted"] == [host["requirement_id"]]
+    else:
+        reduction = json.loads((logs / "verification_reduction.json").read_text())
+        assert reduction["classification"] == (
+            "coverage_error" if defect == "skips" else "candidate_failure"
+        )
+        assert len(record["leaves"]) == 2
+    before = list(calls)
+    if defect == "mutation":
+        with pytest.raises(ValueError, match="different candidate"):
+            writer.cmd_execute_functional(args)
+    else:
+        assert writer.cmd_execute_functional(args) == 1
+    assert calls == before
+
+
+def test_host_collect_only_never_executes_or_emits_receipt(tmp_path):
+    proc, receipt, tree = _host_run(
+        tmp_path,
+        """from pathlib import Path
+import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.mark.parametrize("value", range(19))
+def test_host(value): Path("BODY_RAN").write_text("bad")
+""",
+        extra=("--collect-only",),
+        env_extra={"CONSUMER_RETURN_CODE": "0"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["selected"] == 19
+    assert receipt is None and not (tree / "tests/python_tests/BODY_RAN").exists()
+    assert "[RESULT]" not in proc.stderr
+    assert not list(tmp_path.rglob("consumer-junit.xml"))
+
+
+def test_host_collect_only_rejects_nonhost_modes(tmp_path):
+    proc = subprocess.run(
+        ["bash", str(RUN_TEST), "compile", "--collect-only"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 4 and "host-only" in proc.stderr
+
+
+@pytest.mark.parametrize("defect", ["nodeids", "version", "mutation"])
+def test_sealed_functional_collection_faults_cannot_admit_silicon(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    real_run = writer.subprocess.run
+
+    def collector(argv, **kwargs):
+        if "--collect-only" in argv:
+            if defect == "mutation":
+                (tree / "tests/python_tests/test_device.py").write_text(
+                    "def test_device(): assert False\n"
+                )
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "import failed after mutation"
+                )
+            doc = {
+                "schema": "tt.issue-solver.pytest-collection",
+                "version": 2,
+                "selected": 19,
+                "collected": 19,
+                "errors": 0,
+                "returncode": 0,
+                "nodeids": [f"test_host.py::test_host[{n}]" for n in range(19)],
+            }
+            if defect == "version":
+                doc["version"] = 1
+            else:
+                doc["nodeids"][1] = doc["nodeids"][0]
+            return subprocess.CompletedProcess(argv, 0, json.dumps(doc), "")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", collector)
+    with pytest.raises(ValueError, match="schema|nodeids|identity changed"):
+        writer.cmd_execute_functional(args)
+    assert not _submitted(calls)
+
+
+def test_sealed_functional_refuses_preexisting_attempt_receipts(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    results = Path(args.log_dir) / "verification-results" / manifest["attempt_id"]
+    results.mkdir(parents=True)
+    (results / "existing.json").write_text(
+        json.dumps(_sealed_result(manifest, manifest["requirements"][1]))
+    )
+    with pytest.raises(ValueError, match="already exist"):
+        writer.cmd_execute_functional(args)
+    assert calls == []
+
+
+@pytest.mark.parametrize("mode", [None, "sealed-llk-v1", "unknown"])
+def test_sealed_functional_optin_only_initialized_from_environment(
+    tmp_path, monkeypatch, mode
+):
+    if mode:
+        monkeypatch.setenv("CODEGEN_FUNCTIONAL_EXECUTOR", mode)
+    else:
+        monkeypatch.delenv("CODEGEN_FUNCTIONAL_EXECUTOR", raising=False)
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "init",
+        "--log-dir",
+        str(tmp_path),
+        "--run-id",
+        "run-test",
+        "--kernel",
+        "test",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "fix",
+        "--patch-json",
+        '{"functional_executor":"forged","functional_execution":{"status":"success"}}',
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True)
+    if mode == "unknown":
+        assert proc.returncode != 0 and not (tmp_path / "run.json").exists()
+        return
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc.get("functional_executor") == mode and "functional_execution" not in doc
+    for key in (
+        "functional_executor",
+        "functional_execution.status",
+        ".functional_execution.status",
+    ):
+        before = (tmp_path / "run.json").read_bytes()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "metric",
+                "--log-dir",
+                str(tmp_path),
+                "--patch-json",
+                json.dumps({key: "success"}),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0 and (tmp_path / "run.json").read_bytes() == before
+
+
+def test_sealed_functional_existing_shell_step_real_host_only(tmp_path, monkeypatch):
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    _, args, _, tree = _functional_fixture(tmp_path, monkeypatch, [host])
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_run_sealed_functional',
+            "step",
+            str(ORCHESTRATOR_STEPS.resolve()),
+        ],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["functional_execution"]["status"] == "success"
+    assert run["tests_passed"] == 19 and run["status"] == "running"
+    assert not (tree / "tests/sfpi").exists()
+
+
+def test_sealed_functional_terminal_timeout_preserves_unexecuted_coverage(
+    tmp_path, monkeypatch
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [device, host]
+    )
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        outcomes={"executed": 0, "passed": 0, "timed_out": True, "returncode": 124},
+    )
+    assert writer.cmd_execute_functional(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["functional_execution"]
+    assert record["leaves"][0]["status"] == "recorded"
+    assert record["unstarted"] == [host["requirement_id"]]
+    assert "execution_timed_out" in record["error"] and len(_submitted(calls)) == 1
+    assert run["status"] == "running"
+
+
+def test_sealed_functional_old_dispatch_interface_falls_back_before_any_leaf(
+    tmp_path, monkeypatch
+):
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch)
+    real_run, seen = subprocess.run, []
+
+    def old_dispatch(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture":
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "--arch --test", "")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", old_dispatch)
+    assert writer.cmd_execute_functional(args) == 20
+    assert seen == [["sealed-dispatch-fixture", "--help"]]
+
+
+def test_sealed_functional_all_architectures_execute_and_record_in_manifest_order(
+    tmp_path, monkeypatch
+):
+    requirements = [
+        _requirement(
+            arch,
+            selector={
+                "test": "test_device.py",
+                "test_id": "test_device.py::test_device",
+                "k": "device",
+            },
+        )
+        for arch in ("wormhole", "blackhole")
+    ]
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    submitted = _submitted(calls)
+    # Architectures run concurrently, so submission order across them is not
+    # defined; each leaf must still be submitted exactly once.
+    assert sorted(argv[argv.index("--requirement-id") + 1] for argv in submitted) == (
+        sorted(r["requirement_id"] for r in requirements)
+    )
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    # The record, which downstream readers consume, keeps manifest order.
+    assert [
+        leaf["requirement_id"] for leaf in run["functional_execution"]["leaves"]
+    ] == [r["requirement_id"] for r in requirements]
+    assert run["tests_passed"] == 70
+    assert all(
+        run["arch_results"][arch]["verdict"] == "SUCCESS"
+        for arch in ("wormhole", "blackhole")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sealed current-only measurement: perf leaves off the review critical path.
+# ---------------------------------------------------------------------------
+
+_CONTRACT = {
+    "primary_metric": "mean(L1_TO_L1)",
+    "marker": "TILE_LOOP",
+    "normalization": "loop_factor*tile_cnt",
+    "variants": [
+        {"mathop": "copy", "marker": "TILE_LOOP", "loop_factor": "4", "tile_cnt": "2"}
+    ],
+}
+
+
+def _measurement_requirement(index=1, **overrides):
+    return _requirement(
+        suite="perf",
+        index=index,
+        selector={"test": f"perf_copy{index}.py", "test_id": None, "k": None},
+        required_measurements=["cycle_measurement"],
+        measurement_contract=_CONTRACT,
+        **overrides,
+    )
+
+
+def _measurement_fixture(tmp_path, monkeypatch, requirements=None):
+    requirements = requirements or [_measurement_requirement()]
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    for leaf in requirements:
+        module = tree / "tests/python_tests" / leaf["selector"]["test"]
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("def test_perf(): pass\n")
+    return writer, args, manifest, tree
+
+
+def _fake_measurement_dispatch(
+    monkeypatch,
+    writer,
+    args,
+    manifest,
+    *,
+    classification="success",
+    evaluate_rc=0,
+    bad_description=None,
+    job_mismatch=False,
+):
+    """Fake only the hardware transport; the real evaluator writes the evidence."""
+    real_run, calls = subprocess.run, []
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    commands = {c["leaf"]["requirement_id"]: c for c in plan["commands"]}
+
+    def fake(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture":
+            calls.append(list(argv))
+            if "--help" in argv:
+                return subprocess.CompletedProcess(
+                    argv, 0, "--requirement-id --describe --artifact-out", ""
+                )
+            identity = argv[argv.index("--requirement-id") + 1]
+            command = commands[identity]
+            leaf = command["leaf"]
+            if "--describe" in argv:
+                context = {
+                    "run_id": plan["run_id"],
+                    "attempt_id": plan["attempt_id"],
+                    "manifest_id": plan["manifest_id"],
+                    "requirement_id": identity,
+                    "arch": leaf["architecture"],
+                    "kind": "perf",
+                    "base": plan["base"],
+                    "worktree": args.worktree,
+                    "runner_pool": "audit",
+                    "measurement": True,
+                    "copy_result_json": True,
+                    "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                    "test_filter": leaf["selector"]["k"],
+                    "result_json_out": command["result"],
+                    "artifact_out": command["current"],
+                    "raw_artifact_out": command["raw"],
+                }
+                if bad_description:
+                    context.update(bad_description)
+                return subprocess.CompletedProcess(argv, 0, json.dumps(context), "")
+            job = "j-measure-" + identity.replace(":", "-")
+            # Publish CSVs whose per-tile values are exactly raw/(loop*tiles).
+            raw_cycles = 64.0
+            divisor = 4 * 2
+            rows = "mathop,marker,loop_factor,tile_cnt,mean(L1_TO_L1)\n"
+            Path(command["raw"]).write_text(rows + f"copy,TILE_LOOP,4,2,{raw_cycles}\n")
+            Path(command["current"]).write_text(
+                rows + f"copy,TILE_LOOP,4,2,{raw_cycles / divisor}\n"
+            )
+            # Drive the real classifier through its own inputs, never by
+            # writing a classification the counts would not produce.
+            outcome = {
+                "success": {},
+                "infra_error": {"markers": ["hang_detected"]},
+                "candidate_failure": {"failed": 1, "passed": 0, "returncode": 1},
+            }[classification]
+            receipt = _sealed_result(
+                manifest,
+                leaf,
+                job_id=job,
+                patch_sha256=plan["patch_sha256"],
+                **outcome,
+            )
+            assert receipt["classification"] == classification
+            receipt["version"] = 4
+            receipt["suite"] = "perf"
+            receipt["measurement_artifacts"] = {
+                name: {
+                    "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                    "size": Path(path).stat().st_size,
+                }
+                for name, path in (
+                    ("current", command["current"]),
+                    ("raw_current", command["raw"]),
+                )
+            }
+            receipt["result_id"] = _content_id(receipt, {"result_id"})
+            destination = Path(command["result"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(receipt))
+            marker_job = "j-wrong" if job_mismatch else job
+            stream = kwargs.get("stdout")
+            line = (
+                f"HW_TEST_RESULT arch={leaf['architecture']} ok=true ran=true "
+                f"passed=true job={marker_job} tests_total=1 tests_passed=1\n"
+            )
+            if stream is not None and hasattr(stream, "write"):
+                stream.write(line)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "perf_eval.py" in " ".join(str(a) for a in argv) and evaluate_rc:
+            calls.append(["evaluator-forced-failure"])
+            return subprocess.CompletedProcess(argv, evaluate_rc, "", "forced")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    return calls
+
+
+def test_sealed_measurement_dispatches_once_and_binds_real_evaluator(
+    tmp_path, monkeypatch
+):
+    """The reviewed evaluator, not an agent, derives the verdict from receipt bytes."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    submitted = [a for a in calls if "--describe" not in a and "--help" not in a]
+    assert len(submitted) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["measurement_execution"]
+    assert record["status"] == "success" and record["unstarted"] == []
+    assert [leaf["status"] for leaf in record["leaves"]] == ["measured"]
+    # Published where the existing all-scope reduction already looks for it.
+    assert run["perf"]["schema"] == "tt.issue-solver.perf-results"
+    measured = run["perf"]["results"]["blackhole:perf:1"]
+    assert measured["outcome"] == "PERF_OK" and measured["measured"] is True
+    assert measured["measurements"]["cycle_measurement"]["measured"] is True
+    assert measured["variants"][0]["current_cycles"] == 8.0
+    assert measured["primary_metric"] == "mean(L1_TO_L1)"
+
+
+def test_sealed_measurement_never_resubmits_a_recorded_attempt(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    before = len(calls)
+    assert writer.cmd_execute_perf(args) == 0 and len(calls) == before
+
+
+def test_sealed_measurement_refuses_preexisting_receipts(tmp_path, monkeypatch):
+    """An existing current-attempt receipt is inspected, never overwritten."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    destination = Path(plan["commands"][0]["result"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("{}")
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    with pytest.raises(ValueError, match="already exist"):
+        writer.cmd_execute_perf(args)
+    assert not [a for a in calls if "--describe" not in a and "--help" not in a]
+
+
+@pytest.mark.parametrize(
+    "requirements,reason",
+    [
+        # A comparison owns a detached baseline tree; the agent keeps the whole run.
+        (
+            [_requirement(suite="perf", required_measurements=["cycle_comparison"])],
+            "unsupported_measurement_route",
+        ),
+        (
+            [
+                _measurement_requirement(),
+                _requirement(
+                    suite="perf", index=2, required_measurements=["cycle_comparison"]
+                ),
+            ],
+            "unsupported_measurement_route",
+        ),
+        # No perf leaf at all: nothing for this executor to own.
+        ([_requirement()], "unsupported_measurement_route"),
+    ],
+)
+def test_sealed_measurement_falls_back_before_any_dispatch(
+    tmp_path, monkeypatch, requirements, reason
+):
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    for leaf in requirements:
+        module = tree / "tests/python_tests" / leaf["selector"]["test"]
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("def test_perf(): pass\n")
+    real_run = subprocess.run
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: (
+            pytest.fail("fallback must not reach hardware")
+            if argv and argv[0] == "sealed-dispatch-fixture"
+            else real_run(argv, **kw)
+        ),
+    )
+    assert writer.cmd_execute_perf(args) == 20
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert "measurement_execution" not in run
+
+
+@pytest.mark.parametrize("defect", ["prod", "forged"])
+def test_sealed_measurement_requires_explicit_audit_opt_in(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    path = Path(args.log_dir) / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool" if defect == "prod" else "functional_executor"] = (
+        "prod" if defect == "prod" else "forged"
+    )
+    path.write_text(json.dumps(run))
+    assert writer.cmd_execute_perf(args) == 20
+
+
+@pytest.mark.parametrize(
+    "bad_description",
+    [
+        {"kind": "llk"},
+        {"measurement": False},
+        {"copy_result_json": False},
+        {"artifact_out": "/tmp/elsewhere.post.csv"},
+        {"raw_artifact_out": "/tmp/elsewhere.csv"},
+        {"runner_pool": "prod"},
+    ],
+)
+def test_sealed_measurement_rejects_changed_dispatcher_identity(
+    tmp_path, monkeypatch, bad_description
+):
+    """A dispatcher that redirects evidence must not be allowed to execute."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(
+        monkeypatch, writer, args, manifest, bad_description=bad_description
+    )
+    with pytest.raises(ValueError, match="changed measurement identity"):
+        writer.cmd_execute_perf(args)
+    assert not [a for a in calls if "--describe" not in a and "--help" not in a]
+
+
+def test_sealed_measurement_rejects_receipt_from_another_job(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(monkeypatch, writer, args, manifest, job_mismatch=True)
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert "does not match its dispatched job" in run["measurement_execution"]["error"]
+    assert "perf" not in run
+
+
+@pytest.mark.parametrize(
+    "classification,expected",
+    [
+        ("infra_error", "infrastructure failure"),
+        ("candidate_failure", "hardware execution failed"),
+    ],
+)
+def test_sealed_measurement_preserves_failure_without_publishing(
+    tmp_path, monkeypatch, classification, expected
+):
+    """A failed measurement keeps its evidence and never reaches run.perf."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(
+        monkeypatch, writer, args, manifest, classification=classification
+    )
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert expected in run["measurement_execution"]["error"]
+    assert "perf" not in run
+
+
+def test_sealed_measurement_rejected_evidence_is_not_success(tmp_path, monkeypatch):
+    """Evaluator rejection is recorded as unmeasured, not quietly dropped."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(monkeypatch, writer, args, manifest, evaluate_rc=2)
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["measurement_execution"]
+    assert record["status"] == "failed"
+    assert [leaf["status"] for leaf in record["leaves"]] == ["unmeasured"]
+    assert "perf" not in run
+
+
+def test_sealed_measurement_evaluator_is_deployed_not_candidate_owned(
+    tmp_path, monkeypatch
+):
+    """A candidate must not be able to grade its own measurement.
+
+    The evaluator is resolved next to the deployed writer, so editing the
+    worktree's copy of perf_eval.py cannot change the verdict.
+    """
+    writer, args, manifest, tree = _measurement_fixture(tmp_path, monkeypatch)
+    hostile = tree / "codegen/scripts/perf_eval.py"
+    hostile.parent.mkdir(parents=True, exist_ok=True)
+    hostile.write_text("import sys\nsys.exit(0)\n")
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    evaluator = Path(plan["commands"][0]["evaluate"][1])
+    assert evaluator == Path(writer.__file__).resolve().parent / "perf_eval.py"
+    assert not evaluator.is_relative_to(tree)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    # The real evaluator still produced bound evidence, not the stub's silence.
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["perf"]["results"]["blackhole:perf:1"]["measured"] is True
+
+
+@pytest.mark.parametrize(
+    "run,expected",
+    [
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "1",
+        ),
+        # Every other shape must fail closed, so the perf tester still runs.
+        (
+            {
+                "required_verification": {"manifest_id": "m2", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a2"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "failed",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        ({"required_verification": {"manifest_id": "m1", "attempt_id": "a1"}}, "0"),
+        ({}, "0"),
+    ],
+)
+def test_sealed_measurement_gate_only_skips_an_exact_candidate_match(
+    tmp_path, run, expected
+):
+    """The gate decides whether a perf tester is spawned, so it fails closed."""
+    (tmp_path / "run.json").write_text(json.dumps(run))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; _LOG(){ printf "%s" "$D"; }; '
+            "execute_step_sealed_measurement_done",
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=ORCHESTRATOR_STEPS.parents[2],
+        env={**os.environ, "D": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_sealed_measurement_gate_fails_closed_on_unreadable_run(tmp_path):
+    (tmp_path / "run.json").write_text("not json")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; _LOG(){ printf "%s" "$D"; }; '
+            "execute_step_sealed_measurement_done",
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=ORCHESTRATOR_STEPS.parents[2],
+        env={**os.environ, "D": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "0"
+
+
+def test_sealed_measurement_executes_every_leaf_in_manifest_order(
+    tmp_path, monkeypatch
+):
+    requirements = [_measurement_requirement(1), _measurement_requirement(2)]
+    writer, args, manifest, _ = _measurement_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    submitted = [a for a in calls if "--describe" not in a and "--help" not in a]
+    assert [a[a.index("--requirement-id") + 1] for a in submitted] == [
+        r["requirement_id"] for r in requirements
+    ]
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert set(run["perf"]["results"]) == {r["requirement_id"] for r in requirements}
+
+
+def test_sealed_functional_host_only_checks_run_worktree_pointer(tmp_path, monkeypatch):
+    host = _requirement(
+        backend="host", selector={"test": "test_host.py", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch, [host])
+    run_path = Path(args.log_dir) / "run.json"
+    run = json.loads(run_path.read_text())
+    run["worktree_dir"] = str(tmp_path / "foreign")
+    run_path.write_text(json.dumps(run))
+    with pytest.raises(ValueError, match="worktree identity"):
+        writer.cmd_execute_functional(args)
+
+
+@pytest.mark.parametrize("foreign_attempt", [False, True])
+def test_sealed_functional_preexisting_root_host_receipt_identity(
+    tmp_path, monkeypatch, foreign_attempt
+):
+    host = _requirement(
+        backend="host", selector={"test": "test_host.py", "test_id": None, "k": None}
+    )
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, [host])
+    assert writer.cmd_execute_functional(args) == 0
+    logs = Path(args.log_dir)
+    run = json.loads((logs / "run.json").read_text())
+    receipt = Path(run.pop("functional_execution")["leaves"][0]["result"])
+    root_receipt = logs / "verification-results/manual-host.json"
+    receipt.rename(root_receipt)
+    assert writer._load_verification_result(root_receipt)["version"] == 3
+    if foreign_attempt:
+        manifest["attempt_id"] = "attempt-002"
+        manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+        (logs / "required_verification_manifest.json").write_text(json.dumps(manifest))
+        run["required_verification"] = {
+            key: manifest[key] for key in ("attempt_id", "manifest_id")
+        }
+        state = json.loads((logs / "state.json").read_text())
+        state.update(
+            REQUIRED_VERIFICATION_ATTEMPT_ID=manifest["attempt_id"],
+            REQUIRED_VERIFICATION_MANIFEST_ID=manifest["manifest_id"],
+        )
+        (logs / "state.json").write_text(json.dumps(state))
+    (logs / "run.json").write_text(json.dumps(run))
+    if foreign_attempt:
+        assert writer.cmd_execute_functional(args) == 0
+        reduction = json.loads((logs / "verification_reduction.json").read_text())
+        assert reduction["tests_passed"] == 19
+        assert (
+            reduction["excluded_results"][0]["reason"]
+            == "superseded_or_foreign_attempt"
+        )
+    else:
+        with pytest.raises(ValueError, match="already exist"):
+            writer.cmd_execute_functional(args)
+        assert len(list((logs / "verification-results").rglob("*.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "missing", "expected_class", "repair"),
+    [
+        (
+            {"selected": 48, "executed": 35, "passed": 35, "skipped": 13},
+            False,
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        (
+            {"selected": 35, "executed": 35, "passed": 34, "failed": 1},
+            False,
+            "TESTS_FAILED",
+            True,
+        ),
+        (
+            {"selected": 0, "executed": 0, "passed": 0},
+            False,
+            "MISSING_TEST_COVERAGE",
+            True,
+        ),
+        ({}, True, "ENV_ERROR", False),
+        ({}, False, "", False),
+    ],
+)
+def test_sealed_executor_reduction_drives_existing_retry_wrapper(
+    tmp_path, monkeypatch, outcomes, missing, expected_class, repair
+):
+    """The adapter's real reduction, not a hand-built hint, drives retry routing."""
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(
+        monkeypatch, writer, args, manifest, outcomes=outcomes, missing=missing
+    )
+    success = not missing and not outcomes
+    assert writer.cmd_execute_functional(args) == (0 if success else 1)
+    logs = Path(args.log_dir)
+    reduction = json.loads((logs / "verification_reduction.json").read_text())
+    assert reduction["scope"] == "functional"
+    assert reduction["success_token"] is None
+    state_path = logs / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(ISSUE_NUMBER="5", DEBUG_CYCLES=0, MAX_DEBUG_CYCLES=3)
+    state_path.write_text(json.dumps(state))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "sealed execution evidence"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is repair, result.stdout + result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["FAILURE_CLASS"] == expected_class
+    context = state["VERIFICATION_RETRY_CONTEXT"]
+    assert context["reduction_id"] == reduction["reduction_id"]
+    assert context["retry_allowed"] is repair
+    assert context["manifest_id"] == manifest["manifest_id"]
+    if not success:
+        assert len(context["leaves"]) == 1
+        assert context["leaves"][0]["backend"] == "silicon"
+        assert (
+            context["leaves"][0]["requirement_id"]
+            == manifest["requirements"][1]["requirement_id"]
+        )
+    run = json.loads((logs / "run.json").read_text())
+    assert run["status"] == "running"
+    assert run["current_step"] == ("fix_tests" if repair else "tester")
+    assert len(_submitted(calls)) == 1
+    before = list(calls)
+    assert writer.cmd_execute_functional(args) == (0 if success else 1)
+    assert calls == before  # diagnostic routing cannot resubmit the same attempt
+
+
+def test_sealed_dispatch_cmd_falls_back_to_the_environment(tmp_path, monkeypatch):
+    """worker.py exports HW_TEST_DISPATCH_CMD as env and never writes it to state.
+
+    Reading state alone made both sealed executors fall back with
+    sealed_dispatch_unavailable on every real run. The no-model replay hid it by
+    writing the key into fixture state by hand.
+    """
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    path = Path(args.log_dir) / "state.json"
+    state = json.loads(path.read_text())
+    del state["HW_TEST_DISPATCH_CMD"]
+    path.write_text(json.dumps(state))
+
+    monkeypatch.delenv("HW_TEST_DISPATCH_CMD", raising=False)
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan == {"supported": False, "reason": "sealed_dispatch_unavailable"}
+
+    monkeypatch.setenv("HW_TEST_DISPATCH_CMD", "sealed-dispatch-fixture")
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["supported"] is True
+    assert plan["dispatch"] == ["sealed-dispatch-fixture"]
+
+
+def test_sealed_dispatch_cmd_in_state_wins_over_the_environment(tmp_path, monkeypatch):
+    """State still pins a specific client when a sealed run sets one."""
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("HW_TEST_DISPATCH_CMD", "env-client")
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["dispatch"] == ["sealed-dispatch-fixture"]
+
+
+# ── sealed executor over metal and ttnn leaves ──────────────────────────────
+# Run 24095 spent 7,155s of 11,380s verification time in the agent wrapper
+# around the jobs -- 63%, against 3,984s of build and ~500s of execution --
+# because the sealed executor refused any route carrying a metal or ttnn leaf.
+def _multi_suite_fixture(tmp_path, monkeypatch, requirements, **dispatch_modes):
+    ttnn_rel = "tests/ttnn/unit_tests/operations/test_transpose.py"
+    fixture = _functional_fixture(tmp_path, monkeypatch, requirements=requirements)
+    writer, args, manifest, _ = fixture
+    root = Path(args.worktree)
+    target = root / ttnn_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("def test_transpose(): pass\n")
+    state_path = Path(args.log_dir) / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(dispatch_modes)
+    state_path.write_text(json.dumps(state))
+    return fixture
+
+
+def _ttnn_requirement(**over):
+    fields = {
+        "selector": {
+            "test": "tests/ttnn/unit_tests/operations/test_transpose.py",
+            "test_id": None,
+            "k": None,
+        },
+        **over,
+    }
+    return _requirement(suite="ttnn", index=3, **fields)
+
+
+def test_sealed_functional_executes_metal_and_ttnn_leaves(tmp_path, monkeypatch):
+    metal = _requirement(suite="metal", index=2)
+    requirements = [metal, _ttnn_requirement()]
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        requirements,
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    reduction = json.loads(
+        (Path(args.log_dir) / "verification_reduction.json").read_text()
+    )
+    assert reduction["classification"] == "success"
+    assert [r["requirement_id"] for r in run["functional_execution"]["leaves"]] == [
+        "blackhole:metal:2",
+        "blackhole:ttnn:3",
+    ]
+    # Each leaf reaches the dispatcher under its own suite, not as llk.
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    suites = {
+        c["leaf"]["requirement_id"]: c["env"]["CODEGEN_VERIFICATION_SUITE"]
+        for c in plan["commands"]
+    }
+    assert suites == {"blackhole:metal:2": "metal", "blackhole:ttnn:3": "ttnn"}
+    assert len(_submitted(calls)) == 2
+
+
+@pytest.mark.parametrize("suite", ["metal", "ttnn"])
+def test_sealed_functional_falls_back_when_the_dispatch_mode_is_unset(
+    tmp_path, monkeypatch, suite
+):
+    """The dispatcher rejects these leaves without a mode; fall back before any
+    leaf runs rather than part-way through the route."""
+    requirement = (
+        _requirement(suite="metal", index=2)
+        if suite == "metal"
+        else _ttnn_requirement()
+    )
+    writer, args, _, _ = _multi_suite_fixture(tmp_path, monkeypatch, [requirement])
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan == {"supported": False, "reason": f"sealed_{suite}_dispatch_unset"}
+    # Exit 20 hands the route back to the existing tester with nothing executed.
+    assert writer.cmd_execute_functional(args) == 20
+    assert "functional_execution" not in json.loads(
+        (Path(args.log_dir) / "run.json").read_text()
+    )
+
+
+@pytest.mark.parametrize("mode", ["", "turbo", None])
+def test_sealed_functional_rejects_an_unknown_dispatch_mode(
+    tmp_path, monkeypatch, mode
+):
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        [_requirement(suite="metal", index=2)],
+        METAL_DISPATCH=mode,
+    )
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    assert plan["supported"] is False
+
+
+def test_sealed_functional_rejects_a_metal_leaf_carrying_a_pytest_node(
+    tmp_path, monkeypatch
+):
+    """Metal selects by gtest filter; a node or -k would silently select nothing."""
+    metal = _requirement(
+        suite="metal",
+        index=2,
+        selector={"test": "LLK.Reduce", "test_id": "LLK.Reduce::x", "k": None},
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [metal], METAL_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="bare gtest filter"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_rejects_a_ttnn_selector_outside_the_worktree(
+    tmp_path, monkeypatch
+):
+    ttnn = _ttnn_requirement(
+        selector={"test": "../../../etc/passwd", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [ttnn], TTNN_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="ttnn selector"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_rejects_a_ttnn_selector_that_no_longer_exists(
+    tmp_path, monkeypatch
+):
+    ttnn = _ttnn_requirement(
+        selector={"test": "tests/ttnn/deleted_test.py", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path, monkeypatch, [ttnn], TTNN_DISPATCH="fast"
+    )
+    with pytest.raises(ValueError, match="ttnn selector"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+@pytest.mark.parametrize("suite", ["metal", "ttnn"])
+def test_a_host_backed_metal_or_ttnn_leaf_is_refused_before_the_executor(
+    tmp_path, monkeypatch, suite
+):
+    """Only llk has a host path. The manifest validator already rejects this, so
+    the executor's own guard is the second line, not the first."""
+    requirement = (
+        _requirement(suite="metal", index=2, backend="host")
+        if suite == "metal"
+        else _ttnn_requirement(backend="host")
+    )
+    writer, args, _, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        [requirement],
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    with pytest.raises(ValueError, match="host verification is an LLK"):
+        writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+
+
+def test_sealed_functional_still_covers_a_mixed_llk_metal_ttnn_route(
+    tmp_path, monkeypatch
+):
+    """The 24095 route: all three suites under one manifest and one patch."""
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    requirements = [host, _requirement(suite="metal", index=2), _ttnn_requirement()]
+    writer, args, manifest, _ = _multi_suite_fixture(
+        tmp_path,
+        monkeypatch,
+        requirements,
+        METAL_DISPATCH="fast",
+        TTNN_DISPATCH="fast",
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    reduction = json.loads(
+        (Path(args.log_dir) / "verification_reduction.json").read_text()
+    )
+    assert reduction["classification"] == "success"
+    # One patch digest across all three suites: the sealed invariant holds.
+    assert reduction["patch_sha256"]
+    assert len(_submitted(calls)) == 2  # host runs locally, two silicon leaves
+
+
+def test_sealed_functional_runs_architectures_concurrently(tmp_path, monkeypatch):
+    """Blackhole and wormhole leaves build and run on different hosts.
+
+    Run 24095 serialised them, so every metal and ttnn round waited for one
+    architecture before starting the other. Each fake dispatch here blocks on a
+    two-party barrier: a serial executor would time the barrier out on the
+    first leaf, a concurrent one lets both arrive.
+    """
+    import threading
+
+    requirements = [
+        _requirement(
+            arch,
+            selector={
+                "test": "test_device.py",
+                "test_id": "test_device.py::test_device",
+                "k": "device",
+            },
+        )
+        for arch in ("wormhole", "blackhole")
+    ]
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    barrier = threading.Barrier(2, timeout=10)
+    fake = writer.subprocess.run
+
+    def gated(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture" and not (
+            "--help" in argv or "--describe" in argv
+        ):
+            barrier.wait()  # BrokenBarrierError if the other arch is not running
+        return fake(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", gated)
+    assert writer.cmd_execute_functional(args) == 0
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["functional_execution"]["status"] == "success"
+    assert run["functional_execution"]["unstarted"] == []
+
+
+def test_a_failing_architecture_stops_its_own_later_leaves(tmp_path, monkeypatch):
+    """Within one architecture the serial stop semantics are unchanged: after a
+    defect, that arch's later leaves stay deterministically unstarted."""
+    first = _requirement(
+        "blackhole", selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    second = _requirement(
+        "blackhole",
+        index=2,
+        selector={
+            "test": "test_device.py",
+            "test_id": "test_device.py::test_device",
+            "k": None,
+        },
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [first, second]
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest, missing=True)
+    assert writer.cmd_execute_functional(args) == 1
+    record = json.loads((Path(args.log_dir) / "run.json").read_text())[
+        "functional_execution"
+    ]
+    assert len(_submitted(calls)) == 1
+    assert record["unstarted"] == [second["requirement_id"]]

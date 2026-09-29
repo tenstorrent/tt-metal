@@ -258,3 +258,28 @@ All runs are also indexed in `runs.jsonl` (one JSON line per run) for dashboardi
 3. **Instruction encoding drives API** -- `TTI_` macros require compile-time constants; function parameter types must preserve constexpr-ness
 4. **Target-first design** -- Use reference for semantics only; derive implementation patterns from existing target code
 5. **Append SFPU ops to the unified test** -- New SFPU ops register into the consolidated test for their category (`test_eltwise_unary_sfpu_quasar.py`, `test_eltwise_binary_sfpu_quasar.py`, or the ternary `test_sfpu_where_quasar.py`) rather than getting their own per-op files; non-SFPU kernels extend a sibling test
+
+### Optional Tenstorrent specialist plugins
+
+The issue pipeline uses the existing worker, reviewer and perf tester; plugins
+add domain knowledge inside those roles. Install and enable `tt-review-skills`
+and `tt-autodebug` through Claude's normal plugin manager as the runner user.
+No additional environment variables or plugin directory flags are needed.
+Before each solve or address-comments session, the dashboard queries
+`claude plugin list --json` in the solver project, validates enabled specialist
+packages, and records their paths, versions and content hashes in
+`run.json.solver_plugins`. Absent or disabled packages retain repository-only
+behavior; an unreadable inventory or broken enabled package fails before launch.
+Roles read selected skill files explicitly; plugin discovery alone does not
+preload them into delegated agents. Model bringup skills are not used.
+
+Review results carry `review_context.json` identity and validated counts. A patch
+or verification-manifest change requires a fresh review; accepted attempts are
+retained in `reviews/`. Unknown evidence cannot become an automatic code fix.
+AutoDebug runs first for timeout, data-mismatch and reconfiguration retries, with
+a 30-minute default timeout inside the existing retry budget. It inherits the
+selected model/proxy; reports live under the run log directory. Testers retain
+all runtime testing.
+Queued LLK hangs reuse the existing `llk_triage.py` collector before reset, under
+the card lock; `device_recovery.triage` links the report. Simulators and Metal
+Inspector are not treated as interchangeable LLK evidence sources.

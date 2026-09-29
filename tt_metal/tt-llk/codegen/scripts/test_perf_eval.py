@@ -4,10 +4,14 @@
 
 """Tests for perf_eval.py — intent-aware perf regression judgement."""
 
+import csv
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "perf_eval", Path(__file__).parent / "perf_eval.py"
@@ -34,7 +38,9 @@ def _csv(path: Path, mathop: str, tile_loop_cycles: float) -> Path:
     return path
 
 
-def _eval(current_csv, baseline_csv, *, op, goal):
+def _eval(
+    current_csv, baseline_csv, *, op, goal, primary_metric=perf_eval.PRIMARY_METRIC
+):
     cur = perf_eval._read_csv(current_csv)
     base = perf_eval._read_csv(baseline_csv) if baseline_csv else []
     return perf_eval.evaluate(
@@ -45,6 +51,7 @@ def _eval(current_csv, baseline_csv, *, op, goal):
         noise_pct=3.0,
         regress_pct=3.0,
         improve_pct=2.0,
+        primary_metric=primary_metric,
     )
 
 
@@ -107,6 +114,7 @@ def test_missing_baseline_is_not_comparable(tmp_path):
     cur = _csv(tmp_path / "c.csv", "MathOperation.Reciprocal", 600.0)
     r = _eval(cur, None, op="Reciprocal", goal="no_regress")
     assert r["verdict"] == "no_baseline"
+    assert r["reason_code"] == "baseline_rows_missing"
     assert r["exit_code"] == 2
 
 
@@ -116,6 +124,7 @@ def test_op_filter_excludes_other_ops(tmp_path):
     cur = _csv(tmp_path / "c.csv", "MathOperation.Reciprocal", 600.0)
     r = _eval(cur, base, op="Reciprocal", goal="no_regress")
     assert r["verdict"] == "no_baseline"
+    assert r["reason_code"] == "baseline_rows_missing"
     assert r["exit_code"] == 2
 
 
@@ -124,7 +133,20 @@ def test_no_current_rows_not_measured(tmp_path):
     empty.write_text("")
     r = _eval(empty, None, op=None, goal="no_regress")
     assert r["verdict"] == "not_measured"
+    assert r["reason_code"] == "current_rows_missing"
     assert r["exit_code"] == 2
+
+
+def test_empty_current_selection_is_a_plan_defect_not_missing_measurements(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Sqrt", 600.0)
+    base = _csv(tmp_path / "baseline.csv", "MathOperation.Reciprocal", 600.0)
+    result = _eval(cur, base, op="Reciprocal", goal="no_regress")
+    assert result["verdict"] == "not_measured"
+    assert result["reason_code"] == "current_selection_empty"
+    assert result["exit_code"] == 2
+    assert result["measured"] is False
+    assert result["coverage"]["current_rows"] == 0
+    assert result["coverage"]["comparison_complete"] is False
 
 
 # --- 0.5% noise floor (perf team) ------------------------------------------
@@ -183,3 +205,630 @@ def test_shipped_cli_defaults_use_half_pct_noise_floor(tmp_path):
 
     assert run(near) == 0  # within noise -> not flagged
     assert run(over) == 1  # beyond noise -> regression
+
+
+def test_isolate_only_csv_requires_explicit_selection(tmp_path):
+    # Matches the archived feature-support run's schema: there is no L1 metric.
+    header = "variant,marker,mean(MATH_ISOLATE),TEXT_SIZE(MATH_ISOLATE)\n"
+    base = tmp_path / "baseline.csv"
+    cur = tmp_path / "current.csv"
+    base.write_text(header + "a,TILE_LOOP,100,2000\nb,TILE_LOOP,200,2000\n")
+    cur.write_text(header + "a,TILE_LOOP,100,2100\nb,TILE_LOOP,200,2100\n")
+
+    missing = _eval(cur, base, op=None, goal="no_regress")
+    assert missing["verdict"] == "missing_metric"
+    assert missing["exit_code"] == 2
+    assert "mean(L1_TO_L1)" in missing["reason"]
+
+    result = _eval(
+        cur, base, op=None, goal="no_regress", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert result["verdict"] == "neutral"
+    assert result["variants_compared"] == 2
+    assert result["primary_metric"] == "mean(MATH_ISOLATE) @ TILE_LOOP"
+
+
+def test_selected_metric_is_not_replaced_by_more_favorable_metric(tmp_path):
+    base = _csv(tmp_path / "base.csv", "MathOperation.Reciprocal", 600.0)
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 660.0)
+    # L1 regresses by 10%, whereas MATH improves by 10%.
+    cur.write_text(cur.read_text().replace("660.0,0.0,660.0", "660.0,0.0,540.0"))
+    assert _eval(cur, base, op=None, goal="no_regress")["verdict"] == "regressed"
+    isolated = _eval(
+        cur, base, op=None, goal="improve", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert isolated["verdict"] == "improved"
+    assert isolated["delta_pct_worst"] == -10.0
+
+
+@pytest.mark.parametrize("source", ["current", "baseline"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "", "bad", "0", "-1"])
+def test_invalid_selected_measurement_cannot_silently_pass(tmp_path, source, value):
+    # A valid neutral variant must not hide a second malformed measurement.
+    header = "variant,marker,mean(MATH_ISOLATE)\n"
+    files = {name: tmp_path / f"{name}.csv" for name in ("current", "baseline")}
+    for name, path in files.items():
+        second = value if name == source else "100"
+        path.write_text(header + f"good,TILE_LOOP,100\nbad,TILE_LOOP,{second}\n")
+    result = _eval(
+        files["current"],
+        files["baseline"],
+        op=None,
+        goal="no_regress",
+        primary_metric="mean(MATH_ISOLATE)",
+    )
+    assert result["exit_code"] == 2
+    assert result["verdict"] == "invalid_measurement"
+    assert source in result["reason"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_missing_selected_baseline_metric_is_not_comparable(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 600.0)
+    base = tmp_path / "baseline.csv"
+    base.write_text(cur.read_text().replace("mean(MATH_ISOLATE)", "std(MATH_ISOLATE)"))
+    result = _eval(
+        cur, base, op=None, goal="no_regress", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert result["verdict"] == "missing_metric"
+    assert "baseline" in result["reason"]
+
+
+def test_unsupported_metric_rejected_by_api(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 600.0)
+    with pytest.raises(ValueError, match="unsupported primary metric"):
+        _eval(cur, cur, op=None, goal="no_regress", primary_metric="std(L1_TO_L1)")
+
+
+@pytest.mark.parametrize("name", ["noise_pct", "regress_pct", "improve_pct"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0])
+def test_nonfinite_or_negative_threshold_rejected(name, value):
+    thresholds = dict(noise_pct=0.5, regress_pct=0.5, improve_pct=0.5)
+    thresholds[name] = value
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        perf_eval.evaluate([], [], op=None, goal="no_regress", **thresholds)
+
+
+def test_cli_records_explicit_metric_and_rejects_invalid_configuration(tmp_path):
+    cur = tmp_path / "current.csv"
+    cur.write_text("variant,marker,mean(MATH_ISOLATE)\na,TILE_LOOP,100\n")
+    out = tmp_path / "result.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).parent / "perf_eval.py"),
+        "--current",
+        str(cur),
+        "--baseline",
+        str(cur),
+        "--json-out",
+        str(out),
+    ]
+    result = subprocess.run(
+        command + ["--primary-metric", "mean(MATH_ISOLATE)"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "mean(MATH_ISOLATE) @ TILE_LOOP" in result.stdout
+    assert (
+        json.loads(out.read_text())["primary_metric"]
+        == "mean(MATH_ISOLATE) @ TILE_LOOP"
+    )
+
+    for flags in (
+        ["--primary-metric", "mean(UNKNOWN)"],
+        ["--regress-pct", "nan"],
+        ["--improve-pct", "inf"],
+    ):
+        invalid = subprocess.run(command + flags, capture_output=True, text=True)
+        assert invalid.returncode == 2
+        assert "error:" in invalid.stderr
+
+
+def _variant_csv(path, variants, *, include_dest_acc=True):
+    columns = ["dest_acc", "tile_cnt", "marker", "mean(L1_TO_L1)"]
+    if not include_dest_acc:
+        columns.remove("dest_acc")
+    with path.open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=columns)
+        writer.writeheader()
+        for acc, cycles in variants:
+            row = {
+                "dest_acc": acc,
+                "tile_cnt": "1",
+                "marker": "TILE_LOOP",
+                "mean(L1_TO_L1)": cycles,
+            }
+            writer.writerow({key: row[key] for key in columns})
+    return path
+
+
+def test_dest_acc_mismatch_is_not_a_comparable_variant(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "no_matching_baseline_variants"
+    assert result["coverage"]["matched_variants"] == 0
+    assert result["coverage"]["current_only_variants"] == 1
+    assert result["coverage"]["baseline_only_variants"] == 1
+
+
+@pytest.mark.parametrize("goal", ["no_regress", "improve"])
+def test_new_current_variant_prevents_whole_sweep_success_without_claiming_regression(
+    tmp_path, goal
+):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 100), ("Yes", 300)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal=goal)
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "incomplete_baseline_coverage"
+    assert result["measured"] is True
+    assert result["matched_verdict"] in ("neutral", "not_improved")
+    assert result["variants_compared"] == 1
+    assert result["coverage"] == {
+        "current_rows": 2,
+        "baseline_rows": 1,
+        "current_variants": 2,
+        "baseline_variants": 1,
+        "matched_variants": 1,
+        "current_only_variants": 1,
+        "baseline_only_variants": 0,
+        "duplicate_current_rows": 0,
+        "duplicate_baseline_rows": 0,
+        "comparison_complete": False,
+    }
+    assert "do not certify" in result["reason"]
+
+
+@pytest.mark.parametrize("missing_in", ["current", "baseline"])
+def test_asymmetric_configuration_columns_cannot_certify_same_variant(
+    tmp_path, missing_in
+):
+    # Omitting current dest_acc used to match against baseline No, regardless
+    # of the actual current configuration. The converse is equally unprovable.
+    cur = _variant_csv(
+        tmp_path / "cur.csv", [("Yes", 100)], include_dest_acc=missing_in != "current"
+    )
+    base = _variant_csv(
+        tmp_path / "base.csv", [("No", 100)], include_dest_acc=missing_in != "baseline"
+    )
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "variant_schema_mismatch"
+    assert "configuration columns differ" in result["reason"]
+    assert result["coverage"]["matched_variants"] is None
+    assert result["coverage"]["comparison_complete"] is False
+
+
+@pytest.mark.parametrize("source", ["current", "baseline"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_variant_keys_are_rejected_independent_of_csv_order(
+    tmp_path, source, reverse
+):
+    duplicates = [("Yes", 50), ("Yes", 100)]
+    if reverse:
+        duplicates.reverse()
+    cur = _variant_csv(
+        tmp_path / "cur.csv", duplicates if source == "current" else [("Yes", 100)]
+    )
+    base = _variant_csv(
+        tmp_path / "base.csv", duplicates if source == "baseline" else [("Yes", 100)]
+    )
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "duplicate_variant_keys"
+    assert "duplicate variant keys" in result["reason"]
+    assert result["coverage"][f"duplicate_{source}_rows"] == 1
+    assert result["coverage"]["comparison_complete"] is False
+
+
+def test_broader_baseline_is_allowed_and_its_extra_variants_are_disclosed(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 200), ("Yes", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 0 and result["verdict"] == "neutral"
+    assert result["coverage"]["comparison_complete"] is True
+    assert result["coverage"]["matched_variants"] == 1
+    assert result["coverage"]["current_only_variants"] == 0
+    assert result["coverage"]["baseline_only_variants"] == 1
+
+
+def test_partial_overlap_retains_proven_regression_without_full_coverage_claim(
+    tmp_path,
+):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 120), ("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 1 and result["verdict"] == "regressed"
+    assert result["reason_code"] == "incomplete_baseline_coverage"
+    assert result["matched_verdict"] == "regressed"
+    assert result["coverage"]["comparison_complete"] is False
+    assert "no matching baseline" in result["reason"]
+
+
+def test_cli_incomplete_coverage_is_exit_two_and_reports_counts(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 100), ("Yes", 300)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    out = tmp_path / "result.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parent / "perf_eval.py"),
+            "--current",
+            str(cur),
+            "--baseline",
+            str(base),
+            "--goal",
+            "no_regress",
+            "--json-out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "matched=1 current-only=1 baseline-only=0 complete=False" in result.stdout
+    saved = json.loads(out.read_text())
+    assert saved["verdict"] == "no_baseline"
+    assert saved["reason_code"] == "incomplete_baseline_coverage"
+
+
+def _measurement_fixture():
+    keys = {
+        "mathop": "datacopy",
+        "marker": "TILE_LOOP",
+        "tile_cnt": "8",
+        "loop_factor": "16",
+    }
+    contract = {
+        "primary_metric": "mean(L1_TO_L1)",
+        "marker": "TILE_LOOP",
+        "normalization": "loop_factor*tile_cnt",
+        "variants": [keys],
+    }
+    return (
+        contract,
+        [{**keys, "mean(L1_TO_L1)": "2.5"}],
+        [{**keys, "mean(L1_TO_L1)": "320"}],
+    )
+
+
+def test_measurement_only_checks_raw_normalization_without_claiming_speedup():
+    contract, current, raw = _measurement_fixture()
+    result = perf_eval.evaluate_measurement(current, raw, contract)
+    assert result["exit_code"] == 0
+    assert result["verdict"] == "measured"
+    assert result["goal"] == "measure"
+    assert result["units"] == "cycles_per_tile"
+    assert result["variants"][0]["current_cycles"] == 2.5
+    assert not any("baseline" in key or "delta" in key for key in result)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "extra",
+        "duplicate",
+        "cross_variant",
+        "raw_missing",
+        "raw_duplicate",
+        "raw_cross_variant",
+        "unnormalized",
+        "zero",
+        "negative",
+        "nan",
+        "infinity",
+        "missing_metric",
+        "schema",
+    ],
+)
+def test_measurement_only_rejects_incomplete_or_invalid_evidence(defect):
+    contract, current, raw = _measurement_fixture()
+    if defect == "missing":
+        current = []
+    elif defect == "extra":
+        current.append({**current[0], "mathop": "other"})
+    elif defect == "duplicate":
+        current.append(dict(current[0]))
+    elif defect == "cross_variant":
+        current[0]["tile_cnt"] = "4"
+    elif defect == "raw_missing":
+        raw = []
+    elif defect == "raw_duplicate":
+        raw.append(dict(raw[0]))
+    elif defect == "raw_cross_variant":
+        raw[0]["mathop"] = "other"
+    elif defect == "unnormalized":
+        current[0]["mean(L1_TO_L1)"] = "320"
+    elif defect in {"zero", "negative", "nan", "infinity"}:
+        current[0]["mean(L1_TO_L1)"] = {
+            "zero": "0",
+            "negative": "-1",
+            "nan": "NaN",
+            "infinity": "inf",
+        }[defect]
+    elif defect == "missing_metric":
+        del current[0]["mean(L1_TO_L1)"]
+    elif defect == "schema":
+        current[0]["unplanned"] = "1"
+    result = perf_eval.evaluate_measurement(current, raw, contract)
+    assert result["exit_code"] == 2
+    assert result["measured"] is False
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("normalization", "none"),
+        ("marker", "KERNEL"),
+        ("variants", []),
+        ("primary_metric", "mean(FAKE)"),
+    ],
+)
+def test_measurement_contract_rejects_unspecified_coverage_or_units(field, value):
+    contract, _, _ = _measurement_fixture()
+    contract[field] = value
+    with pytest.raises(ValueError):
+        perf_eval.validate_measurement_contract(contract)
+
+
+def test_measurement_ignores_counter_metrics_but_keeps_configuration_keys():
+    contract, current, raw = _measurement_fixture()
+    current[0]["L1_TO_L1_mean(fpu_utilization_pct)"] = "50"
+    raw[0]["L1_TO_L1_mean(fpu_utilization_pct)"] = "50"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 0
+    current[0]["data_format"] = "Float32"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+
+
+def test_measurement_csv_rejects_duplicate_headers(tmp_path):
+    path = tmp_path / "ambiguous.csv"
+    path.write_text("marker,mean(L1_TO_L1),mean(L1_TO_L1)\nTILE_LOOP,1,2\n")
+    with pytest.raises(ValueError, match="duplicate headers"):
+        perf_eval._read_csv(path, strict=True)
+
+
+def test_bound_measurement_parses_the_attested_buffers_even_if_paths_change(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    contract, current_rows, raw_rows = _measurement_fixture()
+    current, raw = tmp_path / "post.csv", tmp_path / "raw.csv"
+    fields = list(current_rows[0])
+    for path, rows in ((current, current_rows), (raw, raw_rows)):
+        with path.open("w") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+    receipt = {
+        "version": 4,
+        "suite": "perf",
+        "backend": "silicon",
+        "classification": "success",
+        "measurement_artifacts": {
+            name: {
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for name, path in (("current", current), ("raw_current", raw))
+        },
+    }
+    original = perf_eval._read_csv
+    parsed = []
+
+    def replace_then_parse(path, *, strict=False, data=None):
+        assert data is not None
+        parsed.append(data)
+        path.write_text("replacement after receipt validation")
+        return original(path, strict=strict, data=data)
+
+    monkeypatch.setattr(perf_eval, "_read_csv", replace_then_parse)
+    result = perf_eval.evaluate_bound_measurement(current, raw, contract, receipt)
+    assert result["exit_code"] == 0
+    assert result["variants"][0]["current_cycles"] == 2.5
+    assert (
+        result["current_sha256"]
+        == receipt["measurement_artifacts"]["current"]["sha256"]
+    )
+    assert len(parsed) == 2
+    # A subsequent reducer reopen rejects the now-mutated files.
+    with pytest.raises(ValueError, match="differs from selected hardware receipt"):
+        perf_eval.evaluate_bound_measurement(current, raw, contract, receipt)
+
+
+def test_measurement_integer_key_spelling_matches_mixed_marker_pandas_export():
+    # Pinned postprocess_tile_loop + to_csv promotes these columns to floats
+    # when INIT has missing counts; source-planned integers keep their identity.
+    contract, current, raw = _measurement_fixture()
+    for row in (current[0], raw[0]):
+        row["loop_factor"], row["tile_cnt"] = "16.0", "8.0"
+    raw.append(
+        {
+            "mathop": "init",
+            "marker": "INIT",
+            "loop_factor": "",
+            "tile_cnt": "",
+            "mean(L1_TO_L1)": "1",
+        }
+    )
+    current.append(
+        {
+            "mathop": "init",
+            "marker": "INIT",
+            "loop_factor": "1.0",
+            "tile_cnt": "1.0",
+            "mean(L1_TO_L1)": "1",
+        }
+    )
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 0
+    current[0]["mathop"] = "datacopy.0"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+
+
+@pytest.mark.parametrize(
+    "value", ["NaN", "inf", "0", "-1", "8.5", "8.00000000000000000001"]
+)
+def test_measurement_integer_keys_reject_nonintegral_or_invalid_numbers(value):
+    contract, current, raw = _measurement_fixture()
+    current[0]["tile_cnt"] = value
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+    contract["variants"][0]["tile_cnt"] = value
+    with pytest.raises(ValueError):
+        perf_eval.validate_measurement_contract(contract)
+
+
+def test_measurement_equivalent_integer_spellings_cannot_duplicate_coverage():
+    contract, _, _ = _measurement_fixture()
+    contract["variants"].append({**contract["variants"][0], "tile_cnt": "8.0"})
+    with pytest.raises(ValueError, match="duplicate"):
+        perf_eval.validate_measurement_contract(contract)
+
+
+def _multi_csv(path: Path, cycles_by_variant: dict[str, float]) -> Path:
+    """One TILE_LOOP row per variant, keyed by mathop."""
+    rows = [HEADER]
+    for mathop, cycles in cycles_by_variant.items():
+        rows.append(f"{mathop},DestAccumulation.No,8,INIT,457.0,0.0,176.0,12484")
+        rows.append(
+            f"{mathop},DestAccumulation.No,8,TILE_LOOP,{cycles},0.0,{cycles},12484"
+        )
+    path.write_text("\n".join(rows) + "\n")
+    return path
+
+
+def _eval_multi(current_csv, baseline_csv, *, goal="no_regress", regress_pct=0.5):
+    return perf_eval.evaluate(
+        perf_eval._read_csv(current_csv),
+        perf_eval._read_csv(baseline_csv),
+        op=None,
+        goal=goal,
+        noise_pct=regress_pct,
+        regress_pct=regress_pct,
+        improve_pct=2.0,
+        primary_metric=perf_eval.PRIMARY_METRIC,
+    )
+
+
+def test_single_variant_outlier_is_reported_not_blocking(tmp_path):
+    """Replays the measurement that force-closed run 24095.
+
+    Blackhole flagged 1 of 13 variants at +1.41% -- 354 -> 359 cycles, five
+    cycles -- against a 0.5% threshold on one sample per tree, while the median
+    was 0.00%. That false regression cost a repair round plus the re-verify
+    round that exhausted the wall clock.
+    """
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 359.0  # +1.41%, five cycles
+    r = _eval_multi(_multi_csv(tmp_path / "c.csv", cur), base)
+
+    assert r["verdict"] == "neutral"
+    assert r["exit_code"] == 0
+    assert r["single_variant_outlier"] is True
+    assert r["variants_over_threshold"] == 1
+    assert r["regress_signal_basis"] == "median"
+    assert r["delta_pct_median"] == 0.0
+    assert r["delta_pct_worst"] > 1.4
+    # the outlier stays visible, with the cycle numbers a reader needs
+    assert r["reason_code"] == "single_variant_outlier"
+    assert "354.0 -> 359.0 cycles" in r["reason"]
+    assert "median was 0.0%" in r["reason"]
+
+
+def test_population_wide_regression_still_blocks(tmp_path):
+    """A real regression moves the population, so the median catches it."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = _multi_csv(tmp_path / "c.csv", {n: 361.0 for n in names})  # +1.98% each
+    r = _eval_multi(cur, base)
+    assert r["verdict"] == "regressed"
+    assert r["exit_code"] == 1
+    assert r["single_variant_outlier"] is False
+    assert r["variants_over_threshold"] == 13
+
+
+def test_majority_regression_blocks_even_with_some_clean_variants(tmp_path):
+    """Seven of thirteen is still the population, not an outlier."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    for n in names[:7]:
+        cur[n] = 372.0  # +5%
+    r = _eval_multi(_multi_csv(tmp_path / "c.csv", cur), base)
+    assert r["verdict"] == "regressed"
+    assert r["variants_over_threshold"] == 7
+
+
+def test_fewer_than_three_variants_keeps_the_strict_worst_rule(tmp_path):
+    """A median over one or two samples is not robust, so do not soften there."""
+    base = _multi_csv(tmp_path / "b.csv", {"MathOperation.A": 354.0})
+    cur = _multi_csv(tmp_path / "c.csv", {"MathOperation.A": 359.0})
+    r = _eval_multi(cur, base)
+    assert r["regress_signal_basis"] == "worst_variant"
+    assert r["verdict"] == "regressed"
+
+
+def test_worst_rule_keeps_the_strict_verdict_and_reports_the_typical_one(tmp_path):
+    """The Quasar optimizer keeps or reverts an attempt on the strict rule."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 359.0  # one variant +1.41%
+    cur[names[1]] = 340.0  # one variant -3.95%
+    r = perf_eval.evaluate(
+        perf_eval._read_csv(_multi_csv(tmp_path / "c.csv", cur)),
+        perf_eval._read_csv(base),
+        op=None,
+        goal="no_regress",
+        noise_pct=0.5,
+        regress_pct=0.5,
+        improve_pct=0.5,
+        primary_metric=perf_eval.PRIMARY_METRIC,
+        regress_rule="worst",
+    )
+    assert r["verdict"] == "regressed" and r["exit_code"] == 1
+    assert r["regress_signal_basis"] == "worst_variant"
+    assert r["single_variant_outlier"] is False
+    assert (r["variants_improved"], r["variants_neutral"], r["variants_regressed"]) == (
+        1,
+        11,
+        1,
+    )
+    assert r["verdict_typical"] == "neutral"
+
+
+def test_metric_alias_and_regress_rule_reach_the_cli(tmp_path):
+    names = [f"MathOperation.Op{i}" for i in range(4)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 372.0
+    out = tmp_path / "r.json"
+    rc = perf_eval.main(
+        [
+            "--current",
+            str(_multi_csv(tmp_path / "c.csv", cur)),
+            "--baseline",
+            str(base),
+            "--metric",
+            "mean(MATH_ISOLATE)",
+            "--regress-rule",
+            "worst",
+            "--regress-pct",
+            "0.5",
+            "--goal",
+            "no_regress",
+            "--json-out",
+            str(out),
+        ]
+    )
+    r = json.loads(out.read_text())
+    assert rc == 1 and r["verdict"] == "regressed"
+    assert r["primary_metric"].startswith("mean(MATH_ISOLATE)")
+    assert "mean(MATH_ISOLATE)" not in (
+        r["worst_variant"].get("thread_breakdown") or {}
+    )
+    assert "mean(L1_TO_L1)" in r["worst_variant"]["thread_breakdown"]

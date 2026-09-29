@@ -46,12 +46,24 @@ temporary detached baseline worktree.
 
 ## Agent and Result Conventions
 
-- Spawn one agent at a time and wait for it.
-- Give every agent `WORKTREE_DIR`; give `perf-tester.md` the one architecture
-  it must measure. Agents resolve other inputs from state.
-- Expand prompt placeholders before spawning. The Agent tool does not expand
-  shell variables.
-- Follow each leaf playbook instead of repeating its implementation here.
+- Spawn one agent at a time. The spawn call blocks and returns that child's
+  result, so that return is the entire wait: a completion notification means the
+  result is ready to read now. When a result is missing, read its authoritative
+  artifact once and act on what is there.
+- Expand this delegation template before spawning:
+
+  ```text
+  Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/{role}.md.
+  WORKTREE_DIR={WORKTREE_DIR}
+  ```
+
+- Spawn the reviewer as subagent type `issue-solver-reviewer`, which runs
+  review at `xhigh` effort; spawn every other role as a general subagent.
+- The child reads its playbook, state (including verbatim issue text), and
+  artifacts. Do not pre-read its playbook or copy these inputs into the prompt.
+- Append only needed perf `TARGET_ARCH`, retry `FAILURE_CLASS`, evidence paths,
+  scoped questions, or explicit user/runner constraints unavailable in state/artifacts.
+- Do not turn model assumptions or prior-memory advice into hard rules.
 - Use the authoritative result for each stage:
 
   | Stage | Authoritative result |
@@ -103,36 +115,52 @@ execute_step_write_initial_run_json
 Stop on an input rejection. Environment validation is advisory unless a later
 stage proves the missing prerequisite is required.
 
-## 2. Analyze and Research
+## 2. Solve: analyse, research and apply the fix in one session
 
-Spawn `issue-analyzer.md` once. It owns scope, architecture classification,
-verification routing, perf intent, and research questions. Then run:
+Measured on this corpus: run duration tracks the number of agent stages at
+roughly half an hour each, and analysis, architecture research and the initial
+fix shared almost all of their discovery while paying that cost three times
+over. They now run as **one** agent session.
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_solve
+```
+
+Spawn a single agent with both contracts, in this order, in one session:
+
+```text
+Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-analyzer.md
+to produce the analysis artifact. Then, in this same session, read and follow
+{WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-worker.md
+in initial-fix mode to apply the fix it calls for.
+WORKTREE_DIR={WORKTREE_DIR}
+```
+
+Both playbooks keep their own contracts, artifacts and result markers. What
+goes away is the boundary between them: one orientation instead of three, no
+analysis artifact written only to be re-read and re-derived by the next agent,
+and no separate spawn for architecture research.
+
+Handle the analyzer half's outcome before the fix half's:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_refine_perf_goal
 ```
 
-Read `in_scope` from the analysis artifact. If false, run:
+Read `in_scope` from the analysis artifact. If false, run
+`execute_step_finalize_out_of_scope` and stop. Do not enter any later stage.
+The session must decide scope before it edits, so an out-of-scope issue still
+costs only the analysis.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_finalize_out_of_scope
-```
+`needs_arch_research: true` is answered inside the same session, against the
+repository and the architecture references, and recorded in the analysis
+artifact exactly as `arch-lookup.md` would. Spawn `arch-lookup.md` separately
+only when the session returns `BLOCKED` with a hardware question it could not
+settle from the repository; that is an escalation, not a routine stage.
 
-Then stop. Do not spawn another agent or enter any later pipeline stage.
-
-If `needs_arch_research: true`, run `execute_step_advance_arch_lookup`, then
-spawn `arch-lookup.md` once. Otherwise leave `PREVIOUS_AGENT=analyzer`.
-
-## 3. Apply the Fix
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_writer
-```
-
-Spawn `issue-worker.md` in initial-fix mode.
+Then take the fix half's marker.
 
 - `FIX_APPLIED`: continue.
 - `BLOCKED`: store the reported reason in `OBSTACLE`, mark the run failed, and
@@ -164,6 +192,19 @@ successful empty fix.
 
 ## 4. Functional Verification
 
+When `run.json.functional_executor` is `sealed-llk-v1` (enabled at initialization),
+call `execute_step_run_sealed_functional` after routing/sealing and before
+spawning a tester. It supports audit silicon leaves for every verification
+suite -- llk, metal and ttnn -- and explicitly marked LLK host leaves. Exit 20
+means no leaf executed: follow the normal tester route below. Exit 0 means every
+sealed functional leaf passed; skip every tester the route selected, not just
+the LLK one, and continue the existing combiner, review and performance gates.
+Any other
+exit preserves partial evidence in `run.json.functional_execution` and raw
+leaf logs: diagnose that failure through the existing retry path; do not
+resubmit successful or unresolved jobs to obtain a narrative summary. A changed
+candidate needs a new sealed attempt and all its required evidence.
+
 `VERIFY_ROUTE` is a canonical `+`-separated subset of `llk`, `metal`, and
 `ttnn`. Run every named suite, in that order:
 
@@ -177,6 +218,16 @@ successful empty fix.
 
 For example, `llk+ttnn` runs the Layer-1 and end-to-end suites, while
 `llk+metal+ttnn` runs all three. Never stop after the first successful suite.
+
+Do stop at the first *failing* one. When a suite returns `COMPILE_FAILED`,
+`TESTS_FAILED`, `ENV_ERROR` or `SIM_ISA_GAP`, its advance helper for the next
+suite exits 21 and prints `SUITE_ROUTE_SHORT_CIRCUIT <suite>` with the blocking
+`<arch>/<suite>: <verdict>` lines. Treat exit 21 as that failure already routed:
+go straight to the outcome rules for the printed verdict — repair, or a stop
+condition — and do not run the remaining suites or retry the advance. The
+repair re-runs the whole route, so the skipped suites lose no coverage.
+On the `audit` pool the helper never short-circuits: its retry classifier needs
+a sealed receipt for every required leaf, so run the whole route there.
 
 The analyzer and worker must leave every required suite at coverage
 `existing` or `added`. If routing returns `missing`, consume one debug retry:
@@ -239,9 +290,16 @@ Handle each suite verdict as follows:
 Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
 1. Call `execute_step_debug_feedback` with the first meaningful failure.
-2. Spawn `issue-worker.md` with the concrete failure class and raw-log path.
-   A missing selector or zero selected tests uses
-   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
+   For a compiler failure before execution, pass optional second argument
+   `COMPILE_FAILED` with the raw compiler log; this preserves caller diagnosis
+   without claiming an execution receipt or waiving final verification.
+   Stop if it rejects the retry. With a current reduction it records
+   `FAILURE_CLASS` and `VERIFICATION_RETRY_CONTEXT` in state; do not replace
+   those reasons with the compatibility verdict `TESTS_FAILED`.
+2. Spawn `issue-worker.md` with that class and the evidence paths. Pure coverage
+   errors use `VERIFICATION_PLAN_ERROR`; zero selected tests use
+   `MISSING_TEST_COVERAGE`. Actual candidate failures retain their raw evidence,
+   including mixed failures. Legacy runs use the concrete failure/log class.
 3. On `FIX_UPDATED`, rerun route verification and changed-file recording, then
    call `execute_step_bump_debug`.
 4. Return to functional verification using the updated route.
@@ -249,6 +307,29 @@ Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 `BLOCKED` or `HYPOTHESIS_REFUTED` ends the run failed with its evidence. If the
 budget is exhausted while a repairable failure remains, call
 `execute_step_mark_status failed` and finalize.
+
+## 4a. Sealed measurement, before review
+
+Run this immediately after the functional gate is green and before spawning the
+reviewer. It is opt-in and applies only when every sealed perf leaf is a
+predeclared current-only `cycle_measurement`:
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_run_sealed_measurement; rc=$?
+```
+
+| `rc` | Meaning | Action |
+|---|---|---|
+| `0` | Every measurement leaf measured and bound to this candidate | continue to review; section 6 will skip the perf tester |
+| `20` | Unsupported before any submission, or a stale record for another candidate | continue to review; section 6 runs the existing perf tester unchanged |
+| other | Hardware or evidence failure, evidence preserved | continue to review; section 6 owns the retry through its existing classes |
+
+This never grants success, reduces all requirements, or replaces review. A
+non-zero result is not a functional failure and must not be turned into one: the
+functional verdict already stands on its own evidence. Do not skip review
+because a measurement succeeded, and do not skip the measurement because review
+is pending — they are independent reads of the same frozen candidate.
 
 ## 5. Review
 
@@ -260,8 +341,18 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_review
 ```
 
-Spawn `reviewer.md`, then call `execute_step_record_review`. Read
-`blocking_total` from `review_result.json`:
+Spawn `reviewer.md` as subagent type `issue-solver-reviewer`, then call
+`execute_step_record_review`. Read
+`blocking_total` from `review_result.json` only after recording succeeds.
+If validation fails, have the reviewer correct its output; never forward a
+malformed result to the worker. A changed candidate requires
+`execute_step_advance_review` and a full review again. For `unresolved` evidence,
+spend one review retry (`execute_step_bump_review`) on the existing
+architecture/test owner, then re-review. If the budget is exhausted or evidence
+is unavailable, mark failed with the evidence gap. Do not interpret
+uncertainty as a code-change request or continue to success.
+
+For validated findings:
 
 - `0`: continue to performance.
 - Greater than zero with retry budget: call `execute_step_review_feedback`,
@@ -286,16 +377,28 @@ return to functional verification. Do not reuse the earlier review.
 
 ## 6. Performance
 
-Run only after the current diff has completed the review loop.
+A comparison runs only after the current diff has completed the review loop,
+because a changed diff invalidates the measurement it would compare.
+
+A **sealed current-only measurement is different**: it takes one worktree, no
+baseline, and its verdict comes from a deterministic evaluator rather than an
+agent. Waiting for review to finish before measuring it adds the entire review
+duration to the critical path for no evidentiary gain, so section 4a measures it
+as soon as the functional gate is green. When that already succeeded for exactly
+this candidate, do not spawn a perf tester for it:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
+[ "$(execute_step_sealed_measurement_done)" = 1 ] && echo "measurement already bound"
 PERF_ARCHES="$(execute_step_perf_arches)"
 ```
 
-If empty, call `execute_step_perf_not_measured` and finalize. Otherwise call
-`execute_step_advance_perf`, spawn `perf-tester.md` for `TARGET_ARCH`, and call
-`execute_step_record_perf`.
+If the measurement is already bound to this candidate, continue to finalize; its
+evidence is in `run.json` under `perf` and the all-scope reduction validates it.
+
+Otherwise, if `PERF_ARCHES` is empty, call `execute_step_perf_not_measured` and
+finalize. Otherwise call `execute_step_advance_perf`, spawn `perf-tester.md` for
+`TARGET_ARCH`, and call `execute_step_record_perf`.
 
 | Outcome | Action |
 |---|---|

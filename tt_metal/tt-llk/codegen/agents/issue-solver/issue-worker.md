@@ -1,7 +1,7 @@
 ---
 name: issue-worker
 description: Plan, implement, and debug the right-sized LLK issue fix — minimal for targeted issues, complete for sweeps.
-tools: Bash, Read, Write, Edit, Glob, Grep
+tools: Bash, Read, Write, Edit, Glob, Grep, TaskOutput
 ---
 
 # LLK Issue Worker
@@ -36,10 +36,10 @@ multi-arch fix.
   implementations genuinely differ.
 - Do not reset devices for compile errors or reconfig escapes.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
-- Do not run functional tests; `tester.md` owns verification.
-- Treat required regression coverage as part of the fix. Add or extend the
-  selected LLK or metal test when the analysis says `add_required`; do not
-  return a successful fix with required coverage still missing.
+- Do not run functional tests; `tester.md` owns verification. Cardless compile
+  checks below are diagnostic and do not satisfy final verification.
+- Required regression coverage is part of the fix: a fix that leaves it missing
+  is not successful. Required Test Coverage owns which suite takes what.
 - On retry, consume reviewer and performance artifacts; do not repeat their
   independent review or measurement.
 - Do not invoke the standalone `.claude` arch-lookup, debug-kernel,
@@ -116,9 +116,8 @@ Treat the analysis artifact as the starting contract:
   unknown, return `BLOCKED` with the precise research question instead of
   performing separate architecture research or guessing.
 
-Do not restrict edits to `tt_metal/tt-llk`. If evidence requires a tt-metal path
-not listed in the analysis, add it to `Likely Files` with the reason before
-editing.
+When evidence requires a tt-metal path the analysis did not list, add it to
+`Likely Files` with the reason before editing.
 
 If implementation evidence changes `arch_scope`, `fix_layer`,
 `verification_required`, `verifiable_in_llk_suite`, `llk_coverage`, or
@@ -168,7 +167,16 @@ runnable regression can be added inside the tt-metal worktree, return
 3. Validate existing coverage and design every test marked `add_required`.
 4. Write `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch work,
    explain the shared contract once and list only genuine arch differences.
-5. Apply the production and test changes.
+5. Apply the first coherent production/test slice. For local LLK C++ changes,
+   compile one representative affected test source with `codegen/scripts/compiler.py`
+   before broadening the patch. Use explicit template/runtime parameters and
+   matching `CHIP_ARCH`/`--arch`; provision the harness with
+   `cd tests && bash ./setup_external_testing_env.sh --reuse` when needed.
+   Fix compile errors before continuing. The helper uses Float16_b inputs;
+   select a path that actually exercises the change, not an unrelated kernel.
+   Skip this early check with a brief reason when no compiled LLK path changes,
+   no representative cardless target exists, or the backend is ttsim.
+   Then finish the production and test changes.
 6. Update the analysis coverage state and routing with the exact implemented
    selectors.
    Update every requirement's evidence and status. Keep implemented but
@@ -176,19 +184,23 @@ runnable regression can be added inside the tt-metal worktree, return
    requirement cannot be completed, record its blocker and return `BLOCKED`
    with the completed and remaining IDs; do not silently narrow the task.
 7. Run `git diff --check`.
-8. For `TEST_BACKEND=local`, run a narrow cardless compile check appropriate
-   to the changed layer. For LLK sources, provision the harness when needed
-   with `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
-   `codegen/scripts/compiler.py`. If no narrow cardless check exists, record
-   `compile_checks: none` with the reason. For `TEST_BACKEND=ttsim`, record
-   `compile_checks: none`; the tester owns compilation.
+8. If later edits affect the compiled slice, repeat the step-5 check; otherwise
+   reuse that evidence. Give any other changed layer the narrow cardless check
+   that suits it. When no narrow cardless check exists, or the backend is
+   ttsim and the tester owns compilation, record `compile_checks: none` with
+   the reason.
 
 ## Debug/Retry Process
 
-1. Classify the evidence:
+1. Read `VERIFICATION_RETRY_CONTEXT` from run state when present. Its current
+   reduction/receipt IDs and per-leaf reasons distinguish plan coverage from
+   failing code; preserve every failed leaf, including mixed outcomes.
+   Classify the evidence:
 
    | Class | Evidence | Action |
    |---|---|---|
+   | `TESTS_FAILED` | actual candidate failure; inspect the referenced receipt/raw log | identify the assertion, numerical, compile or timeout cause below; do not infer it from the compatibility verdict |
+   | `VERIFICATION_PLAN_ERROR` | validated coverage/backend-plan evidence, including selected cases that did not execute | investigate selector/applicability and original requirements; correct the plan or add missing supported coverage, then reseal and reverify |
    | `COMPILE_ERROR` | compiler error, undefined symbol, bad include | inspect first real error and fix targeted code |
    | `TIMEOUT` | `TENSIX TIMED OUT`, hang block | inspect sync/MOP/reconfig |
    | `ASSERTION` | LLK/test assertion | inspect violated contract |
@@ -202,8 +214,42 @@ runnable regression can be added inside the tt-metal worktree, return
 
    The orchestrator does not send `SIM_ISA_GAP` or `ENV_ERROR` to the worker.
    If invoked with either, return `BLOCKED` without editing.
-2. For local runs, inspect generated assembly only when it helps classify the
-   failure:
+   A skipped required case is an investigation hint, not proof that the skip is
+   legitimate. For existing unsupported inputs, cite the base/current source
+   constraint and retain all required capabilities in an explicit supported
+   selector with meaningful count bounds. Do not erase skip guards, accept
+   arbitrary skips, or narrow scope to observed passes. Missing receipts and
+   infrastructure failures are not requests to invent tests.
+2. Inspect the exact failing variant, raw evidence, and relevant current source.
+   Use AutoDebug only when a specific hardware question or competing hypotheses
+   remain unresolved; failure classification alone does not require escalation.
+   Reuse relevant prior findings after checking their variant and patch identity.
+   Escalate again only for new evidence or a different unresolved question.
+
+   When needed and `run.json.solver_plugins` configures `tt-autodebug`, read
+   `<path>/skills/autodebug/SKILL.md` and invoke the existing inspection-only
+   launcher once within the current retry budget:
+
+   ```bash
+   python codegen/scripts/issue_solver_run_utils.py autodebug \
+     --log-dir "$LOG_DIR" --worktree "$WORKTREE_DIR" \
+     --problem "<exact variant, patch identity, raw evidence paths, unresolved question and discriminating check>"
+   ```
+
+   Wait for its blocking return; if Bash yields a task ID, use `TaskOutput` on
+   that same task. Do not add polling sleeps. Verify the report against current
+   source. A pre-existing-failure claim requires a matched baseline control;
+   a specialist conclusion alone is not proof. Launcher failure or unavailable
+   specialist evidence does not justify guessing, disabling isolation, or an
+   unbounded retry. Record unresolved evidence and return `BLOCKED` if needed.
+   For hangs with captured state, read `autotriage/SKILL.md` and use native LLK
+   evidence in `device_recovery.triage`; do not recapture a reset card or use
+   Metal Inspector for bare LLK. When applying a specialist diagnosis, read
+   `autofix/SKILL.md` and put its discriminating check in the existing Test
+   Strategy for testers to execute. Keep one writer; do not spawn repair agents
+   or run hardware here. Save specialist reports under `$LOG_DIR`.
+3. Make only changes justified by the failure evidence. For local runs, inspect
+   generated assembly when needed to verify the diagnosis:
 
    ```bash
    SFPI_BIN="$WORKTREE_DIR/tt_metal/tt-llk/tests/sfpi/compiler/bin"
@@ -211,7 +257,6 @@ runnable regression can be added inside the tt-metal worktree, return
    $SFPI_BIN/riscv-tt-elf-addr2line -e <elf> <addr>  # resolve address
    ```
 
-3. Make only changes justified by the failure evidence.
 4. Update the analysis and plan when evidence changes scope or routing.
    Recheck the full Requirements table after a retry; resolving the reported
    failure does not waive the other requirements.
@@ -252,6 +297,14 @@ required: true|false
 actions:
 - ...
 
+## Performance Metric
+# One entry per planned perf selector, or "none" when no perf leaf applies.
+- arch: blackhole|wormhole
+  test: <same exact selector as the perf regression entry>
+  primary_metric: mean(L1_TO_L1)|mean(UNPACK_ISOLATE)|mean(MATH_ISOLATE)|mean(PACK_ISOLATE)
+  source: <test module's declared PerfConfig.run_types>
+  scope_reason: <why this metric measures the affected operation>
+
 ## Test Strategy
 # tt-llk suite only; Metal and TTNN verification remain in the analysis artifact
 compile_checks:
@@ -269,7 +322,7 @@ regression_tests:
   coverage: existing|added
   minimum_selected: 1
   minimum_executed: 1  # use the real repeat count for statistical/perf checks
-  required_measurements: []|["cycle_comparison"]|["cycle_comparison", "repeatability"]
+  required_measurements: []|["cycle_comparison"]|["cycle_measurement"]|["cycle_comparison", "repeatability"]
 compile_only_ok: true|false  # true only when verification_required is no
 why_compile_only_ok: ...
 
@@ -285,6 +338,16 @@ or `added`. These markers mean ready for verification, not that the issue is
 solved. Include requirement IDs, remaining verification, production and test
 files, checks, and plan path.
 
+Use `execution: host` on a planned selector only when its module/node is
+explicitly `pytest.mark.llk_host`; predeclare it before sealing. Default device
+execution, required hardware coverage and cycle measurements remain unchanged.
+For a required legacy device-free check that lacks the marker, inspect its body
+and fixtures, add `pytest.mark.llk_host`, and declare `execution: host` before
+the first seal. Unsupported/device fixtures remain blockers; the tester must
+not convert a sealed device leaf after a failure. After sealing, the tester uses
+the existing versioned `run_test.sh host` adapter; inspect that supported path
+before proposing historical conftest/plugin changes.
+
 The Test Strategy is executable input, not explanatory prose. Keep explanations
 in surrounding fields; each `test` value must be one exact selector accepted by
 `run_test.sh`. Each architecture/suite/selector tuple may appear only once
@@ -298,9 +361,31 @@ a coverage reference. Select once before sealing; the perf tester executes
 that leaf. If no performance test covers the change, record why. Do not add waivers to the plan after observing
 a failure.
 
+For each comparison perf leaf, declare its metric in `Performance Metric` before sealing
+or measuring. Use `mean(L1_TO_L1)` whenever the selected test supplies it.
+For an isolate-only test, choose only a declared isolate that measures the
+affected operation; state that limited scope. For example, the existing
+`perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`. Select from test
+source, never from favorable CSV deltas. Keep the declaration on retries;
+a necessary correction requires a documented plan change, not a result waiver.
+Comparison metric preselection is enforced by these instructions and stays outside
+Test Strategy. Measurement-only leaves instead seal their metric in the v2
+`measurement_contract` below.
+
 `HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before
 returning it, keep every Plan Artifact section above, including an executable
-Test Strategy. When `perf_intent: optimize`, include an exact `perf_*.py`
+Test Strategy. For `perf_intent: measure`, seal an exact perf selector with
+`required_measurements: ["cycle_measurement"]` and a one-line JSON
+`measurement_contract` on that list item. Declare `primary_metric` from the test's
+run types, `marker: "TILE_LOOP"`, `normalization: "loop_factor*tile_cnt"`, and
+`variants`: every expected non-metric CSV key dictionary (string values, including
+`marker`, `loop_factor`, `tile_cnt`). Derive variants from the planned parameter
+matrix before execution; do not shrink them to match observed output. Retain
+functional goldens; do not replace a required comparison with measurement-only.
+Repeatability may accompany measurement. A sealed measurement contract cannot
+be removed or changed on a retry.
+This verifies current measurements, not a speedup; no baseline is required.
+When `perf_intent: optimize`, include an exact `perf_*.py`
 regression selector for every in-scope architecture (or one `arch: all` entry)
 with `required_measurements: ["cycle_comparison"]`; do not replace that selector
 with suggested commands, alternatives, brackets, ellipses, or prose.
@@ -321,10 +406,11 @@ BLOCKED - issue #<number>
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_issue_worker.md` before returning.
+Write a concise decision handoff to `${LOG_DIR}/agent_issue_worker.md`: result,
+changed hypothesis or scope, unresolved evidence, and artifact paths. The plan
+and analysis remain authoritative; do not repeat them, raw output, commands,
+or file/search inventories already captured in transcripts.
 
-On retry, preserve the existing log, append `## Debug Attempt`, and write the
-concise result to `${LOG_DIR}/agent_issue_worker_debug.md`.
-
-Include files read, searches, hypothesis, edits, checks, classification, and
-deviations. If `LOG_DIR` is empty, report that self-logging was skipped.
+On retry, append only the new `## Debug Attempt` delta; put its result and
+location in `${LOG_DIR}/agent_issue_worker_debug.md`. Preserve earlier attempts.
+If `LOG_DIR` is empty, skip self-logging.

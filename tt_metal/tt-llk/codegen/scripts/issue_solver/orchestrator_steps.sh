@@ -621,6 +621,11 @@ PY
     # Snapshot the playbooks this run executed. `review/` is nested, so a flat glob
     # would skip it and the round would archive instructions it never ran.
     cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
+    # Playbooks reach branch-specific routes through codegen/references, so the
+    # snapshot must carry those too or it archives less than the run could run.
+    for f in codegen/references/*.md; do
+        [ -f "$f" ] && cp "$f" "$LOG_DIR/instructions/reference-$(basename "$f")" 2>/dev/null || true
+    done
     if [ "$RUN_KIND" = "review" ]; then
         for f in codegen/agents/issue-solver/review/*.md; do
             [ -f "$f" ] && cp "$f" "$LOG_DIR/instructions/review-$(basename "$f")" 2>/dev/null || true
@@ -643,12 +648,19 @@ PY
     ss TEST_BACKEND           "$TEST_BACKEND"
     ss CREATE_LOCAL_BRANCH    "$CREATE_LOCAL_BRANCH"
     ss CREATE_PR              "$CREATE_PR"
-    ss ISSUE_NUMBER           "$ISSUE_NUMBER"
-    ss ISSUE_TITLE            "$ISSUE_TITLE"
-    ss ISSUE_BODY             "$ISSUE_BODY"
-    ss ISSUE_LABELS           "$ISSUE_LABELS"
-    ss ISSUE_COMMENTS         "$ISSUE_COMMENTS"
-    ss ISSUE_URL              "$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_URL)"
+    # Copy issue text directly between JSON stores: command substitution strips
+    # trailing newlines, and issue/comment content must remain verbatim.
+    _disk_guard python - "$S" "$wt" "$LOG_DIR" <<'PY_ISSUE_STATE' || return $?
+import sys
+sys.path.insert(0, sys.argv[1])
+import state
+source = state._load(state._resolve_path(None, None, sys.argv[2]))
+keys = ("ISSUE_NUMBER", "ISSUE_TITLE", "ISSUE_BODY", "ISSUE_LABELS",
+        "ISSUE_LABELS_JSON", "ISSUE_COMMENTS", "ISSUE_URL")
+patch = {key: source[key] for key in keys if key in source}
+state._locked_update(state._resolve_path(None, sys.argv[3], None),
+                     lambda store: store.update(patch))
+PY_ISSUE_STATE
     ss DASHBOARD_PROJECT_ID   "$DASHBOARD_PROJECT_ID"
     ss CODEGEN_LOGS_ROOT      "$CODEGEN_LOGS_ROOT"
     ss LOGS_BASE              "$LOGS_BASE"
@@ -709,14 +721,18 @@ execute_step_write_initial_run_json() {
     first_step="analyzer"
     if [ "$kind" = "review" ]; then steps="$_PIPELINE_STEPS_REVIEW"; first_step="addresser"; fi
 
-    issue_json="$(python - "$num" "$title" "$(sg ISSUE_URL)" "$(sg ISSUE_LABELS)" <<'PY'
+    issue_json="$(python - "$_L/state.json" <<'PY'
 import json, sys
-num, title, url, labels = sys.argv[1:5]
+state = json.load(open(sys.argv[1]))
+num = state["ISSUE_NUMBER"]
+labels = state.get("ISSUE_LABELS_JSON")
+if not isinstance(labels, list):
+    labels = [label for label in (state.get("ISSUE_LABELS") or "").split(",") if label]
 print(json.dumps({
     "number": int(num),
-    "title": title,
-    "url": url or f"https://github.com/tenstorrent/tt-metal/issues/{num}",
-    "labels": [l for l in labels.split(",") if l] if labels else [],
+    "title": state["ISSUE_TITLE"],
+    "url": state.get("ISSUE_URL") or f"https://github.com/tenstorrent/tt-metal/issues/{num}",
+    "labels": labels,
 }))
 PY
 )"
@@ -785,16 +801,17 @@ PY
 
 # ===========================================================================
 # Step 1 — refine PERF_GOAL from the analyzer's perf_intent line (optimize →
-# improve, maintain → no_regress). No-op if the line is absent.
+# improve, maintain → no_regress, measure → measure). No-op if the line is absent.
 # ===========================================================================
 execute_step_refine_perf_goal() {
     local _L; _L="$(_LOG)"
     local num pi; num="$(sg ISSUE_NUMBER)"
-    pi="$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain)' \
-        "codegen/artifacts/issue_${num}_analysis.md" 2>/dev/null | head -1 | grep -ioE 'optimize|maintain')"
+    pi="$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain|measure)' \
+        "codegen/artifacts/issue_${num}_analysis.md" 2>/dev/null | head -1 | grep -ioE 'optimize|maintain|measure')"
     case "$pi" in
         optimize) ss PERF_GOAL improve ;;
         maintain) ss PERF_GOAL no_regress ;;
+        measure) ss PERF_GOAL measure ;;
     esac
     echo "PERF_GOAL=$(sg PERF_GOAL)"
 }
@@ -923,6 +940,32 @@ PY
     rj message --message "Verify route: ${ROUTE}; sealed ${manifest_count} requirement(s) as ${manifest_id}"
     echo "$out"
     echo "VERIFY_ROUTE=$ROUTE MANIFEST_ID=$manifest_id ATTEMPT_ID=$manifest_attempt REQUIREMENTS=$manifest_count"
+
+    # Run the sealed executor here rather than asking the orchestrator to call
+    # it. The playbooks did instruct that call and the run logged no attempt at
+    # it at all -- the third instruction in this pipeline measured as not
+    # followed, after the anti-sleep rule and the read-batching rule. Sealing is
+    # the right moment: it has just happened, no tester has been spawned, and
+    # this step is reached on every route. Exit 20 leaves the existing tester
+    # route untouched, so a fallback costs nothing.
+    if [ "$(rj-get-functional-executor 2>/dev/null)" = "sealed-llk-v1" ]; then
+        execute_step_run_sealed_functional
+        local sealed_rc=$?
+        echo "SEALED_FUNCTIONAL_RC=$sealed_rc"
+    fi
+}
+
+# run.json is the authority for the opt-in; state.json never carries it.
+rj-get-functional-executor() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    print(json.loads((Path(sys.argv[1]) / "run.json").read_text()).get("functional_executor") or "")
+except (OSError, ValueError):
+    print("")
+PY
 }
 
 # ===========================================================================
@@ -940,6 +983,23 @@ execute_step_advance_arch_lookup() {
 # ===========================================================================
 # Step 3 — advance to the writer (fix). Uses PREVIOUS_AGENT (analyzer|arch_lookup).
 # ===========================================================================
+# Analysis, architecture research and the initial fix as one stage. Duration on
+# this corpus tracks stage count at roughly half an hour each, and these three
+# shared nearly all their discovery while paying for it three times.
+execute_step_advance_solve() {
+    local _L; _L="$(_LOG)"
+    local num mode; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
+    if [ "$(sg STATUS)" = "skipped" ]; then
+        echo "cannot advance a skipped run to solve" >&2
+        return 1
+    fi
+    local msg="Analysing and fixing issue #${num}"
+    [ "$mode" = multi ] && msg="Analysing and fixing issue #${num} across $(sg TARGET_ARCHES_JSON)"
+    rj advance --new-step "solve" --new-message "$msg" \
+        --prev-result "success" --prev-message "Run set up" --agent "orchestrator"
+    ss PREVIOUS_AGENT "solve"
+}
+
 execute_step_advance_writer() {
     local _L; _L="$(_LOG)"
     local num mode prev; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"; prev="$(sg PREVIOUS_AGENT)"
@@ -953,16 +1013,56 @@ execute_step_advance_writer() {
         --prev-result "success" --prev-message "Analysis/research complete" --agent "${prev:-analyzer}"
 }
 
+# Run tt-metal's own pre-commit hooks over the given worktree-relative files and
+# return the exit status of the settled pass (a fixing hook exits 1 after it
+# rewrites, so the second pass is the verdict).
+#
+# Packaging refuses any commit whose hooks change the candidate and sends the
+# run back through the whole verification route. Hooks used to run only there,
+# after silicon verification: in run 56945 fix-cstdint rewrote two new metal
+# tests at commit and cost a full second attempt after every leaf had passed.
+# The root config is deliberate. The base clone's hook was installed with the
+# nested tt_metal/tt-llk config, whose fix-cstdint matches every *.cpp/*.h in
+# the repo and rewrites metal files; the root config scopes it to tt_metal/tt-llk.
+_normalize_candidate() {
+    local wt="$1"; shift
+    local cfg="$wt/.pre-commit-config.yaml" f
+    local -a files=()
+    for f in "$@"; do [ -f "$wt/$f" ] && files+=("$f"); done
+    { [ ${#files[@]} -gt 0 ] && [ -f "$cfg" ] && command -v pre-commit >/dev/null 2>&1; } || return 0
+    local run_log log=/dev/null
+    run_log="$(_LOG 2>/dev/null)" || run_log=""
+    [ -n "$run_log" ] && [ -d "$run_log" ] && log="$run_log/pre-commit.log"
+    # git-clang-format only formats staged content and refuses a file with
+    # unstaged changes, so stage the candidate exactly as the commit would, run
+    # the hooks, then restore the index: nothing else in the pipeline expects
+    # a staged candidate before packaging.
+    _hook_pass() {
+        local rc=0
+        git -C "$wt" add -A -- "${files[@]}" >/dev/null 2>&1
+        (cd "$wt" && pre-commit run --config "$cfg" --files "${files[@]}" >>"$log" 2>&1) || rc=$?
+        git -C "$wt" reset -q -- "${files[@]}" >/dev/null 2>&1
+        return $rc
+    }
+    _hook_pass || _hook_pass
+}
+
 # ===========================================================================
 # Step 3 — record the worker's tracked and untracked changed files into state
-# (for tester/reviewer).
+# (for tester/reviewer). The candidate is normalized first, so the bytes that
+# are verified are the bytes that get committed.
 # ===========================================================================
 execute_step_record_changed_files() {
     local _L; _L="$(_LOG)"
     local wt tracked untracked cf test_changes; wt="$(_wt)"
-    tracked="$(git -C "$wt" diff --name-only 2>/dev/null || true)"
+    tracked="$(git -C "$wt" diff HEAD --name-only 2>/dev/null || true)"
     untracked="$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null || true)"
     cf="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
+    # A failing non-fixing hook (pylint, codespell) is left for packaging,
+    # which still refuses to commit it.
+    local -a cf_files=()
+    [ -z "$cf" ] || mapfile -t cf_files <<< "$cf"
+    [ ${#cf_files[@]} -eq 0 ] || _normalize_candidate "$wt" "${cf_files[@]}" || true
     ss CHANGED_FILES "$cf"
     test_changes="$(printf '%s\n' "$cf" | grep -E '(^|/)tests?/|(^|/)test_[^/]+$' || true)"
     [ -z "$test_changes" ] || rj metric --patch-json '{"tests_generated":true}'
@@ -1001,11 +1101,55 @@ execute_step_advance_tester() {
         --prev-result "success" --prev-message "Fix applied" --agent "$agent"
 }
 
+# A terminal failure in an earlier suite cannot be redeemed by a later one, and
+# the repair re-runs the whole route anyway, so verifying on is dead time. Prints
+# one "<arch>/<suite>: <verdict>" line per blocking earlier result, nothing when
+# the route is clear so far. Route order guarantees every earlier suite in the
+# route already ran this round, so these results are never stale.
+rj-blocking-suite-failure() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" "$1" "$(sg VERIFY_ROUTE)" <<'PY'
+import json, sys
+from pathlib import Path
+
+log_dir, next_suite, route = sys.argv[1:4]
+ORDER = ("llk", "metal", "ttnn")
+BLOCKING = {"ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP"}
+if next_suite not in ORDER:
+    sys.exit(0)
+try:
+    run = json.loads((Path(log_dir) / "run.json").read_text())
+except (OSError, ValueError):
+    sys.exit(0)
+# The audit lane classifies a retry from sealed receipts for every required
+# leaf, and treats a missing receipt as an evidence problem (ENV_ERROR, no
+# retry). Skipping the later suites there would turn a repairable failure into
+# a terminal one, so the route runs to completion on audit.
+if run.get("runner_pool") == "audit":
+    sys.exit(0)
+members = [s for s in ORDER if s in route.split("+")]
+earlier = [s for s in members if ORDER.index(s) < ORDER.index(next_suite)]
+for arch, result in sorted((run.get("arch_results") or {}).items()):
+    if result.get("verdict") == "SKIPPED":
+        continue
+    suites = result.get("suite_results") or {}
+    for suite in earlier:
+        entry = suites.get(suite) or {}
+        if entry.get("status") == "done" and entry.get("verdict") in BLOCKING:
+            print(f"{arch}/{suite}: {entry['verdict']}")
+PY
+}
+
 # ===========================================================================
 # Step 4b — advance to the metal unit_tests_llk suite.
 # ===========================================================================
 execute_step_advance_metal_test() {
     local _L; _L="$(_LOG)"
+    local blocking; blocking="$(rj-blocking-suite-failure metal)"
+    if [ -n "$blocking" ]; then
+        printf 'SUITE_ROUTE_SHORT_CIRCUIT metal\n%s\n' "$blocking" >&2
+        return 21
+    fi
     local num mode arches route filt agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; filt="$(sg METAL_FILTER)"
     agent="${1:-writer}"
@@ -1021,6 +1165,11 @@ execute_step_advance_metal_test() {
 # ===========================================================================
 execute_step_advance_ttnn_test() {
     local _L; _L="$(_LOG)"
+    local blocking; blocking="$(rj-blocking-suite-failure ttnn)"
+    if [ -n "$blocking" ]; then
+        printf 'SUITE_ROUTE_SHORT_CIRCUIT ttnn\n%s\n' "$blocking" >&2
+        return 21
+    fi
     local num mode arches route test agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; test="$(sg TTNN_TEST)"
     agent="${1:-writer}"
@@ -1041,6 +1190,42 @@ execute_step_advance_ttnn_test() {
 # the compatibility verdict/count fields consumed by final status and the
 # dashboard. Missing or unknown required results fail closed as ENV_ERROR.
 # ===========================================================================
+# Opt-in execution: 0 = reduced functional success, 20 = unsupported before
+# execution (use the existing tester), other = preserve evidence; do not rerun.
+execute_step_run_sealed_functional() {
+    local _L; _L="$(_LOG)"
+    rj execute-functional --worktree "$(_wt)"
+}
+
+# Opt-in measurement of sealed current-only perf leaves, run as soon as the
+# functional gate is green so review no longer sits between a green candidate
+# and its hardware measurement. 0 = measured, 20 = unsupported before any
+# submission (use the existing perf tester), other = preserve evidence.
+execute_step_run_sealed_measurement() {
+    local _L; _L="$(_LOG)"
+    rj execute-perf --worktree "$(_wt)"
+}
+
+# Has the current candidate already been measured deterministically? Prints 1
+# when the recorded measurement belongs to exactly this manifest and patch.
+execute_step_sealed_measurement_done() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" <<'PY'
+import json, sys
+from pathlib import Path
+log = Path(sys.argv[1])
+try:
+    run = json.loads((log / "run.json").read_text())
+except (OSError, ValueError):
+    print("0"); raise SystemExit(0)
+record = run.get("measurement_execution") or {}
+current = run.get("required_verification") or {}
+print("1" if record.get("status") == "success"
+      and record.get("manifest_id") == current.get("manifest_id")
+      and record.get("attempt_id") == current.get("attempt_id") else "0")
+PY
+}
+
 execute_step_combine_verification_results() {
     local _L; _L="$(_LOG)"
     local route arches patch pool manifest
@@ -1234,9 +1419,41 @@ execute_step_feedback() {
 }
 
 # Convenience wrappers over execute_step_feedback for the three loops.
+execute_step_prepare_test_retry() {
+    local _L; _L="$(_LOG)"
+    local caller_verdict="${1:-}" context failure_class
+    case "$caller_verdict" in ""|COMPILE_FAILED) ;; *) echo "Unsupported retry verdict: $caller_verdict" >&2; return 2 ;; esac
+    # Legacy runs without a structured reduction retain caller-owned routing.
+    if [ -z "$caller_verdict" ] && [ ! -f "$_L/verification_reduction.json" ] && \
+        ! python -c 'import json,sys; sys.exit(json.load(open(sys.argv[1])).get("runner_pool") != "audit")' "$_L/run.json"; then
+        ss VERIFICATION_RETRY_CONTEXT '{}' --json || return $?
+        return 0
+    fi
+    context="$(rj verification-retry-context)" || {
+        [ "$caller_verdict" = COMPILE_FAILED ] || { printf '%s\n' "$context"; return 1; }
+        context='{}'
+    }
+    failure_class="$(python -c 'import json,sys; print(json.loads(sys.argv[1]).get("failure_class") or "")' "$context")" || return $?
+    # Compilation can fail before an execution receipt exists. Preserve the
+    # explicit caller diagnosis, but never overwrite trusted numerical evidence.
+    if [ "$caller_verdict" = COMPILE_FAILED ] && \
+        python -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(bool(d.get("retry_allowed")) or any(x["failed"] or x["xpassed"] or x["result_classification"] == "candidate_failure" for x in d.get("leaves", [])))' "$context"; then
+        context='{}'
+        failure_class=COMPILE_ERROR
+    fi
+    ss VERIFICATION_RETRY_CONTEXT "$context" --json || return $?
+    ss FAILURE_CLASS "$failure_class" || return $?
+    case "$failure_class" in
+        COMPILE_ERROR) echo "FAILURE_CLASS=COMPILE_ERROR (caller compiler evidence; no structured retry hint)" ;;
+        TESTS_FAILED|MISSING_TEST_COVERAGE|VERIFICATION_PLAN_ERROR)
+            echo "FAILURE_CLASS=$failure_class EVIDENCE=$_L/verification_reduction.json" ;;
+        *) echo "No repair retry authorized by the current reduction: ${failure_class:-SUCCESS}"; return 1 ;;
+    esac
+}
 execute_step_debug_feedback() {
     local _L; _L="$(_LOG)"
     local summary="$1" num dc mdc; num="$(sg ISSUE_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
+    execute_step_prepare_test_retry "${2:-}" || return $?
     execute_step_feedback "tester" "tester" "$summary" \
         "Debugging test failure for issue #${num} (attempt $((dc+1))/${mdc})"
 }
@@ -1263,6 +1480,7 @@ execute_step_perf_feedback() {
 execute_step_review_round_feedback() {
     local _L; _L="$(_LOG)"
     local step="${1:-tester}" summary="$2" prnum dc mdc
+    [ "$step" != tester ] || execute_step_prepare_test_retry "${3:-}" || return $?
     prnum="$(sg PR_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
     execute_step_feedback "$step" "$step" "$summary" \
         "Repairing the review fix on PR #${prnum} (attempt $((dc+1))/${mdc})"
@@ -1290,6 +1508,7 @@ execute_step_advance_review() {
     fi
     local what="fix diff for issue #${num}"
     [ "$mode" = multi ] && what="shared fix diff for issue #${num} across ${arches}"
+    rj review --action prepare --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" --expected-base-sha "$(sg GIT_COMMIT)" || return 1
     rj advance --new-step "review" \
         --new-message "Reviewing ${what} (attempt $((rr+1))/$((mrr+1)))" \
         --prev-result "success" --prev-message "Functional tests passed" --agent "$agent"
@@ -1300,8 +1519,7 @@ execute_step_advance_review() {
 # ===========================================================================
 execute_step_record_review() {
     local _L; _L="$(_LOG)"
-    [ -f "$_L/review_result.json" ] || { echo "no review_result.json to record"; return 0; }
-    rj metric --patch-json "{\"review\": $(cat "$_L/review_result.json")}"
+    rj review --action record --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" --expected-base-sha "$(sg GIT_COMMIT)"
 }
 
 # ===========================================================================
@@ -1527,7 +1745,7 @@ execute_step_write_generated_patch() {
     rj metric --patch-json '{"supervisor_phase":"finalization"}' || return $?
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
-    local cf cfj base fix packaged tmp_patch
+    local cf cfj base fix packaged tmp_patch candidate_tree candidate_digest current_digest
     # Input validation requires either a clean dedicated worktree or the exact
     # content-addressed resumed candidate, so every non-ignored change belongs to
     # this run. Stage the whole worktree and exclude generated test infrastructure.
@@ -1545,6 +1763,37 @@ execute_step_write_generated_patch() {
     fi
     ss BASE_COMMIT "$base"
 
+    # The hooks already ran before verification (record_changed_files). Run
+    # them once more with the same config: a change now means these bytes were
+    # never verified, so go back to verification rather than commit them, and a
+    # failing hook still blocks the commit as the commit-time hook used to. The
+    # commit itself then skips the installed hook, which uses the mis-scoped
+    # nested config (see _normalize_candidate).
+    local -a candidate_files=()
+    local before_digest after_digest hooks_rc=0 no_verify=()
+    if command -v pre-commit >/dev/null 2>&1 && [ -f "$wt/.pre-commit-config.yaml" ]; then
+        mapfile -t candidate_files < <(
+            { git -C "$wt" diff --name-only "$base"; git -C "$wt" ls-files --others --exclude-standard; } |
+                sed '/^$/d' | sort -u
+        )
+        before_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base" 2>/dev/null)" || before_digest=""
+        _normalize_candidate "$wt" "${candidate_files[@]}" || hooks_rc=$?
+        after_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base" 2>/dev/null)" || after_digest=""
+        if [ "$before_digest" != "$after_digest" ]; then
+            ss PACKAGING_ERROR "packaging failed: pre-commit hooks changed the candidate; verification must be renewed"
+            echo "PACKAGING_FAILED: candidate changed by pre-commit hooks; return to verification" >&2
+            return 1
+        fi
+        if [ "$hooks_rc" -ne 0 ]; then
+            ss PACKAGING_ERROR "packaging failed: pre-commit hooks failed (LOG_DIR/pre-commit.log)"
+            echo "PACKAGING_FAILED: pre-commit hooks failed; see $(_LOG)/pre-commit.log" >&2
+            return 1
+        fi
+        no_verify=(--no-verify)
+    fi
+
     if ! git -C "$wt" -c advice.addIgnoredFile=false add -A -- "${pathspec[@]}"; then
         ss PACKAGING_ERROR "packaging failed: could not stage the complete fix"
         echo "PACKAGING_FAILED: git add failed" >&2
@@ -1556,12 +1805,22 @@ execute_step_write_generated_patch() {
     cfj="$(CF="$cf" python -c "import json,os;print(json.dumps([l for l in os.environ['CF'].splitlines() if l]))")"
     ss CHANGED_FILES_JSON "$cfj" --json
 
+    # Hooks can change either the index or working files. Freeze both views
+    # before committing; path-set equality alone cannot bind packaged bytes.
+    if ! candidate_tree="$(git -C "$wt" write-tree)" ||
+       ! candidate_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base")"; then
+        ss PACKAGING_ERROR "packaging failed: could not freeze candidate identity"
+        echo "PACKAGING_FAILED: could not freeze candidate identity" >&2
+        return 1
+    fi
+
     fix=""
     if ! git -C "$wt" diff --cached --quiet 2>/dev/null; then
         local cm="AI issue-solver: fix #${num} ${title}"
         [ "$mode" = multi ] && cm="AI issue-solver: multi-arch fix #${num} ${title}"
         if ! git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
-            commit -q -m "$cm"; then
+            commit -q "${no_verify[@]}" -m "$cm"; then
             ss PACKAGING_ERROR "packaging failed: could not commit the complete fix"
             echo "PACKAGING_FAILED: git commit failed; fix remains staged" >&2
             return 1
@@ -1569,6 +1828,14 @@ execute_step_write_generated_patch() {
     fi
     # A retry may find that the previous attempt already committed the fix.
     [ -z "$cf" ] || fix="$(git -C "$wt" rev-parse HEAD)"
+    if [ "$(git -C "$wt" rev-parse 'HEAD^{tree}')" != "$candidate_tree" ] ||
+       ! current_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base")" ||
+       [ "$current_digest" != "$candidate_digest" ]; then
+        ss PACKAGING_ERROR "packaging failed: candidate changed during commit; verification must be renewed"
+        echo "PACKAGING_FAILED: candidate changed during commit; preserve hook output and return to verification" >&2
+        return 1
+    fi
     ss FIX_COMMIT "$fix"
 
     if [ -n "$fix" ] && [ "$fix" != "$base" ]; then
@@ -1580,7 +1847,7 @@ execute_step_write_generated_patch() {
         fi
 
         tmp_patch="$_L/.generated.patch.$$"
-        if ! git -C "$wt" diff --binary "$base" "$fix" > "$tmp_patch"; then
+        if ! git -C "$wt" diff --binary --full-index "$base" "$fix" > "$tmp_patch"; then
             rm -f "$tmp_patch"
             ss PACKAGING_ERROR "packaging failed: could not create generated.patch"
             echo "PACKAGING_FAILED: git diff failed" >&2
@@ -1590,6 +1857,13 @@ execute_step_write_generated_patch() {
             rm -f "$tmp_patch"
             ss PACKAGING_ERROR "packaging failed: generated.patch is empty"
             echo "PACKAGING_FAILED: generated.patch is empty" >&2
+            return 1
+        fi
+        current_digest="$(sha256sum "$tmp_patch")"
+        if [ "${current_digest%% *}" != "$candidate_digest" ]; then
+            rm -f "$tmp_patch"
+            ss PACKAGING_ERROR "packaging failed: generated.patch differs from candidate"
+            echo "PACKAGING_FAILED: generated.patch differs from candidate" >&2
             return 1
         fi
         if ! _disk_guard mv "$tmp_patch" "$_L/generated.patch"; then
@@ -1662,23 +1936,13 @@ PY
     fi
 
     # Functional success covers only the selected tests. The existing reviewer
-    # must also have checked that the selected fix completes the original issue.
-    if [ "$(sg RUN_KIND)" != review ] && [[ "$(sg STATUS)" =~ ^(success|compiled)$ ]]; then
+    # must cover the current candidate; issue solves also require whole-issue completion.
+    if [[ "$(sg STATUS)" =~ ^(success|compiled)$ ]]; then
         local review_error
-        review_error="$(python - "$_L/review_result.json" <<'PY'
-import json, sys
-try:
-    review = json.load(open(sys.argv[1]))
-except (OSError, ValueError):
-    review = {}
-if not isinstance(review, dict) or review.get("requirements_complete") is not True:
-    print("issue requirements are incomplete or their completion was not reviewed")
-    if isinstance(review, dict) and review.get("summary"):
-        print(review["summary"])
-elif review.get("blocking_total") != 0 or review.get("verdict") != "clean":
-    print("unresolved_review_findings")
-PY
-)" || return 1
+        review_error="$(rj review --action check --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" \
+            --expected-base-sha "$(sg GIT_COMMIT)" 2>&1)" || {
+            review_error="${review_error:-review validation failed}"
+        }
         if [ -n "$review_error" ]; then
             [ -n "$(sg OBSTACLE)" ] || ss OBSTACLE "$review_error"
             ss FINAL_MESSAGE "issue #${num} incomplete: ${review_error}"

@@ -12,8 +12,9 @@ Coordinate one fix for `TARGET_ARCHES_JSON`. Read and follow
 invalidation, and outcome rules are the shared contract. This file replaces
 only the single-architecture behavior identified below.
 
-Do not spawn the single-architecture orchestrator. Spawn each leaf agent
-directly.
+Spawn leaves directly using the compact delegation contract in `orchestrator.md`;
+do not spawn the single-architecture orchestrator. Leaves read mode and arches
+from state; each perf call still receives its selected architecture.
 
 ## Multi-Arch Invariants
 
@@ -42,25 +43,44 @@ Bootstrap state differs from the single-architecture run only in:
 
 The setup commands from `orchestrator.md` are mode-aware and remain unchanged.
 
-## Analyze and Scope
+## Solve: analyse, scope and apply one shared fix in one session
 
-Spawn `issue-analyzer.md` once for the full `TARGET_ARCHES_JSON`. For each
+Analysis, architecture research and the shared fix run as **one** agent
+session, for the same reason as in `orchestrator.md`: they share nearly all
+their discovery and were paying the per-stage cost three times over.
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_solve
+```
+
+Spawn a single agent with both contracts, in this order, in one session:
+
+```text
+Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-analyzer.md
+to produce the analysis artifact for the full TARGET_ARCHES_JSON. Then, in this
+same session, read and follow
+{WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/issue-worker.md
+in initial-fix mode to apply the one shared fix it calls for.
+WORKTREE_DIR={WORKTREE_DIR}
+```
+
+Both playbooks keep their contracts, artifacts and result markers. The worker
+half reads `RUN_MODE=multi` from state; its plan must describe the shared
+contract once and separate only genuine architecture differences.
+
+Take the analyser half's scope decisions before the fix half's marker. For each
 requested architecture, read `arch_scope` from the analysis artifact:
 
 - Set `arch_results.<arch>.verdict=SKIPPED` for `out_of_scope`.
 - Keep `in_scope` architectures pending.
 - If all requested architectures are out of scope, run
-  `execute_step_finalize_out_of_scope` and stop without spawning another agent.
+  `execute_step_finalize_out_of_scope` and stop without entering a later stage.
 
-Run one `arch-lookup.md` only when the shared analysis requests architecture
-research. It must answer the recorded questions for every architecture named
-by each question.
-
-## Apply One Shared Fix
-
-Call `execute_step_advance_writer`, then spawn `issue-worker.md` once with
-`RUN_MODE=multi`. The plan must describe the shared contract once and separate
-only genuine architecture differences.
+Architecture research is answered inside the same session and recorded in the
+analysis artifact, covering every architecture named by each question. Spawn
+`arch-lookup.md` separately only when the session returns `BLOCKED` on a
+hardware question it could not settle from the repository.
 
 Handle `FIX_APPLIED`, `BLOCKED`, and `HYPOTHESIS_REFUTED` exactly as in
 `orchestrator.md`, including sealing explicit performance requirements before
@@ -77,6 +97,19 @@ contract. Test selection remains per architecture inside the tester.
 
 ## Functional Verification
 
+When `run.json.functional_executor` is `sealed-llk-v1` (enabled at initialization),
+call `execute_step_run_sealed_functional` after routing/sealing and before
+spawning a tester. It supports audit silicon leaves for every verification
+suite -- llk, metal and ttnn -- and explicitly marked LLK host leaves. Exit 20
+means no leaf executed: follow the normal tester route below. Exit 0 means every
+sealed functional leaf passed; skip every tester the route selected, not just
+the LLK one, and continue the existing combiner, review and performance gates.
+Any other
+exit preserves partial evidence in `run.json.functional_execution` and raw
+leaf logs: diagnose that failure through the existing retry path; do not
+resubmit successful or unresolved jobs to obtain a narrative summary. A changed
+candidate needs a new sealed attempt and all its required evidence.
+
 Use the shared canonical `VERIFY_ROUTE` and run every named suite in
 `llk` → `metal` → `ttnn` order:
 
@@ -87,6 +120,17 @@ Use the shared canonical `VERIFY_ROUTE` and run every named suite in
 | contains `ttnn` | spawn `ttnn-tester.md` once |
 | `missing` | send one combined `MISSING_TEST_COVERAGE` retry to the shared worker |
 | `none` | call `execute_step_mark_unverifiable`; valid only when verification is not applicable |
+
+Stop at the first *failing* suite. When any architecture's suite returns
+`COMPILE_FAILED`, `TESTS_FAILED`, `ENV_ERROR` or `SIM_ISA_GAP`, the advance
+helper for the next suite exits 21 and prints `SUITE_ROUTE_SHORT_CIRCUIT
+<suite>` with the blocking `<arch>/<suite>: <verdict>` lines. Treat exit 21 as
+that failure already routed: go straight to the outcome rules for the printed
+verdict and do not run the remaining suites or retry the advance. One
+architecture's hard failure short-circuits the shared route, because the repair
+re-runs it for every architecture anyway.
+On the `audit` pool the helper never short-circuits: its retry classifier needs
+a sealed receipt for every required leaf, so run the whole route there.
 
 When routing returns `missing`, call `execute_step_coverage_feedback`, spawn
 one shared worker with `FAILURE_CLASS=MISSING_TEST_COVERAGE`, and consume one
@@ -128,10 +172,13 @@ When one or more architectures have `COMPILE_FAILED` or `TESTS_FAILED`:
 
 1. Build one failure summary containing the first meaningful failure for every
    failed architecture and suite.
-2. Call `execute_step_debug_feedback` once.
-3. Spawn one `issue-worker.md` retry with the combined evidence.
-   Use `FAILURE_CLASS=MISSING_TEST_COVERAGE` when any required suite had no
-   applicable selector or selected zero tests.
+2. Call `execute_step_debug_feedback` once; stop if it rejects the retry.
+   For a compiler failure before execution, use the single-arch optional
+   `COMPILE_FAILED` argument and retain the raw compiler log.
+3. Spawn one `issue-worker.md` with the recorded `FAILURE_CLASS` and
+   `VERIFICATION_RETRY_CONTEXT` evidence. Follow the single-arch typed routing;
+   preserve all failed leaves and do not hide a numerical failure behind a
+   coverage error from another architecture. Legacy runs retain caller routing.
 4. On `FIX_UPDATED`, rerun routing and changed-file recording, then call
    `execute_step_bump_debug`.
 5. Rerun the applicable tester once for all in-scope architectures.
@@ -140,7 +187,8 @@ Do not retry the worker for `ENV_ERROR` or `SIM_ISA_GAP`. Other architectures
 may finish, but any in-scope terminal failure makes the final combined status
 `partial` or `failed`.
 
-Review the shared diff once. One review retry worker handles all blocking
+Review the shared diff once, spawning the reviewer as subagent type
+`issue-solver-reviewer`. One review retry worker handles all blocking
 findings. After it edits the fix, rerun functional verification for all
 in-scope architectures and review the new shared diff before performance.
 The review must check all original requirements across the requested scope,

@@ -46,6 +46,49 @@ def _bash(
     )
 
 
+def _prepare_review(worktree, log_dir, review):
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(worktree), *args], text=True
+        ).strip()
+
+    if not (worktree / ".git").exists():
+        (worktree / ".gitignore").write_text(".codegen_run_state.json\n")
+        git("init", "-q")
+        git("config", "user.name", "test")
+        git("config", "user.email", "test@example.com")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state.setdefault("GIT_COMMIT", git("rev-parse", "HEAD"))
+    state_path.write_text(json.dumps(state))
+    prepared = _bash("execute_step_advance_review", worktree / "tt_metal/tt-llk")
+    assert prepared.returncode == 0, prepared.stderr
+    if review is not None:
+        result = {
+            "reviewed": True,
+            "findings": [],
+            "unresolved": [],
+            "skills_used": [],
+            **review,
+            "identity": json.loads((log_dir / "review_context.json").read_text()),
+        }
+        if result.get("blocking_total"):
+            result["findings"] = [
+                {
+                    "blocking": True,
+                    "severity": "completeness",
+                    "file": "fix.cpp",
+                    "line": "1",
+                    "title": "missing requirement",
+                    "comment": "R2 missing",
+                }
+            ]
+        result["findings_total"] = len(result["findings"])
+        (log_dir / "review_result.json").write_text(json.dumps(result))
+
+
 @pytest.fixture
 def worktree(tmp_path: Path) -> Path:
     """A minimal fake worktree: <wt>/tt_metal/tt-llk with local artifacts."""
@@ -675,8 +718,7 @@ def test_finalize_requires_whole_issue_review(
         }
     )
     (log_dir / "state.json").write_text(json.dumps(state))
-    if review is not None:
-        (log_dir / "review_result.json").write_text(json.dumps(review))
+    _prepare_review(worktree, log_dir, review)
     finalized = _bash(
         "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
         worktree / "tt_metal" / "tt-llk",
@@ -723,6 +765,7 @@ def test_review_round_does_not_require_whole_original_issue_completion(
         }
     )
     (log_dir / "state.json").write_text(json.dumps(state))
+    _prepare_review(worktree, log_dir, None)
     finalized = _bash(
         "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
         worktree / "tt_metal" / "tt-llk",
@@ -962,6 +1005,8 @@ def test_packaging_failure_and_retry_preserve_verification(
     git("add", "-A")
     git("commit", "-qm", "earlier fix")
     source.write_text("complete fix\n")
+    source.chmod(0o755)
+    (worktree / "new-binary.dat").write_bytes(b"new\x00binary\n")
     state_path = log_dir / "state.json"
     state = json.loads(state_path.read_text())
     obstacle = "Wormhole unavailable" if verification_status == "failed" else ""
@@ -977,14 +1022,14 @@ def test_packaging_failure_and_retry_preserve_verification(
         }
     )
     state_path.write_text(json.dumps(state))
-    (log_dir / "review_result.json").write_text(
-        json.dumps(
-            {
-                "verdict": "clean",
-                "blocking_total": 0,
-                "requirements_complete": True,
-            }
-        )
+    _prepare_review(
+        worktree,
+        log_dir,
+        {
+            "verdict": "clean",
+            "blocking_total": 0,
+            "requirements_complete": True,
+        },
     )
     hook = worktree / ".git/hooks/pre-commit"
     hook.write_text("#!/bin/sh\nexit 1\n")
@@ -1000,17 +1045,49 @@ def test_packaging_failure_and_retry_preserve_verification(
     assert state["STATUS"] == verification_status
     if retry:
         hook.write_text("#!/bin/sh\nexit 0\n")
-        for _ in range(2):
+        # Failed packaging staged the full candidate. Capture the hardware
+        # transport bytes before committing, including binary/untracked/mode changes.
+        transport_patch = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+                "--",
+            ]
+        )
+        expected_digest = hashlib.sha256(transport_patch).hexdigest()
+        for abbrev in ("7", "12"):
+            git("config", "core.abbrev", abbrev)
             packaged = _bash("execute_step_write_generated_patch", llk)
             assert packaged.returncode == 0, packaged.stderr
             state = json.loads(state_path.read_text())
             assert state["PACKAGING_ERROR"] == ""
             assert state["OBSTACLE"] == obstacle
             assert state["FIX_COMMIT"] == git("rev-parse", "HEAD")
-            assert set(state["CHANGED_FILES_JSON"]) == {"fix.cpp", "earlier.cpp"}
-            assert (log_dir / "generated.patch").read_text().strip() == git(
-                "diff", "--binary", base, "HEAD"
-            )
+            assert set(state["CHANGED_FILES_JSON"]) == {
+                "fix.cpp",
+                "earlier.cpp",
+                "new-binary.dat",
+            }
+            assert (log_dir / "generated.patch").read_bytes() == transport_patch
+            digest = subprocess.check_output(
+                [
+                    sys.executable,
+                    str(CODEGEN / "scripts/run_json_writer.py"),
+                    "candidate-patch-digest",
+                    "--worktree",
+                    str(worktree),
+                    "--expected-base-sha",
+                    base,
+                ],
+                text=True,
+            ).strip()
+            assert digest == expected_digest
     finalized = _bash("refresh_cost() { :; }; execute_step_finalize_run", llk)
     assert finalized.returncode == 0, finalized.stderr
     run = json.loads((log_dir / "run.json").read_text())
@@ -1022,5 +1099,438 @@ def test_packaging_failure_and_retry_preserve_verification(
         assert obstacle in run["obstacle"]
 
 
+@pytest.mark.parametrize("restores_worktree", [False, True])
+def test_packaging_rejects_hook_candidate_mutation(
+    tmp_path, worktree, restores_worktree
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "combine-log"
+    _prepare_review(worktree, log_dir, None)
+    source = worktree / "fix.cpp"
+    source.write_text("reviewed candidate\n")
+    _prepare_review(
+        worktree,
+        log_dir,
+        {
+            "verdict": "clean",
+            "blocking_total": 0,
+            "requirements_complete": True,
+        },
+    )
+    reviewed = json.loads((log_dir / "review_context.json").read_text())
+    hook = worktree / ".git/hooks/pre-commit"
+    commands = "#!/bin/sh\nprintf 'unverified hook bytes\\n' > fix.cpp\n"
+    if restores_worktree:
+        # Keep the same path set and restore the reviewed worktree, while the
+        # hook's unreviewed index content is what git commit actually packages.
+        commands += "git add fix.cpp\nprintf 'reviewed candidate\\n' > fix.cpp\n"
+    hook.write_text(commands)
+    hook.chmod(0o755)
+
+    packaged = _bash(
+        "execute_step_mark_status success; execute_step_write_generated_patch",
+        llk,
+    )
+    assert packaged.returncode != 0
+    state = json.loads((log_dir / "state.json").read_text())
+    assert "candidate changed during commit" in state["PACKAGING_ERROR"]
+    assert not (log_dir / "generated.patch").exists()
+    # Do not hide mutations or bypass hooks: retain the failure for inspection.
+    assert hook.read_text() == commands
+    if restores_worktree:
+        committed = subprocess.check_output(
+            ["git", "-C", str(worktree), "show", "HEAD:fix.cpp"]
+        )
+        assert committed == b"unverified hook bytes\n"
+        assert source.read_text() == "reviewed candidate\n"
+        check = _bash(
+            'rj() { python "$_ORCH_SCRIPTS/run_json_writer.py" "$@"; }; '
+            f'rj review --action check --log-dir "{log_dir}" --worktree "{worktree}" '
+            f'--expected-base-sha "{reviewed["base_commit"]}" --run-kind issue',
+            llk,
+        )
+        # Existing review validates the worktree, so cannot detect this alone.
+        assert check.returncode == 0, check.stderr
+    else:
+        assert source.read_text() == "unverified hook bytes\n"
+    finalized = _bash("refresh_cost() { :; }; execute_step_finalize_run", llk)
+    assert finalized.returncode == 0, finalized.stderr
+    assert json.loads((log_dir / "run.json").read_text())["status"] == "failed"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_review_round_validates_candidate_without_original_issue_completion(
+    tmp_path, worktree, stale
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0
+    logs = tmp_path / "combine-log"
+    state = json.loads((logs / "state.json").read_text())
+    state.update(
+        {
+            "RUN_KIND": "review",
+            "RUN_MODE": "single",
+            "ISSUE_NUMBER": "1",
+            "TARGET_ARCH": "blackhole",
+            "CHANGED_FILES_JSON": [],
+        }
+    )
+    (logs / "state.json").write_text(json.dumps(state))
+    _prepare_review(worktree, logs, None)
+    (worktree / "kernel.h").write_text("review fix\n")
+    _prepare_review(worktree, logs, {"verdict": "clean", "blocking_total": 0})
+    if stale:
+        (worktree / "kernel.h").write_text("unreviewed change\n")
+    finalized = _bash(
+        "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
+        worktree / "tt_metal/tt-llk",
+    )
+    assert finalized.returncode == 0, finalized.stderr
+    run = json.loads((logs / "run.json").read_text())
+    assert run["status"] == ("failed" if stale else "success")
+
+
+def _short_circuit_case(tmp_path, worktree, suite_results, *, suite, route, pool=None):
+    """Minimal state+run.json, then try to advance to `suite`."""
+    log_dir = tmp_path / f"sc-{suite}-{route.replace('+', '_')}"
+    log_dir.mkdir()
+    (log_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "LOG_DIR": str(log_dir),
+                "VERIFY_ROUTE": route,
+                "TARGET_ARCHES_JSON": ["blackhole"],
+                "ISSUE_NUMBER": "24095",
+                "RUN_MODE": "single",
+                "TEST_BACKEND": "silicon",
+                "METAL_FILTER": "LLK.Reduce",
+                "TTNN_TEST": "test_transpose.py",
+                "GIT_COMMIT": "a" * 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (log_dir / "run.json").write_text(
+        json.dumps(
+            {"run_id": "run-1", "arch_results": suite_results}
+            | ({"runner_pool": pool} if pool else {})
+        ),
+        encoding="utf-8",
+    )
+    llk = worktree / "tt_metal" / "tt-llk"
+    (llk / ".codegen_run_state.json").write_text(
+        json.dumps({"LOG_DIR": str(log_dir)}), encoding="utf-8"
+    )
+    return _bash(
+        f"execute_step_advance_{'metal_test' if suite == 'metal' else 'ttnn_test'}", llk
+    )
+
+
+def _suites(**by_suite):
+    return {
+        "blackhole": {
+            "suite_results": {
+                name: {"status": "done", "verdict": verdict}
+                for name, verdict in by_suite.items()
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "verdict", ["COMPILE_FAILED", "TESTS_FAILED", "ENV_ERROR", "SIM_ISA_GAP"]
+)
+def test_advance_short_circuits_after_a_terminal_earlier_suite(
+    tmp_path, worktree, verdict
+):
+    """Run 24095 spent 2,432s on metal+ttnn after llk returned COMPILE_FAILED.
+
+    A broken new test file cannot be redeemed by a later suite, and the repair
+    re-runs the whole route, so those two suites were pure dead time.
+    """
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk=verdict), suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 21, result.stderr
+    assert "SUITE_ROUTE_SHORT_CIRCUIT metal" in result.stderr
+    assert f"blackhole/llk: {verdict}" in result.stderr
+
+
+def test_advance_proceeds_when_the_earlier_suite_passed(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk="PASSED"), suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SHORT_CIRCUIT" not in result.stderr
+
+
+def test_ttnn_short_circuits_on_either_earlier_suite(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="PASSED", metal="TESTS_FAILED"),
+        suite="ttnn",
+        route="llk+metal+ttnn",
+    )
+    assert result.returncode == 21, result.stderr
+    assert "blackhole/metal: TESTS_FAILED" in result.stderr
+
+
+def test_a_failure_outside_the_route_does_not_short_circuit(tmp_path, worktree):
+    """A stale non-member result must not block a route that never selected it."""
+    result = _short_circuit_case(
+        tmp_path, worktree, _suites(llk="COMPILE_FAILED"), suite="ttnn", route="ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_later_suite_failure_does_not_block_an_earlier_one(tmp_path, worktree):
+    """Only suites *before* the next one in llk -> metal -> ttnn order can block."""
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(ttnn="TESTS_FAILED"),
+        suite="metal",
+        route="metal+ttnn",
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_nonterminal_earlier_result_does_not_short_circuit(tmp_path, worktree):
+    """An in-flight suite has not failed yet; only status done counts."""
+    case = {
+        "blackhole": {
+            "suite_results": {"llk": {"status": "running", "verdict": "COMPILE_FAILED"}}
+        }
+    }
+    result = _short_circuit_case(
+        tmp_path, worktree, case, suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_skipped_arch_does_not_short_circuit(tmp_path, worktree):
+    """Out-of-scope architectures are skipped by design, not failing."""
+    case = {
+        "blackhole": {
+            "verdict": "SKIPPED",
+            "suite_results": {"llk": {"status": "done", "verdict": "COMPILE_FAILED"}},
+        }
+    }
+    result = _short_circuit_case(
+        tmp_path, worktree, case, suite="metal", route="llk+metal+ttnn"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_audit_runs_the_whole_route_after_a_failure(tmp_path, worktree):
+    """On audit the retry classifier needs a sealed receipt for every leaf and
+    treats a missing one as ENV_ERROR with no retry, so skipping the later
+    suites would make a repairable failure terminal."""
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="COMPILE_FAILED"),
+        suite="metal",
+        route="llk+metal+ttnn",
+        pool="audit",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SHORT_CIRCUIT" not in result.stderr
+
+
+def test_prod_still_short_circuits(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="COMPILE_FAILED"),
+        suite="metal",
+        route="llk+metal+ttnn",
+        pool="prod",
+    )
+    assert result.returncode == 21, result.stderr
+
+
+def _packaging_with_precommit(tmp_path, worktree, fake_body, installed_hook=None):
+    """Clean reviewed candidate, a root .pre-commit-config.yaml, and a fake
+    `pre-commit` on PATH whose behaviour the caller chooses."""
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "combine-log"
+    _prepare_review(worktree, log_dir, None)
+    (worktree / "fix.cpp").write_text("reviewed candidate\n")
+    (worktree / ".pre-commit-config.yaml").write_text("repos: []\n")
+    subprocess.check_call(
+        ["git", "-C", str(worktree), "add", ".pre-commit-config.yaml"]
+    )
+    subprocess.check_call(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "config",
+            "--no-verify",
+        ]
+    )
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state["GIT_COMMIT"] = subprocess.check_output(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True
+    ).strip()
+    state_path.write_text(json.dumps(state))
+    _prepare_review(
+        worktree,
+        log_dir,
+        {"verdict": "clean", "blocking_total": 0, "requirements_complete": True},
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pre-commit"
+    fake.write_text("#!/bin/sh\n" + fake_body)
+    fake.chmod(0o755)
+    if installed_hook is not None:
+        hook = worktree / ".git/hooks/pre-commit"
+        hook.write_text(installed_hook)
+        hook.chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+    packaged = _bash(
+        "execute_step_mark_status success; execute_step_write_generated_patch",
+        llk,
+        env=env,
+    )
+    return packaged, json.loads(state_path.read_text()), log_dir
+
+
+def test_packaging_rejects_a_candidate_the_hooks_still_change(tmp_path, worktree):
+    """Hooks run before verification; if they still change the candidate at
+    packaging, those bytes were never verified, so nothing is committed."""
+    packaged, state, log_dir = _packaging_with_precommit(
+        tmp_path, worktree, "printf 'unverified hook bytes\\n' > fix.cpp\n"
+    )
+    assert packaged.returncode != 0
+    assert "pre-commit hooks changed the candidate" in state["PACKAGING_ERROR"]
+    assert not (log_dir / "generated.patch").exists()
+
+
+def test_packaging_still_refuses_a_failing_hook(tmp_path, worktree):
+    """A non-fixing hook failure (pylint, codespell) blocks the commit, as the
+    commit-time hook used to."""
+    packaged, state, _ = _packaging_with_precommit(tmp_path, worktree, "exit 1\n")
+    assert packaged.returncode != 0
+    assert "pre-commit hooks failed" in state["PACKAGING_ERROR"]
+
+
+def test_packaging_commits_with_the_root_config_not_the_installed_hook(
+    tmp_path, worktree
+):
+    """The base clone's hook uses the nested tt-llk config, whose fix-cstdint
+    rewrites metal files. With a root config present packaging runs that config
+    itself and does not run the installed hook, so a clean candidate commits."""
+    packaged, state, log_dir = _packaging_with_precommit(
+        tmp_path,
+        worktree,
+        "exit 0\n",
+        installed_hook="#!/bin/sh\nprintf 'nested-config rewrite\\n' > fix.cpp\n",
+    )
+    assert packaged.returncode == 0, packaged.stderr
+    committed = subprocess.check_output(
+        ["git", "-C", str(worktree), "show", "HEAD:fix.cpp"]
+    )
+    assert committed == b"reviewed candidate\n"
+    assert (log_dir / "generated.patch").exists()
+
+
+def test_record_changed_files_normalizes_and_restores_the_index(tmp_path, worktree):
+    """The worker's files go through the hooks before verification, staged the
+    way a commit stages them, and the index is left as it was."""
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "norm-log"
+    log_dir.mkdir()
+    (log_dir / "state.json").write_text(json.dumps({"LOG_DIR": str(log_dir)}))
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(log_dir)}))
+    if not (worktree / ".git").exists():
+        subprocess.check_call(["git", "-C", str(worktree), "init", "-q"])
+        subprocess.check_call(["git", "-C", str(worktree), "add", "-A"])
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "base",
+                "--no-verify",
+            ]
+        )
+    (worktree / ".pre-commit-config.yaml").write_text("repos: []\n")
+    (worktree / "new_test.cpp").write_text("int   x ;\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pre-commit"
+    # Mimic git-clang-format: only touch the file once it is staged.
+    fake.write_text(
+        "#!/bin/sh\ngit diff --cached --quiet -- new_test.cpp || printf 'int x;\\n' > new_test.cpp\n"
+    )
+    fake.chmod(0o755)
+    result = _bash(
+        "execute_step_record_changed_files",
+        llk,
+        env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert (worktree / "new_test.cpp").read_text() == "int x;\n"
+    status = subprocess.check_output(
+        ["git", "-C", str(worktree), "status", "--porcelain", "--", "new_test.cpp"],
+        text=True,
+    )
+    assert status.startswith("??"), status  # back to untracked, not left staged
