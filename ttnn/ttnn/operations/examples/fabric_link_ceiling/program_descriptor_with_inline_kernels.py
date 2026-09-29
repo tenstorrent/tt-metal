@@ -17,6 +17,10 @@ VARIANTS (how the sender issues packets):
                     flushes only when it wraps around to a header it is about to rewrite.
 
 Directions: "uni" (row 0 sends, row 1 receives) or "bi" (both rows send and receive at once).
+
+Placement: `cores` picks the logical core that serves each link (sender on the sending chip, landing ring
+on the receiving chip), and `sender_noc` the NoC the sender writes packets to its router on. Together
+they decide which NoC links the per-link streams share on their way to and from the Ethernet cores.
 """
 
 import ttnn
@@ -118,14 +122,17 @@ void kernel_main() {
 """
 
 
+NOC0 = ttnn.NOC.RISCV_0_default  # routes +X, then +Y
+NOC1 = ttnn.NOC.RISCV_1_default  # routes -Y, then -X
+
+
 def link_cores(num_links):
-    """One sender/receiver core per link: logical (l, 0)."""
+    """Default placement: one core per link, side by side at logical (l, 0)."""
     return [ttnn.CoreCoord(l, 0) for l in range(num_links)]
 
 
-def ring_memory_config(num_links, slots, packet_bytes):
-    """L1 ring of `slots` packets per link core: uint32 row-major, one packet per row."""
-    cores = link_cores(num_links)
+def ring_memory_config(cores, slots, packet_bytes):
+    """L1 ring of `slots` packets on each link core: uint32 row-major, one packet per row."""
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -135,12 +142,23 @@ def ring_memory_config(num_links, slots, packet_bytes):
 
 
 def create_mesh_program_descriptor(
-    mesh_device, src, dst, sem_addr, *, variant, direction, num_links, slots, packet_bytes, packets_per_link
+    mesh_device,
+    src,
+    dst,
+    sem_addr,
+    *,
+    variant,
+    direction,
+    cores,
+    slots,
+    packet_bytes,
+    packets_per_link,
+    sender_noc=NOC1,
 ):
     assert variant in VARIANTS and direction in DIRECTIONS
     rows, cols = tuple(mesh_device.shape)
     assert rows == 2, "pairs chips along mesh axis 0: needs exactly 2 rows"
-    cores = link_cores(num_links)
+    num_links = len(cores)
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     virt = [mesh_device.worker_core_from_logical_core(c) for c in cores]  # same on every chip
     src_addr, dst_addr = int(src.buffer_address()), int(dst.buffer_address())
@@ -178,7 +196,9 @@ def create_mesh_program_descriptor(
                         core_ranges=core_set,
                         compile_time_args=[int(variant == "header_ring"), NUM_HEADERS, packet_bytes, slots],
                         runtime_args=rt,
-                        config=ttnn.WriterConfigDescriptor(),
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=sender_noc
+                        ),
                     )
                 )
             if receives:
@@ -192,7 +212,7 @@ def create_mesh_program_descriptor(
                         core_ranges=core_set,
                         compile_time_args=[],
                         runtime_args=rt,
-                        config=ttnn.ReaderConfigDescriptor(),
+                        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1),
                     )
                 )
             program.kernels = kernels
@@ -201,5 +221,5 @@ def create_mesh_program_descriptor(
 
 
 def fabric_link_ceiling(mesh_device, src, dst, sem_addr, **kw):
-    """One dispatch: stream packets_per_link full packets per link, per direction."""
+    """One dispatch: stream packets_per_link full packets over each link (one core per entry of `cores`)."""
     return ttnn.generic_op([src, dst], create_mesh_program_descriptor(mesh_device, src, dst, sem_addr, **kw))

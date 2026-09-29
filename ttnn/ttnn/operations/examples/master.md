@@ -26,11 +26,12 @@ kernel, so you know how far your op is from the ceiling.
 payload, 1 link), in both directions at once. At 4,352 B packets a ring of pre-routed headers issued
 non-blocking is **12–22% faster** than flushing every packet; at 14,336 B the two are identical. The best
 payload depends on the fabric (1D peaks at 14,336 B, 2D at 8,704 B with 43.6 GB/s), and the 15,232 B maximum
-is 30% slower than the 1D peak. With 2 links per chip pair each link drops to ~40 GB/s (one direction) and
-30–37 GB/s (both directions).
+is 30% slower than the 1D peak. A second link keeps the full 48.5 GB/s only when each link's core sits in the
+NoC column of its Ethernet core; with the two cores side by side, shared NoC links drop each link to ~40 GB/s
+(one direction) and 30 GB/s (both).
 **Gist:** send full packets with pre-routed headers and `send_current_slot_non_blocking`, flushing only
 before a header is reused; measure the router payload for your fabric config instead of taking the maximum;
-compare your op's per-link rate with this example's number for the same config.
+place each link's sender/landing core directly below its Ethernet core (its column is in a NoC trace); compare your op's per-link rate with this example's number for the same config.
 
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)

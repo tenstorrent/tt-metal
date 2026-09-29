@@ -50,6 +50,8 @@ python -m ttnn.operations.examples.fabric_link_ceiling [options]
 | `--links` | comma list | `1,2` | links driven per chip pair (one sender core per link) |
 | `--mb` | float | `64` | MiB streamed per link per direction per launch |
 
+The placement test reads `FLC_PLACEMENTS` (`name=x,y;x,y|name=...`, logical cores, link l on the l-th core) and `FLC_SENDER_NOCS` (default `1`; `1,0` adds NoC0 senders, see the hang note below).
+
 ```bash
 # the headline point only
 python -m ttnn.operations.examples.fabric_link_ceiling --fabric 1d --payload 14336 --links 1 --variant header_ring
@@ -85,10 +87,27 @@ is negligible.
   14,336 B, FABRIC_2D at 8,704 B, and 15,232 B (the Blackhole maximum) is 30% below the 1D peak. The
   router splits a fixed amount of buffer space into slots of this size, so the payload also sets how
   many packets can be in flight. Measure your own config; do not assume bigger is better.
-- **A second link does not double the rate here.** With two links each link drops to about 40 GB/s
-  (uni) and 30–37 GB/s (bi). The two sender cores sit side by side next to the Ethernet row, so their
-  traffic into the routers, and the routers' writes into the receiving cores, share NoC paths; core
-  placement is a candidate explanation, not yet measured.
+- **A second link runs at full rate only if its traffic has its own NoC path.** With the two link cores
+  side by side (the default placement above), each link drops to ~40 GB/s (one direction) and 30 GB/s
+  (both). The cause is NoC link sharing, confirmed by placement (next table).
+
+### Placement: which core serves each link (2 links, header_ring, FABRIC_1D, 14,336 B)
+
+NoC1 routes −Y then −X. The two links' Ethernet cores sit in the Ethernet row at NoC (3,1) and (4,1).
+
+| Placement | NoC coords | One direction | Both directions | Shared NoC links |
+|---|---|---|---|---|
+| `adjacent` (default) | (1,2) (2,2) | 40.6 | 30.5 | senders: both ride the Ethernet row −X; routers' writes: both end on the same row-2 link |
+| `rows` | (1,2) (1,3) | 40.6 | 39.6 | senders still share the Ethernet row; routers' writes now end in different rows |
+| **`under_eth`** | (3,2) (4,2) | **48.5** | **48.3** | none: each sender goes one hop straight up, each router writes straight down its own column |
+
+With `under_eth` two links deliver 97 GB/s per direction per chip pair, exactly 2× one link. Put each
+link's core in the NoC column of its Ethernet core; which column that is depends on the board and the link,
+so read it from a NoC trace (the destination of the sender's writes).
+
+Sender NoC: NoC0 gives the same numbers where it runs (48.5 with `under_eth`, 40.6 `adjacent` one
+direction), but `adjacent` + NoC0 + both directions **hangs deterministically** on this box (sender stuck in
+`noc_async_write` toward its router). Root cause not determined; avoid that combination.
 
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash

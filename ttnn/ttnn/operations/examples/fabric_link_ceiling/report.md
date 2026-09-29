@@ -98,3 +98,21 @@ header_ring       uni      2      1650785              40.65
 flush_per_packet  bi       2      1961933              34.20
 header_ring       bi       2      2173286              30.87
 ```
+
+### Placement × sender NoC (2 links, header_ring, FABRIC_1D, 14,336 B)
+
+Logical cores → NoC coords on this box. The two links' Ethernet cores are at NoC (3,1) and (4,1) (read from a
+NoC trace). `under_eth` puts each link's core in its Ethernet core's column.
+
+```
+placement  NoC coords      send  dir     kernel ns  GB/s per link-dir
+adjacent   (1,2) (2,2)     NoC1  uni       1651618              40.63
+adjacent   (1,2) (2,2)     NoC1  bi        2198841              30.52
+rows       (1,2) (1,3)     NoC1  uni       1651465              40.63
+rows       (1,2) (1,3)     NoC1  bi        1695630              39.58
+under_eth  (3,2) (4,2)     NoC1  uni       1383376              48.51
+under_eth  (3,2) (4,2)     NoC1  bi        1389985              48.28
+adjacent   (1,2) (2,2)     NoC0  uni       1651721              40.63
+adjacent   (1,2) (2,2)     NoC0  bi        HANG (deterministic; sender stuck in noc_async_write to its router)
+under_eth  (3,2) (4,2)     NoC0  uni       1382639              48.54
+```
