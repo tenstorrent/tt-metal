@@ -170,7 +170,7 @@ def kimi_k3_hf_config(max_seq: int = 8192):
     raises ``ImportError`` at module import without ``fla-core``, which is not installed here.
 
     ``rope_scaling=None`` is the real K3 value and exercises ``ttMLA``'s guard; do not substitute
-    ``{"factor": 1.0, ...}`` as ``glm_5_2_hf_config`` does, since K3 has no rotary embedding at all.
+    ``{"factor": 1.0, ...}`` as ``glm_5_3_hf_config`` does, since K3 has no rotary embedding at all.
     ``max_position_embeddings`` is capped at ``max_seq`` because the CPU reference eagerly builds
     ``[max_position_embeddings, qk_rope_head_dim]`` cos/sin buffers -- 512 MB at K3's true 1M.
     """
