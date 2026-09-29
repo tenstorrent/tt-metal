@@ -18,6 +18,8 @@
 #
 #   nohup m3_budget_study/results_ops/batch_p0a.sh > m3_budget_study/results_ops/logs/batch_p0a.out 2>&1 &
 #   ONLY="w4096_h0_prose w4096_packed" ...   run a subset (run-id suffixes, see POINTS below)
+#   MESH=4x2 PREFIX=p4x2 PER_OP_CSV=.. RUNS_CSV=..  another SPxTP sub-mesh (stage 0 of create_submeshes(SP, TP)); TP != 4
+#                                             runs through tools/profile_4x2.py (multi-head KV cache)
 set -uo pipefail
 RES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$RES/../.." && pwd)}"
@@ -34,8 +36,13 @@ WRAPPER="${WRAPPER:-$TT_METAL_HOME/models/demos/minimax_m3/scripts/run_prefill_p
 PARSE="$TT_METAL_HOME/models/demos/minimax_m3/tests/perf/parse_zone_perf.py"
 PER_OP="$RES/tools/zones_to_per_op.py"
 export NODE="${NODE:-$(ls ~/.vscode-server/cli/servers/*/server/node 2>/dev/null | head -1)}"
-RUNS="$RES/p0a_runs.csv"
+RUNS="${RUNS_CSV:-$RES/p0a_runs.csv}"
 mkdir -p "$RES/logs" "$RES/profiles" "$RES/profiler_tmp"
+
+MESH="${MESH:-2x4}"
+if [ "$MESH" != 2x4 ]; then
+  export MESH HARNESS="${HARNESS:-m3_budget_study/results_ops/tools/profile_4x2.py}"
+fi
 
 # Fixed configuration of every run.
 export STAGES=4 STAGE=0 FABRIC=1d M3_FABRIC=1d LAYER_IDS=0,1,2,3,4,5,6
@@ -75,7 +82,7 @@ for W in 4096 8192; do
 done
 
 other_harness () {  # another M3 device harness running (sibling session / other agent)?
-  pgrep -u "$(id -u)" -af 'models/demos/minimax_m3/tests/perf/[a-z_]+\.py|tracy-capture' | grep -v "^$$ " || true
+  pgrep -u "$(id -u)" -af 'models/demos/minimax_m3/tests/perf/[a-z_]+\.py|tools/profile_4x2\.py|tracy-capture' | grep -v "^$$ " || true
 }
 
 run_point () {
@@ -102,7 +109,7 @@ run_point () {
   { echo "run_id=$id"; echo "git_sha=$(git -C "$TT_METAL_HOME" rev-parse HEAD)"
     echo "dirty=$(git -C "$TT_METAL_HOME" status --porcelain -uno | wc -l)"; echo "date=$(date -Is)"
     printf '%s\n' "${knobs[@]}"
-    env | grep -E '^(STAGES|STAGE|FABRIC|LAYER_IDS|LEVEL|WARM_POINT|PREFIX_QUIET|M3_|PROFILE_|TT_|EXPERT_|HF_)=' | sort
+    env | grep -E '^(MESH|HARNESS|STAGES|STAGE|FABRIC|LAYER_IDS|LEVEL|WARM_POINT|PREFIX_QUIET|M3_|PROFILE_|TT_|EXPERT_|HF_)=' | sort
   } > "$envf"
 
   echo "[p0a] $(date '+%F %T') START $id (W=$W h=$h B=$B input=$input${segs:+ segments=$segs})"
@@ -119,7 +126,7 @@ run_point () {
   if [ -n "$status" ]; then
     kill -TERM -- "-$pid" 2>/dev/null; sleep 20; kill -KILL -- "-$pid" 2>/dev/null
     # python -m tracy starts the harness in a session of its own, outside our process group.
-    pkill -KILL -u "$(id -u)" -f 'models/demos/minimax_m3/tests/perf/profile_prefill.py' 2>/dev/null
+    pkill -KILL -u "$(id -u)" -f 'models/demos/minimax_m3/tests/perf/profile_prefill.py|tools/profile_4x2.py' 2>/dev/null
     wait "$pid" 2>/dev/null
     env -u TT_VISIBLE_DEVICES tt-smi -glx_reset >> "$RES/logs/$id.reset" 2>&1
   else
@@ -138,8 +145,8 @@ run_point () {
     if "$TT_METAL_HOME/python_env/bin/python" "$PARSE" "$csv" --json "$prof/zones.json" \
          --per-device "$prof/per_device.json" --html "$prof/zones.html" > "$prof/parse.log" 2>&1; then
       "$TT_METAL_HOME/python_env/bin/python" "$PER_OP" --zones "$prof/zones.json" --per-device "$prof/per_device.json" \
-        --W "$W" --h "$h" --B "$B" --input "$input" --mesh 2x4 --segments "$rsegs" --run-id "$id" \
-        --out "$RES/per_op.csv" >> "$prof/parse.log" 2>&1 || status="$status/per_op_failed"
+        --W "$W" --h "$h" --B "$B" --input "$input" --mesh "$MESH" --segments "$rsegs" --run-id "$id" \
+        --out "${PER_OP_CSV:-$RES/per_op.csv}" >> "$prof/parse.log" 2>&1 || status="$status/per_op_failed"
     else
       status="$status/parse_failed"
     fi

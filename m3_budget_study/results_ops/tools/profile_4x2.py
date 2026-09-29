@@ -9,7 +9,11 @@ TP != 4 needs, as harness-local monkeypatches (model code untouched):
     and update_padded_kv_cache asserts cache heads == input heads;
   * MSA cache read that gathers a multi-head slot one head at a time: high_bw_all_gather's selected-batch
     path needs singleton dims between batch and the gather dim. The per-head slice / concat copies are
-    charged to ag_kv (FINE sub-zones head_slice / head_concat), so ag_kv is inflated vs a native TP=2 path.
+    charged to ag_kv (MEDIUM sub-zones head_slice / head_concat), so ag_kv is inflated vs a native TP=2 path.
+
+Without PROFILE_KV_PCC / PROFILE_KV_DUMP the run is handed to profile_prefill.main() (PROFILE_MESH carves the
+sub-mesh there), so its PROFILE_PREFIX_QUIET / PROFILE_SEGMENTS / PROFILE_WARM_POINT knobs apply; drive it with
+run_prefill_profile.sh MESH=4x2 HARNESS=m3_budget_study/results_ops/tools/profile_4x2.py.
 
 Env, besides profile_prefill.py's PROFILE_CHUNK / PROFILE_CACHE / PROFILE_NUM_LAYERS / PROFILE_LAYER_IDS /
 PROFILE_READ_EVERY / PROFILE_SKIP_PREFIX / PROFILE_SKIP_COMPILE / PREFILL_TRACE_DIR / M3_FABRIC /
@@ -131,7 +135,7 @@ def _install_multihead_cache_read():
     import models.demos.minimax_m3.tt.attention.msa as msa
     import models.demos.minimax_m3.tt.attention.prefill as prefill
     import ttnn
-    from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
+    from models.demos.minimax_m3.utils.profiler_utils import MEDIUM, zone
 
     orig = msa.msa_sp_attention_cache_read
 
@@ -181,7 +185,7 @@ def _install_multihead_cache_read():
             nh, hd = cache_t.shape[1], cache_t.shape[3]
             heads = []
             for h in range(nh):
-                with zone("head_slice", FINE):
+                with zone("head_slice", MEDIUM):
                     # DRAM interleaved: slicing into the cache's ND-shard spec trips the 1-D DRAM bank grid check
                     one = ttnn.slice(
                         cache_t,
@@ -191,7 +195,7 @@ def _install_multihead_cache_read():
                     )
                 heads.append(gather(f"{key}_h{h}", one, None))
                 one.deallocate(True)
-            with zone("head_concat", FINE):
+            with zone("head_concat", MEDIUM):
                 return ttnn.concat(heads, dim=1)
 
         with zone("ag_kv"):
@@ -311,6 +315,8 @@ def main():
 
     _install_multihead_kv(_hf_num_kv_heads())
     _install_multihead_cache_read()
+    if not (do_pcc or dump_dir):
+        return pp.main()
 
     pp.set_fabric_config_from_env(fabric_config)
     galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=pp.L1_SMALL_SIZE)

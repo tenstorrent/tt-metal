@@ -86,6 +86,9 @@ Env:
   PROFILE_STAGES      intra-galaxy pipeline depth: 1 (whole 8x4 galaxy), 2 ((4,4) sub-meshes, EP16) or
                       4 ((2,4) sub-meshes, EP8). The galaxy is opened whole and stage PROFILE_STAGE's
                       sub-mesh is carved out of it, so one process profiles one stage           [default 1]
+  PROFILE_MESH        SPxTP sub-mesh shape, e.g. 4x2; overrides PROFILE_STAGES with (8/SP)*(4/TP) and carves
+                      create_submeshes(MeshShape(SP, TP))[PROFILE_STAGE]. TP != 4 needs the multi-head KV cache
+                      of m3_budget_study/results_ops/tools/profile_4x2.py (run through it)       [default unset]
   PROFILE_STAGE       which stage to profile, 0..PROFILE_STAGES-1. Stage k owns global layers
                       [k*60/S, (k+1)*60/S); PROFILE_LAYER_IDS must fall inside that range and
                       PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
@@ -420,6 +423,12 @@ def main():
     stages = int(os.getenv("PROFILE_STAGES", "1"))
     stage = int(os.getenv("PROFILE_STAGE", "0"))
     assert stages in (1, 2, 4), f"PROFILE_STAGES must be 1, 2 or 4 (got {stages})"
+    sub_shape = (8 // stages, 4)
+    mesh_env = os.getenv("PROFILE_MESH", "").strip().lower()
+    if mesh_env:
+        sub_shape = tuple(int(x) for x in mesh_env.split("x"))
+        assert 8 % sub_shape[0] == 0 and 4 % sub_shape[1] == 0, f"PROFILE_MESH={mesh_env} does not tile the 8x4 galaxy"
+        stages = (8 // sub_shape[0]) * (4 // sub_shape[1])
     assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
     fabric_config = fabric_config_from_env()
     warm_iters = int(os.getenv("PROFILE_WARM_ITERS", "2"))
@@ -499,8 +508,9 @@ def main():
         )
 
         if stages > 1:
-            # Contiguous row-block sub-meshes, in the same order the pipeline bindings assign stages.
-            mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage]
+            # Row-major tiles of the grid (row blocks for the default (8/S, 4) shape), in the same order the
+            # pipeline bindings assign stages.
+            mesh = galaxy.create_submeshes(ttnn.MeshShape(*sub_shape))[stage]
             print(
                 f"[zone-prof] stage {stage}/{stages} sub-mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}",
                 flush=True,

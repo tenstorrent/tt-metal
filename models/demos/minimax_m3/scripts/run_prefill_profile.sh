@@ -26,6 +26,9 @@
 #   STAGE=k         which stage to profile, 0..STAGES-1. Stage k owns global layers
 #                   [k*60/STAGES, (k+1)*60/STAGES); LAYER_IDS must fall inside that range and LAYERS
 #                   takes the first N of it. Only stage 0 has dense layers.          [default 0]
+#   MESH=SPxTP      sub-mesh shape instead of (8/STAGES, 4), e.g. 4x2 (PROFILE_MESH; STAGE indexes the
+#                   row-major tiles). TP != 4 needs HARNESS=m3_budget_study/results_ops/tools/profile_4x2.py.
+#   HARNESS=path    harness script relative to TT_METAL_HOME           [default tests/perf/profile_prefill.py]
 #   M3_FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config (utils/fabric_env.py, same names as the runner's
 #                   PREFILL_FABRIC_MODE). 1d matches the whole-galaxy baseline and the production runner;
 #                   the pipeline runner's intra-galaxy bindings use 2d. Ring/torus modes select the
@@ -96,7 +99,7 @@ export M3_PROFILE_ZONES=1      # arm the zone markers (utils/profiler_utils.py r
 export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="${TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT:-20000}"
 
 GOLDEN="${GOLDEN_DIR:-$HF_MODEL/golden}"
-HARNESS="models/demos/minimax_m3/tests/perf/profile_prefill.py"
+HARNESS="${HARNESS:-models/demos/minimax_m3/tests/perf/profile_prefill.py}"
 VISUALIZE="models/demos/minimax_m3/tests/perf/visualize_zones.py"
 CSVS=()
 FAILED=0
@@ -148,14 +151,18 @@ case "$STAGES" in 1|2|4) ;; *) die "STAGES must be 1, 2 or 4 (got $STAGES)" ;; e
 # run writes, so its presence distinguishes a finished layer from an aborted one. M3_FORCE_LOAD_WEIGHTS=1
 # (cache populate) is the one case that means to read the source.
 M3_NUM_LAYERS=60   # MiniMax-M3 num_hidden_layers; the harness reads the real value from hf_config
-STAGE_ROWS=$((8 / STAGES))
-STAGE_CACHE="${TT_CACHE_PATH:-$HF_MODEL}/tensor_cache_bfp8_MeshShape([$STAGE_ROWS, 4])"
+STAGE_ROWS=$((8 / STAGES)) STAGE_COLS=4
+if [ -n "${MESH:-}" ]; then
+  export PROFILE_MESH="$MESH"
+  STAGE_ROWS="${MESH%x*}" STAGE_COLS="${MESH#*x}"
+fi
+STAGE_CACHE="${TT_CACHE_PATH:-$HF_MODEL}/tensor_cache_bfp8_MeshShape([$STAGE_ROWS, $STAGE_COLS])"
 FIRST_LAYER="${LAYER_IDS:-}"
 FIRST_LAYER="${FIRST_LAYER%%,*}"
 FIRST_LAYER="${FIRST_LAYER:-$((STAGE * M3_NUM_LAYERS / STAGES))}"
 if [ "${M3_FORCE_LOAD_WEIGHTS:-0}" != "1" ] && [ ! -d "$STAGE_CACHE/model.layers.$FIRST_LAYER/self_attn" ]; then
   die "no tilized cache for layer $FIRST_LAYER at $STAGE_CACHE — set TT_CACHE_PATH to a root that has the" \
-      "([$STAGE_ROWS, 4]) cache (see models/demos/minimax_m3/docs/PIPELINE_PREFILL_TESTING.md), or" \
+      "([$STAGE_ROWS, $STAGE_COLS]) cache (see models/demos/minimax_m3/docs/PIPELINE_PREFILL_TESTING.md), or" \
       "M3_FORCE_LOAD_WEIGHTS=1 to populate it from the bf16 source"
 fi
 
@@ -283,7 +290,7 @@ echo "logging to $LOG"
   echo "MiniMax-M3 prefill zone profile"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
   echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
-  echo "  STAGES=$STAGES  STAGE=$STAGE  M3_FABRIC=$M3_FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
+  echo "  STAGES=$STAGES  STAGE=$STAGE  M3_FABRIC=$M3_FABRIC  MESH=($STAGE_ROWS, $STAGE_COLS)  CACHE_DIR=$STAGE_CACHE"
   echo "  PREFIX_QUIET=${PROFILE_PREFIX_QUIET:-0}  SEGMENTS=${PROFILE_SEGMENTS:-}  WARM_POINT=${PROFILE_WARM_POINT:-0}  SRC_TRACE=$SRC_TRACE"
   echo "  TT_MESH_GRAPH_DESC_PATH=$TT_MESH_GRAPH_DESC_PATH"
   echo "  RESULTS_DIR=$RESULTS_DIR"
