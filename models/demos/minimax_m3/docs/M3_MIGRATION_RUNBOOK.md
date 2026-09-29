@@ -1,6 +1,6 @@
-# MiniMax-M3 KV migration runbook — prefill loopback, decode loopback, prefill → decode
+# MiniMax-M3 KV migration runbook — prefill loopback, decode loopback, prefill → decode, KV Manager
 
-Copy-paste commands for the three M3 migration tests on the Blackhole galaxies. Paths are this
+Copy-paste commands for the four M3 migration tests on the Blackhole galaxies. Paths are this
 checkout's (`/data/philei/...`). The mechanism and config layering are explained elsewhere; this file
 only tells you what to type.
 
@@ -9,8 +9,14 @@ only tells you what to type.
 | 1 | prefill → prefill loopback (Gate 2 / P2) | 1 | `migration_driver` (terminal C) | `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md` |
 | 2 | decode → decode loopback | 1 | `[kv-slice]` lines from every decoder rank | `tt-blaze/docs/DECODE_MIGRATION.md` |
 | 3 | prefill → decode, two galaxies (harness) | 2 | `pd_migration_complete` step | `tt-llm-engine/disaggregation/launch_harness/README.md` |
+| 4 | prefill → decode through the KV Manager (tt-d-gen, `kv_manager: "kvm"`) | 2 | request checks + the KVM log, then blaze's `[kv-golden]` | `tt-d-gen/kv_manager/scripts/fleet/kvm-fleet-launcher.md` |
 
-Do §1 and §2 before §3: the harness reports a failure on either side as one.
+Do §1 and §2 before §3, and §3 before §4. The harness reports a failure on either side as a single
+failure. §4 adds a serving stack and a second transport on top of §3.
+
+Every migrating run needs a **bf8 prefill index cache** (`M3_INDEX_CACHE_BF16=0`). Decode stores index_k
+in bfp8, and the workers copy raw chunk bytes, so building a migration table rejects a bf16 index_k.
+The checked-in migration bindings already set it.
 
 ---
 
@@ -243,8 +249,11 @@ MIGRATE slot 0 -> 2 ... complete / MIGRATE slot 1 -> 3 ... complete
 [migration_driver] verify bytes PASSED: 2 pair(s), N chunk(s) byte-identical dst == src
 ```
 
-`verify bytes` is the default `--verify-migration dst-bytes`, across all 9 configs (`k_h0..3`,
-`v_h0..3`, `index_k`). For the golden-anchored destination check as well, append
+`verify bytes` is the default `--verify-migration dst-bytes`, across all 9 configs. The table names
+them `"00"`..`"08"`, matching blaze: `00`–`03` = K heads 0–3, `04`–`07` = V heads 0–3, `08` = index_k.
+index_k rows exist only on MSA layers, because blaze publishes it only there. The driver therefore logs
+`N chunk(s) not compared — their table rows are unpublished on both sides`; at 10240 tokens N is 1920
+(3 dense layers × 320 chunks × 2 pairs). For the golden-anchored destination check as well, append
 `--verify-migration both` (expect an extra `verify golden PASSED`). Exit code 0 means every check
 passed. `[spsc-trace] ... wait_complete` backtraces in C are queue instrumentation, not errors.
 
@@ -394,12 +403,22 @@ the prefill host: `tt-llm-engine`'s launch harness, scenario `pd_migration`, con
   (§0.5). The prefill steps get `prefill.tree` from the yaml.
 - Use Slurm hostnames and run the harness on the prefill node; the short `bh-glx-b*` aliases do not
   resolve everywhere.
-- Checks: CHECK 1 = prefill source vs golden (producer, over UMD); CHECK 2 = `[kv-src]` source vs
-  destination, not available for M3 (no source dump); CHECK 3 = `[kv-golden]` destination vs golden,
-  K/V only. `index_k` reports `SKIP` there: its `load_golden` is `None`, and `longbook_10240` carries
-  no `index_k` tensors anyway.
+- Checks:
+  - CHECK 1 = prefill source vs golden (producer, over UMD).
+  - CHECK 2 = `[kv-src]` source vs destination. Not available for M3: there is no source dump.
+  - CHECK 3 = `[kv-golden]` destination vs golden, K/V and, on the sparse layer, index_k.
+    `longbook_10240` carries index_k for the MSA layers.
+- The migration layer's own tt-metal must read the compressed (`STRIDED_ROWS`) tables that tt-metal
+  ≥ #57098 exports. At the engine's old pin (e49ac055d6) those rows import as empty: the sender logs
+  `no destination rows for config N ...; skipped` and migrates nothing. Two fixes:
+  - use tt-llm-engine#419 (tt-metal cc834df1b8);
+  - or set `KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=2080374784` in the harness `prefill.env` and
+    `decode.flags.env`, which makes the exporters mirror the per-chunk entries.
+
+  With blaze ≥ #4502 every K/V config is compressible, so without either fix nothing migrates.
 - The decode driver's wait for the sentinel has no timeout.
-- Last passing run: 2026-09-08, b08u08 → b08u02, PCC 0.999 on every K/V head of layers 0 and 3.
+- Last passing run: 2026-09-29, b08u08 → b09u02, tt-blaze main + tt-llm-engine#419, no dual-write.
+  CHECK 3: K/V ≥ 0.999, index_k 0.99976.
 
 ### 3.2 Run
 
@@ -445,8 +464,8 @@ Logs: `/data/philei/disagg_runs/<timestamp>/<step>.log`, plus the generated
 [pd-migration] CHECK 1 (prefill src == golden), producer over UMD:   ... kv_cache_pcc_complete ...
 [pd-migration] CHECK 2 (prefill src == decode dst), transport fidelity:   (none)        <- expected for M3
 [pd-migration] CHECK 3 (decode dst == golden), KV correctness:
-  [kv-golden] mesh1/layer0 k_h0 slot0: PASS (pcc=0.99...)
-  [kv-golden] mesh2/layer3 index_k: SKIP (no host_tensor/load_golden hook)            <- expected, see 3.1
+  [kv-golden] mesh1/layer0 k_h0 slot0 layer0 head0 [0,10239): PASS pcc=0.999...
+  [kv-golden] mesh2/layer3 index_k slot0 layer3 head0 [0,10239): PASS pcc=0.999759
 [pd-migration] stage verdicts (4/4 stages reported): ...
 [pd-migration] PASS: all 4 decode stages validated
 ```
@@ -478,3 +497,165 @@ grep "gathered layer_id->mesh_id" /data/philei/disagg_runs/*/decode_driver.log
 - The prefill binding the yaml points at is the §1 one; the harness overrides its queue, endpoint,
   `PREFILL_NUM_USERS`, `PREFILL_MIGRATION_TABLE_PATH` and `PREFILL_MIGRATION_CLIENT_DIR` entries and
   writes the merged file to `<run_dir>/prefill_topology.yaml`.
+
+---
+
+## 4. Prefill → decode through the KV Manager (tt-d-gen, `kv_manager: "kvm"`)
+
+The same two model runners as §3, but served:
+- a Dynamo frontend and the tt-d-gen `tt_dynamo` prefill and decode workers;
+- KV moves through a **KV Manager (KVM) fleet**, one `kv-manager` docker container per galaxy, instead
+  of the migration-layer endpoints.
+
+The workers route every prompt of at least `min_disagg_tokens` (1024) to prefill and hand the KV to
+decode; shorter prompts stay on decode. Validated 2026-09-29: prefill bh-glx-120-b08u08 → decode
+bh-glx-120-b09u02. The same driver without `--kvm` runs the legacy migration-layer transport.
+
+### 4.1 What differs from §3
+
+- **No endpoints and no `/dev/shm` command queues.**
+  - Each runner writes its KV chunk table and device map to files at startup.
+  - Each KVM loads both tables and pairs the prefill and decode rows **by config name**. The prefill
+    table must therefore use blaze's names, `"00"`..`"08"` (see §1).
+  - The KVM rejects a (layer, config) row that only one side publishes:
+    `layer=0 config=8 is covered by only one side (source=1 destination=0)`. That is why the prefill
+    table publishes index_k on the MSA layers only, like blaze.
+- **Where the tables go.** Every KVM in the fleet reads the tables, so they must be on shared storage.
+  The device maps hold host-local ASIC ids, so they stay in `/tmp`.
+
+  | | prefill runner (binding `global_env`) | blaze decode | fleet conf |
+  |---|---|---|---|
+  | enable | `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1` | env `TT_MIGRATION_EXPORT_TO_FILE=1` | |
+  | table | `PREFILL_MIGRATION_TABLE_PATH` | `--migration-table-path` | `PREFILL_TABLE` / `DECODE_TABLE` |
+  | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `--migration-device-map-path` | `PREFILL_DEVICE_MAP` / `DECODE_DEVICE_MAP` |
+
+  The container writes into the table directory, so it must be world-writable (`chmod 777`).
+- **Workers.** Both worker configs set `kv_manager: "kvm"`, and `kv_endpoint` points at the
+  *prefill-side* KVM's ZMQ endpoint (`tcp://<prefill-ip>:9093`); only the prefill leader arms ZMQ.
+  The `kv_cmd/table/resp_queue` keys configure the legacy client and are rejected under `kvm`.
+
+### 4.2 Trees and one-time setup
+
+| Tree | Where (validated run) | Notes |
+|---|---|---|
+| tt-d-gen | `/data/philei/tmp/dgen-m3`, branch `philei/minimax-m3-disagg` | See below. |
+| tt-blaze | `/data/philei/tmp/blaze-pre4502` (148bf3af6a + #4650) | Linked at `$DGEN/third_party/tt-blaze`. Blaze main is not yet tested under `kvm`. |
+| prefill tt-metal | this branch | Built per §0.1 a). |
+
+The tt-d-gen branch carries:
+- the worker configs `models/minimax-m3/dynamo.disagg.kvm.{prefill,decode}.json`;
+- the runner binding `engine/tools/manifests/minimax_m3/runner_1rank_kvm.yaml`.
+
+Everything below lives in `/data/philei/scripts/m3_pd/dgen`, outside the repos. `env.sh` there sets
+the tree paths. It also keeps uv's interpreters and caches on `/data`, because home is node-local on
+the galaxies.
+
+```bash
+S=/data/philei/scripts/m3_pd/dgen
+source $S/env.sh
+
+# tt-d-gen: libzmq from source + the Dynamo adapter venv, then the blaze-enabled engine module (compute node)
+bash $S/build_deps.sh
+bash $S/build_blaze.sh      # a later `build_dgen.sh --bindings` replaces the device module with a CPU build
+
+# KVM image, on a galaxy host with docker
+cd $DGEN && ./kv_manager/scripts/build_kv_manager_image.sh --image kv-manager:m3-local
+```
+
+- **A local image** is enough. `launch_kvm_fleet.sh up` ships it to the other fleet hosts through its
+  `kvm-registry` container, pulled over `ssh -R localhost:5001`.
+- **A GHCR image** (`ghcr.io/tenstorrent/tt-d-gen/kv-manager:kvm-<sha>`) needs `IMAGE_PULL_USER` and
+  `IMAGE_PULL_TOKEN` with `read:packages`.
+- **Per host:** `docker info` must work as your user on both hosts, and the node→node ssh from §0.2
+  must be in place. The driver uses `/data/philei/.mig_ssh/id_ed25519`.
+
+### 4.3 Run
+
+`run_real_pd.sh` runs from the **login node, inside tmux**. It takes two RUNNING Slurm jobs of yours
+holding the two galaxies. It only reads them (`squeue`) and reaches the hosts over ssh, not `srun`:
+a process started in an `srun` step dies with the step.
+
+```bash
+export KVM_IMAGE=kv-manager:m3-local PREFILL_HOST=bh-glx-120-b08u08 DECODE_HOST=bh-glx-120-b09u02
+S=/data/philei/scripts/m3_pd/dgen
+
+# Configs, cross-config invariants, ports and docker on both hosts; starts nothing.
+$S/run_real_pd.sh <prefill-job> <decode-job> --kvm --golden --dry-run
+
+$S/run_real_pd.sh <prefill-job> <decode-job> --kvm --golden
+```
+
+Steps in order:
+1. `glx_reset` + 90 s on both hosts (`--no-reset` skips it).
+2. blaze 4-stage ring, launch-only (~9 min).
+3. Prefill runner (~3 min).
+4. KVM fleet: `plan`, `up`, `health`. It needs both runners' tables first.
+5. etcd + frontend on the decode host.
+6. Decode worker, then prefill worker.
+7. The three requests.
+8. **Hold until Enter**, then teardown in reverse.
+
+`--golden` sends `longbook_5120`'s token ids as the third request. At teardown blaze then PCCs the
+migrated KV against that golden (up to 30 min).
+
+A device-free rehearsal of the script runs on any one node: `--mock` uses mock pipelines and a
+`mock_kvm_server` per side, with `PREFILL_HOST=DECODE_HOST=<cpu node>` and `NIC`/`DECODE_NIC` set to
+two different interfaces.
+
+Ports it checks and holds:
+
+| Host | Ports |
+|---|---|
+| decode | 8000 frontend, 12379/12380 etcd, 20020 worker health |
+| prefill | 20021 worker health; 9093 KVM ZMQ, 18650 KVM control, 18081 KVM health |
+| both | 19071 prefill↔decode rendezvous |
+
+### 4.4 Reading the result
+
+A pass, in the script's output:
+
+```
+[PASS] long_fact_prompt_migrates: HTTP 200 ..., prompt_tokens=3072 migrated_tokens=3008 prefill_admitted=1 decode_prefilled=64
+[PASS] short_prompt_stays_local: HTTP 200 ..., prompt_tokens=182 migrated_tokens=0 prefill_admitted=0     <- < min_disagg_tokens
+[PASS] golden_token_ids_migrate: HTTP 200 ..., prompt_tokens=5120 migrated_tokens=4928 prefill_admitted=1
+[INFO] migration_id=...: all children completed, overall successful=true                                  <- kvm-prefill-0 log
+REQUESTS PASS
+```
+
+The decode worker prefills the 64-token block holding the last prompt token itself, so migration stops
+short of the prompt end. The golden check covers `[0, 5056)`.
+
+After Enter (with `--golden`), in `<run>/blaze.log`:
+
+```bash
+grep -aE '\[kv-golden\]' <run>/blaze.log
+# [kv-golden] mesh1/layer0 k_h1 slot1 layer0 head0 [0,5056): PASS pcc=0.999916      <- slot 1 = the golden request
+# [kv-golden] mesh1/layer0 k_h1 slot0 layer0 head0 [0,5056): FAIL pcc=0.001353      <- expected, see below
+```
+
+Only slot 1 received the golden tokens; slot 0 holds the fact prompt. `--migration-validate-golden-pt`
+validates both slots against `longbook_5120`, so slot 0's `FAIL` at PCC ≈ 0 is expected. **Judge the
+run by slot 1.**
+
+KVM-side detail: `docker logs kvm-prefill-0` on the prefill host. `grep -ac 'successful=false'` must
+print 0.
+
+### 4.5 Teardown and gotchas
+
+- If the script dies without its trap (kill -9, lost tmux), the remote processes keep running. From
+  the login node:
+
+  ```bash
+  K="-i /data/philei/.mig_ssh/id_ed25519"
+  ssh $K <prefill-host> bash $S/pd_remote.sh <run> kvm_fleet <run>/fleet.conf down
+  for h in <prefill-host> <decode-host>; do ssh $K $h FORCE_CLEAN=1 bash $S/pd_remote.sh <run> preclean; done
+  ```
+
+  `preclean` refuses while any of your runner, worker or endpoint processes live, unless
+  `FORCE_CLEAN=1`.
+- Teardown stops the decode ring mid-run, which wedges its Ethernet cores. Keep the reset on for the
+  next bring-up.
+- The validated run set `KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=2080374784` on both workers and runners,
+  for the legacy transport's older importer (§3.1). It has not been re-tested under `kvm` without it.
+- `rendezvous :19071 connections ... 2` means both workers resolved their peer. Fewer means one side
+  fell back to local prefill, and `migrated_tokens` stays 0.

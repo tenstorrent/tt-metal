@@ -455,7 +455,7 @@ def _verify_dst_vs_src_bytes(
         )
         return False
 
-    failures, checked, skipped, tail_tokens = [], 0, 0, 0
+    failures, checked, skipped, unpublished, tail_tokens = [], 0, 0, 0, 0
     for src, dst, real_len in triples:
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
@@ -474,7 +474,7 @@ def _verify_dst_vs_src_bytes(
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
                     if src_loc.size_bytes == 0 and dst_loc.size_bytes == 0:
                         # Unpublished row (e.g. M3 index_k on a dense layer): nothing migrates there.
-                        skipped += 1
+                        unpublished += 1
                         continue
                     try:
                         src_uid = producer._resolve_unique_id(
@@ -506,6 +506,11 @@ def _verify_dst_vs_src_bytes(
         logger.warning(
             f"[migration_driver] verify bytes: {tail_tokens} trailing token(s) across all pairs fell in a "
             "partial chunk and were NOT compared (real_len is not chunk-aligned)."
+        )
+    if unpublished:
+        logger.info(
+            f"[migration_driver] verify bytes: {unpublished} chunk(s) not compared — their table rows are "
+            "unpublished on both sides (e.g. M3 index_k on a dense layer), so nothing migrates there."
         )
     if skipped:
         logger.warning(
