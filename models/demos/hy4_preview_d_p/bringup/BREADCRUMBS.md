@@ -2503,3 +2503,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
+
+## S.moe_shared.04 test (attempt 1)
+
+What was done
+- Replaced the rendered one-line swap test (attn_hc, attn_hc_pre, attn_norm, q_a on device, layer 2) with
+  test_swap_moe_shared_03_attn_norm.py (layer-2 setup: ctx.extra["shared_topk"] = golden L1 topk in both contexts, no
+  indexer top-k check, per-stream h_mid limit 0.005, router >= 0.98) plus the q_a checks of
+  test_swap_moe_full_04_q_a.py at the test_c_moe_shared_q_a.py limits: q_resid vs golden (rel 0.008, row ratio
+  [0.994, 1.006], worst row 0.015), vs the CPU q_a on the device attn_norm (same limits), and the q_a module on the
+  device attn_norm x 0.01 (bf16) vs the CPU step (0.01 / 0.02, the eps check). Every other limit is unchanged from
+  swap 03. The q_resid check is now at component limits (swap 03 had a loose rel 0.01 only).
+- CPU block-level q_a mutation study at layer 2: /tmp/hy4_ssh4/study.py (outside the repo, 9 s per variant). The table
+  is in the test docstring.
+
+Decisions
+- At layer 2 every q_a mutation passes the 0.98 out gate, even a zeroed q_resid (out PCC 0.99977). The shared top-k
+  comes from the golden, so q_a only feeds q_b, and the residual dominates. The q_resid checks catch every mutation
+  except eps; the x 0.01 run catches eps (1e-5 0.181, 0 0.029, 2e-6 0.026 vs bf16 0.0023).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999995, q_resid 0.00180 / [0.99952, 1.00054] / 0.00209, router 0.99725).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98, every extra check fails).
+- Gate (device): PASS. pcc_swap_out 0.999994. q_resid 0.00224, ratio [0.99860, 1.00094], row 0.00336; vs CPU
+  0.00177 / 0.00222; x 0.01 0.00176 / 0.00216. attn_out 0.00235. h_mid 0.00092, stream max 0.0031. router 0.99689.
+  out rel 0.00347.
+
+Gotchas
+- The smallest margin is still gate column 0 (0.0045 vs 0.01), carried over from swap 01.
+- The first block of FAIL-looking lines in the reference / gate logs is the precompile collect pass, as before.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
