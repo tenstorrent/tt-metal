@@ -748,12 +748,20 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const auto [stream_out_h, stream_out_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, 2);
+    // Every CB of the fp32 DEST streaming kernel: Q, two K/V slots, the fp32 scores, accumulators and row sums, the
+    // row maxes, the output ping pong and the small ones (mask, identities, sink, recip, chain control).
     const uint32_t fp32_streaming_bytes =
         Sq_chunk_t * DHt * q_buffer_factor *
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype())) +
         Sk_chunk_t * DHt * 2 * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype())) +
         Sk_chunk_t * vDHt * 2 * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype())) +
-        (Sq_chunk_t * Sk_chunk_t + 2 * Sq_chunk_t * vDHt) * fp32_tile_bytes;
+        (Sq_chunk_t * Sk_chunk_t + 2 * Sq_chunk_t * vDHt + 2 * Sq_chunk_t + 3) * fp32_tile_bytes +
+        (3 * Sq_chunk_t + 5) * bf16_tile_bytes +
+        detail::streaming_cb_out_tiles(stream_out_h, stream_out_w, dst_size, Sq_chunk_t, vDHt) *
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype())) +
+        256;
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute = can_use_streaming_compute(
