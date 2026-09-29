@@ -23,7 +23,7 @@ def inspect(channel, device, noc=ttnn.NOC.NOC_0):
 def test_mcast_keywords_and_sender_order(device):
     receivers = core_set([(0, 0), (1, 0), (0, 1), (1, 1)])
     senders = [[ttnn.CoreCoord(1, 0)], [ttnn.CoreCoord(0, 1)]]
-    config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, base_sem_id=4)
+    config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
     channel = ttnn.Mcast(
         device=device,
         config=config,
@@ -32,10 +32,15 @@ def test_mcast_keywords_and_sender_order(device):
         sender_config=ttnn.McastExplicitSenderConfig(senders),
         receiver_order=ttnn.McastCoreOrder.RowMajor,
     )
-    config.base_sem_id = 0
+    try:
+        channel.next_semaphore_id()
+        assert False, "next_semaphore_id must require a descriptor attachment"
+    except RuntimeError:
+        pass
     senders.clear()
     descriptor, kernel = inspect(channel, device, ttnn.NOC.NOC_1)
-    assert [semaphore.id for semaphore in descriptor.semaphores] == [4, 5]
+    assert [semaphore.id for semaphore in descriptor.semaphores] == [0, 1]
+    assert channel.next_semaphore_id() == 2
     assert inspect_mcast(kernel, ttnn.CoreCoord(1, 0))["roles"] & 1
     assert inspect_mcast(kernel, ttnn.CoreCoord(0, 1))["roles"] & 1
 
@@ -127,8 +132,6 @@ def test_current_config_bindings_round_trip():
     assert defaults.handshake
     assert defaults.handshake_cores is None
     assert defaults.data_ready == ttnn.McastDataReady.Flag
-    assert defaults.base_sem_id is None
-    assert defaults.sem_ids is None
     assert defaults.irregular_receiver_set_mode == ttnn.TransferMode.Multicast
 
     handshake_cores = core_set([(0, 0), (1, 0)])
@@ -136,19 +139,12 @@ def test_current_config_bindings_round_trip():
         noc=ttnn.NOC.NOC_1,
         handshake_cores=handshake_cores,
         data_ready=ttnn.McastDataReady.Counter,
-        sem_ids=[4, 6],
     )
     assert config.noc.value == ttnn.NOC.NOC_1.value
     assert config.handshake
     assert config.handshake_cores == handshake_cores
     assert config.data_ready == ttnn.McastDataReady.Counter
-    assert config.base_sem_id is None
-    assert config.sem_ids == [4, 6]
     assert config.irregular_receiver_set_mode == ttnn.TransferMode.Multicast
-
-    allocated = ttnn.McastConfig(base_sem_id=3)
-    assert allocated.base_sem_id == 3
-    assert allocated.sem_ids is None
 
     chain = ttnn.McastConfig(irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast)
     assert chain.irregular_receiver_set_mode == ttnn.TransferMode.ChainUnicast

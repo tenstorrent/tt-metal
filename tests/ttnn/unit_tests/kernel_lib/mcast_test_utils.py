@@ -75,15 +75,15 @@ def tile_pattern(pages):
     return values.to(torch.bfloat16).reshape(pages, 1, 32, 32)
 
 
-def attach_for_inspection(mcast, cores, noc=ttnn.NOC.NOC_0, semaphores=()):
+def attach_for_inspection(mcast, cores, noc=ttnn.NOC.NOC_0):
     kernel = ttnn.KernelDescriptor(
         kernel_source="inspection-only.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cores,
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc),
     )
-    descriptor = ttnn.ProgramDescriptor(semaphores=list(semaphores))
-    mcast.attach(descriptor, "mcast", [kernel])
+    descriptor = ttnn.ProgramDescriptor()
+    mcast.attach(descriptor, "mcast", [kernel], 0)
     return descriptor, kernel
 
 
@@ -198,8 +198,6 @@ def run_mcast_groups_case(
     dynamic=True,
     handshake=True,
     rounds=6,
-    zero_ack=False,
-    adopted=False,
     chain_link=False,
     large=False,
     mixed_events=False,
@@ -223,8 +221,6 @@ def run_mcast_groups_case(
                 dynamic=dynamic,
                 handshake=handshake,
                 rounds=rounds,
-                zero_ack=zero_ack,
-                adopted=adopted,
                 chain_link=chain_link,
                 large=large,
                 mixed_events=mixed_events,
@@ -238,13 +234,10 @@ def run_mcast_groups_case(
         * (max(y for _, y in receivers) - min(y for _, y in receivers) + 1)
         for receivers, _ in specs
     )
-    semaphore_count = (2 if handshake else 1) + int(chained)
     config = ttnn.McastConfig(
         noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
         handshake=handshake,
-        handshake_cores=core_set([]) if zero_ack else None,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
-        sem_ids=list(range(semaphore_count)) if adopted else None,
         irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
     )
     mcast = make_mcast(device, specs, config)
@@ -261,8 +254,6 @@ def run_mcast_groups_case(
         max_pages=20 if large else 2,
         mixed_events=mixed_events,
         delayed=delayed,
-        zero_ack=zero_ack,
-        adopted=adopted,
         expected_chain=chained if chain_link else None,
         min_rectangles=min_rectangles,
     )
@@ -329,8 +320,6 @@ def _run_channel(
     max_pages=2,
     mixed_events=False,
     delayed=False,
-    zero_ack=False,
-    adopted=False,
     expected_chain=None,
     min_rectangles=None,
     alternating=True,
@@ -388,44 +377,22 @@ def _run_channel(
             int(group_index is None),
         ]
     kernels = []
-    faces = [True, False] if zero_ack else [None]
-    sender_cores = {core for _, senders in specs for core in senders}
-    for sending in faces:
-        selected = [c for c in dispatch if sending is None or (c in sender_cores) == sending]
-        face_rt = ttnn.RuntimeArgs()
-        for x, y in selected:
-            face_rt[x][y] = list(rt[x][y])
-        face_ct = list(ct)
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KERNEL_DIR}/pipe_mcast.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_set(selected),
-                compile_time_args=face_ct,
-                runtime_args=face_rt,
-                config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
-            )
+    face_rt = ttnn.RuntimeArgs()
+    for x, y in dispatch:
+        face_rt[x][y] = list(rt[x][y])
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/pipe_mcast.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set(dispatch),
+            compile_time_args=list(ct),
+            runtime_args=face_rt,
+            config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
         )
-    semaphores = (
-        [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=mcast.participating_cores(), initial_value=0)
-            for i in config.sem_ids
-        ]
-        if adopted
-        else []
     )
-    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores)
-    mcast.attach(descriptor, "mcast", kernels[:1] if zero_ack else kernels)
+    descriptor = ttnn.ProgramDescriptor()
+    mcast.attach(descriptor, "mcast", kernels, 0)
     attached_ct = inspect_mcast_ct(kernels[0])
-    if zero_ack:
-        passive = make_mcast(
-            device,
-            specs,
-            ttnn.McastConfig(
-                noc=config.noc, handshake=False, data_ready=config.data_ready, sem_ids=[attached_ct["data_ready"]]
-            ),
-        )
-        passive.attach(descriptor, "mcast", kernels[1:])
     if expected_chain is not None:
         assert (attached_ct["flags"] >> 3) & 3 == int(expected_chain)
         if expected_chain:
@@ -452,7 +419,7 @@ def _run_channel(
             participants.num_cores(),
             ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
         )
-        barrier.attach(descriptor, "barrier_mcast", kernels)
+        barrier.attach(descriptor, "barrier_mcast", kernels, mcast.next_semaphore_id())
     else:
         for kernel in kernels:
             ttnn.attach_absent(kernel, "barrier_mcast")

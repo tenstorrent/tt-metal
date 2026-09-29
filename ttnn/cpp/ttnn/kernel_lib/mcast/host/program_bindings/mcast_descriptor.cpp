@@ -51,18 +51,26 @@ void append_offsets(KernelDescriptor& kernel, std::string_view prefix, uint32_t 
 void McastImpl::attach(
     ProgramDescriptor& descriptor,
     std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> targets) const {
+    std::span<const std::reference_wrapper<KernelDescriptor>> targets,
+    uint32_t first_semaphore_id) const {
     prepare_arguments_();
     require_unbound_();
     TT_FATAL(!targets.empty(), "Multicast attachment requires at least one kernel");
 
     // Validate staged copies so a failure preserves both caller resources and kernels.
     auto semaphores = descriptor.semaphores;
-    const auto ids = resolve_semaphore_ids_(semaphores);
-    if (!cfg_.sem_ids) {
-        for (uint32_t role = 0; role < required_semaphores_(); ++role) {
-            semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
-        }
+    std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
+    const auto count = required_semaphores_();
+    TT_FATAL(
+        first_semaphore_id <= std::numeric_limits<uint32_t>::max() - count, "Multicast semaphore ID range overflows");
+    for (uint32_t role = 0; role < count; ++role) {
+        ids[role] = first_semaphore_id + role;
+        const bool collision = std::any_of(semaphores.begin(), semaphores.end(), [&](const auto& sem) {
+            return sem.core_type == tt::CoreType::WORKER && sem.id == ids[role] &&
+                   sem.core_ranges.intersects(participating_);
+        });
+        TT_FATAL(!collision, "Multicast semaphore ID collides with an existing resource");
+        semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
     }
     const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
     std::set<const KernelDescriptor*> selected;
@@ -128,6 +136,14 @@ void McastImpl::attach(
     for (size_t i = 0; i < targets.size(); ++i) {
         targets[i].get() = std::move(kernels[i]);
     }
+    descriptor_next_semaphore_id_ = first_semaphore_id + count;
+}
+
+uint32_t McastImpl::next_semaphore_id() const {
+    TT_FATAL(
+        descriptor_next_semaphore_id_.has_value(),
+        "next_semaphore_id() requires a successful ProgramDescriptor attachment");
+    return *descriptor_next_semaphore_id_;
 }
 
 McastArgumentOffsets McastImpl::append_kernel_args_to(

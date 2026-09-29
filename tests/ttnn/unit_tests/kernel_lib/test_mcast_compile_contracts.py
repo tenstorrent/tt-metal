@@ -37,7 +37,7 @@ def test_forwarding_receive_compile_contract(device, expect_error, with_dense_gr
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
     )
     descriptor = ttnn.ProgramDescriptor()
-    mcast.attach(descriptor, "mcast", [kernel])
+    mcast.attach(descriptor, "mcast", [kernel], 0)
     ct = list(kernel.compile_time_args)
     offset = dict(kernel.named_compile_time_args)["mcast_ct_offset"]
     if violation.startswith("source-"):
@@ -116,7 +116,7 @@ def test_compact_compile_contract(device, expect_error, case):
     if case == "absent-coordinates":
         ttnn.attach_absent(kernel, "mcast")
     else:
-        mcast.attach(descriptor, "mcast", [kernel])
+        mcast.attach(descriptor, "mcast", [kernel], 0)
     ct = list(kernel.compile_time_args)
     ct[1] = len(kernel.runtime_args[core[0]][core[1]])
     ct[2] = len(ct)

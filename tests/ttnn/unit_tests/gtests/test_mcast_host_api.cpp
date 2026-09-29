@@ -41,16 +41,13 @@ CoreRangeSet core_set(const std::vector<CoreCoord>& cores) {
 }
 
 template <typename McastType>
-KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0, const std::vector<uint32_t>& adopted_ids = {}) {
+KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0) {
     tt::tt_metal::ProgramDescriptor descriptor;
     KernelDescriptor kernel;
     kernel.core_ranges = mcast.participating_cores();
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc};
-    for (const auto id : adopted_ids) {
-        descriptor.semaphores.push_back({.id = id, .core_ranges = kernel.core_ranges, .initial_value = 0});
-    }
-    mcast.attach(descriptor, "channel", std::array{std::ref(kernel)});
+    mcast.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     return kernel;
 }
 
@@ -226,11 +223,10 @@ TEST_F(McastFixture, SenderGridOrderingIsNotSpatialInference) {
 TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto receivers = grid({0, 0}, {3, 1});
     auto handshake = core_set({{0, 0}, {1, 0}, {1, 1}});
-    McastConfig config{.handshake_cores = handshake, .base_sem_id = 5};
+    McastConfig config{.handshake_cores = handshake};
     McastExplicitSenderConfig senders{.senders_per_group = {{{0, 0}, {3, 0}}, {{0, 1}, {1, 1}}}};
     Mcast channel(*device_, config, receivers, 4, senders);
     handshake = CoreRangeSet{};
-    config.base_sem_id = 0;
     senders.senders_per_group.clear();
     auto copy = channel;
     expect_pattern(
@@ -240,7 +236,7 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
         {{{0, 0}, {3, 0}}, {{0, 1}, {1, 1}}},
         {{1, 2}, {1, 0}});
     const auto snapshot = emitted(copy);
-    EXPECT_EQ(snapshot.compile_time_args.at(1), 5u);
+    EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
     tt::tt_metal::Program program;
     copy.append_semaphores(program);
@@ -353,7 +349,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     kernel.runtime_args = {{{0, 0}, {11}}, {{1, 0}, {13, 17}}, {{2, 0}, {}}, {{3, 0}, {19}}};
     auto direct_rt = kernel.runtime_args;
     auto direct_ct = kernel.compile_time_args;
-    channel.attach(descriptor, "channel", std::array{std::ref(kernel)});
+    channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
     tt::tt_metal::Program program;
     direct.append_semaphores(program);
@@ -381,28 +377,6 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     for (const auto& [core, words] : direct_rt) {
         args.kernel_run_args.front().advanced_options.runtime_varargs[core] = {words[0], words[1]};
     }
-    auto adopted_spec = spec;
-    auto adopted_args = args;
-    const std::array adopted{m2::SemaphoreSpecName{"publication"}, m2::SemaphoreSpecName{"acknowledgments"}};
-    for (const auto& name : adopted) {
-        adopted_spec.semaphores.push_back({.unique_id = name, .target_nodes = receivers});
-    }
-    channel.attach(adopted_spec, adopted_args, "channel", targets, adopted);
-    ASSERT_EQ(adopted_spec.semaphores.size(), 2u);
-    ASSERT_EQ(adopted_spec.kernels.front().semaphore_bindings.size(), 2u);
-    for (size_t i = 0; i < adopted.size(); ++i) {
-        EXPECT_EQ(adopted_spec.kernels.front().semaphore_bindings[i].semaphore_spec_name, adopted[i]);
-    }
-    // Explicit numeric configuration is owned too, but remains inappropriate for
-    // native named-resource attachment.
-    McastConfig numeric_config{.sem_ids = std::vector<uint32_t>{4, 7}};
-    Mcast numeric(*device_, numeric_config, receivers, 4);
-    numeric_config.sem_ids->clear();
-    const auto numeric_snapshot = emitted(numeric, NOC::NOC_0, {4, 7});
-    EXPECT_EQ(numeric_snapshot.compile_time_args.at(1), 4u);
-    EXPECT_EQ(numeric_snapshot.compile_time_args.at(2), 7u);
-    EXPECT_ANY_THROW(numeric.attach(spec, args, "numeric", targets));
-    EXPECT_TRUE(spec.semaphores.empty());
     channel.attach(spec, args, "channel", targets);
     EXPECT_EQ(spec.semaphores.size(), 2u);
     const auto& spec_kernel = spec.kernels.front();

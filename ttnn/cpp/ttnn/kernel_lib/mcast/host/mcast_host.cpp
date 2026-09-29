@@ -113,17 +113,19 @@ Mcast& Mcast::operator=(Mcast&&) noexcept = default;
 void Mcast::attach(
     tt::tt_metal::ProgramDescriptor& descriptor,
     std::string_view prefix,
-    std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const {
-    impl_->attach(descriptor, prefix, kernels);
+    std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels,
+    uint32_t first_semaphore_id) const {
+    impl_->attach(descriptor, prefix, kernels, first_semaphore_id);
 }
+
+uint32_t Mcast::next_semaphore_id() const { return impl_->next_semaphore_id(); }
 
 void Mcast::attach(
     tt::tt_metal::experimental::ProgramSpec& spec,
     tt::tt_metal::experimental::ProgramRunArgs& args,
     std::string_view prefix,
-    std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-    std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores) const {
-    impl_->attach(spec, args, prefix, kernels, adopted_semaphores);
+    std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const {
+    impl_->attach(spec, args, prefix, kernels);
 }
 
 void Mcast::append_semaphores(tt::tt_metal::Program& program) { impl_->append_semaphores(program); }

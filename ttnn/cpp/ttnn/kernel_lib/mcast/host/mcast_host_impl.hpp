@@ -28,13 +28,14 @@ public:
     void attach(
         tt::tt_metal::ProgramDescriptor&,
         std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
+        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels,
+        uint32_t first_semaphore_id) const;
+    uint32_t next_semaphore_id() const;
     void attach(
         tt::tt_metal::experimental::ProgramSpec&,
         tt::tt_metal::experimental::ProgramRunArgs&,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
+        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const;
 
     void append_semaphores(tt::tt_metal::Program& program);
 
@@ -126,9 +127,6 @@ private:
     void require_arguments_prepared_() const;
     void require_program_bound_() const;
     void require_unbound_() const;
-    std::array<uint32_t, 3> resolve_semaphore_ids_(std::span<const tt::tt_metal::SemaphoreDescriptor> existing) const;
-    void validate_semaphores_present_and_zeroed_(
-        std::span<const tt::tt_metal::SemaphoreDescriptor> existing, const std::array<uint32_t, 3>& ids) const;
     uint32_t required_semaphores_() const;
     std::vector<uint32_t> compile_time_args_(
         const std::array<uint32_t, 3>& ids, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
@@ -138,8 +136,9 @@ private:
     mutable bool topology_current_ = false;
     mutable tt::ARCH prepared_arch_{};
     mutable tt::tt_metal::CoreCoord prepared_device_grid_;
-    std::optional<tt::tt_metal::ProgramId> bound_program_id_;
+    bool program_bound_ = false;
     std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
+    mutable std::optional<uint32_t> descriptor_next_semaphore_id_;
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<Group> groups_;
     McastConfig cfg_;

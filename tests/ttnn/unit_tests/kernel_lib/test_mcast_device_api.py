@@ -31,7 +31,6 @@ def _run_transfer(
     caller_managed=False,
     control=False,
     control_value=0,
-    ack_subset=None,
 ):
     """Separate sender/receiver kernels, including receivers on the opposite NoC."""
     (x0, y0), (x1, y1) = recv_rect
@@ -40,15 +39,12 @@ def _run_transfer(
     if any(x >= size.x or y >= size.y for x, y in receivers + [sender_logical]):
         pytest.skip("requires a larger worker grid")
     assert sender_logical not in receivers
-    if ack_subset is not None:
-        assert handshake and not control and n_iters == 1 and 0 < ack_subset < len(receivers)
     signal = ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag
     helper = ttnn.Mcast(
         device,
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
             handshake=handshake,
-            handshake_cores=core_set(receivers[:ack_subset]) if ack_subset is not None else None,
             data_ready=signal,
         ),
         core_set(receivers),
@@ -83,40 +79,23 @@ def _run_transfer(
         config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
     )
     kernels = [sender]
-    # A partial-ACK mcast owns the channel; passive receivers adopt only its data-ready ID.
-    batches = [receivers] if ack_subset is None else [receivers[:ack_subset], receivers[ack_subset:]]
-    for batch in batches:
-        args = ttnn.RuntimeArgs()
-        for x, y in batch:
-            args[x][y] = [output_tensor.buffer_address(), receivers.index((x, y)) * pages]
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_set(batch),
-                compile_time_args=[1, pages, page_bytes, n_iters]
-                + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
-                named_compile_time_args=named,
-                defines=defines,
-                runtime_args=args,
-                config=ttnn.ReaderConfigDescriptor() if noc else ttnn.WriterConfigDescriptor(),
-            )
+    args = ttnn.RuntimeArgs()
+    for x, y in receivers:
+        args[x][y] = [output_tensor.buffer_address(), receivers.index((x, y)) * pages]
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set(receivers),
+            compile_time_args=[1, pages, page_bytes, n_iters]
+            + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
+            named_compile_time_args=named,
+            defines=defines,
+            runtime_args=args,
+            config=ttnn.ReaderConfigDescriptor() if noc else ttnn.WriterConfigDescriptor(),
         )
-    helper.attach(descriptor, "mcast", kernels[:2])
-    if ack_subset is not None:
-        passive = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(
-                noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
-                handshake=False,
-                data_ready=signal,
-                sem_ids=[inspect_mcast_ct(sender)["data_ready"]],
-            ),
-            core_set(receivers),
-            len(receivers),
-            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*sender_logical)]]),
-        )
-        passive.attach(descriptor, "mcast", kernels[2:])
+    )
+    helper.attach(descriptor, "mcast", kernels, 0)
     descriptor.kernels = kernels
     actual = ttnn.to_torch(ttnn.generic_op([input_tensor, output_tensor], descriptor))
     if control:
@@ -147,7 +126,7 @@ def _run_sender_loopback(device, rect_len, payload_tiles, n_iters):
     has_receivers = R > 1
     mc = ttnn.Mcast(
         device,
-        ttnn.McastConfig(handshake=False, base_sem_id=0),
+        ttnn.McastConfig(handshake=False),
         full_crs,
         full_crs.num_cores(),
         ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
@@ -199,7 +178,7 @@ def _run_sender_loopback(device, rect_len, payload_tiles, n_iters):
         )
         kernels.append(recv_k)
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [sender_k, recv_k] if has_receivers else [sender_k])
+    mc.attach(pd, "mcast", [sender_k, recv_k] if has_receivers else [sender_k], 0)
     pd.kernels = kernels
     output = ttnn.generic_op(io_tensors, pd)
     torch_out = ttnn.to_torch(output).reshape(R, 1, 32, 32 * payload_tiles)
@@ -263,7 +242,7 @@ def _run_rotating_line(
         config=ttnn.ReaderConfigDescriptor(),
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [k])
+    mc.attach(pd, "mcast", [k], 0)
     assert inspect_mcast_ct(k)["span"] == span
     pd.kernels = [k]
     output = ttnn.generic_op(io_tensors, pd)
@@ -334,7 +313,7 @@ def _run_fixed_line(
         config=ttnn.ReaderConfigDescriptor(),
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [k])
+    mc.attach(pd, "mcast", [k], 0)
     assert inspect_mcast_ct(k)["span"] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.McastSenderPlacement.Staggered:
         for Y in range(GR):
@@ -392,15 +371,6 @@ def test_control_counter_accumulation(device, handshake, noc):
 @pytest.mark.parametrize("control_value", [0, 2], ids=["default-valid", "ignore-batch"])
 def test_control_flag_value(device, control_value):
     _run_transfer(device, recv_rect=((0, 0), (0, 1)), control=True, handshake=True, control_value=control_value)
-
-
-@pytest.mark.parametrize("payload_tiles", [1, 4])
-def test_split_count(device, payload_tiles):
-    _run_transfer(device, recv_rect=((0, 0), (0, 3)), payload_tiles=payload_tiles, handshake=True, ack_subset=2)
-
-
-def test_split_count_across_bh_non_worker_columns(device):
-    _run_transfer(device, recv_rect=((0, 0), (8, 0)), handshake=True, ack_subset=2)
 
 
 @pytest.mark.parametrize("payload_tiles", [1, 4, 16])
