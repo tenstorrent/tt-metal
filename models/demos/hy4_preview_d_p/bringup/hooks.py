@@ -63,7 +63,7 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer", "attention"},
+    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer", "attention", "attn_residual"},
     "moe_full": set(),
     "moe_shared": set(),
 }
@@ -72,6 +72,8 @@ DEVICE_STEPS = {
 _HC_STEPS = {"attn_hc": "hc_attn_layer"}
 # iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights.
 _HC_PRE_STEPS = {"attn_hc_pre"}
+# iHC post / residual steps (tt/ihc.py:TtHcPost): h_j = stream_j + post_j * y, no weights, no collective.
+_HC_POST_STEPS = {"attn_residual"}
 # Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
 # q_a stem (tt/q_a.py:TtQa): K-split q_a_proj -> all_reduce over axis 1 -> q_a_layernorm (eps 1e-6).
@@ -147,6 +149,30 @@ def _hc_pre_host_fn(mesh, module, hidden):
         for t in (xd, gd, yd):
             ttnn.deallocate(t)
         return y
+
+    return fn
+
+
+def _hc_post_host_fn(mesh, module, hidden):
+    """fn(ctx, streams_host [S, 4H], gates_host [S, 8], y_host [S, H]) -> new streams host [S, 4H] fp32 (harness
+    boundary: streams / gates / column-split sublayer output in, streams out)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import (
+        col_split_to_device,
+        row_split_to_device,
+        streams_to_device,
+        streams_to_host,
+    )
+
+    def fn(ctx, x, gates, y):
+        xd = streams_to_device(mesh, x, hidden)
+        gd = row_split_to_device(mesh, gates)
+        yd = col_split_to_device(mesh, y)
+        hd = module(xd, gd, yd)
+        h = streams_to_host(mesh, hd, hidden).float()
+        for t in (xd, gd, yd, hd):
+            ttnn.deallocate(t)
+        return h
 
     return fn
 
@@ -384,12 +410,25 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
         return _hc_pre_host_fn(mesh, TtHcPre(mesh, cfg.hidden_size), cfg.hidden_size)
+    if step in _HC_POST_STEPS:
+        from models.demos.hy4_preview_d_p.tt.ihc import TtHcPost
+
+        return _hc_post_host_fn(mesh, TtHcPost(mesh, cfg.hidden_size), cfg.hidden_size)
     return None
 
 
 def device_component(mesh, spec, layer, step):
     if any(
-        step in steps for steps in (_HC_STEPS, _HC_PRE_STEPS, _NORM_STEPS, _QA_STEPS, _INDEXER_STEPS, _ATTENTION_STEPS)
+        step in steps
+        for steps in (
+            _HC_STEPS,
+            _HC_PRE_STEPS,
+            _HC_POST_STEPS,
+            _NORM_STEPS,
+            _QA_STEPS,
+            _INDEXER_STEPS,
+            _ATTENTION_STEPS,
+        )
     ):
         loader = _loader(spec)
         return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
