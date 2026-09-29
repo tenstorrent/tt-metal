@@ -59,6 +59,7 @@ chosen):
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import random
@@ -108,6 +109,7 @@ survive from test-body-end to that SAME test's own teardown, a strictly smaller 
                               overlap with unrelated tests in the same invocation).
 """
 
+import hashlib
 import json
 import os
 import re
@@ -116,7 +118,14 @@ _RESTORE_VAR = "LLK_POLLUTE_INKERNEL_RESTORE"
 
 
 def _sanitize(nodeid):
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)[:200]
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)
+    if len(safe) <= 200:
+        return safe
+    # A long parametrize id can share its first 200 sanitized chars with another (e.g. two
+    # variants differing only in a trailing param); truncating alone would collide the two
+    # onto the same capture file. Suffix with a digest of the FULL nodeid so it stays unique.
+    digest = hashlib.sha256(nodeid.encode()).hexdigest()[:16]
+    return safe[:183] + "_" + digest
 
 
 def pytest_addoption(parser):
@@ -479,7 +488,11 @@ def parse_junit(junit_path):
 
 
 def _sanitize(nodeid):
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)[:200]
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)
+    if len(safe) <= 200:
+        return safe
+    digest = hashlib.sha256(nodeid.encode()).hexdigest()[:16]
+    return safe[:183] + "_" + digest
 
 
 def main():
