@@ -1811,7 +1811,7 @@ using namespace tt::tt_metal::experimental::dfb::detail;
 // DFB count rather than growing with the number of DFBs elsewhere in the program.
 uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) const {
     const auto& hal = MetalContext::instance(context_id_).hal();
-    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_arch_num_circular_buffers();
+    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_num_dataflow_buffers();
 
     uint64_t used_slots = 0;
     for (const auto& other : this->dataflow_buffers_) {

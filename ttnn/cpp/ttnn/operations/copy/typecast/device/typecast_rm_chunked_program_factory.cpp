@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                 {"partial_chunk_size_bytes", input_partial_chunk_size_bytes}  // DRAM read size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const KernelSpec writer{
@@ -179,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                 {"partial_chunk_size_bytes", output_partial_chunk_size_bytes}  // DRAM write size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Create compute kernels - compute per_core_block_cnt as total chunks (full + partial) per core
@@ -187,7 +187,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     // Legacy set unpack_to_dest_mode[input_cb] = UnpackToDestFp32 when preserve_fp32_precision and
     // left every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (args.preserve_fp32_precision) {
         unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
     } else if (args.fp32_dest_acc_en && cb_data_format_input == tt::DataFormat::Float32) {
@@ -217,24 +217,27 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                  {"per_core_block_dim", 1u},
                  {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
                  {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
-            // Quasar (Gen2) rejects a ComputeGen1Config; emit the Gen2 equivalent there (no
-            // bfp_pack_precision_mode on Gen2 — MXFP replaces BFP). WH/BH keep the legacy Gen1 config.
+            // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
+            // legacy config, with the BFP pack knob in config_1xx.
             .hw_config = [&]() -> ComputeHardwareConfig {
                 if (device->arch() == tt::ARCH::QUASAR) {
-                    return ComputeGen2Config{
+                    return ComputeHardwareConfig{
                         .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                         .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
                         .enable_32_bit_dest = args.fp32_dest_acc_en,
                         .unpack_modes = unpack_modes,
                     };
                 }
-                return ComputeGen1Config{
+                return ComputeHardwareConfig{
                     .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                     .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-                    .bfp_pack_precision_mode = args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise
-                                                                      : tt::tt_metal::Precision::Approximate,
                     .enable_32_bit_dest = args.fp32_dest_acc_en,
                     .unpack_modes = unpack_modes,
+                    .config_1xx =
+                        ComputeHardwareConfig::Compute1XXConfig{
+                            .bfp_pack_precision_mode = args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise
+                                                                              : tt::tt_metal::Precision::Approximate,
+                        },
                 };
             }(),
         };

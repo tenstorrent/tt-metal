@@ -23,6 +23,36 @@ class AllCloseThresholds:
 PAD_VALUE = -42
 
 
+@pytest.mark.parametrize("sharded", [False, True])
+@pytest.mark.parametrize("legacy_reduction", [False, True])
+@pytest.mark.parametrize("use_welford", [False, True])
+@pytest.mark.parametrize("legacy_rsqrt", [False, True])
+def test_layer_norm_deprecated_legacy_rsqrt(sharded, legacy_reduction, use_welford, legacy_rsqrt):
+    config_type = ttnn.LayerNormDefaultProgramConfig
+    kwargs = {"legacy_reduction": legacy_reduction, "use_welford": use_welford}
+    if sharded:
+        config_type = ttnn.LayerNormShardedMultiCoreProgramConfig
+        kwargs.update(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+            subblock_w=1,
+            block_h=1,
+            block_w=1,
+            inplace=False,
+        )
+    expected = config_type(**kwargs)
+    config = config_type(**kwargs, legacy_rsqrt=legacy_rsqrt)
+    assert config.legacy_rsqrt is False
+    assert config.legacy_reduction is legacy_reduction
+    assert config.use_welford is use_welford
+    assert repr(config) == repr(expected)
+    config.legacy_rsqrt = True
+    assert config.legacy_rsqrt is False
+    assert repr(config) == repr(expected)
+    config.legacy_rsqrt = False
+    assert repr(config) == repr(expected)
+    assert "deprecated" in config_type.__init__.__doc__.lower()
+
+
 def assert_output_accuracy(torch_output, ttnn_output, use_welford=False):
     """Layer_norm output accuracy check with dtype-/path-conditional bounds.
 
@@ -350,8 +380,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
-@pytest.mark.parametrize("legacy_rsqrt", [True, False])
-def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_reduction, legacy_rsqrt):
+def test_large_layer_norm_with_legacy_reduction(device, h, w, legacy_reduction):
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -364,9 +393,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    program_config = ttnn.LayerNormDefaultProgramConfig(
-        legacy_reduction=legacy_reduction, legacy_rsqrt=legacy_rsqrt, use_welford=False
-    )
+    program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=legacy_reduction, use_welford=False)
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,

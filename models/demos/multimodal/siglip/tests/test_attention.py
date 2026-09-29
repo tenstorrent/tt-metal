@@ -18,7 +18,13 @@ from models.demos.multimodal.siglip.tests.common import convert_state_dict
 from models.demos.multimodal.siglip.tt.attention import siglip_attention_ttnn
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# Fabric needs at least two chips (a fatal on a 1-chip mesh since #56669), so a single N150 / P150 runs
+# the same test without a fabric config.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D} if len(ttnn.get_device_ids()) > 1 else {}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
