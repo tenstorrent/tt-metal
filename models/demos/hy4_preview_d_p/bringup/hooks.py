@@ -63,15 +63,25 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer", "attention", "attn_residual", "ffn_hc"},
+    "dense_full": {
+        "attn_hc",
+        "attn_hc_pre",
+        "attn_norm",
+        "q_a",
+        "indexer",
+        "attention",
+        "attn_residual",
+        "ffn_hc",
+        "ffn_hc_pre",
+    },
     "moe_full": set(),
     "moe_shared": set(),
 }
 
 # iHC gate steps -> checkpoint prefix under model.layers.<i>. (tt/ihc.py:TtHcGates).
 _HC_STEPS = {"attn_hc": "hc_attn_layer", "ffn_hc": "hc_mlp_layer"}
-# iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights.
-_HC_PRE_STEPS = {"attn_hc_pre"}
+# iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights; attn (streams "in") and ffn (streams "h_mid").
+_HC_PRE_STEPS = {"attn_hc_pre", "ffn_hc_pre"}
 # iHC post / residual steps (tt/ihc.py:TtHcPost): h_j = stream_j + post_j * y, no weights, no collective.
 _HC_POST_STEPS = {"attn_residual"}
 # Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
