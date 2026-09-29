@@ -380,7 +380,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.staging_memory_config,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
         )
@@ -391,12 +391,14 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        normalized = output
         output = ttnn.linear(
-            output,
+            normalized,
             weights.output_projection,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.output_projection_compute_config,
         )
+        ttnn.deallocate(normalized)
         if self.tensor_parallel_size > 1:
             cluster_axis = self._tp_cluster_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
