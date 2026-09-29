@@ -1521,6 +1521,13 @@ tasks:
     - ffn_norm
     - router
     layer: 1
+  frozen:
+    at: '2026-09-29T13:55:21'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py: 473eb568e323c52844b205bf7f6f7927518971ef1b2929d62788b2533c45c4fa
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.experts
   title: moe_full experts (moe) on device, layer 1
   step: implement
