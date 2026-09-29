@@ -1175,3 +1175,31 @@ Results:
 - Reference passes (exact). Stub fails.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_09_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.ffn_norm test (attempt 1)
+
+Reviewed the rendered component test for ffn_norm at layer 3 (post_attention_layernorm, [2048, 4096] bf16). I rewrote
+it from the kda_dense ffn_norm and dsa_moe ffn_collapse tests. The gated metric is unchanged: pcc_ffn_norm_L03
+(PCC >= 0.99).
+- Checks, each written `not x <= lim` so NaN fails, run on chunk 1 and on chunk 0: finite; rel L2 <= 0.01;
+  per-token ratio [0.99, 1.01]; worst row <= 0.015 (the earlier norm limits); and a new coefficient
+  `<got, want> / <want, want>` in [0.996, 1.004].
+- Why the coefficient: at layer 3, w is nearly constant (0.441..0.531). So PCC passes no weight (0.99985) and
+  `1 + w` (0.99997), and x1.005 passes every other check (rel 0.0055, ratio 1.0052). The coefficient catches it
+  (1.0050). This matters downstream because router, experts and shared expert all read this output without
+  re-normalizing it (proposed known issue).
+- Sensitivity: CPU host script /tmp/dsaffnnorm/sens.py (not kept); the numbers are in the test docstring. Input row RMS
+  is 0.0016..0.0103 (chunk 0: 0.0014..0.0243), so eps is visible:
+  - eps 1.05e-5 fails rel (0.0103) and the ratio (0.9807).
+  - Mean subtraction (worst row 0.042) and a norm over 4 TP shards (0.039) fail the worst-row limit.
+  - bf16 square accumulation and 5e-3 rsqrt row noise fail the ratio and worst-row limits.
+  - Not caught: none of the listed bugs pass.
+Results:
+- Device already passes, because `_device_step` builds `tt/rms_norm.py` for any layer: PCC 0.999996, rel 0.00284,
+  ratio [0.9989, 1.0006], worst row 0.0032, coefficient 0.99989. Chunk 0 is the same. About 19 s.
+- Reference passes (0.00234 / [0.9998, 1.0002] / 0.0025 / 1.00000). Stub fails (PCC 0).
+Next (implement): the module needs no change. Add `ffn_norm` to `DEVICE_STEPS["dsa_moe"]`, which lists attn_hc
+through attention but not yet attn_residual, ffn_hc or ffn_collapse. Keep eps exactly 1e-5 and fp32 accumulation of
+the squares.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
