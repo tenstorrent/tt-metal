@@ -247,13 +247,17 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
-            }
-            v_endif;
+        // A zero divisor needs almost nothing of its own: the reciprocal of +-0 is +-inf, so
+        // in0 * r is already the IEEE quotient, +-inf by the xor of the signs, or NaN for
+        // 0 / 0 and NaN / 0. The one exception is a subnormal dividend, which the multiply
+        // reads as zero and turns into 0 * inf = NaN, so a finite nonzero dividend takes r's
+        // infinity with the xor sign. The magnitudes are compared as integers because the
+        // SFPU compare does not read -0.0 as equal to 0.0.
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) == 0) {
+            v_and(sfpi::is_finite(in0));
+            v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in0, 0)) != 0);
+            result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1));
+            result = sfpi::copysgn(r, result);
         }
         v_endif;
 
