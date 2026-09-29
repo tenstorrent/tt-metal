@@ -33,6 +33,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "kernels/narrow_row_engine_mode.hpp"
 
 namespace tt::tt_metal {
 
@@ -47,8 +48,9 @@ constexpr std::uint32_t DATUM_BYTES = 2;  // Float16_b
 constexpr std::uint32_t TILE_BYTES = TILE_H * TILE_W * DATUM_BYTES;
 constexpr std::uint32_t OUT_ROWS = TILE_H;
 
-constexpr std::uint32_t ENGINE_IDMA = 0;
-constexpr std::uint32_t ENGINE_NOC = 1;
+// The engine_mode wire values live in the kernel-side header so the two ends of the
+// runtime arg cannot drift apart.
+using narrow_row::EngineMode;
 
 // All 8 iDMA backend VCs. Fan out unconditionally: at 8 channels the gather is never more
 // than 0.4% behind one channel on short rows, and 3.6x ahead at 512 B/row, where a single
@@ -69,7 +71,15 @@ constexpr std::uint32_t GUARD_FILL = 0xA5A5A5A5;
 // any of this reaching the output is a bug worth seeing rather than a plausible-looking zero.
 constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
 
-const char* engine_name(std::uint32_t e) { return e == ENGINE_IDMA ? "iDMA gather" : "NOC per-row"; }
+// Switched rather than ternary so that adding an engine is a -Wswitch warning here
+// instead of a run silently mislabelled as the NOC one in a failure message.
+const char* engine_name(EngineMode e) {
+    switch (e) {
+        case EngineMode::IdmaPerRow: return "iDMA gather";
+        case EngineMode::NocPerRow: return "NOC per-row";
+    }
+    return "unknown";
+}
 
 bool should_skip_test() {
     const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -140,7 +150,7 @@ Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device
 struct RunConfig {
     std::uint32_t ct_dim = 1;
     std::uint32_t last_tile_w = 32;  // datums kept from the LAST tile; matrix_w derives from it
-    std::uint32_t engine_mode = ENGINE_IDMA;
+    EngineMode engine_mode = EngineMode::IdmaPerRow;
     std::uint32_t num_channels = CHANNELS_ALL;
 };
 
@@ -287,7 +297,7 @@ bool run_narrow_row(
                  {"pad_row_bytes", pad_row_bytes},
                  {"out_row_bytes", out_row_bytes},
                  {"num_rows", OUT_ROWS},
-                 {"engine_mode", cfg.engine_mode},
+                 {"engine_mode", static_cast<std::uint32_t>(cfg.engine_mode)},
                  {"dest_coords", packed_coords},
                  {"num_channels", cfg.num_channels}}),
         },
@@ -461,7 +471,7 @@ TEST_F(QuasarNarrowRowUntilize, EngineParity) {
         EXPECT_TRUE(run_narrow_row(devices_[0], buffers, one_channel)) << "iDMA 1ch, " << row_bytes << " B/row";
 
         RunConfig workaround = base;
-        workaround.engine_mode = ENGINE_NOC;
+        workaround.engine_mode = EngineMode::NocPerRow;
         EXPECT_TRUE(run_narrow_row(devices_[0], buffers, workaround)) << "NOC, " << row_bytes << " B/row";
     }
 }

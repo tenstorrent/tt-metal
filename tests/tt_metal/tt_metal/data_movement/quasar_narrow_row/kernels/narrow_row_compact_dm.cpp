@@ -20,10 +20,10 @@
 //
 // TWO ENGINES, ONE OUTPUT. They produce byte-identical results and the host verifies both:
 //
-//   0 IDMA_PER_ROW  one iDMA transaction per row, addresses from the address generator,
+//   0 IdmaPerRow    one iDMA transaction per row, addresses from the address generator,
 //                   fanned out over `num_channels` backend VCs, ONE drain at the end.
 //                   Issue-bound at ~8.7 cyc/row. This is the engine being proposed.
-//   1 NOC_PER_ROW   one stateful NOC read per row from this core's own L1. The CURRENT
+//   1 NocPerRow     one stateful NOC read per row from this core's own L1. The CURRENT
 //                   workaround -- a read per row so the consumer never sees the junk -- and
 //                   therefore the bar to beat. Stateful means only the addresses change per
 //                   call, so it is the cheapest NOC read available, not a straw man.
@@ -41,13 +41,13 @@
 #include "internal/tt-2xx/quasar/noc_nonblocking_api.h"    // init_wr_cmd_buf, noc_local_xy
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"  // addrgen src/dest loops
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"  // overlay:: cmdbuf API
+#include "narrow_row_engine_mode.hpp"                      // EngineMode, shared with the host
 
 using namespace overlay;
 
-namespace {
+using narrow_row::EngineMode;
 
-constexpr std::uint32_t ENGINE_IDMA_PER_ROW = 0;
-constexpr std::uint32_t ENGINE_NOC_PER_ROW = 1;
+namespace {
 
 // The whole of this kernel's addressing rests on this. On a non-TRISC core
 // `cb_addr_shift == 0` (circular_buffer_interface.h), so DataflowBuffer::get_read_ptr() is a
@@ -122,7 +122,7 @@ void kernel_main() {
     const std::uint32_t pad_row_bytes = get_arg(args::pad_row_bytes);  // ct_dim * 32 * datum_bytes
     const std::uint32_t out_row_bytes = get_arg(args::out_row_bytes);  // matrix_w * datum_bytes
     const std::uint32_t num_rows = get_arg(args::num_rows);
-    const std::uint32_t engine_mode = get_arg(args::engine_mode);
+    const auto engine_mode = static_cast<EngineMode>(get_arg(args::engine_mode));
     const std::uint32_t dest_coords = get_arg(args::dest_coords);  // packed (x << 16) | y
 
     // Fan-out round-robins PACKETS, and one packet per row is the right granularity here: both
@@ -136,10 +136,10 @@ void kernel_main() {
     } else if (num_channels > CMDBUF_NUM_IDMA_VCS) {
         num_channels = CMDBUF_NUM_IDMA_VCS;
     }
-    const bool use_idma = engine_mode == ENGINE_IDMA_PER_ROW;
+    const bool use_idma = engine_mode == EngineMode::IdmaPerRow;
     // Anything else would have fallen through to the NOC branch and reported as a passing NOC
     // run, which would hide a runtime-arg plumbing mistake rather than surface it.
-    ASSERT(use_idma || engine_mode == ENGINE_NOC_PER_ROW);
+    ASSERT(use_idma || engine_mode == EngineMode::NocPerRow);
 
     // Wait for stage 1's whole block, then take its base. The DFB is pushed exactly once and
     // never wraps, so the rows are contiguous from the read pointer.

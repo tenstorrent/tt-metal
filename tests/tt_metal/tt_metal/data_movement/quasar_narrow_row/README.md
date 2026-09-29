@@ -84,6 +84,8 @@ verifies both, which is what makes the performance comparison like-for-like.
 | 0 | **iDMA gather** | one transaction per row, addresses from the address generator, fanned out over all 8 VCs, one drain at the end. **The proposal.** |
 | 1 | NOC per-row | one stateful NOC read per row from this core's own L1. **The current workaround, and the bar to beat.** Stateful means only the addresses change per call, so it is the cheapest NOC read available — not a straw man. |
 
+The two wire values are an `EngineMode` enum in `kernels/narrow_row_engine_mode.hpp`, included by both the host test and the kernel. It is a host/device contract carried in one uint32 runtime arg, so two independent lists of constants would agree until someone added a third engine — and then compile cleanly on both sides while taking the wrong branch on device.
+
 The addressing follows `quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp`
 exactly: set the address generator's base and inner loop once, then `push_both_addrgen_0()` +
 `issue_cmdbuf_0()` per row. All four addrgen examples issue once per address — the 2D, face and
