@@ -32,14 +32,23 @@ def hf_model(spec, num_layers):
 # Device steps of the hybrid model, per block type: each passed its component gate on the device. Every other step
 # runs on the CPU reference.
 DEVICE_STEPS = {
-    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm", "attention", "attn_residual"},
+    "kda_dense": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "attention",
+        "attn_residual",
+        "ffn_hc",
+        "ffn_collapse",
+        "ffn_norm",
+    },
     "dsa_moe": set(),
     "kda_moe": set(),
 }
 
 _HC_STEPS = {"attn_hc": "attn", "ffn_hc": "ffn"}
 _COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
-_NORM_STEPS = {"attn_norm": "input_layernorm"}
+_NORM_STEPS = {"attn_norm": "input_layernorm", "ffn_norm": "post_attention_layernorm"}
 _RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
 
 
