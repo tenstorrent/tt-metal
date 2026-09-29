@@ -58,8 +58,6 @@ DEFAULT_MAX_C_IN_BLOCK = 128
 
 _WEIGHT_PREP_REVISION = 3
 
-_KERNEL_SPLIT_MAX_K = 7
-
 
 def weights_variant(
     split_mode: str,
@@ -128,8 +126,6 @@ def conv3d_maybe_split(
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
-    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > _KERNEL_SPLIT_MAX_K:
-        split_mode = "full"
     config = conv_kwargs.get("config")
     if config is not None and config.enable_fp32_operand_split != (split_mode == "kernel"):
         config.enable_fp32_operand_split = split_mode == "kernel"

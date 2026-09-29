@@ -32,12 +32,12 @@ MESH = [
 ]
 
 RECIPES = {
-    "full": {},
+    "full": {"all": "full"},
     "weight": {"all": "weight"},
     "off": {"all": "off"},
-    "full_pack": {"pack": {5: 2, 6: 4}},
+    "full_pack": {"all": "full", "pack": {5: 2, 6: 4}},
     "kernel": {"all": "kernel"},
-    "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
+    "fused_pack": {"all": "full", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack_bshard": {
         "all": "kernel",
