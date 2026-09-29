@@ -480,9 +480,10 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.I0: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
     ),
-    # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
+    # i1: two-region kernel (series |x| <= 10, asymptotic beyond, +/-inf past 91.9);
+    # span past both so the asymptotic and the overflow get exercised too.
     MathOperation.I1: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-95.0, high=95.0)
     ),
     # erf / erfc: span both tails and the transition through 0
     MathOperation.Erf: OperandSpecs(
