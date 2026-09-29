@@ -472,6 +472,10 @@ def _verify_dst_vs_src_bytes(
                 for pos in range(0, n_full, stride):
                     src_loc = table.lookup(row, pos, src, cfg_id)
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
+                    if src_loc.size_bytes == 0 and dst_loc.size_bytes == 0:
+                        # Unpublished row (e.g. M3 index_k on a dense layer): nothing migrates there.
+                        skipped += 1
+                        continue
                     try:
                         src_uid = producer._resolve_unique_id(
                             table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map

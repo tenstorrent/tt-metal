@@ -537,7 +537,18 @@ class TtPrefillRuntime:
             head_dim=self.hf_config.head_dim,
             path=path,
             stage_layouts=stage_layouts,
+            index_k_layers=self.msa_layer_ids(),
         )
+
+    def msa_layer_ids(self) -> set[int]:
+        """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k. Same rule as
+        ``Layer``: ``sparse_attention_config.sparse_attention_freq[i] == 1`` (layers 3-59 on M3)."""
+        sparse_cfg = getattr(self.hf_config, "sparse_attention_config", None)
+        if isinstance(sparse_cfg, dict):
+            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
+        else:
+            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
+        return {i for i, f in enumerate(freq or []) if f}
 
     def read_slot_kv(self, kv_cache, slot: int, n_tokens: int | None = None):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
