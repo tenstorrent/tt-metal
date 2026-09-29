@@ -1,0 +1,17 @@
+# Paper Table 2, Table 3 and Fig. 1: pJ/FLOP per kernel stage (reader / writer / compute) on an
+# 18-grid matmul sweep. Case 1 (all active, 100% write amplification) is the reference; cases 2,
+# 4 and 5 each idle exactly one engine against it. The paper's published Fig. 1 used case 0 as
+# the writer stand-in before case 5 existed; add 0 to power_cases to reproduce that variant.
+name: paper_fig1_stage_breakdown
+workload: high_power_matmul
+app_args: [1024, 2048, 2048, 160]
+telemetry_freq_hz: 50
+trim_ms: 1.0
+runs:
+  power_cases: [1, 2, 4, 5]
+  ops: [matmul]
+analyses:
+  - compare_runs2
+  - energy_by_engine
+  - energy_per_flop_by_engine
+  - pj_per_flop

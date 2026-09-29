@@ -1,0 +1,28 @@
+# Paper Table 4, Figs. 3-4: per-op power and energy of a Llama-style decoder block, every op run
+# separately through ttnn (op_power_breakdown/ttnn_ops_workload.py). Needs a venv with ttnn and
+# torch as --tt-venv-activate; --app-exe defaults to the workload script.
+name: decoder_block
+workload: ttnn_ops
+app_args:
+  - --seq
+  - 1024
+  - --hidden
+  - 2048
+  - --ffn
+  - 8192
+  - --heads
+  - 16
+  - --target-call-ms
+  - 1.5
+  - --max-batch
+  - 96
+  - --target-seconds
+  - 4.0
+  - --pause-seconds
+  - 5.0
+telemetry_freq_hz: 100
+trim_ms: 1.0
+runs:
+  subdir: decoder_block
+analyses:
+  - op_breakdown
