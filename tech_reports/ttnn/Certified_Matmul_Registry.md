@@ -46,7 +46,7 @@ compared without model-specific registry code.
 
 ## Current coverage
 
-The dense table contains 60,221 exact Blackhole entries over 1,302 matrix
+The dense table contains 261,157 exact Blackhole entries over 3,460 matrix
 shapes. It accepts single-device, interleaved tensors with rank at least two
 when every dimension before the final matrix dimensions is `1`. Calls with
 sharded tensors, mesh-wide tensors, explicit program configs or core grids, or
