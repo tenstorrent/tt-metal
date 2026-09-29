@@ -36,7 +36,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0, dfb_exps, dfb_out0);
 
     for (std::uint32_t n = 0; n < N; ++n) {
-        // find max
+        // find the statistic m: max(x) for softmax, min(x) for softmin. min(x) keeps the
+        // shift finite for rows containing +inf so exp(m - x) saturates to 0 there instead of
+        // overflowing the whole row; the fold uses the SFPU binary_min directly.
         for (std::uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
                 copy_tile_to_cb(dfb_in0_obj, dfb_max_obj);
@@ -52,8 +54,13 @@ void kernel_main() {
                 copy_tile_init_with_dt(dfb_max_obj);
                 copy_tile(dfb_max, 0, dst1);
 
+#ifdef SOFTMAX
                 binary_max_tile_init();
                 binary_max_tile(dst0, dst1, dst0);
+#else
+                binary_min_tile_init();
+                binary_min_tile(dst0, dst1, dst0);
+#endif
                 tile_regs_commit();
 
                 dfb_max_obj.pop_front(onetile);

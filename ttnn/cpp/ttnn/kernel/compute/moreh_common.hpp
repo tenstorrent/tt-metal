@@ -712,6 +712,81 @@ ALWI void exp_tile_to_cb(
     ocb.push_back(onetile);
 }
 
+ALWI void negative_tile_to_cb(
+    DataflowBuffer icb, DataflowBuffer ocb, uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+
+    ocb.reserve_back(onetile);
+    icb.wait_front(itile + 1);
+
+    tile_regs_acquire();
+    copy_tile_init_with_dt(icb);
+    copy_tile(icb.get_id(), itile, dst0);
+
+    negative_tile_init();
+    negative_tile(dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, ocb);
+    tile_regs_release();
+
+    if (pop) {
+        icb.pop_front(pop);
+    }
+    ocb.push_back(onetile);
+}
+
+// Copy + negate + mask for the softmin statistic: real lanes become -x and the masked
+// (padding) lanes become -inf — mask_posinf writes +inf where the mask is 0 and the following
+// negate flips it to -inf, so a padding lane can never win the max(-x) reduce (a plain
+// zero-filled pad would win whenever every real lane of the row is negative, e.g. all-positive
+// inputs). Mirrors the MINUS_INF handling in the moreh_norm ord_other kernels.
+ALWI void negative_mask_tile_to_cb(
+    DataflowBuffer icb,
+    DataflowBuffer maskcb,
+    DataflowBuffer ocb,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+    constexpr int dst_mask = 1;
+
+    ocb.reserve_back(onetile);
+    icb.wait_front(itile + 1);
+    maskcb.wait_front(mtile + 1);
+
+    tile_regs_acquire();
+    copy_tile_init_with_dt(icb);
+    copy_tile(icb.get_id(), itile, dst0);
+
+    copy_tile_init_with_dt(maskcb);
+    copy_tile(maskcb.get_id(), mtile, dst_mask);
+
+    mask_tile_init();
+    mask_posinf_tile(dst0, dst_mask);
+
+    negative_tile_init();
+    negative_tile(dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, ocb);
+    tile_regs_release();
+
+    if (pop) {
+        icb.pop_front(pop);
+    }
+    if (popm) {
+        maskcb.pop_front(popm);
+    }
+
+    ocb.push_back(onetile);
+}
+
 ALWI void rexp_tile_to_cb(
     DataflowBuffer icb, DataflowBuffer ocb, uint32_t itile = 0, uint32_t dst = 0, uint32_t pop = 1) {
     constexpr uint32_t onetile = 1;

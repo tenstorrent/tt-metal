@@ -47,6 +47,14 @@ void kernel_main() {
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+// Find the row statistic m: max(x) for softmax, min(x) for softmin.
+        // softmin needs min(x) as the shift so exp(m - x) saturates to 0 at a +inf element
+        // instead of overflowing the whole row; the FPU has no bf16 MIN reduce, so min(x) is
+        // computed as -max(-x): tiles are negated into dfb_tmp, MAX-reduced with per-tile
+        // Accumulate folding, and the final post-reduce callback negates the accumulator
+        // back. Any finite shift is exact for the normalized result; only min(x) guarantees
+        // finiteness for every row that contains at least one finite element.
+#ifdef SOFTMAX
         // find max value
         if (Wt == 1) {
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
@@ -75,8 +83,50 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
         }
+#else
+        if (Wt == 1) {
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
-        // compute x - max(x)
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::single(), compute_kernel_lib::ReduceInputMemoryLayout::contiguous(), compute_kernel_lib::NoAccumulation{}, /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        } else {
+            // min(x) = -max(-x), one tile at a time: negate tile w into dfb_tmp and fold it
+            // into the dfb_max accumulator (iteration 0 seeds it, >0 reloads). No callback on
+            // the intermediate folds; only the final reduce below flips it to min(x).
+            for (std::uint32_t w = 0; w < Wt - 1; ++w) {
+                negative_tile_to_cb(dfb_in0_obj, dfb_tmp_obj, w, /*pop=*/0);
+                compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/w));
+            }
+
+            // Fold the negated + masked last tile (-0 == 0, so the mask still zeroes the
+            // padding lanes after negation) and flip the accumulator to min(x).
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/Wt - 1), /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        }
+#endif
+
+        // compute x - m  (m = max(x) for softmax, min(x) for softmin)
         dfb_x_m_max_obj.reserve_back(static_cast<uint16_t>(Wt));
         dfb_in0_obj.wait_front(static_cast<uint16_t>(Wt));
         dfb_max_obj.wait_front(1);

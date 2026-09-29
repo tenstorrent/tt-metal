@@ -47,6 +47,9 @@ void kernel_main() {
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+// Find the column statistic m: max(x) for softmax, min(x) for softmin (see
+        // moreh_softmax_w.cpp for the -max(-x) lowering rationale).
+#ifdef SOFTMAX
         // find max value
         if (Ht == 1) {
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
@@ -69,8 +72,45 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(dfb_max, 1));  // iteration=1, reload from dfb_max
         }
+#else
+        if (Ht == 1) {
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
-        // compute x - max(x)
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::single(), compute_kernel_lib::ReduceInputMemoryLayout::contiguous(), compute_kernel_lib::NoAccumulation{}, /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        } else {
+            for (std::uint32_t h = 0; h < Ht - 1; ++h) {
+                negative_tile_to_cb(dfb_in0_obj, dfb_tmp_obj, h, /*pop=*/0);
+                compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/h));
+            }
+
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/Ht - 1), /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        }
+#endif
+
+        // compute x - m  (m = max(x) for softmax, min(x) for softmin)
         dfb_x_m_max_obj.reserve_back(static_cast<uint16_t>(Ht));
         dfb_in0_obj.wait_front(static_cast<uint16_t>(Ht));
         dfb_max_obj.wait_front(1);

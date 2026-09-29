@@ -43,6 +43,13 @@ void kernel_main() {
     std::uint32_t Wt = get_arg(args::Wt);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+// Find the row statistic m: max(x) for softmax, min(x) for softmin.
+        // softmin needs min(x) as the shift so exp(m - x) saturates to 0 at a +inf element
+        // instead of overflowing the whole row; the FPU has no bf16 MIN reduce, so min(x) is
+        // computed as -max(-x): tiles are negated into dfb_tmp and MAX-reduced one tile at a
+        // time with Accumulate folding, and the final post-reduce callback negates the
+        // accumulator back. -0 == 0, so masked padding lanes stay zero after negation.
+#ifdef SOFTMAX
         // find max
         if (Wt == 1) {
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
@@ -62,7 +69,48 @@ void kernel_main() {
                 compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
         }
 
-        // step 1
+#else
+        if (Wt == 1) {
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
+
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::single(), compute_kernel_lib::ReduceInputMemoryLayout::contiguous(), compute_kernel_lib::NoAccumulation{}, /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        } else {
+            // min(x) = -max(-x), one tile at a time: negate the front tile of dfb_in0 into
+            // dfb_tmp and fold it into the dfb_max accumulator. No callback on the
+            // intermediate folds; only the final reduce below flips it to min(x).
+            for (std::uint32_t w = 0; w < Wt - 1; ++w) {
+                negative_tile_to_cb(dfb_in0_obj, dfb_tmp_obj, /*itile=*/0, /*pop=*/1);
+                compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/w));
+            }
+
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/Wt - 1), /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        }
+#endif
+
+                // step 1
         for (std::uint32_t w = 0; w < Wt; ++w) {
             // compute exp(x)
             if (w == Wt - 1) {
