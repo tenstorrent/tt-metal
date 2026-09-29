@@ -74,13 +74,15 @@ class MLP:
             # Blackhole takes moe_compute, the arch-agnostic successor to moe_gpt: it sizes its
             # matmul ring from the live DRAM-bank count instead of assuming Wormhole's 12, and
             # folds the combine and the routing-score multiply into the kernel.
-            # OPT-IN ONLY. moe_compute is ~1.8x faster end to end (34.0 vs 19.6 tok/s/user at
+            # OPT-IN ONLY. moe_compute is ~1.7x faster end to end (34.0 vs 19.6 tok/s/user at
             # batch 128 on a Blackhole Galaxy) and its per-layer PCC is good -- experts 0.983,
-            # MLP 0.977, decoder 0.990 against the dense flow's 0.984/0.978/0.992 -- but full
-            # 36-layer generation is not yet trustworthy: users on different mesh rows given
-            # the same prompt diverge, and some prompts collapse into repetition or gibberish.
-            # The dense flow produces 128 coherent, row-identical outputs. Default stays dense
-            # until that is root-caused; set GPT_OSS_MOE_COMPUTE=1 to exercise this path.
+            # MLP 0.977, decoder 0.990 against the dense flow's 0.984/0.978/0.992. The cross-row
+            # divergence/repetition symptom this note used to describe was SDPA decode's own
+            # core-grid mismatch (get_decode_sdpa_config sizing off the wide per-device grid
+            # instead of the tight one-core-per-user grid), not a moe_compute bug -- fixed, so
+            # both flows now produce 128/128 coherent, row-identical outputs at batch 128. Default
+            # stays dense (moe_compute's full end-to-end validation is newer); set
+            # GPT_OSS_MOE_COMPUTE=1 to exercise the faster path.
             moe_compute_config = None
             if (
                 os.getenv("GPT_OSS_MOE_COMPUTE") == "1"
