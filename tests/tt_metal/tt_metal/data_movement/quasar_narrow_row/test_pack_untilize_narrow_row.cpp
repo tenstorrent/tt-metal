@@ -30,6 +30,7 @@
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
@@ -147,7 +148,6 @@ struct RunConfig {
 // Returns true iff the narrow-row matrix is exactly right.
 bool run_narrow_row(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffers& buffers, const RunConfig& cfg) {
-    IDevice* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
@@ -182,7 +182,8 @@ bool run_narrow_row(
 
     // The NOC engine reads this core's own L1 (loopback), so it needs PHYSICAL noc coords --
     // logical {0,0} is physical (0,1) on the 1x3 emu.
-    const CoreCoord physical_core = device->worker_core_from_logical_core(CORE);
+    const CoreCoord physical_core =
+        slow_dispatch::physical_device_from_unit_mesh(*mesh_device)->worker_core_from_logical_core(CORE);
     const std::uint32_t packed_coords = ((std::uint32_t)physical_core.x << 16) | (std::uint32_t)physical_core.y;
 
     // ---- stimulus -----------------------------------------------------------------------
@@ -197,7 +198,10 @@ bool run_narrow_row(
     // Prefill output + guard band, so "the gather never ran" and "the gather overran its row"
     // are both visible rather than passing on stale data.
     std::vector<std::uint32_t> out_init((out_bytes + GUARD_BYTES) / sizeof(std::uint32_t), GUARD_FILL);
-    tt_metal::detail::WriteToDeviceL1(device, CORE, out_addr, out_init);
+    if (!slow_dispatch::WriteToL1(*mesh_device, CORE, out_addr, out_init)) {
+        log_error(tt::LogTest, "ct_dim={}: failed to prefill the output buffer", ct_dim);
+        return false;
+    }
 
     // ---- program ------------------------------------------------------------------------
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
@@ -302,11 +306,11 @@ bool run_narrow_row(
     // placement SubFaceWidths probes.
     const std::uint32_t read_bytes = out_bytes + GUARD_BYTES;
     std::vector<std::uint32_t> out_words;
-    tt_metal::detail::ReadFromDeviceL1(device, CORE, out_addr, read_bytes, out_words);
+    const bool read_ok = slow_dispatch::ReadFromL1(*mesh_device, CORE, out_addr, read_bytes, out_words);
     // Guard the dereference below: a failed read leaves out_words empty, and data() would be
     // null. Checking the size also catches a short read, which would otherwise score the
     // untouched tail as a clean guard band.
-    if (out_words.size() * sizeof(std::uint32_t) < read_bytes) {
+    if (!read_ok || out_words.size() * sizeof(std::uint32_t) < read_bytes) {
         log_error(
             tt::LogTest,
             "ct_dim={} last_tile_w={}: L1 read-back returned {} B, expected {} B",
