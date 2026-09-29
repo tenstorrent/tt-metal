@@ -193,3 +193,33 @@ def test_kda_prefix_carry_matmul_perf(device) -> None:
     logger.info(f"KDA prefix carry matmul: default {default_us:.1f} us, tuned {tuned_us:.1f} us")
     assert torch.equal(ttnn.to_torch(default), ttnn.to_torch(tuned)), "tuned carry matmul is not bit-identical"
     assert tuned_us <= _MAX_CARRY_MATMUL_US, f"carry matmul {tuned_us:.1f} us regressed"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_kda_prepare_reads_row_major_beta(device) -> None:
+    """Chunk preparation must produce identical outputs from row-major [1, rows, heads] beta."""
+    q, k, v, gate, _ = _prepare_inputs(device)
+    generator = torch.Generator().manual_seed(120)
+    rows = _CHUNKS * 32
+    beta_rows = torch.sigmoid(torch.randn(1, rows, _HEADS, generator=generator))
+    beta_by_chunk = beta_rows[0].T.reshape(_HEADS, _CHUNKS, 32, 1)
+    actual_start = make_actual_start(device, 0)
+    compute_config = _compute_config(device)
+    results = []
+    for beta in (beta_by_chunk, beta_rows):
+        beta_tt = ttnn.from_torch(beta, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
+            q,
+            k,
+            v,
+            gate,
+            beta_tt,
+            _HEADS,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
+            output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
+            actual_start=actual_start,
+        )
+        results.append([output.cpu().to_torch_with_padded_shape() for output in outputs])
+    for index, (by_chunk, by_rows) in enumerate(zip(*results)):
+        assert torch.equal(by_chunk, by_rows), f"prepare output {index} differs with row-major beta"

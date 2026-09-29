@@ -135,11 +135,8 @@ def _prepare_chunk_terms(
     sequence_parallel_axis: int,
 ) -> _PreparedChunks:
     if geometry.batch == 1:
-        # Split rows into chunks with a tile-aligned view, then move heads to the front and the unit
-        # batch dimension to the column; this skips a tile-changing reshape of [heads, rows].
-        beta_by_chunk = ttnn.permute(
-            ttnn.reshape(beta, (1, geometry.num_chunks, geometry.chunk_size, geometry.heads)), (3, 1, 2, 0)
-        )
+        # Chunk preparation reads each head's column straight from row-major [1, rows, heads] beta.
+        beta_by_chunk = beta
     else:
         beta_by_head = ttnn.permute(beta, (0, 2, 1))
         beta_by_chunk = ttnn.reshape(
