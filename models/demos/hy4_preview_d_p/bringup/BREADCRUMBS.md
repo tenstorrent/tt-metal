@@ -1604,3 +1604,41 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
+
+## C.moe_full.ffn_hc test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test for ffn_hc at layer 1 (iHC gates [S, 8] from h_mid, hc_mlp_layer of layer 1,
+  s4096 chunk 1, bf16 golden). Built it from the C.moe_full.attn_hc test. It keeps the gated PCC (0.99) and the
+  CPU-bridge assert, and adds these checks vs the golden: element count, finite, rel L2 <= 0.01, per-column rel L2
+  <= 0.01 (<= 0.02 on columns 0, 1, 6), post worst row <= 0.015. The pre gates are checked through the CPU
+  ffn_hc_pre on the golden h_mid (ffn_x rel <= 0.005, worst row <= 0.02). The post gates are checked through the CPU
+  ffn_residual with the golden mlp_out (out per stream <= 0.005, worst row <= 0.02).
+- CPU mutation study in /tmp/hy4_ffnhc1/{keys,mut}.py (outside the repo). The table is in the test docstring.
+
+Decisions
+- Columns 0, 1 and 6 get a limit of 0.02, not 0.01. Their means (1.05e-5, 1.45e-6, 1.6e-6) are within ~10x of
+  hc_eps. The device reaches 0.0072 / 0.0035 / 0.0075 on them, which leaves little margin under 0.01. The check is
+  still needed at 0.02: gates 0 / 1 / 6 zeroed, base 0 / 1 swapped and a dropped hc_eps move ffn_x and out by < 1e-4
+  and fail only this check.
+- The out per-stream limit is 0.005, not attn_hc's 0.003. Out stream 3 carries post 7 x mlp_out at 1.7x the stream
+  norm, so it tracks post column 7: device 0.0026, CPU reference 0.0013. post x 1.01 still fails it (0.008).
+- Every mutation in the study fails at least one check, except bf16 rounding of the input, fn or output.
+
+Results
+- BRINGUP_IMPL=reference: PASS. PCC 0.999999, rel 0.00131, col rel <= 0.0028, post row 0.0040, ffn_x 0.0013 /
+  0.0048, out stream <= 0.0013 / row 0.0033.
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device, the existing TtHcGates via `_HC_STEPS["ffn_hc"]`): PASS. PCC 0.999999, rel 0.00133, col rel
+  [0.0072, 0.0035, 0.0012, 0.0018, 0.0056, 0.0066, 0.0075, 0.0032], post row 0.0093, ffn_x 0.00135 / 0.0052, out
+  stream <= 0.0026 / row 0.0063.
+
+Gotchas
+- The tightest margins are post columns 4 / 5 (0.0056 / 0.0066 vs 0.01) and the post worst row (0.0093 vs 0.015).
+  All three come from the device sigmoid on gates of ~1e-4. Watch them if a change touches TtHcGates.
+- The first `FAIL pcc ... 0.000000` line comes from the precompile collect pass.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
