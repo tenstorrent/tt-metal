@@ -984,6 +984,13 @@ tasks:
     kind: op
     layer: 3
     stateful: true
+  frozen:
+    at: '2026-09-29T07:27:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py: dc0a2b9ef5a8cb8b3cdbb4cb847bbeef4c7d7a2043d720dd0d9ea5eafe12b0e8
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.05
   title: 'dsa_moe block with steps 1-5 on device (last: indexer)'
   step: implement
