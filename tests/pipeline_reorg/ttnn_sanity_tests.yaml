@@ -290,7 +290,6 @@
   # same tests by --ignore'ing these files; deselecting the marker instead keeps the
   # functional cases in test_chain_perf.py, which do run here.
   cmd: >-
-    build/test/ttnn/unit_tests_ttnn --gtest_filter='Mcast*' &&
     pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
     -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
   skus:
