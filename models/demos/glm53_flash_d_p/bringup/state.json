@@ -3953,8 +3953,107 @@
   "waiting": null
  },
  "O.1": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "6e3d7427-aaa0-448a-b109-7bfb5270546f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 1084.4,
+    "session_id": "6e3d7427-aaa0-448a-b109-7bfb5270546f",
+    "t": "2026-09-29T23:34:32"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 370.0,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T23:16:27"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T23:40:45"
+   }
+  ],
+  "last_run": "2026-09-29T23:40:45",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/O.1.log",
+  "metrics": {
+   "chunk_seconds_c10": 1.257,
+   "covered_layers": 5,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "fork_calls": 8,
+   "fork_calls_uncovered": 0,
+   "fork_tests_failed": 0,
+   "forks_used": 6,
+   "model_load_s": 5.4,
+   "pcc_layer_L00": 0.9999752004233728,
+   "pcc_layer_L01": 0.9999665558776015,
+   "pcc_layer_L02": 0.9999865028898893,
+   "pcc_layer_L03": 0.9999553474830585,
+   "pcc_layer_L04": 0.9999405339315828,
+   "pcc_state_index_key_L03": 0.9999982170820199,
+   "pcc_state_kda_conv_L00": 0.9999980359940379,
+   "pcc_state_kda_conv_L01": 0.9999926792047319,
+   "pcc_state_kda_conv_L02": 0.9999776122577597,
+   "pcc_state_kda_conv_L04": 0.9999881546626223,
+   "pcc_state_kda_recurrent_L00": 0.9996682501801475,
+   "pcc_state_kda_recurrent_L01": 0.99838979218403,
+   "pcc_state_kda_recurrent_L02": 0.9992937053136891,
+   "pcc_state_kda_recurrent_L04": 0.9992402779356737,
+   "pcc_state_kv_latent_L03": 0.999997026546561,
+   "pcc_state_min": 0.99838979218403,
+   "prefill_seconds": 1.257,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 51200,
+   "subset": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "optests",
+  "started": "2026-09-29T23:34:35",
+  "status": "PASS",
+  "waiting": null
  },
  "P.1": {
   "agent": {
