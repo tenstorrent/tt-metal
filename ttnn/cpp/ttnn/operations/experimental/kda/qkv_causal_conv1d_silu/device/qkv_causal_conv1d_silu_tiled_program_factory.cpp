@@ -428,10 +428,21 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
+    // Partials in dest (see the compute kernel): only with a bf16 half-sync dest and q, k and v all in L1.
+    // With DRAM outputs the faster compute lets the output writes congest the NoC (the op gets slower),
+    // and an fp32 dest would not round the partials to bf16; those cases compile the partial-DFB flow.
+    const auto& cfg = attrs.compute_kernel_config;
+    const bool outputs_in_l1 = std::all_of(outputs.begin(), outputs.begin() + 3, [](const Tensor& output) {
+        return output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
+    });
+    const bool partials_in_dest = outputs_in_l1 && !cfg.fp32_dest_acc_en && !cfg.dst_full_sync_en;
+
     m2::KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source = std::filesystem::path(compute_source),
-        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .compiler_options =
+            {.defines = {{"QKV_CONV_PARTIALS_IN_DEST", partials_in_dest ? "1" : "0"}},
+             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::ConsumerOf(x_in_dfb_name, "x_in"),
