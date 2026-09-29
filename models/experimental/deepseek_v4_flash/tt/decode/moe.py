@@ -93,8 +93,12 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
+        hub_mode: Optional[bool] = None,
     ):
         """Build the shared expert's three projections.
+
+        ``hub_mode`` (default: ``use_prefetcher``) builds the decode ``LinearDecode`` projections even without
+        the DRISC prefetcher (each weight copies DRAM -> L1 per call), the layout the traced decode needs.
 
         ``weights`` holds the checkpoint's ``<prefix>.gate_proj`` / ``up_proj`` / ``down_proj``
         ``.weight`` torch tensors ``[I, D]`` / ``[I, D]`` / ``[D, I]`` (``[I/TP, D]`` and
@@ -112,7 +116,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None
         tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
-        if not use_prefetcher:
+        if not (use_prefetcher if hub_mode is None else hub_mode):
             self.gate_proj = Linear(
                 weights[f"{prefix}.gate_proj.weight"],
                 device,
@@ -138,21 +142,24 @@ class DeepSeekV4MLP(DeepSeekV4Module):
 
         hidden, inter = config.hidden_size, config.moe_intermediate_size
         local_inter = inter // tp_size if tp_size > 1 else inter
-        if prefetch_buffers is None:
+        if use_prefetcher and prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
         page_bytes = decode_prefetch_page_bytes(weight_dtype)
         gate_up_layout = dict(check_decode_layout("shared_gate_proj", hidden, inter))
         down_layout = dict(check_decode_layout("shared_down_proj", inter, hidden))
         # Same 32-receiver FIFO as q_a (and CSA). Queued after those in
         # :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`.
-        gate_up_prefetch = {
-            "use_prefetcher": True,
-            "global_cb": ensure_named_gcb(
-                prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
-            ),
-            "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
-        }
-        down_cb = prefetch_buffers["shared_down_proj"]
+        gate_up_prefetch = {"use_prefetcher": False}
+        down_cb = None
+        if use_prefetcher:
+            gate_up_prefetch = {
+                "use_prefetcher": True,
+                "global_cb": ensure_named_gcb(
+                    prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
+                ),
+                "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
+            }
+            down_cb = prefetch_buffers["shared_down_proj"]
         decode_gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None
         decode_down_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
         if tp_size > 1:
@@ -194,7 +201,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             global_cb=down_cb,
             global_cb_page_bytes=page_bytes,
             num_inputA_cores=max(1, local_inter // 64) if tp_size > 1 else 32,
-            use_prefetcher=True,
+            use_prefetcher=use_prefetcher,
             rectangle_b_grid=True,
             **down_layout,
             use_rm_hs=False,
@@ -272,8 +279,13 @@ def _make_router_gate(
     use_prefetcher: bool = False,
     prefetch_buffers: Optional[dict] = None,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    hub_mode: Optional[bool] = None,
 ):
     """The learned ``[D, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
+
+    ``hub_mode`` (default: ``use_prefetcher``) picks the decode ``LinearDecode`` even without the DRISC
+    prefetcher (the weight then copies DRAM -> L1 per call); the traced decode needs that layout, the
+    prefill / MTP callers keep the ``ttnn.linear`` gate.
 
     ``use_prefetcher=False`` (the env-gated MTP stack) keeps ``ttnn.linear``. Decode runs
     ``matmul_decode`` in hub mode: the gate is full-width on 8 cores (``n_blocks=8``, one output
@@ -282,7 +294,7 @@ def _make_router_gate(
     was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring
     or ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`.
     """
-    if not use_prefetcher:
+    if not (use_prefetcher if hub_mode is None else hub_mode):
         return Linear(weights["gate.weight"], device, cache.file("gate"))
     layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts))
     if prefetch_buffers is None:
@@ -293,11 +305,17 @@ def _make_router_gate(
         cache.file("gate.decode"),
         dtype=weight_dtype,
         **layout,
-        use_prefetcher=True,
-        global_cb=ensure_named_gcb(
-            prefetch_buffers, ROUTER_GATE_GCB, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
+        **(
+            {
+                "use_prefetcher": True,
+                "global_cb": ensure_named_gcb(
+                    prefetch_buffers, ROUTER_GATE_GCB, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
+                ),
+                "global_cb_page_bytes": router_gate_page_bytes(weight_dtype),
+            }
+            if use_prefetcher
+            else {"use_prefetcher": False}
         ),
-        global_cb_page_bytes=router_gate_page_bytes(weight_dtype),
         rectangle_b_grid=True,
         use_rm_hs=True,
     )
@@ -334,6 +352,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        hub_mode: Optional[bool] = None,
     ):
         """``weights["gate.weight"]`` is the checkpoint's ``[E, D]`` projection and
         ``weights["gate.e_score_correction_bias"]`` the ``[E]`` bias, loaded as a
@@ -356,6 +375,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
+            hub_mode=hub_mode,
         )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16
@@ -430,6 +450,7 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        hub_mode: Optional[bool] = None,
     ):
         """``weights["gate.tid2eid"]`` is the frozen ``[V, k]`` int64 token-id -> expert-id table,
         uploaded as the bf16 ROW_MAJOR device tensor ``eid_table`` (host-side only, so it is
@@ -449,6 +470,7 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
+            hub_mode=hub_mode,
         )
         tid = weights["gate.tid2eid"]
         tid = tid() if callable(tid) else tid
@@ -958,6 +980,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
+        hub_mode: Optional[bool] = None,
     ):
         """``gate`` may be injected (a :class:`DeepSeekV4HashRouter` for the first
         ``num_hash_layers`` MoE layers); otherwise this builds the learned
@@ -981,6 +1004,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
                 use_prefetcher=use_prefetcher,
                 prefetch_buffers=prefetch_buffers,
                 weight_dtype=weight_dtype,
+                hub_mode=hub_mode,
             )
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
@@ -995,6 +1019,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             tp_size=tp_size,
+            hub_mode=hub_mode,
         )
 
     def prefetch_weights(self):

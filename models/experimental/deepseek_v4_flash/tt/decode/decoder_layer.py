@@ -69,6 +69,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
+        hub_mode: Optional[bool] = None,
     ):
         """Build layer ``layer_idx``: attention, MoE, the two hyper-connections and the two
         ``[D]`` RMSNorms.
@@ -108,6 +109,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             tp_size=tp_size,
+            hub_mode=hub_mode,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True

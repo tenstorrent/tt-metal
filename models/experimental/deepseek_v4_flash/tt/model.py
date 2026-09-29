@@ -455,6 +455,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
                     tp_size=tp_size,
+                    # the decode layouts (LinearDecode, hub mode) with or without the prefetcher
+                    hub_mode=True,
                 )
             )
             _profile(current_device)
@@ -816,6 +818,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             use_prefetcher=self.use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype if weight_dtype is not None else ttnn.bfloat16,
+            hub_mode=True,
         )
 
     # -- compressor pooling schedule -------------------------------------------- #
