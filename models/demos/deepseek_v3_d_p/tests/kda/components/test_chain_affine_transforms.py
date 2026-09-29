@@ -23,7 +23,10 @@ _GALAXY = pytest.param(
 
 
 @pytest.mark.parametrize("mesh_device,device_params", [_GALAXY], indirect=True)
-@pytest.mark.parametrize("start", [0, 640, 672, 3232], ids=["aligned", "rotated", "split", "late-split"])
+# Only the rank holding the first token orders the chain; "split" checks that an offset within that rank is ignored.
+@pytest.mark.parametrize(
+    "start", [0, 640, 672, 3232, 4480], ids=["aligned", "rotated", "split", "late-split", "last-rank"]
+)
 def test_chain_affine_transforms_matches_reference(mesh_device, start):
     generator = torch.Generator().manual_seed(start)
     sp_size, tp_size = tuple(mesh_device.shape)

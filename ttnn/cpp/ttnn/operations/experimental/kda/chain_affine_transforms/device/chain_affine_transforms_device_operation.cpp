@@ -100,12 +100,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<ChainAffineTransformsOperatio
 ChainAffineTransformsOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
-    const double steps = static_cast<double>(attrs.steps) * attrs.batch_heads;
+    const double head_steps = static_cast<double>(attrs.steps) * attrs.batch_heads;
     const double key_dim = attrs.key_dim;
     const double value_dim = attrs.value_dim;
     const KdaFpuWork work{
-        .fpu_matrix_flops = steps * 2.0 * key_dim * key_dim * value_dim,
-        .fpu_add_ops = steps * key_dim * value_dim,
+        .fpu_matrix_flops = head_steps * 2.0 * key_dim * key_dim * value_dim,
+        .fpu_add_ops = head_steps * key_dim * value_dim,
     };
     const std::array<const Tensor*, 2> inputs = {&in.transforms, &in.initial_state};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
