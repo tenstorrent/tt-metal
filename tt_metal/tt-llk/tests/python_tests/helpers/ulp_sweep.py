@@ -203,19 +203,28 @@ def _claim_limits() -> Dict:
 
 def _claimed(op, src: torch.Tensor) -> torch.Tensor:
     """Lanes where *op* claims a finite, accurate answer: the whole format, less the
-    undefined ranges ``sfpu_domains`` registers and any ``_CLAIM_LIMIT``.
+    side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
+    for a pole, and any ``_CLAIM_LIMIT``.
 
     Deliberately not the functional driver's sampling window, which is where a few
     thousand points are drawn, not where the op stops being defined: Abs is sampled on
-    (-10, 10) and defined everywhere.
+    (-10, 10) and defined everywhere. Nor ``_SFPU_UNDEFINED_RANGES``, whose holes are
+    guard bands that keep a random draw off a singularity: Reciprocal's is
+    (-1e-6, 1e-6), and ``1/1e-7`` is a finite bf16 answer an inf must not be excused on.
     """
-    from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
+    from helpers.sfpu_domains import _OP_SINGULARITIES, Operand, SingularitySide
 
     value = src.detach().to(torch.float32)
     claimed = torch.ones_like(value, dtype=torch.bool)
-    for low, high in _SFPU_UNDEFINED_RANGES.get(op, {}).get(Operand.A, ()):
-        # Open, like the holes `exclude_intervals` cuts: the endpoints stay defined.
-        claimed &= ~((value > low) & (value < high))
+    for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
+        # The defined side keeps the point: sqrt(0) and acosh(1) are answers. A golden
+        # that is infinite there (log(0), atanh(1)) is out of range and dropped anyway.
+        if side is SingularitySide.ABOVE:
+            claimed &= value >= point
+        elif side is SingularitySide.BELOW:
+            claimed &= value <= point
+        else:
+            claimed &= value != point
     limit = _claim_limits().get(op)
     if limit is not None:
         claimed &= value.abs() <= limit
@@ -250,11 +259,12 @@ def nonfinite_failures(
       (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
       wrong, and no budget on any op could be met.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
-    * **an input outside the op's registered safe domain.** ``Sin`` and ``Cos`` are
-      registered over ``[-pi, pi]`` and disagree on ~21,000 bf16 lanes far outside it,
-      which is the case ``measurable_mask``'s own docstring cites. The budget is still
-      measured over the whole format; it is only the *non-finite* answer that needs the
-      op to have been claiming something.
+    * **an input the op makes no claim on** (:func:`_claimed`): the undefined side of
+      a registered singularity, or past an argument-reduction limit. ``Sin`` and
+      ``Cos`` disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``, which is the
+      case ``measurable_mask``'s own docstring cites. The budget is still measured over
+      the whole format; it is only the *non-finite* answer that needs the op to have
+      been claiming something.
 
     What is left is the case the mask would otherwise hide: an op returning ``inf`` or
     ``NaN`` where it is defined, the input is normal, and the output could have held

@@ -240,10 +240,14 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
-    # (Erfinv bf16->bf16 holds 84 lanes at 14690 steps with it) is honoured.
+    # (Erfinv bf16->bf16 holds 84 lanes at 14690 steps with it) is honoured. That makes
+    # `stats` the raw maximum, which can be a lane the floor rescued: the failing lanes
+    # are the ones passed_test logs.
     assert passed_test(
         golden, result, out_fmt, mask=mask, **contract.passed_test_kwargs()
     ), (
-        f"{cell}: {stats['max']} ULP over {lanes} swept lanes, budget "
-        f"{contract.max_ulp}. Worst lane at flat index {stats['worst_index']}."
+        f"{cell}: failed a {contract.max_ulp}-step budget over {lanes} swept lanes; "
+        "the failing lanes are in the ULP-budget log above. Raw maximum before any "
+        f"near_zero_atol floor: {stats['max']} ULP at flat index "
+        f"{stats['worst_index']}."
     )

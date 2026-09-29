@@ -79,10 +79,11 @@ swept and then masked out of the statistics, so they still reach hardware.
 
 The second kind is a *failure*, not a non-question, so `nonfinite_failures` reports it
 separately — over everywhere the op claims an answer: the whole format, less the
-undefined ranges `sfpu_domains` registers (`Log` below zero, `Reciprocal` at zero) and a
-per-op argument-reduction limit (`Sin` and `Cos` past pi). Not the functional driver's
-sampling window, which is where points are drawn rather than where an op stops being
-defined.
+undefined side of each singularity `sfpu_domains._OP_SINGULARITIES` registers (`Log`
+below zero, `Reciprocal` at zero) and a per-op argument-reduction limit (`Sin` and `Cos`
+past pi). Not the functional driver's sampling window, which is where points are drawn
+rather than where an op stops being defined, and not `_SFPU_UNDEFINED_RANGES`, whose
+holes are guard bands around those points rather than the points themselves.
 
 ## Enrolling an op, step by step
 

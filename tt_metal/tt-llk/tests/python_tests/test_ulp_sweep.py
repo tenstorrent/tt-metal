@@ -310,10 +310,35 @@ def test_an_interval_domain_is_not_clipped_to_the_specs_default_bounds(fmt, inpu
     result = torch.full_like(src, float("inf"))
     op = MathOperation.Reciprocal
     assert nonfinite_failures(op, src, golden, result, fmt, DataFormat.Float16_b).all()
-    # Its undefined hole around zero still excuses a lane.
+    # Its pole at zero still excuses a lane.
     zero = torch.tensor([0.0], dtype=torch.bfloat16)
     one = torch.tensor([1.0], dtype=torch.bfloat16)
     assert not nonfinite_failures(op, zero, one, result[:1], fmt, fmt).any()
+
+
+@pytest.mark.parametrize(
+    "op, inside, outside",
+    [
+        (MathOperation.Reciprocal, [1e-7, -1e-7, 1e-30], []),
+        (MathOperation.Log, [1e-7, 1e-30], [-1e-7, -2.0]),
+        (MathOperation.Rsqrt, [1e-7], [-1e-7]),
+        (MathOperation.Asin, [-1.0, 0.5, 1.0], [-1.5, 2.0]),
+    ],
+    ids=lambda v: getattr(v, "name", None) or "",
+)
+def test_the_claim_is_the_singularity_not_the_sampling_guard_band(op, inside, outside):
+    """``_SFPU_UNDEFINED_RANGES`` keeps a random draw 1e-6 off Reciprocal's pole, and
+    that band was the claim: a bf16 ``1/1e-7`` returning inf was excused in both the
+    emitted measurement and the gate. The claim is ``_OP_SINGULARITIES`` -- the point,
+    and the side the op is undefined on."""
+    fmt = DataFormat.Float16_b
+    finite = torch.tensor([1.0], dtype=torch.bfloat16)
+    inf = torch.tensor([float("inf")], dtype=torch.bfloat16)
+    for value, claimed in [(v, True) for v in inside] + [(v, False) for v in outside]:
+        src = torch.tensor([value], dtype=torch.bfloat16)
+        assert (
+            bool(nonfinite_failures(op, src, finite, inf, fmt, fmt).any()) is claimed
+        ), value
 
 
 def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
