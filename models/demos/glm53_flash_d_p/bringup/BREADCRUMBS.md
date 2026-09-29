@@ -325,3 +325,38 @@ Next step: the device attention's low scale (0.9954) accounts for most of the bl
 the per-token minimum (0.983 of 0.97).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_04_attention.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.attn_residual test (attempt 1)
+
+Reviewed the rendered component test for `h_mid = post * attn_out + comb^T @ in` ([S * 4, H], token-major). Rewrote
+it on the attn_collapse test's pattern: the gated PCC plus asserted checks, run on layer 0 and again (same weightless
+module) on layer 1's golden. At layer 0 the streams are identical, so the comb cannot be seen there.
+Sensitivity (CPU host script on the goldens, not kept), layer 0 PCC / rel L2 (layer 1 rel): comb not transposed
+0.9987 / 0.064 (0.26); post x1.02 0.9998 / 0.023 (0.015); comb x1.05 0.9987 / 0.057 (0.035); last token zeroed 0.99993 /
+0.012; identity comb 0.999996 / 0.0030 (layer 1 0.50). Device-like noise: bf16 products and partial sums rel 0.0048,
+ratio [0.995, 1.005], per-stream <= 0.0065, worst row 0.014. A bfp8 output gives rel 0.0082, so keep h_mid bf16.
+Checks per layer: rel L2 <= 0.01, per-row norm ratio [0.985, 1.015], per-stream rel <= 0.015, worst row rel <= 0.05.
+Each term is also checked on its own (out minus the exact other term from the golden inputs, vs post * attn_out and
+vs comb^T @ in): coefficient [0.98, 1.02] and rel <= 0.02.
+Results: reference passes (PCC 0.999995; L0 rel 0.0032, worst row 0.0104; L1 rel 0.0027). Stub fails (PCC 0). Device
+mode fails with NotImplementedError until the implement step adds the module.
+Implement notes: the module is called twice, with device_ctx(0) and device_ctx(1) and the matching golden inputs, so
+it must not cache anything per layer. comb is row-major 4x4 at attn_hc[:, 8:24], and out stream m uses column m
+(sum_n comb[n, m] in[n]).
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py`
+(`BRINGUP_IMPL=stub` for the stub; no prefix for the device gate).
+
+## C.kda_dense.attn_residual implement (attempt 1)
+
+What was done: `tt/residual.py:TtHcResidual` (+ `build_residual(cfg)`), weightless, replicated, no CCL. Inputs are
+x [1, 1, S, 4H] (packed streams), hc [1, 1, S, 24] fp32 and y [1, 1, S, H]. For each output stream m:
+`multiply(post col m, y)`, then 4 x `addcmul(o, x_i, comb col 4i + m)` (comb^T, the same as TtMHCWrap.hc_post), then
+`typecast` to bf16 and `concat` dim -1. Uses DeepSeek's `_streams` and width-1 `ttnn.slice` columns of hc.
+Precision: x, y and hc are cast to fp32. The mix runs in fp32 and rounds to bf16 once. That matches the fp32 reference,
+where post and comb are cast to the activation dtype (fp32). A bf16 mix would give about 0.005 rel (test notes).
+hooks: `_residual_host_fn` (x and y uploaded as bf16, hc as fp32, output read back as [S * 4, H]). It serves both
+`attn_residual` and `ffn_residual` (`_RESIDUAL_STEPS`, same weightless module). Only `attn_residual` was added to
+`DEVICE_STEPS["kda_dense"]`. The module caches nothing per layer, so the test's layer-1 call is safe.
+Result (gate): pcc_attn_residual_L00 0.999994. L0: rel 0.0036, ratio [0.9959, 1.0050], worst row 0.0106, both terms
+coef 1.0000 / rel 0.0015. L1: rel 0.0031, ratio [0.9965, 1.0035], terms rel 0.0022.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py`
