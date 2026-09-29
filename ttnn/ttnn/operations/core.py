@@ -23,118 +23,28 @@ def _validate_file_extension(file_name: pathlib.Path):
 
 _CANONICAL_PROC_SELF_FD = re.compile(r"/proc/self/fd/([1-9][0-9]*)\Z")
 _PROC_SELF_FD_PREFIX = "/proc/self/fd/"
-_PROC_FD_MAGIC_PATH = re.compile(r"\A/proc/(?:self|thread-self|[0-9]+)(?:/task/(?:self|[0-9]+))?/fd(?:/|\Z)")
-_MAX_LOAD_TENSOR_SYMLINK_HOPS = 40
-_MAX_LOAD_TENSOR_PATH_STEPS = 4096
 
 
-class _LoadTensorCleanupError(RuntimeError):
-    """A descriptor-bound tensor load failed and its returned tensor did not deallocate."""
-
-    def __init__(self, primary_error: BaseException, cleanup_error: BaseException) -> None:
-        super().__init__(
-            "descriptor-bound tensor load failed and returned-tensor cleanup also failed; "
-            f"primary={type(primary_error).__name__}: {primary_error}; "
-            f"cleanup={type(cleanup_error).__name__}: {cleanup_error}"
-        )
-        self.primary_error = primary_error
-        self.cleanup_error = cleanup_error
-
-
-def _file_signature(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        int(metadata.st_dev),
-        int(metadata.st_ino),
-        int(metadata.st_mode),
-        int(metadata.st_size),
-        int(metadata.st_mtime_ns),
-        int(metadata.st_ctime_ns),
-    )
-
-
-def _stable_descriptor_contract(descriptor: int):
-    proc_path = f"{_PROC_SELF_FD_PREFIX}{descriptor}"
+def _load_tensor_from_descriptor(descriptor: int, device: Optional[ttnn.MeshDevice]) -> ttnn.Tensor:
+    """Keep the caller's open file alive through the native reader's own open."""
     try:
-        metadata = os.fstat(descriptor)
-        target = os.readlink(proc_path)
+        owned_descriptor = fcntl.fcntl(descriptor, fcntl.F_DUPFD_CLOEXEC, 3)
     except OSError as error:
-        raise RuntimeError(f"File {proc_path} does not name an open descriptor") from error
-    if not stat.S_ISREG(metadata.st_mode):
-        raise RuntimeError(f"File {proc_path} descriptor target must be a regular file")
-    if not os.path.isabs(target) or target.endswith(" (deleted)"):
-        raise RuntimeError(f"File {proc_path} descriptor target must be one live absolute file")
-    return _file_signature(metadata), target
-
-
-def _proc_self_fd_contract(file_name: Union[str, pathlib.Path]):
-    """Validate the one descriptor-path spelling accepted by ``load_tensor``.
-
-    ``/proc/self/fd`` is a Linux magic-link interface.  The exact decimal path
-    is safe to pass to the native flatbuffer reader only while its descriptor
-    remains open; suffix aliases must never fall back to ordinary pathname
-    loading.  The returned identity is intentionally derived from the open
-    file description, without resolving it back to a mutable pathname.
-    """
-
-    text = str(file_name)
-    match = _CANONICAL_PROC_SELF_FD.fullmatch(text)
-    if match is None:
-        if text.startswith(_PROC_SELF_FD_PREFIX):
-            raise RuntimeError(f"File {file_name} must use the canonical /proc/self/fd/<positive-int> descriptor path")
-        return None
-
-    descriptor = int(match.group(1))
-    signature, target = _stable_descriptor_contract(descriptor)
-    if not target.endswith(".tensorbin"):
-        raise RuntimeError(f"File {file_name} descriptor target must be an absolute .tensorbin file")
-    return descriptor, signature, target
-
-
-def _reject_proc_self_fd_symlink_chain(file_name: pathlib.Path) -> None:
-    """Boundedly resolve every symlink component and reject proc-FD magic links."""
-
-    absolute = os.path.join(os.getcwd(), os.fspath(file_name))
-    pending = list(pathlib.PurePath(absolute).parts[1:])
-    resolved = os.path.sep
-    symlink_hops = 0
-    path_steps = 0
-    while pending:
-        path_steps += 1
-        if path_steps > _MAX_LOAD_TENSOR_PATH_STEPS:
-            raise RuntimeError(f"File {file_name} symlink resolution exceeds its path-step bound")
-        component = pending.pop(0)
-        if component in {"", "."}:
-            continue
-        if component == "..":
-            resolved = os.path.dirname(resolved.rstrip(os.path.sep)) or os.path.sep
-            continue
-        candidate = os.path.join(resolved, component)
-        if _PROC_FD_MAGIC_PATH.match(candidate) is not None:
-            raise RuntimeError(f"File {file_name} must not alias a /proc/self/fd descriptor")
-        try:
-            metadata = os.lstat(candidate)
-        except FileNotFoundError:
-            return
-        except OSError as error:
-            raise RuntimeError(f"File {file_name} symlink chain is unavailable") from error
-        if not stat.S_ISLNK(metadata.st_mode):
-            resolved = candidate
-            continue
-        symlink_hops += 1
-        if symlink_hops > _MAX_LOAD_TENSOR_SYMLINK_HOPS:
-            raise RuntimeError(f"File {file_name} symlink resolution exceeds its hop bound")
-        try:
-            target = os.readlink(candidate)
-        except OSError as error:
-            raise RuntimeError(f"File {file_name} symlink changed during resolution") from error
-        if os.path.isabs(target):
-            expanded = target
-        else:
-            expanded = os.path.join(resolved, target)
-        if _PROC_FD_MAGIC_PATH.match(expanded) is not None:
-            raise RuntimeError(f"File {file_name} must not alias a /proc/self/fd descriptor")
-        pending = list(pathlib.PurePath(expanded).parts[1:]) + pending
-        resolved = os.path.sep
+        raise RuntimeError(f"File /proc/self/fd/{descriptor} does not name an open descriptor") from error
+    try:
+        metadata = os.fstat(owned_descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError(f"File /proc/self/fd/{descriptor} descriptor target must be a regular file")
+        owned_path = f"{_PROC_SELF_FD_PREFIX}{owned_descriptor}"
+        target = os.readlink(owned_path)
+        # Atomic publication may unlink the old pathname while this descriptor
+        # still owns the original inode. Linux appends this marker to its link.
+        if target.endswith(" (deleted)") and os.fstat(owned_descriptor).st_nlink == 0:
+            target = target.removesuffix(" (deleted)")
+        _validate_file_extension(pathlib.Path(target))
+        return ttnn._ttnn.tensor.load_tensor_flatbuffer(owned_path, device)
+    finally:
+        os.close(owned_descriptor)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, slices):
@@ -868,41 +778,6 @@ def _golden_function_load_tensor(file_name, *, device=None, **_):
     return host_tensor.to_torch()
 
 
-def _load_tensor_from_owned_descriptor(
-    descriptor: int,
-    *,
-    signature: tuple[int, int, int, int, int, int],
-    target: str,
-    device: ttnn.MeshDevice,
-    caller_name: Union[str, pathlib.Path],
-    post_validate: Optional[Callable[[], None]] = None,
-) -> ttnn.Tensor:
-    """Perform the native read through one wrapper-owned stable descriptor."""
-
-    stable_path = pathlib.Path(f"{_PROC_SELF_FD_PREFIX}{descriptor}")
-    tensor = None
-    try:
-        if _stable_descriptor_contract(descriptor) != (signature, target):
-            raise RuntimeError(f"File {caller_name} descriptor identity changed before tensor load")
-        tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(str(stable_path), device)
-        try:
-            after = _stable_descriptor_contract(descriptor)
-        except RuntimeError as error:
-            raise RuntimeError(f"File {caller_name} descriptor target changed during tensor load") from error
-        if after != (signature, target):
-            raise RuntimeError(f"File {caller_name} descriptor target changed during tensor load")
-        if post_validate is not None:
-            post_validate()
-        return tensor
-    except BaseException as error:
-        if tensor is not None:
-            try:
-                ttnn.deallocate(tensor)
-            except BaseException as cleanup_error:
-                raise _LoadTensorCleanupError(error, cleanup_error) from error
-        raise
-
-
 @ttnn.register_python_operation(name="ttnn.load_tensor", golden_function=_golden_function_load_tensor)
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
     """
@@ -911,80 +786,39 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
     Args:
         file_name (str | pathlib.Path): a ``.tensorbin`` pathname, or the exact
             Linux path ``/proc/self/fd/<positive-int>`` for an open regular
-            ``.tensorbin`` file. Descriptor loads retain the verified open file
-            if its original pathname is replaced. Keep the caller's descriptor
-            open until this function returns.
+            ``.tensorbin`` file. A descriptor load retains that open file even
+            if its pathname is atomically replaced or unlinked. Keep the
+            caller's descriptor open until this function returns.
 
     Keyword Args:
         device (ttnn.MeshDevice, optional): the device. Defaults to `None`.
 
     Returns:
         ttnn.Tensor: the loaded tensor.
+
+    Note:
+        The native reader memory-maps the file. Callers must prevent in-place
+        writes and truncation while any loaded host tensor or view exists and
+        until device transfers complete. This function does not authenticate
+        contents or create an immutable snapshot. Publishing a new inode with
+        an atomic rename preserves existing readers of the old inode.
     """
-    # Validate descriptor syntax before ``Path`` collapses aliases such as a
-    # trailing slash, duplicate separators, or a ``.`` component.  Callers
-    # using an already-constructed ``Path`` necessarily supply its canonical
-    # string representation.
-    raw_file_name = os.fspath(file_name)
-    descriptor_contract = _proc_self_fd_contract(raw_file_name)
-    file_name = pathlib.Path(raw_file_name)
-    if descriptor_contract is not None:
-        descriptor, signature, target = descriptor_contract
-        stable_descriptor = None
-        try:
-            # Own a CLOEXEC duplicate for the entire native read.  This closes
-            # the caller-close/reuse race without resolving back to ``target``.
-            stable_descriptor = fcntl.fcntl(descriptor, fcntl.F_DUPFD_CLOEXEC, 3)
-            return _load_tensor_from_owned_descriptor(
-                stable_descriptor,
-                signature=signature,
-                target=target,
-                device=device,
-                caller_name=file_name,
-            )
-        finally:
-            if stable_descriptor is not None:
-                os.close(stable_descriptor)
+    # Inspect the original spelling before Path collapses slash/dot aliases.
+    text = os.fspath(file_name)
+    if text.startswith(_PROC_SELF_FD_PREFIX):
+        match = _CANONICAL_PROC_SELF_FD.fullmatch(text)
+        if match is None:
+            raise RuntimeError(f"File {file_name} must use the canonical /proc/self/fd/<positive-int> descriptor path")
+        return _load_tensor_from_descriptor(int(match.group(1)), device)
 
+    file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
-    absolute_path = pathlib.Path(os.path.join(os.getcwd(), raw_file_name))
-    _reject_proc_self_fd_symlink_chain(absolute_path)
-    owned_descriptor = None
-    try:
-        try:
-            # Reject non-regular files after opening without blocking on a FIFO.
-            owned_descriptor = os.open(absolute_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
-        except FileNotFoundError as error:
-            raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.") from error
-        except OSError as error:
-            raise RuntimeError(f"Unable to open the tensor from {file_name}.") from error
-        if owned_descriptor == 0:
-            positive_descriptor = fcntl.fcntl(owned_descriptor, fcntl.F_DUPFD_CLOEXEC, 3)
-            os.close(owned_descriptor)
-            owned_descriptor = positive_descriptor
-        signature, target = _stable_descriptor_contract(owned_descriptor)
+    if not file_name.exists():
+        raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
+    if not file_name.is_file():
+        raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
 
-        def revalidate_legacy_path() -> None:
-            _reject_proc_self_fd_symlink_chain(absolute_path)
-            try:
-                path_metadata = os.stat(absolute_path)
-            except OSError as error:
-                raise RuntimeError(f"File {file_name} changed during tensor load") from error
-            if _file_signature(path_metadata) != signature:
-                raise RuntimeError(f"File {file_name} changed during tensor load")
-
-        revalidate_legacy_path()
-        return _load_tensor_from_owned_descriptor(
-            owned_descriptor,
-            signature=signature,
-            target=target,
-            device=device,
-            caller_name=file_name,
-            post_validate=revalidate_legacy_path,
-        )
-    finally:
-        if owned_descriptor is not None:
-            os.close(owned_descriptor)
+    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
 
 
 # dump_tensor writes to disk and returns None; there is no output value to compare.
