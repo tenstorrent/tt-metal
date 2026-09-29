@@ -26,7 +26,6 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillSta
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
-from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -235,15 +234,7 @@ class TtV41Attention(LightweightModule):
         # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence)
         head_to_seq = self.tp > 1
         if head_to_seq:
-            q = ttnn.experimental.all_to_all_async_generic(
-                q,
-                in_dim=1,
-                out_dim=2,
-                num_links=self.ccl.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl.tp_topology,
-                cluster_axis=TP_AXIS,
-            )
+            q = self.ccl.tp_all_to_all(q, in_dim=1, out_dim=2)
         attn = ttnn.transformer.sparse_sdpa(
             ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
             kv_tensor,
@@ -256,15 +247,7 @@ class TtV41Attention(LightweightModule):
         )
         attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
         if head_to_seq:
-            attn = ttnn.experimental.all_to_all_async_generic(
-                attn,
-                in_dim=2,
-                out_dim=1,
-                num_links=self.ccl.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl.tp_topology,
-                cluster_axis=TP_AXIS,
-            )
+            attn = self.ccl.tp_all_to_all(attn, in_dim=2, out_dim=1)
         state.update_window_carry(self.layer, length)
         attn = self._rope(attn, cos, sin, inverse=True)
         return self._o_proj(attn, seq_local)
