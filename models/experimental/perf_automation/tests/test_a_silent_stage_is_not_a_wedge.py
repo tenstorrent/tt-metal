@@ -204,3 +204,19 @@ def test_it_names_no_model_or_stage(monkeypatch):
         lowered = ast.unparse(node).lower()
         for name in ("qwen", "denoise", "prefill", "vision", "encoder", "decoder", "vae"):
             assert name not in lowered, f"{name!r} in {fn.__name__} assumes the model's vocabulary"
+
+
+def test_one_iteration_longer_than_the_window_is_still_not_silent(monkeypatch, capsys):
+    """THE HOLE IN REPORTING PER ITERATION: the loop can only speak between steps, and a stage whose
+    single step outlasts the supervising window is silent for the whole of it."""
+    import time as _t
+
+    TR = _trace_replay(monkeypatch)
+    monkeypatch.setenv("PERF_MCP_VALIDATE_STALL_SEC", "4")  # beat every 1s
+
+    def _one_very_long_step():
+        _t.sleep(2.5)  # longer than the beat, and it is the ONLY iteration
+
+    TR._iterate(_one_very_long_step, 1, "s")
+    out = capsys.readouterr().out
+    assert "TRACE_STAGE_WAITING[s]" in out, "nothing spoke while the single step ran"

@@ -136,14 +136,20 @@ def _iterate(step, iters, what, keep=False):
     n = max(0, iters)
     beat = _heartbeat_s()
     last = time.monotonic()
-    for i in range(n):
-        r = step()
-        if keep:
-            out.append(r)
-        now = time.monotonic()
-        if i + 1 == n or (beat > 0 and now - last >= beat):
-            last = now
-            print("TRACE_STAGE_ITER[%s]=%d/%d" % (what, i + 1, n), flush=True)
+    # THE LOOP CAN ONLY SPEAK BETWEEN ITERATIONS, AND ONE ITERATION CAN OUTLAST THE WINDOW. A stage
+    # whose single step costs more than the supervising window is silent for the whole of it, so
+    # reporting per iteration is not enough on its own -- the beat has to come from somewhere that is
+    # not waiting on the step. Hence the heartbeat across the whole loop: the ITER lines mark
+    # progress, the heartbeat proves liveness, and no step duration can outrun it.
+    with _Alive(what):
+        for i in range(n):
+            r = step()
+            if keep:
+                out.append(r)
+            now = time.monotonic()
+            if i + 1 == n or (beat > 0 and now - last >= beat):
+                last = now
+                print("TRACE_STAGE_ITER[%s]=%d/%d" % (what, i + 1, n), flush=True)
     return out
 
 
