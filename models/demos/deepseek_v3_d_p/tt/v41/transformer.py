@@ -101,10 +101,12 @@ class TtV41Transformer(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
         )
 
-    def prefill(self, tokens: torch.Tensor, logit_positions: int = 1):
+    def prefill(self, tokens: torch.Tensor, logit_positions: int = 1, on_block: Callable | None = None):
         """tokens [S] (S <= max_seq_len) -> (fp32 logits [logit_positions, vocab] of the last ``logit_positions``
         prompt positions, state); the state holds the caches, carries and (with DSpark) the seeded DSpark
-        window rings. Generation needs the last position only; more positions score the prompt itself."""
+        window rings. Generation needs the last position only; more positions score the prompt itself.
+        ``on_block(layer, streams, start, length)`` observes each block's output streams per chunk (accuracy
+        gates on free-running per-layer drift)."""
         total = int(tokens.numel())
         assert 0 < total <= self.max_seq_len, f"prompt of {total} tokens, max {self.max_seq_len}"
         assert 0 < logit_positions <= total, f"logit_positions {logit_positions} outside the {total}-token prompt"
@@ -135,6 +137,8 @@ class TtV41Transformer(LightweightModule):
                 if self.dspark is not None and layer in self.config.DSPARK_TARGET_LAYER_IDS:
                     taps.append(self.dspark.tap(x))
                 x, pre = block(x, pre, state, length)
+                if on_block is not None:
+                    on_block(layer, x, start, length)
             if self.dspark is not None:
                 self.dspark.seed(taps, start, length, state.dspark_rings)
             if start + length > first_scored:

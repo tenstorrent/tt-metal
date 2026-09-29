@@ -227,11 +227,17 @@ def test_tail_logits_match_reference_and_noise_floor(cache, monkeypatch):
     )
     assert not torch.equal(noisy, o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 1)))
 
+    drift = o.noise_drift(spec, tokens, 5, (0.045, 4e-3, 0), model)
+    assert set(drift) == set(spec.layer_ids)
+    assert all(0.5 < d[k] < 1.0 for d in drift.values() for k in ("all", "tail")), drift
+    assert torch.equal(noisy, o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 0)))  # same noisy run
+
     def no_prefill(*args):
         raise AssertionError("cache hit must not run the reference")
 
     monkeypatch.setattr(o, "prefill", no_prefill)
     assert torch.equal(o.tail_logits(spec, tokens, 5), tail)  # hit: bit-identical reload
+    assert o.noise_drift(spec, tokens, 5, (0.045, 4e-3, 0)) == drift
 
 
 def test_window_ring_hand_values():

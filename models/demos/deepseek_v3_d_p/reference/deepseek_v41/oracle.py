@@ -594,18 +594,57 @@ def tail_logits(
     input's RMS to every attention and MoE input (the input-level sensitivity that flips top-k selection and
     expert routing): the floor an implementation whose components meet their bars is gated against. Cached next
     to the ``oracle`` result of the same (spec, tokens), keyed additionally by ``count`` and ``noise``."""
-    if not 0 < count <= tokens.size(1):
-        raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
-    base = cache_path(spec, tokens)
-    tag = f"-tail{count}" + (f"-noise-out{noise[0]:g}-in{noise[1]:g}-{noise[2]}" if noise else "")
-    path = base.with_name(base.stem + tag + ".pt")
+    path = _noisy_path(spec, tokens, count, noise, "tail")
     if path.is_file():
         return torch.load(path)
+    return _noisy_run(spec, tokens, count, model, noise)[0]
+
+
+@torch.no_grad()
+def noise_drift(
+    spec: OracleSpec,
+    tokens: torch.Tensor,
+    count: int,
+    noise: tuple[float, float, int],
+    model: v41.Transformer | None = None,
+) -> dict:
+    """{layer id: {"all": pcc, "tail": pcc}}: how far each block output of the prefill under ``noise`` (as
+    ``tail_logits``) drifts from the clean ``oracle`` result, over all rows and over the last ``count`` rows: the
+    per-layer floor a free-running implementation's streams are gated against. Cached like ``tail_logits``."""
+    path = _noisy_path(spec, tokens, count, noise, "drift")
+    if path.is_file():
+        return torch.load(path)
+    return _noisy_run(spec, tokens, count, model, noise)[1]
+
+
+def _noisy_path(spec: OracleSpec, tokens: torch.Tensor, count: int, noise, kind: str) -> Path:
+    base = cache_path(spec, tokens)
+    tag = f"-tail{count}" if kind == "tail" else f"-drift{count}"
+    tag += f"-noise-out{noise[0]:g}-in{noise[1]:g}-{noise[2]}" if noise else ""
+    return base.with_name(base.stem + tag + ".pt")
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    return torch.corrcoef(torch.stack([a.double().flatten(), b.double().flatten()]))[0, 1].item()
+
+
+def _save(obj, path: Path) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    torch.save(obj, tmp)
+    tmp.replace(path)
+
+
+def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise) -> tuple[torch.Tensor, dict | None]:
+    """One prefill (with ``noise`` if given): stores and returns the tail logits and, with noise, the drift."""
+    if not 0 < count <= tokens.size(1):
+        raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
     model = model if model is not None else build_reference(spec)
+    clean = oracle(spec, tokens, model) if noise is not None else None  # before the noisy run resets the state
     _reset_state(model)
     if spec.checkpoint is None:
         load_engram_rows(model, spec, tokens)
-    captured = {}
+    captured, blocks = {}, {}
 
     def capture(mod, args):  # the backbone's head call comes first (DSpark calls the head again afterwards)
         captured.setdefault("x", args[0][0, -count:].clone())
@@ -624,9 +663,14 @@ def tail_logits(
         def perturb_input(mod, args):
             return (perturbed(args[0], input_rel), *args[1:])
 
-        for layer in model.layers:
+        for pos, layer in enumerate(model.layers):
             for m in (layer.attn, layer.ffn):
                 hooks += [m.register_forward_pre_hook(perturb_input), m.register_forward_hook(perturb_output)]
+
+            def block_out(mod, args, out, lid=spec.layer_ids[pos]):
+                blocks[lid] = out[0][0].clone()
+
+            hooks.append(layer.register_forward_hook(block_out))
     try:
         prefill(model, tokens)
     finally:
@@ -635,11 +679,15 @@ def tail_logits(
     # one row at a time, as the reference head projects the last position (bit-identical to its logits)
     weight = model.head.weight.float()
     logits = torch.cat([torch.nn.functional.linear(row[None].float(), weight) for row in captured["x"]])
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    torch.save(logits, tmp)
-    tmp.replace(path)
-    return logits
+    _save(logits, _noisy_path(spec, tokens, count, noise, "tail"))
+    if noise is None:
+        return logits, None
+    drift = {}
+    for lid, x in blocks.items():
+        ref = clean["blocks"][lid]["x_out"]
+        drift[lid] = {"all": _pcc(ref, x), "tail": _pcc(ref[-count:], x[-count:])}
+    _save(drift, _noisy_path(spec, tokens, count, noise, "drift"))
+    return logits, drift
 
 
 # ------------------------------------------------------------------------------------ chunk contract

@@ -5,16 +5,16 @@
 """DeepSeek-V4.1 prefill transformer (bead F9): embed -> layers -> final collapse -> norm -> head, chunked.
 
 The prompt is real text, so the logits of its last ``SCORED`` positions are teacher-forced next-token
-predictions (the repo's accuracy convention: token agreement over many positions of real text, e.g. DeepSeek-V3
-test_demo_teacher_forced). Device vs the reference's single-shot prefill of the same layer subset: top-1
-agreement, top-5 recall of the reference's top-1, and logits PCC over those positions; repeats are bit-identical.
+predictions. Free-running V4.1 stacks are chaotic (top-k selection and MoE routing flips: real layer 20's MoE
+keeps the same experts on 77% of rows at input PCC 0.9987), so absolute bars on one token's logits measure flips.
 
-Bars (user decisions 2026-09-29): the reference's agreement with itself when every attention and MoE output
-carries the error its component bar allows and every attention and MoE input the error that flips selection and
-routing like the device's (``NOISE``, ``NOISE_SEEDS`` seeds), worst seed, minus ``MARGIN``:
-the stack must compose its components' errors no worse than that (a state or composition bug fails it).
-Free-running V4.1 stacks are chaotic (top-k selection and MoE routing flips: real layer 20's MoE keeps the same
-experts on 77% of rows at input PCC 0.9987), so an absolute bar on one token's logits measures the flips.
+Gate (user decisions 2026-09-29; playbook ~/knowledge/wiki/playbooks/Acceptance bars.md): each layer's
+free-running streams (all rows and the last SCORED rows) vs the reference's single-shot prefill must be no
+further than the reference itself drifts when every attention and MoE output carries the error its component bar
+allows and every attention and MoE input the error that flips selection and routing like the device's
+(``NOISE``, ``NOISE_SEEDS`` seeds, worst seed), minus ``DRIFT_MARGIN``: the stack composes its components' errors
+no worse than the components predict (a state or composition bug fails it). Top-1 agreement, top-5 recall and
+logits PCC over the scored positions are reported against the same floor; repeats are bit-identical.
 Cases: small dims (one chunk, two chunks, a padded last chunk), then production shape (S=2048) with synthetic
 and real weights.
 """
@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
+from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _unpack
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
@@ -57,7 +58,11 @@ SCORED = 256  # scored prompt positions (the last ones)
 NOISE = (0.045, 4e-3)
 NOISE_SEEDS = 5
 # below the worst reference self-agreement: ~1 binomial SD of an agreement rate at 256 positions; PCC is smooth
-MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}
+MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}  # token metrics: reported against the floor, not gated
+# per-layer stream PCC below the reference's worst noisy drift (user decision 2026-09-29: gate per-layer drift;
+# Gaussian noise matches the stream error's size but not its flip-shaped per-row distribution, which token
+# agreement is sensitive to)
+DRIFT_MARGIN = 0.003
 PRODUCTION_SEQ = 2048
 PRODUCTION_CANDIDATE_BLOCKS = 96  # of 128 visible blocks at S=2048 (2048 would make every block a candidate)
 WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
@@ -156,30 +161,46 @@ def _agreement(expected: torch.Tensor, actual: torch.Tensor) -> dict:
 
 
 def _check(model, spec, tokens, reference, name):
-    """Two prefills of ``tokens`` [1, S] scoring the last SCORED positions: bit-identical, and each agreement
-    metric vs the reference >= the reference's worst self-agreement under noise minus MARGIN. Returns the first
-    prefill's state."""
+    """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows and the last
+    SCORED rows) no further from the reference than its drift under the floor noise (worst seed) minus
+    DRIFT_MARGIN. Token agreement vs the same floor is reported. Returns the first prefill's state."""
     scored = min(SCORED, tokens.shape[1])
-    with _stage(f"{name} prefill (compile + run)"):
-        logits, state = model.prefill(tokens[0], scored)
+    mesh, tp = model.mesh_device, model.mesh_device.shape[1]
+    concat = ttnn.ConcatMesh2dToTensor(mesh, tuple(mesh.shape), dims=(2, 3))
+    streams = {}
+
+    def observe(layer, x, start, length):
+        rows = ttnn.to_torch(x, mesh_composer=concat)[0, 0, :length]
+        streams.setdefault(layer, []).append(_unpack(rows, model.config.HC_MULT, tp))
+
+    with _stage(f"{name} prefill (compile + run, observed)"):
+        logits, state = model.prefill(tokens[0], scored, observe)
     with _stage(f"{name} prefill (repeat)"):
         logits2, _ = model.prefill(tokens[0], scored)
-    with _stage(f"{name} reference logits (cached unless precomputed)"):
+    with _stage(f"{name} reference (cached unless precomputed)"):
+        clean = orc.oracle(spec, tokens, reference)
         expected = orc.tail_logits(spec, tokens, scored, reference)
-        floor = {k: 1.0 for k in MARGIN}
+        drifts = [orc.noise_drift(spec, tokens, scored, (*NOISE, s), reference) for s in range(NOISE_SEEDS)]
+        token_floor = {k: 1.0 for k in MARGIN}
         for seed in range(NOISE_SEEDS):
             noisy = _agreement(expected, orc.tail_logits(spec, tokens, scored, reference, noise=(*NOISE, seed)))
-            floor = {k: min(floor[k], noisy[k]) for k in floor}
-    device = _agreement(expected, logits)
-    logger.info(
-        f"transformer {name}: device "
-        + ", ".join(
-            f"{k} {device[k]:.4f} (bar {floor[k] - MARGIN[k]:.4f}, reference self {floor[k]:.4f})" for k in MARGIN
-        )
-    )
+            token_floor = {k: min(token_floor[k], noisy[k]) for k in token_floor}
     assert torch.equal(logits, logits2), "prefill is not bit-identical across repeats"
-    for k in MARGIN:
-        assert device[k] >= floor[k] - MARGIN[k], (k, device[k], floor[k])
+    tokens_device = _agreement(expected, logits)
+    logger.info(
+        f"transformer {name} tokens (reported): "
+        + ", ".join(f"{k} {tokens_device[k]:.4f} (reference self {token_floor[k]:.4f})" for k in MARGIN)
+    )
+    failures = []
+    for layer, parts in streams.items():
+        device, ref = torch.cat(parts), clean["blocks"][layer]["x_out"]
+        for key, rows in (("all", slice(None)), ("tail", slice(-scored, None))):
+            value = comp_pcc(ref[rows].float(), device[rows].float(), 0.0)[1]
+            floor = min(d[layer][key] for d in drifts)
+            logger.info(f"transformer {name} layer {layer} {key}: device {value:.5f} (bar {floor - DRIFT_MARGIN:.5f})")
+            if value < floor - DRIFT_MARGIN:
+                failures.append((layer, key, value, floor))
+    assert not failures, failures
     return state
 
 
