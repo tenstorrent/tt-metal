@@ -308,7 +308,7 @@ class ttKDA:
         )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            # Transient: forward untilizes it to DRAM immediately, which reads faster from L1.
+            # Transient: forward untilizes it immediately, which reads faster from L1.
             qkv=_slice_width(projected, 0, auxiliary_start, memory_config=self.staging_memory_config),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
             output_gate=_slice_width(
@@ -461,12 +461,13 @@ class ttKDA:
             ),
         )
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=self.staging_memory_config)
         ttnn.deallocate(projected.qkv)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        ttnn.deallocate(qkv)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
