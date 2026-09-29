@@ -31,6 +31,7 @@ class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixt
 inline CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 inline CoreRangeSet cores(const std::vector<CoreCoord>& values) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(values.size());
     for (auto core : values) {
         ranges.emplace_back(core, core);
     }
@@ -129,7 +130,12 @@ inline DecodedCompileTime decode_emitted_ct(const std::vector<uint32_t>& ct, uin
         m.mcast.uniform_remote_count = next();
     }
     const uint32_t ack = (control >> 24) & 3u;
-    m.mcast.ack_count = ack == 1 ? next() : ack == 2 ? m.mcast.uniform_remote_count : ack == 3 ? 0xFFFFFFFFu : 0u;
+    switch (ack) {
+        case 1: m.mcast.ack_count = next(); break;
+        case 2: m.mcast.ack_count = m.mcast.uniform_remote_count; break;
+        case 3: m.mcast.ack_count = 0xFFFFFFFFu; break;
+        default: m.mcast.ack_count = 0u; break;
+    }
     if (control & (1u << 23)) {
         m.mcast.rotating_span = next();
     }

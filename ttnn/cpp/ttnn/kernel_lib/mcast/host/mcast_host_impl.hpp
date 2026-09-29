@@ -26,16 +26,16 @@ public:
         std::optional<uint32_t> ack_count_override = std::nullopt);
 
     void attach(
-        tt::tt_metal::ProgramDescriptor&,
+        tt::tt_metal::ProgramDescriptor& descriptor,
         std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels,
+        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> targets,
         uint32_t first_semaphore_id) const;
     uint32_t next_semaphore_id() const;
     void attach(
-        tt::tt_metal::experimental::ProgramSpec&,
-        tt::tt_metal::experimental::ProgramRunArgs&,
+        tt::tt_metal::experimental::ProgramSpec& spec,
+        tt::tt_metal::experimental::ProgramRunArgs& run_args,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const;
+        std::span<const tt::tt_metal::experimental::KernelSpecName> targets) const;
 
     void append_semaphores(tt::tt_metal::Program& program);
 
@@ -115,6 +115,7 @@ private:
         PreparedChain prepare_chain_(const tt::tt_metal::IDevice& device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
         uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
+        uint32_t roles_for_core_(const tt::tt_metal::CoreCoord& core) const;
 
         tt::tt_metal::CoreRangeSet receivers_;
         std::vector<tt::tt_metal::CoreCoord> senders_;

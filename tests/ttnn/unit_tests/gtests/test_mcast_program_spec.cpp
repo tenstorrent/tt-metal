@@ -74,7 +74,7 @@ TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
 
 TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
     auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
-    for (const auto violation :
+    for (const auto* const violation :
          {"missing-prefix",
           "trailing-values",
           "duplicate-run-entry",
@@ -199,9 +199,14 @@ void run_spec_device_contract(
     SCOPED_TRACE(
         ::testing::Message() << "noc=" << noc << " counter=" << counter << " rotating=" << rotating << " control="
                              << control << " chain=" << chain << " handshake=" << handshake << " local=" << local);
-    const std::vector<CoreCoord> active = local   ? std::vector<CoreCoord>{{0, 0}}
-                                          : chain ? std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 1}}
-                                                  : std::vector<CoreCoord>{{0, 0}, {1, 0}, {2, 0}};
+    std::vector<CoreCoord> active;
+    if (local) {
+        active = {{0, 0}};
+    } else if (chain) {
+        active = {{0, 0}, {1, 0}, {0, 1}};
+    } else {
+        active = {{0, 0}, {1, 0}, {2, 0}};
+    }
     auto placed = active;
     placed.push_back({3, 0});  // Placed kernel outside either mcast must get inactive role data.
     const auto participants = cores(active);
@@ -275,7 +280,10 @@ void run_spec_device_contract(
             ASSERT_EQ(result.size(), 12u);
             const bool inside = node != CoreCoord{3, 0};
             for (uint32_t round = 0; round < rounds; ++round) {
-                const uint32_t expected = control ? (counter ? round + 1 : 1) : 136 * (seed + round * 100) + 1360;
+                uint32_t expected = 136 * (seed + round * 100) + 1360;
+                if (control) {
+                    expected = counter ? round + 1 : 1;
+                }
                 EXPECT_EQ(result[round], inside ? expected : 0u);
             }
             EXPECT_EQ(result[8], inside ? 136 * (seed + 1000) + 1360 : 0u);

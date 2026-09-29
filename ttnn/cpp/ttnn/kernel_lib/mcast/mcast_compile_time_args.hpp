@@ -60,11 +60,16 @@ constexpr uint32_t compile_time_control(ArgumentMetadata input) {
     const bool sends = (metadata.kernel.capabilities & CAN_SEND) != 0;
     const bool needs_ack =
         sends && (mcast.flags & PRE_HANDSHAKE) && transfer_mode(mcast.flags) == TransferMode::Multicast;
-    const Ack ack_encoding = !needs_ack                             ? Ack::None
-                             : mcast.ack_count == ACK_EQUALS_FANOUT ? Ack::Runtime
-                             : mcast.remote_count_known && mcast.ack_count == mcast.uniform_remote_count
-                                 ? Ack::RemoteCount
-                                 : Ack::Constant;
+    Ack ack_encoding = Ack::None;
+    if (needs_ack) {
+        if (mcast.ack_count == ACK_EQUALS_FANOUT) {
+            ack_encoding = Ack::Runtime;
+        } else if (mcast.remote_count_known && mcast.ack_count == mcast.uniform_remote_count) {
+            ack_encoding = Ack::RemoteCount;
+        } else {
+            ack_encoding = Ack::Constant;
+        }
+    }
     return WIRE_VERSION | (mcast.flags << FLAGS_SHIFT) | (mcast.has_remote_receivers ? HAS_RECEIVERS : 0u) |
            (uint32_t(mcast.sender_mcast_mode) << MODE_SHIFT) | (mcast.rectangle_capacity << CAPACITY_SHIFT) |
            (metadata.kernel.roles == DYNAMIC_ROLES ? DYNAMIC : metadata.kernel.roles << ROLES_SHIFT) |
@@ -124,7 +129,12 @@ struct CompileTimeLayout {
     }
 
     constexpr uint32_t semaphore(SemaphoreRole role) const {
-        return role == DATA_READY ? data_ready : role == CONSUMER_READY ? consumer_ready : signal_source;
+        switch (role) {
+            case DATA_READY: return data_ready;
+            case CONSUMER_READY: return consumer_ready;
+            case SIGNAL_SOURCE: return signal_source;
+        }
+        return OMITTED;
     }
 };
 
@@ -163,10 +173,12 @@ constexpr ArgumentMetadata decode_compile_time_metadata(const Words& words, bool
         metadata.mcast.uniform_remote_count = words[layout.remote_count];
     }
     const auto ack = ct_control::ack(control);
-    metadata.mcast.ack_count = ack == ct_control::Ack::Constant      ? words[layout.ack_count]
-                               : ack == ct_control::Ack::RemoteCount ? metadata.mcast.uniform_remote_count
-                               : ack == ct_control::Ack::Runtime     ? ACK_EQUALS_FANOUT
-                                                                     : 0u;
+    switch (ack) {
+        case ct_control::Ack::Constant: metadata.mcast.ack_count = words[layout.ack_count]; break;
+        case ct_control::Ack::RemoteCount: metadata.mcast.ack_count = metadata.mcast.uniform_remote_count; break;
+        case ct_control::Ack::Runtime: metadata.mcast.ack_count = ACK_EQUALS_FANOUT; break;
+        case ct_control::Ack::None: metadata.mcast.ack_count = 0u; break;
+    }
     if (layout.rotating_span != OMITTED) {
         metadata.mcast.rotating_span = words[layout.rotating_span];
     }
