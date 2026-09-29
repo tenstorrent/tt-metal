@@ -236,14 +236,12 @@ def test_compute_norm_spells_the_two_approx_true_calls_out():
         "(true /* APPROX */, MUL_UNARY, 8 /* ITERATIONS */, false /* is_fp32_dest_acc_en */), dst0, "
         "VectorMode::RC, RECIP_W));" in squeezed
     )
-    # rsqrt: ckernel::sfpu::rsqrt_init<true, false> and calculate_rsqrt<true, 8, false, false, false>
-    assert (
-        "MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */, false /* legacy_compat */)));" in squeezed
-    )
+    # rsqrt: ckernel::sfpu::rsqrt_init<true> and calculate_rsqrt<true, 8, false, false>
+    assert "MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */)));" in squeezed
     assert (
         "MATH(SFPU_UNARY_CALL( DST_SYNC_MODE, false /* is_fp32_dest_acc_en */, calculate_rsqrt, "
-        "(true /* APPROX */, 8 /* ITERATIONS */, false /* is_fp32_dest_acc_en */, false /* FAST_APPROX */, "
-        "false /* legacy_compat */), dst0, VectorMode::RC));" in squeezed
+        "(true /* APPROX */, 8 /* ITERATIONS */, false /* is_fp32_dest_acc_en */, false /* FAST_APPROX */), dst0, VectorMode::RC));"
+        in squeezed
     )
     # the API wrappers would pass the kernel's own APPROX (false here): they must not appear
     for wrong in ("rsqrt_tile<", "rsqrt_tile_init<", "mul_unary_tile("):
