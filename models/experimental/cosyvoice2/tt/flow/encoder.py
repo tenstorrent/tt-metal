@@ -835,6 +835,7 @@ class TtUpsampleConformerEncoder:
         context=None,
         streaming: bool = False,
         valid_length: int | None = None,
+        context_rows: int = 0,
     ):
         """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. `streaming=False`
         (default): original, unchanged behavior -- all-valid mask, no context, every
@@ -857,12 +858,28 @@ class TtUpsampleConformerEncoder:
         multiple of `CHUNK_SIZE` (mid-stream calls always are; the final one takes every
         remaining token).
 
+        `context_rows` (streaming, bucketed; the pipeline's streaming flow): the look-ahead tokens are already IN
+        `xs`, in the `context_rows` rows right after `valid_length`, and the rows past them are padding. The embed
+        output is zeroed past `valid_length + context_rows` and `pre_lookahead_layer` runs at the bucket's `length`,
+        as the non-streaming bucketed path does, so a streaming chunk meets only bucket geometries, never one per
+        chunk length. The valid rows see exactly upstream's `concat([token, context])`: the look-ahead conv reads
+        the context rows right after them, and conv2 is causal. The context and padding rows' outputs are hidden
+        from every query by the streaming mask's key-padding term. Mutually exclusive with `context`.
+
         `streaming=True` always runs eager -- tracing is already proven unavailable for
         this module (see class docstring) regardless of streaming, and chunk-causal/
         context/bucketing adds more host-side construction than it would be worth
         chasing."""
         if streaming:
-            return self._call_eager(xs, length, batch_size, context=context, streaming=True, valid_length=valid_length)
+            return self._call_eager(
+                xs,
+                length,
+                batch_size,
+                context=context,
+                streaming=True,
+                valid_length=valid_length,
+                context_rows=context_rows,
+            )
         if valid_length is not None and valid_length < length:
             # non-streaming bucketed: its mask depends on valid_length, so it runs eager like streaming
             return self._call_eager(xs, length, batch_size, valid_length=valid_length)
@@ -891,11 +908,15 @@ class TtUpsampleConformerEncoder:
         context=None,
         streaming: bool = False,
         valid_length: int | None = None,
+        context_rows: int = 0,
     ):
         if valid_length is None:
             valid_length = length
         assert 0 < valid_length <= length
         bucketed = not streaming and valid_length < length
+        if context_rows:
+            assert streaming and context is None, "context_rows is the streaming, in-place form of `context`"
+            assert valid_length + context_rows <= length, (valid_length, context_rows, length)
 
         if streaming:
             bias1 = ttnn.from_torch(
@@ -921,14 +942,16 @@ class TtUpsampleConformerEncoder:
         if valid_length == length:
             h = self.embed(xs)
             h = self.pre_lookahead_layer(h, length, batch_size, context=context_embedded)
-        elif bucketed:
-            # Non-streaming bucketed: everything runs at the bucket's geometry, so an utterance meets only warmed
-            # shapes. Upstream zero-pads the embed OUTPUT after the last token before the look-ahead conv
+        elif bucketed or context_rows:
+            # Bucketed: everything runs at the bucket's geometry, so an utterance meets only warmed shapes.
+            # Non-streaming, upstream zero-pads the embed OUTPUT after the last token before the look-ahead conv
             # (PreLookaheadLayer: F.pad(..., (0, pre_lookahead_len))), so the padded rows are zeroed here, after
-            # `embed`, and the look-ahead of the last valid rows reads exactly those zeros.
+            # `embed`, and the look-ahead of the last valid rows reads exactly those zeros. Streaming with the
+            # context in place (`context_rows`), upstream concatenates the context tokens instead: they are the
+            # rows right after the valid ones, kept, and only the rows past them are zeroed.
             h = self.embed(xs)
             keep = ttnn.from_torch(
-                (torch.arange(length) < valid_length)
+                (torch.arange(length) < valid_length + context_rows)
                 .float()
                 .reshape(1, length, 1)
                 .expand(batch_size, length, 1)

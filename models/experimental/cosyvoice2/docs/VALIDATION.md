@@ -10,7 +10,7 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **met: corpus WER 0.68 %** on the Stage 1 audio (chunked HiFT), the same as the PyTorch reference (below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **met: 95.87** on the Stage 1 audio (chunked HiFT), reference 95.21 (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
-| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | streaming not built | — |
+| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | not measured yet; streaming's first stage (offline, from fixed tokens) is built and gated against upstream's own streaming ("Streaming, stage A" below) | — |
 
 ## How the figures are produced
 
@@ -629,6 +629,56 @@ The gate: whole ≤ 0.13, and no seam above 1.5x its utterance's whole-signal fi
 - In the waveform, chunked vs single pass has PCC only 0.49–0.82, even in upstream itself: past the carried overlap,
   each call's sine phase restarts. The spectrum barely moves.
 
+## Streaming, stage A: offline, from fixed tokens (2026-09-29)
+
+`tt/streaming.py` runs upstream's streaming schedule (`CosyVoice2Model.tts(stream=True)`, reproduced in its module
+docstring) over a fixed token list, as if the LLM had finished.
+
+**Per chunk:**
+- The flow recomputes the prefix with chunk-causal masks and keeps the new frames. The final chunk runs the
+  non-streaming flow, as upstream's does.
+- Then HiFT runs with upstream's cache: 8 frames, source carry-over and the Hamming crossfade.
+- The hop starts at 25, plus a pad bringing the prompt to a 25-token boundary, then 50, then 100. It restarts for
+  every utterance; upstream's carries over between requests.
+
+**The geometries stay finite:**
+- **The flow** runs every chunk at a non-streaming flow bucket. The 3 look-ahead tokens sit right after the valid
+  rows (`TtUpsampleConformerEncoder`'s `context_rows`), so the look-ahead layer runs at the bucket length, not at a
+  length per chunk.
+- **HiFT** runs the middle chunks at their exact 108 and 208 frames. The first chunk (50–98 frames) is padded to 128
+  in front, and the final one to 128 or 256 at the end.
+  - At 108, 128 and 208 frames, every k=11 resblock conv's TILE-prepared weight is wrong (1.0 up to 7.9e7, and inf).
+  - The ROW_MAJOR-prepared candidate is right there (0.0035–0.0045), and the checks keep it ("Prepared conv weights"
+    above).
+
+**The gate** (`tests/e2e/test_streaming.py`) compares against upstream's own streaming run on the same tokens
+(`scripts/streaming_reference.py`, reference venv):
+- the tokens are TT's from the Stage 1 demo: six utterances, 23 chunks, 17 seams;
+- the hop restarts at 25 on both sides.
+
+| check | measured | gate |
+|---|---|---|
+| chunk plan (offsets, hops) | identical to upstream's, all six | equal |
+| flow: each chunk's new mel vs upstream's streaming mel, relative L2 | 0.0085–0.0182 | ≤ 0.03 |
+| control: upstream's non-streaming mel of the same frames vs its streaming mel | 0.022–0.130 | further away than ours, at every middle chunk |
+| HiFT, mechanism (upstream's mel, F0 and noise per call): each chunk's emitted audio | PCC 0.99921–0.99985 | ≥ 0.999 |
+| HiFT, mechanism: each seam (the crossfade ±40 ms) | PCC 0.99900–0.99989 | ≥ 0.998 |
+| HiFT, the final chunk's last 0.4 s | difference at −55 to −82 dBFS | 20 dB below the signal, or under −50 dBFS |
+| HiFT, own F0: log-mel L1 vs upstream's streamed audio | 0.069–0.088 | ≤ 0.13 |
+
+- **The final chunk's tail.** Its end padding reaches back into the last ~0.4 s, like bucketing's ("Bucketing"
+  above).
+  - Where the utterance ends in near-silence, the difference sits at the silence's own level (121-127105-0003:
+    signal −71.3, difference −70.4 dBFS).
+  - Elsewhere it sits 18–23 dB below the signal.
+  - Over the whole of 121-127105-0015's short final chunk (0.68 s), PCC is 0.965; before its last 0.4 s, 0.99921.
+- **WER and SIM** (`scripts/eval_wer_sim.py`) of our offline-streamed audio (our flow, our HiFT, own F0), against
+  upstream's streaming of the same tokens:
+  - WER 1.36 % vs 0.68 %; SIM 95.83 vs 95.90.
+  - The one extra word is Whisper appending "you" after the last word of 260-123440-0010. Otherwise the
+    transcripts match upstream's word for word.
+  - For scale, the same tokens non-streamed (the Stage 1 demo) score 0.68 % and 95.87.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch
@@ -676,4 +726,5 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 - **tenstorrent/tt-metal#36487** (prepared conv weights wrong under DRAM slicing) is worked around by the per-geometry
   checks. Where the TILE-prepared weight is wrong, a ROW_MAJOR-prepared one usually isn't, and the checks keep it.
   A comment with our geometries is drafted, not posted.
-- **Streaming (Stages 2 and 3)** is not built. Chunked HiFT is the vocoder half of it.
+- **Streaming:** stage A (offline, from fixed tokens) is built and gated against upstream's own streaming. Streaming
+  interleaved with the LLM, and its time to first packet and RTF, are not measured yet.

@@ -10,8 +10,8 @@ text-to-speech model, for [tenstorrent/tt-metal#54104](https://github.com/tensto
 ## Status
 
 The whole model runs on device, non-streaming: text → speech tokens (LLM) → mel (flow matching) → 24 kHz waveform
-(HiFT vocoder). **The four Stage 1 targets are met.** Streaming (the Stage 3 targets) is in progress and not in this
-tree yet.
+(HiFT vocoder). **The four Stage 1 targets are met.** Streaming (the Stage 3 targets) is in progress. Its offline stage
+(fixed tokens, upstream's chunk schedule) is built and matches upstream's own streaming run (`docs/VALIDATION.md`).
 
 | target (#54104) | stage | measured | status |
 |---|---|---|---|
@@ -19,7 +19,7 @@ tree yet.
 | token accuracy > 95 % vs the PyTorch reference | 1 | **95.94 %**, teacher-forced over 5,003 positions (27 sequences, 4 speakers) | met |
 | WER < 5 % | 1 | **0.68 %** (1 error in 147 words); the PyTorch reference also 0.68 % | met |
 | speaker similarity > 0.60 (cosine) | 1 | **0.959**; the PyTorch reference 0.952 | met |
-| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | streaming not built yet | — |
+| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | not measured yet | — |
 
 - Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The RTF and token-accuracy gates are
   enforced by tests.
@@ -167,7 +167,8 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
   - So start-up runs a fixed warm-up sequence. It takes 3.2 minutes when the kernels are on disk and 30.5 minutes on
     an empty cache ([`PERF.md`](PERF.md)).
   - Any change to the code, the configuration or the checkpoint costs one cold start.
-- **Streaming is not built yet.** The Stage 3 targets are unmeasured. Chunked HiFT is the vocoder half of it.
+- **Streaming is partly built.** The offline stage runs; streaming interleaved with the LLM is next, and the Stage 3
+  targets are unmeasured.
 - **Blackhole is untested.**
   `tests/pcc/test_flow_decoder.py::test_device_decoder_fused_sdpa_ignores_tile_padding_at_t_1_mod_32` guards the
   fused-SDPA tile-padding bug reported for Blackhole ([#57608](https://github.com/tenstorrent/tt-metal/issues/57608)).

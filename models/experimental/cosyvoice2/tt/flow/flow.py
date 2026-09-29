@@ -287,6 +287,56 @@ class TtCausalMaskedDiffWithXvec:
         assert feat.shape[1] == mel_len2
         return feat
 
+    def inference_streaming(
+        self,
+        token: torch.Tensor,
+        prompt_token: torch.Tensor,
+        prompt_feat: torch.Tensor,
+        embedding: torch.Tensor,
+        bucket_tokens: int,
+        context_len: int = 3,
+    ) -> torch.Tensor:
+        """Upstream's `CausalMaskedDiffWithXvec.inference(streaming=True, finalize=False)`: one mid-stream chunk.
+
+        `token`: every generated token so far, the last `context_len` of them being the look-ahead context
+        (`pre_lookahead_len`). As upstream does, it recomputes the whole prefix (prompt + tokens) with chunk-causal
+        masks, and returns the mel of every generated frame so far, `[1, 2 x (len(token) - context_len), 80]`; the
+        caller keeps the new ones.
+
+        Bucketed, always (`bucket_tokens` >= prompt + tokens): the sequence is `[prompt | tokens | padding]`, so the
+        look-ahead tokens sit right after the valid rows and the encoder runs them in place (`context_rows`). A
+        chunk then meets only the bucket's geometries, never one of its own. The CFM runs `streaming=True` with
+        the valid mask: its chunk-causal term plus the key padding."""
+        assert token.shape[0] == 1
+        spks = self._xvec(embedding)
+        full_token = torch.cat([prompt_token, token], dim=1)
+        n_valid = full_token.shape[1] - context_len
+        if bucket_tokens < full_token.shape[1]:
+            raise ValueError(f"bucket_tokens {bucket_tokens} < {full_token.shape[1]} tokens (look-ahead included)")
+        full_token = torch.nn.functional.pad(full_token, (0, bucket_tokens - full_token.shape[1]))
+        ids_dev = ttnn.from_torch(
+            full_token.reshape(1, 1, 1, -1).clamp(min=0).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        tok_emb_dev = self.input_embedding(ids_dev)
+        h_dev = self.encoder(
+            tok_emb_dev, bucket_tokens, 1, streaming=True, valid_length=n_valid, context_rows=context_len
+        )
+        t_len2 = h_dev.shape[1]
+        valid2 = n_valid * t_len2 // bucket_tokens
+        mel_len1 = prompt_feat.shape[1]
+        h_dev = ttnn.linear(h_dev, self.encoder_proj_w, bias=self.encoder_proj_b)
+        mu = ttnn.to_torch(h_dev).float().reshape(1, t_len2, self.output_size)
+
+        conds = torch.zeros(1, t_len2, self.output_size, dtype=mu.dtype)
+        conds[:, :mel_len1] = prompt_feat
+        mask = torch.zeros(1, t_len2, 1, dtype=mu.dtype)
+        mask[:, :valid2] = 1.0
+        feat = self.decoder.forward(mu, mask, N_TIMESTEPS, spks, conds, streaming=True)
+        return feat[:, mel_len1:valid2, :]
+
     def release_traces(self) -> None:
         """Release both the encoder's and the CFM's captured traces (see
         `TtUpsampleConformerEncoder.release_encoder_trace` / `TtCausalConditionalCFM.release_cfm_trace`),
