@@ -2708,6 +2708,85 @@
   "started": "2026-09-29T13:59:44",
   "status": "PASS"
  },
+ "C.kda_moe.attn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "79bcc9d3-ed58-42d6-98e8-ff629c0102ae"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_moe.attn_residual.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_moe.attn_residual.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 207.3,
+    "session_id": "79bcc9d3-ed58-42d6-98e8-ff629c0102ae",
+    "t": "2026-09-29T15:15:17"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 20.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T15:16:17"
+   }
+  ],
+  "last_run": "2026-09-29T15:16:17",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.kda_moe.attn_residual.log",
+  "metrics": {
+   "comb_term_coef_attn_residual_L04": 1.000008463859558,
+   "comb_term_rel_l2_attn_residual_L04": 0.001650160294957459,
+   "norm_ratio_max_attn_residual_L04": 1.0034542083740234,
+   "norm_ratio_max_attn_residual_L04_vs_cpu": 1.00020432472229,
+   "norm_ratio_min_attn_residual_L04": 0.9964480996131897,
+   "norm_ratio_min_attn_residual_L04_vs_cpu": 0.9996437430381775,
+   "pcc_attn_residual_L04": 0.9999952147245624,
+   "post_term_coef_attn_residual_L04": 1.0000035762786865,
+   "post_term_rel_l2_attn_residual_L04": 0.06261284649372101,
+   "rel_l2_attn_residual_L04": 0.003093775361776352,
+   "rel_l2_attn_residual_L04_vs_cpu": 0.0016499306075274944,
+   "worst_row_rel_attn_residual_L04": 0.006706742569804192,
+   "worst_row_rel_attn_residual_L04_vs_cpu": 0.0017774496227502823,
+   "worst_stream_rel_attn_residual_L04": 0.0037716394290328026
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T15:15:57",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 399.9,
