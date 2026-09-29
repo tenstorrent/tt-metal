@@ -2004,10 +2004,11 @@ class TestConfig:
                 )
                 return
 
-        # Init-completeness fuzzing: while the TRISCs are still held in reset (ELFs
-        # loaded, not yet released), optionally scribble garbage into the CFG space.
-        # Anything the kernel's init fails to (re)write stays polluted. No-op unless
-        # LLK_POLLUTE_CFG is set. CFG is not reset at launch, so this survives.
+        # Config-pollution sweep: while the TRISCs are still held in reset (ELFs loaded,
+        # not yet released), optionally replay a captured restore plan into the CFG space.
+        # Anything the victim's init fails to (re)write stays at that replayed residue.
+        # No-op unless an LLK_POLLUTE_INKERNEL_RESTORE* env var is set. CFG is not reset
+        # at launch, so this survives.
         maybe_pollute_cfg_from_env(TestConfig.TENSIX_LOCATION)
 
         match boot_mode:
