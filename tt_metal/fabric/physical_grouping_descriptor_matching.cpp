@@ -978,6 +978,7 @@ bool configure_pgd_psd_host_alignment_constraints(
         // target group must therefore be carvable inside one PSD host. Groups are free to share a host, so a
         // host_topology finer than the physical hosts stays legal; what is rejected is a single declared rank
         // whose chips would have to come from two different hosts.
+        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
             std::set<uint32_t> fam;
             for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
@@ -1077,6 +1078,8 @@ bool add_pgd_to_psd_constraints(
     // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
     // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
     // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
+    // DEBUG-CLEANUP(remove; normal default when unset = PGD tray/asic-location trait constraints APPLIED):
+    // TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS
     const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
     const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
     if (relax_pgd_slot_traits) {
@@ -1174,6 +1177,7 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         // This is the "host match" phase.
         const bool encoded =
             add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
+        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
             std::set<uint32_t> asics;
             for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
@@ -1227,6 +1231,7 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         MappingResult<LogicalChipId, AsicID> mapping = state.session->next();
         ++state.solves;
         if (!mapping.success) {
+            // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
             if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
                 grouping_info.name.find("SplitHost") != std::string::npos) {
                 std::set<uint32_t> asics;
@@ -1616,6 +1621,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 if (n >= required_nodes) {
                     candidates_by_diff[n - required_nodes].emplace_back(name, idx);
                 }
+                // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
                 if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
                     grouping_info.name.find("SplitHost") != std::string::npos &&
                     grouping_info.name.find("hostedge") != std::string::npos) {
@@ -1712,6 +1718,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         constraints,
                         ConnectionValidationMode::STRICT,
                         true);
+                    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
                     if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && name.find("SplitHost") != std::string::npos) {
                         std::set<uint32_t> asics, trays;
                         for (uint32_t nd : grouping_info.adjacency_graph.get_nodes()) {
@@ -1825,6 +1832,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         instance_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
                     for (const auto& match : best_matches_topology) {
                         const GroupingInfo committed_candidate = make_committed_grouping(match);
+                        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
                         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
                             match.name.find("SplitHost") != std::string::npos) {
                             std::set<uint32_t> asics;
@@ -1872,6 +1880,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             /*max_solutions=*/1,
                             solve_constraints,
                             gate_validation_mode);
+                        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
                         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
                             match.name.find("SplitHost") != std::string::npos) {
                             std::set<uint32_t> asics;
@@ -2684,6 +2693,7 @@ const Candidate* sat_footprint_canonical(
 AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
     const std::map<GlobalMeshId, CandidatePool>& pools, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
     const bool dedup =
+        // DEBUG-CLEANUP(remove; normal default when unset = footprint dedup ON): TT_METAL_SAT_NO_DEDUP
         std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     AdjacencyMatrixCache adjacency_cache;
@@ -2746,6 +2756,7 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
         }
     }
     {
+        // DEBUG-CLEANUP(remove): DBGSEAT diagnostic stats block (logs unconditionally)
         std::size_t total_edges = 0, unique_edges = 0, max_deg = 0, max_unique_deg = 0;
         std::map<std::size_t, std::size_t> unique_deg_hist;  // unique-degree -> #seats
         for (const auto& [seat, nbrs] : seat_adj) {
@@ -2767,6 +2778,7 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
             unique_edges ? static_cast<double>(total_edges) / static_cast<double>(unique_edges) : 0.0);
         // Diagnostic (TT_METAL_SAT_DIAG=1): unique-degree distribution. Low-degree seats are propagation
         // "anchors" that force assignments; a graph with none (all-uniform degree) makes CDCL search blindly.
+        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
             std::string hist;
             for (const auto& [deg, cnt] : unique_deg_hist) {
@@ -2782,8 +2794,10 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
 // File format: one line per mesh "meshId asic0,asic1,...". Used to pin the SAT to exactly that placement
 // so we can tell whether a valid placement is a satisfiable SAT model (adjacency correct, just hard) or is
 // rejected by the encoding (adjacency/footprint bug). Returns empty map when env unset / file unreadable.
+// DEBUG-CLEANUP(remove; normal default = empty pin map): whole load_sat_pin_solution() debug helper
 static std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
     std::map<uint64_t, std::vector<uint64_t>> pin;
+    // DEBUG-CLEANUP(remove; normal default when unset = empty pin map, no pinning): TT_METAL_SAT_PIN_SOLUTION
     const char* path = std::getenv("TT_METAL_SAT_PIN_SOLUTION");
     if (path == nullptr) {
         return pin;
@@ -2816,17 +2830,21 @@ bool build_sat_placement_constraints(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) {
     constraints = {};
+    // DEBUG-CLEANUP(remove; normal default = empty pin_solution, block below no-ops): TT_METAL_SAT_PIN_SOLUTION call
+    // site
     const std::map<uint64_t, std::vector<uint64_t>> pin_solution = load_sat_pin_solution();
     // TT_METAL_SAT_ANCHOR_N=k: anchor only the first k meshes (by mesh_id order) to their pinned footprint,
     // leaving the rest free. k<0 / unset => pin ALL meshes (full-pin test). Used to measure how many anchors
     // it takes to collapse the interchange symmetry (adjacency-stage symmetry break).
     int anchor_n = -1;
+    // DEBUG-CLEANUP(remove; normal default = no anchoring since pin map empty): TT_METAL_SAT_ANCHOR_N
     if (const char* v = std::getenv("TT_METAL_SAT_ANCHOR_N")) {
         anchor_n = std::atoi(v);
     }
     // Same footprint dedup as build_sat_placement_seat_graph -- MUST use the identical canonicalization so the
     // constraint's allowed seats match the graph's nodes. Meshes stay distinct targets; only seats are shared.
     const bool dedup =
+        // DEBUG-CLEANUP(remove; normal default when unset = footprint dedup ON): TT_METAL_SAT_NO_DEDUP
         std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     std::map<const Candidate*, std::vector<uint32_t>> seat_to_asics;
@@ -2857,6 +2875,7 @@ bool build_sat_placement_constraints(
             seats.insert(seat);
             seat_to_asics[seat] = candidate.dense_asics();
         }
+        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
         if (!pin_solution.empty() && std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
             log_info(
                 tt::LogFabric, "DBGPIN mesh={} pinned_seats={} (pinned={})", *mesh_id, seats.size(), pinned != nullptr);
@@ -2866,6 +2885,7 @@ bool build_sat_placement_constraints(
         }
     }
     {
+        // DEBUG-CLEANUP(remove): DBGSAT diagnostic stats block (logs unconditionally)
         std::size_t max_seats = 0, min_seats = SIZE_MAX;
         for (const auto& [mesh_id, pool] : pools) {
             (void)mesh_id;
@@ -2884,6 +2904,7 @@ bool build_sat_placement_constraints(
     // Diagnostic (TT_METAL_SAT_DIAG=1): per-mesh candidate-variant table. Shows which grouping variants
     // generated the seats for each mesh (name+type -> seat count), plus a global histogram across all
     // meshes. Lets us compare which variants the solver has to choose among for revAB vs revC.
+    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
     if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
         std::map<std::string, std::size_t> global_variant_seats;
         log_info(tt::LogFabric, "DBGVAR ==== per-mesh candidate variant table ({} meshes) ====", pools.size());
@@ -2905,6 +2926,7 @@ bool build_sat_placement_constraints(
                 distinct_asic_sets.insert(set_key);
                 // TT_METAL_SAT_DUMP_CANDS=1: emit each candidate's sorted ASIC-id set so we can check whether
                 // the known-good greedy placement's per-mesh ASIC set is even present in the SAT candidate pool.
+                // DEBUG-CLEANUP(remove): TT_METAL_SAT_DUMP_CANDS diagnostic (DBGCAND dump)
                 if (std::getenv("TT_METAL_SAT_DUMP_CANDS") != nullptr) {
                     log_info(tt::LogFabric, "DBGCAND mesh={} asics={}", *mesh_id, set_key);
                 }
@@ -2957,6 +2979,7 @@ bool build_sat_placement_constraints(
                 break;
             }
         }
+        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
         if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
             log_info(
                 tt::LogFabric,
@@ -3281,6 +3304,7 @@ void SatPlacementEnumerationSession::finish_init(
         }
     }
 
+    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
     if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
         for (const auto& [mesh_id, gs] : global_mesh_groupings_) {
             if (*mesh_id > 1) {
