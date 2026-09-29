@@ -282,3 +282,44 @@ def test_page_ring_and_chunk_boundaries(mesh_device, device_params, layer_index)
                 assert min(row["last_prefill_pcc"], row["decode_pcc"]) >= 0.99, row
     finally:
         result_path.write_text(json.dumps({"layer": layer_index, "cases": records}, indent=2) + "\n")
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "require_exact_physical_num_devices": True})],
+    indirect=True,
+)
+def test_padded_single_user_prefill_preserves_live_ring(mesh_device, device_params):
+    """A 1024-token padded launch must retain a 128-token live prompt in its 768-token ring."""
+    del device_params
+    inputs, expected = _reference(0)
+    layer, config, cos, sin = _layer_and_rope(mesh_device, 0, 1)
+    padded = torch.zeros((1, 1, 1024, config.hidden_size), dtype=torch.bfloat16)
+    padded[0, 0, :128] = inputs[0, :128]
+    hidden = _tensor(padded, mesh_device)
+    rope = [_tensor(value[:, :, :1024], mesh_device) for value in (cos, sin)]
+    table = _tensor(torch.arange(HF_CONTEXT_LENGTH // 64, dtype=torch.int32).reshape(1, -1), mesh_device, integer=True)
+    output = layer.prefill_forward(
+        hidden,
+        position_embeddings=rope,
+        page_table=table,
+        batch_size=1,
+        fill_seq_lens=[128],
+    )
+    prefill = _read_ranks(output, (1, 1024, config.hidden_size))[:, :128]
+    prefill_pcc = _rows_pcc(prefill, expected[:1, :128])[0]
+    for tensor in (hidden, output, *rope):
+        tensor.deallocate(True)
+    hidden = _tensor(inputs[:1, 128].reshape(1, 1, 1, -1), mesh_device)
+    position = _tensor(torch.tensor([128], dtype=torch.int32), mesh_device, integer=True)
+    rope = _decode_rope(cos, sin, torch.tensor([128]), layer)
+    output = layer.decode_forward(hidden, position_embeddings=rope, current_position=position, page_table=table)
+    actual = _read_ranks(output, (1, config.hidden_size))
+    result = {"prefill_pcc": prefill_pcc, "decode_pcc": _rows_pcc(actual, expected[:1, 128])[0]}
+    path = Path(os.environ["GPT_OSS_120B_RESULTS"]) / "padded-ring.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2) + "\n")
+    for tensor in (hidden, position, table, output, *rope):
+        tensor.deallocate(True)
+    assert min(result.values()) >= 0.99, result
