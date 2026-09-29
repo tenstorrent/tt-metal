@@ -1489,8 +1489,12 @@ void validate_matmul_mcast2d_glu(
         "{}: fuse_swiglu does not support transpose_a / transpose_b",
         config_name);
     TT_FATAL(
-        !input_tensor_a.memory_config().is_sharded() && !input_tensor_b.memory_config().is_sharded(),
-        "{}: fuse_swiglu requires interleaved input tensors",
+        (!input_tensor_a.memory_config().is_sharded() || operations::matmul::utilities::is_remote_hs_l1_in0(
+                                                             input_tensor_a.memory_config(),
+                                                             program_config.per_core_M,
+                                                             input_tensor_a.tensor_spec().tile().get_height())) &&
+            !input_tensor_b.memory_config().is_sharded(),
+        "{}: fuse_swiglu requires interleaved input tensors (in0 may be remote HEIGHT_SHARDED L1)",
         config_name);
     TT_FATAL(
         attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -1534,7 +1538,15 @@ void validate_matmul_mcast2d_config(
     const tt::tt_metal::CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     check_tensor_in_grid(input_tensor_a, device_grid);
     check_tensor_in_grid(input_tensor_b, device_grid);
-    if (input_tensor_a.memory_config().is_sharded()) {
+    // SHARDRES_A: remote HEIGHT_SHARDED L1 in0 is read through TensorAccessor like interleaved.
+    const bool in0_remote_hs = operations::matmul::utilities::is_remote_hs_l1_in0(
+        input_tensor_a.memory_config(), program_config.per_core_M, in0_tile.get_height());
+    if (in0_remote_hs) {
+        TT_FATAL(program_config.fuse_batch, "{}: Batch fusion is required when input A is sharded", config_name);
+        TT_FATAL(
+            !program_config.transpose_mcast, "{}: remote HEIGHT_SHARDED in0 needs transpose_mcast=false", config_name);
+    }
+    if (input_tensor_a.memory_config().is_sharded() && !in0_remote_hs) {
         TT_FATAL(program_config.fuse_batch, "{}: Batch fusion is required when input A is sharded", config_name);
         auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
         const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
@@ -1708,8 +1720,10 @@ void validate_matmul_mcast2d_config(
     }
 
     if (attributes.output_mem_config.is_sharded()) {
+        // SHARDRES_A: HEIGHT_SHARDED L1 output is written through TensorAccessor like interleaved.
         TT_FATAL(
-            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                operations::matmul::utilities::is_remote_hs_l1_out(attributes.output_mem_config),
             "{}: Output memory layout must be BLOCK_SHARDED, got: {}",
             config_name,
             attributes.output_mem_config.memory_layout());
@@ -2698,6 +2712,16 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         per_core_N,
                         tile_width_ratio);
 
+                    if (operations::matmul::utilities::is_remote_hs_l1_out(attributes.output_mem_config) &&
+                        attributes.output_mem_config.shard_spec().has_value()) {
+                        // SHARDRES_A: user-supplied HEIGHT_SHARDED L1 output, written through TensorAccessor.
+                        return {tt::tt_metal::TensorSpec(
+                            output_shape,
+                            tt::tt_metal::TensorLayout(
+                                attributes.output_dtype.value(),
+                                tt::tt_metal::PageConfig(output_layout, output_tile),
+                                attributes.output_mem_config))};
+                    }
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's

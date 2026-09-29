@@ -16,6 +16,18 @@
 
 namespace ttnn::prim {
 
+// SHARDRES_A: HEIGHT_SHARDED L1 tensor with shard = one tile row x full width. The interleaved
+// one-row-per-core factory reads/writes it through TensorAccessor (remote shards allowed).
+inline bool layernorm_is_hs_tile_rows(const Tensor& t) {
+    if (!t.is_sharded() || t.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+        t.memory_config().buffer_type() != tt::tt_metal::BufferType::L1 || !t.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& ss = t.shard_spec().value();
+    return ss.shape[0] == t.tensor_spec().tile().get_height() && ss.shape[1] == t.padded_shape()[-1] &&
+           ss.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
+}
+
 struct LayerNormMultiCoreProgramFactory {
     // The framework calls this with three arguments. The fourth restricts the cores the program may
     // touch: non-sharded layernorm splits its tile rows over whichever range it is given, so the

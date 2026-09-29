@@ -1419,7 +1419,7 @@ def gated_deltanet_forward_ttnn(
     o = ttnn.linear(
         o,
         o_proj_weight,
-        memory_config=mc_outproj,
+        memory_config=(tpc.resid_hs_mc() if (tpc.resid_hs_active() and T == tpc.RESID_HS_T) else mc_outproj),
         compute_kernel_config=ckc,
         program_config=_pc(o, o_proj_weight),
         **({"dtype": ttnn.bfloat8_b} if (T > 1 and os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1") else {}),

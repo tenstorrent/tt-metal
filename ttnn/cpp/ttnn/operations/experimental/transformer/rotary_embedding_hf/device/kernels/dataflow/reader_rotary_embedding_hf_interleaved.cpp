@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<10>();
     constexpr auto cos_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    // Pages per input row (== Wt normally; > Wt in partial mode: only the first Wt tiles of each row are read).
+    constexpr uint32_t Wt_in = get_compile_time_arg_val(sin_args.next_compile_time_args_offset());
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -65,19 +67,39 @@ void kernel_main() {
     uint32_t ht = start_row_id;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    // Partial in-place mode (Wt_in != Wt): the writer overwrites tile j of a row as soon as output j is computed,
+    // but output j' >= half_Wt still needs the ORIGINAL tile j'-half_Wt. So read all rotated tiles of the row
+    // (in compute order) before any other tile of the row is pushed: compute cannot start before then.
+    constexpr bool partial = (Wt_in != Wt);
     for (uint32_t i = 0; i < num_rows; ++i) {
+        if constexpr (partial) {
+            const uint32_t row_base = input_curr_id;
+            for (uint32_t j = 0; j < Wt; ++j) {
+                cb_rotated_input.reserve_back(onetile);
+                noc.async_read(
+                    s0,
+                    CoreLocalMem<uint32_t>(cb_rotated_input.get_write_ptr()),
+                    input_tile_bytes,
+                    {.page_id = row_base + (j < half_Wt ? j + half_Wt : j - half_Wt)},
+                    {});
+                noc.async_read_barrier();
+                cb_rotated_input.push_back(onetile);
+            }
+        }
         for (uint32_t j = 0; j < Wt; ++j) {
-            cb_rotated_input.reserve_back(onetile);
-            uint32_t rotated_input_l1_write_addr = cb_rotated_input.get_write_ptr();
-            noc.async_read(
-                s0,
-                CoreLocalMem<uint32_t>(rotated_input_l1_write_addr),
-                input_tile_bytes,
-                {.page_id = rotated_input_curr_id},
-                {});
-            noc.async_read_barrier();
-            cb_rotated_input.push_back(onetile);
-            rotated_input_curr_id++;
+            if constexpr (!partial) {
+                cb_rotated_input.reserve_back(onetile);
+                uint32_t rotated_input_l1_write_addr = cb_rotated_input.get_write_ptr();
+                noc.async_read(
+                    s0,
+                    CoreLocalMem<uint32_t>(rotated_input_l1_write_addr),
+                    input_tile_bytes,
+                    {.page_id = rotated_input_curr_id},
+                    {});
+                noc.async_read_barrier();
+                cb_rotated_input.push_back(onetile);
+                rotated_input_curr_id++;
+            }
 
             cb_sin.reserve_back(onetile);
             uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
@@ -102,11 +124,16 @@ void kernel_main() {
             cb_cos.push_back(onetile);
             cos_sin_curr_id++;
 
-            if (j == half_Wt - 1) {
-                rotated_input_curr_id -= Wt;
+            if constexpr (!partial) {
+                if (j == half_Wt - 1) {
+                    rotated_input_curr_id -= Wt;
+                }
             }
         }
-        rotated_input_curr_id += Wt;
+        input_curr_id += Wt_in - Wt;
+        if constexpr (!partial) {
+            rotated_input_curr_id += Wt_in;
+        }
         ht++;
         if (ht == Ht) {
             ht = 0;

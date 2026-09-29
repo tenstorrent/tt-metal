@@ -125,7 +125,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in0_remote_hs = ttnn::operations::matmul::utilities::is_remote_hs_l1_in0(
+        in0_tensor.memory_config(), per_core_M, in0_tile.get_height());
+    const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !in0_remote_hs;
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
     const bool in1_is_width_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool in1_is_height_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;

@@ -554,6 +554,45 @@ def act_bf8_norm():
     return os.environ.get("QWEN36_ACT_BF8_NORM", "0") == "1"
 
 
+# P11 RESID_HS (QWEN36_RESID_HS=1, code default 0): at T == M5_ADDNORM_T prefill chunks the residual stream h and the
+# o-proj / down-proj outputs b are HEIGHT_SHARDED L1 on the 64 cores the fused add+RMSNorm uses (shard [32, 2048], shard k on
+# the core of tile row k = first 64 cores of the 13x10 grid, row-major); the fused add+norm then runs local to each shard.
+# layer.py turns the "active" state on around a layer forward that takes the M5 path; the matmul sites (G3, F3, M2) read it.
+RESID_HS_T = 2048
+_RESID_HS_STATE = {"active": False, "mc": None}
+
+
+def resid_hs_flag():
+    return os.environ.get("QWEN36_RESID_HS", "0") == "1"
+
+
+def resid_hs_set_active(on):
+    _RESID_HS_STATE["active"] = bool(on)
+
+
+def resid_hs_active():
+    return _RESID_HS_STATE["active"]
+
+
+def resid_hs_mc(width=2048):
+    """HEIGHT_SHARDED L1 memory config, shard [32, width] over the first 64 cores of the 13x10 grid (row-major)."""
+    mc = _RESID_HS_STATE["mc"]
+    if mc is None or mc[0] != width:
+        grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 3)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(11, 4)),
+            }
+        )
+        cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [32, width], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        mc = _RESID_HS_STATE["mc"] = (width, cfg)
+    return mc[1]
+
+
 def r5_value(item):
     """Raw value of the R5 item flag (a key of R5_FLAG_DEFAULTS): env QWEN36_R5_<item>."""
     return os.environ.get("QWEN36_R5_" + item, R5_FLAG_DEFAULTS[item])

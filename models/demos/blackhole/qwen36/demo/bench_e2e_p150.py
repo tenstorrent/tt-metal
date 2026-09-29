@@ -394,6 +394,11 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "1",
         "P6_BF8ACT: 1 = bfloat8_b fused add+RMSNorm / layer-0 norm output n at T == 2048 (residual h stays bf16); 0 = bf16 (no change)",
     ),
+    "QWEN36_RESID_HS": (
+        "1",
+        "P11_SHARDRES_B: 1 = T == 2048 prefill residual stream h and the o-proj / down-proj outputs (G3, F3, M2) HEIGHT_SHARDED L1 "
+        "[32, 2048] on the 64 fused add+RMSNorm cores (bit-exact); 0 = interleaved (no change)",
+    ),
     # SGRN item flag (tt/tp_common.py sgrn_kernel_variant(); only with QWEN36_C2_SGRN=1); unset = op default 4.
     "QWEN36_SGRN_VARIANT": (
         "5",
@@ -412,6 +417,12 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "0",
         "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
         "DRAM interleaved (bit-exact). run_bench_e2e_p150.sh pins it (runner default 1); 0=DRAM",
+    ),
+    "QWEN36_ROPE_PARTIAL_INPLACE": (
+        "1",
+        "P10_ROPE: prefill partial RoPE (rotary 64 of head 256) as ONE in-place ttnn.experimental.rotary_embedding_hf "
+        "call per tensor (rotary_dim=64) instead of slice+rope+slice+concat (bit-exact). run_bench_e2e_p150.sh pins "
+        "it (runner default 0); 1=in-place op",
     ),
     "QWEN36_GDN_STATE_INPLACE": (
         "0",

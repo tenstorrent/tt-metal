@@ -10,6 +10,7 @@ import os
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as _tpc_hs
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
@@ -49,11 +50,13 @@ def make_decode_norm_sharded_config(dim, num_cores=8):
     return mem_cfg, prog_cfg
 
 
-def _m5_add_norm(norm, a, b, h_mc, n_mc):
+def _m5_add_norm(norm, a, b, h_mc, n_mc, resid_hs=False):
     """M5 ADDNORM (tp_common M5 table): h = a + b and n = rmsnorm(h) * gamma in ONE op (the R6 stage-1
     ttnn.rms_norm residual_output_tensor path). h is allocated here (bf16 TILE, a's shape, memory config h_mc =
     where the plain ttnn.add(a, b) writes); n goes to n_mc. Same eps / weight / HiFi2 compute config /
     program_config=None as RMSNorm.forward, so h and n are bit-identical to ttnn.add + ttnn.rms_norm (R6 T1/T3).
+    resid_hs (P11 RESID_HS): a, b are HEIGHT_SHARDED L1 [32, 2048] shards on the 64 norm cores, h_mc is that sharded
+    config (h is written HS), n_mc stays interleaved; the op needs LayerNormDefaultProgramConfig for sharded inputs.
     Returns (h, n)."""
     h = ttnn.allocate_tensor_on_device(a.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, a.device(), h_mc)
     n = ttnn.rms_norm(
@@ -61,7 +64,7 @@ def _m5_add_norm(norm, a, b, h_mc, n_mc):
         epsilon=norm.eps,
         weight=norm.weight,
         residual_input_tensor=b,
-        program_config=None,
+        program_config=ttnn.LayerNormDefaultProgramConfig() if resid_hs else None,
         memory_config=n_mc,
         compute_kernel_config=norm.compute_kernel_config_hifi2,
         residual_output_tensor=h,
@@ -429,6 +432,11 @@ class Qwen36DecoderLayer:
             and xs.shape[1] == M5_ADDNORM_T
             and xs.dtype == ttnn.bfloat16
         )
+        # P11 RESID_HS (QWEN36_RESID_HS=1): on the M5 fused path the residual h, x and the o-proj / down-proj outputs b are
+        # HEIGHT_SHARDED L1 (tp_common.resid_hs_mc); n stays interleaved. The matmul sites read the "active" state.
+        _hs = bool(_m5 and _attn_norm_config is None and _ff_norm_config is None and _tpc_hs.resid_hs_flag())
+        _tpc_hs.resid_hs_set_active(_hs)
+        _hs_mc = _tpc_hs.resid_hs_mc() if _hs else None
         attn_input = None
         if pending is not None:
             # M5 ADDNORM cross-layer pair: x = h_prev + mlp_prev (the add the previous layer deferred, written where
@@ -437,7 +445,12 @@ class Qwen36DecoderLayer:
             x_mc = _residual_mc if _residual_mc is not None else h_prev.memory_config()
             if _m5 and _attn_norm_config is None:
                 x, attn_input = _m5_add_norm(
-                    self.attention_norm, h_prev, mlp_prev, x_mc, ttnn.L1_MEMORY_CONFIG if _m1_norm_l1 else x_mc
+                    self.attention_norm,
+                    h_prev,
+                    mlp_prev,
+                    _hs_mc if _hs else x_mc,
+                    ttnn.L1_MEMORY_CONFIG if (_m1_norm_l1 or _hs) else x_mc,
+                    resid_hs=_hs,
                 )
             else:
                 x = ttnn.add(h_prev, mlp_prev, memory_config=_residual_mc)
@@ -527,13 +540,17 @@ class Qwen36DecoderLayer:
             # (same slice + to_layout as Qwen36Model's exact-multiple last-row read). The 1-row ffn_norm
             # writes L1 interleaved, as in decode, so the MLP runs its T == 1 (decode) path.
             _T_full = x.shape[1]
+            # P11 RESID_HS: x (fused-add output) is HEIGHT_SHARDED; slice from an interleaved copy.
+            _x_sl = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG) if (_hs and x.memory_config().is_sharded()) else x
             if last_row_tile_slices:
                 # M4 R4A: tile-aligned 32-row block (TILE path), then its row 31 (small untilize path).
-                _x_blk = x[:, _T_full - 32 : _T_full, :]
+                _x_blk = _x_sl[:, _T_full - 32 : _T_full, :]
                 x_res = ttnn.to_layout(_x_blk[:, 31:32, :], ttnn.TILE_LAYOUT)
                 ttnn.deallocate(_x_blk)
             else:
-                x_res = ttnn.to_layout(x[:, _T_full - 1 : _T_full, :], ttnn.TILE_LAYOUT)
+                x_res = ttnn.to_layout(_x_sl[:, _T_full - 1 : _T_full, :], ttnn.TILE_LAYOUT)
+            if _x_sl is not x:
+                ttnn.deallocate(_x_sl)
             h = ttnn.add(x_res, attn_output, memory_config=_residual_mc)
             ttnn.deallocate(x_res)
             _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
@@ -542,7 +559,16 @@ class Qwen36DecoderLayer:
             # M5 ADDNORM intra-layer pair: h = x + attn_output (where the residual add writes today) + ffn_norm
             # (the plain ffn_norm writes h's placement, as here).
             h_mc = _residual_mc if _residual_mc is not None else x.memory_config()
-            h, ff_input = _m5_add_norm(self.ffn_norm, x, attn_output, h_mc, h_mc)
+            _x_in = x
+            if _hs:
+                if not x.memory_config().is_sharded():  # layer 0: x is the (interleaved) embedding output
+                    _x_in = ttnn.to_memory_config(x, _hs_mc)
+                h_mc = _hs_mc
+            h, ff_input = _m5_add_norm(
+                self.ffn_norm, _x_in, attn_output, h_mc, ttnn.L1_MEMORY_CONFIG if _hs else h_mc, resid_hs=_hs
+            )
+            if _x_in is not x:
+                ttnn.deallocate(_x_in)
         else:
             h = ttnn.add(x, attn_output, memory_config=_residual_mc)
             ff_input = None
@@ -562,8 +588,24 @@ class Qwen36DecoderLayer:
 
         if defer_out:
             # M5 ADDNORM: the next layer fuses this residual add with its attention_norm (pending).
+            _tpc_hs.resid_hs_set_active(False)
             return (h, ff_output)
-        output = ttnn.add(h, ff_output, memory_config=_residual_mc)
+        _tpc_hs.resid_hs_set_active(False)
+        if h.memory_config().is_sharded() or ff_output.memory_config().is_sharded():
+            # P11 RESID_HS: the layer output leaves the HS residual domain (interleaved add).
+            _h_i = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG) if h.memory_config().is_sharded() else h
+            _f_i = (
+                ttnn.to_memory_config(ff_output, ttnn.L1_MEMORY_CONFIG)
+                if ff_output.memory_config().is_sharded()
+                else ff_output
+            )
+            output = ttnn.add(_h_i, _f_i, memory_config=_residual_mc)
+            if _h_i is not h:
+                ttnn.deallocate(_h_i)
+            if _f_i is not ff_output:
+                ttnn.deallocate(_f_i)
+        else:
+            output = ttnn.add(h, ff_output, memory_config=_residual_mc)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 

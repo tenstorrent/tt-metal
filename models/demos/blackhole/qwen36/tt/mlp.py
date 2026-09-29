@@ -483,6 +483,9 @@ class Qwen36MLP:
                 if self._mm_grid is not None and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
                 else None
             )
+            _down_mc = ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG
+            if m1_pc is not None and T == tpc.RESID_HS_T and tpc.resid_hs_active():
+                _down_mc = tpc.resid_hs_mc()  # P11 RESID_HS: b written HEIGHT_SHARDED (shard k on norm core k)
             if m1_pc is not None and self._m3_zero_bias is not None:
                 # M3 ZB (QWEN36_M3_ZB=1): the same M1 S2 program via ttnn.linear + the shared zero bias
                 # (FUSE_BIAS path; N1 N-f: bit-identical to minimal_matmul). Allocated at model load.
@@ -492,7 +495,7 @@ class Qwen36MLP:
                     bias=self._m3_zero_bias,
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=_down_mc,
                     dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif m1_pc is not None:
@@ -505,7 +508,7 @@ class Qwen36MLP:
                     w.w2,
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=_down_mc,
                     dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif i2_pc is not None:

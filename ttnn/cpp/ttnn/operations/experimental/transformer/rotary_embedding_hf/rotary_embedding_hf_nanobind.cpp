@@ -47,6 +47,13 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
                 ``math_fidelity=HiFi4``, ``math_approx_mode=True``, ``fp32_dest_acc_en=False``,
                 ``packer_l1_acc=False``, and ``dst_full_sync_en=False``.
 
+            rotary_dim (Optional[int]): Partial, IN-PLACE rotary embedding (prefill only). When given, must be
+                a multiple of ``2 * ttnn.TILE_SIZE`` and smaller than the padded ``head_dim`` of ``input_tensor``.
+                ``cos_cache``/``sin_cache`` then have last dim ``rotary_dim``. Only the first ``rotary_dim``
+                columns of each row are rotated, they are written back into ``input_tensor``'s buffer, and the
+                remaining columns are neither read nor written. The op returns ``input_tensor`` itself.
+                Interleaved tensors only. Default ``None`` (regular out-of-place op on the full head_dim).
+
         Returns:
             ttnn.Tensor: Output tensor with rotary embedding applied
 
@@ -70,7 +77,8 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("is_decode_mode") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("rotary_dim") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

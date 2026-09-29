@@ -17,6 +17,23 @@
 
 namespace ttnn::operations::matmul::utilities {
 
+// SHARDRES_A: a HEIGHT_SHARDED L1 tensor that the 2D-mcast factory reads/writes through TensorAccessor
+// like an interleaved tensor (remote shards). Excludes the existing local HEIGHT_SHARDED in0 path
+// (single-column shard grid and shard height == per_core_M tiles), so existing behaviour is unchanged.
+inline bool is_remote_hs_l1_out(const tt::tt_metal::MemoryConfig& mc) {
+    return mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+           mc.buffer_type() == tt::tt_metal::BufferType::L1;
+}
+inline bool is_remote_hs_l1_in0(const tt::tt_metal::MemoryConfig& mc, uint32_t per_core_M, uint32_t tile_h) {
+    if (!is_remote_hs_l1_out(mc) || !mc.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& ss = mc.shard_spec().value();
+    const auto bb = ss.grid.bounding_box();
+    const bool local_ok = bb.start_coord.x == bb.end_coord.x && ss.shape[0] / tile_h == per_core_M;
+    return !local_ok;
+}
+
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.

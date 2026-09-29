@@ -296,6 +296,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // The caller may restrict the program to a subset of the grid; otherwise take the whole of it.
     CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+    if (layernorm_is_hs_tile_rows(a)) {
+        // SHARDRES_A: tile row k goes to the core that holds shard k (ROW_MAJOR shard order over the grid).
+        requested_cores = a.shard_spec().value().grid;
+    }
 
     // Use split_work_to_cores to properly distribute tile rows across available cores
     auto

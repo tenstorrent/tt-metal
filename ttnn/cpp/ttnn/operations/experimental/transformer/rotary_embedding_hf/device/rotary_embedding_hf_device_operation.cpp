@@ -50,7 +50,28 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");
-    TT_FATAL(cos.padded_shape()[0] == 1 && cos.padded_shape()[-1] == X, "Cos dims must match input dims");
+    const uint32_t cos_dim = args.rotary_dim > 0 ? args.rotary_dim : X;
+    if (args.rotary_dim > 0) {
+        TT_FATAL(!args.is_decode_mode, "rotary_dim (partial in-place RoPE) is prefill only");
+        TT_FATAL(
+            args.rotary_dim % (TILE_WIDTH * 2) == 0 && args.rotary_dim < X,
+            "rotary_dim ({}) must be a multiple of {} and smaller than the input head dim ({})",
+            args.rotary_dim,
+            TILE_WIDTH * 2,
+            X);
+        TT_FATAL(
+            !input_tensor.is_sharded() && !args.output_mem_config.is_sharded(),
+            "rotary_dim (partial in-place RoPE) requires interleaved input");
+        TT_FATAL(
+            args.output_mem_config == input_tensor.memory_config(),
+            "rotary_dim (partial in-place RoPE): output memory config must equal the input memory config");
+    }
+    TT_FATAL(
+        cos.padded_shape()[0] == 1 && cos.padded_shape()[-1] == cos_dim,
+        "Cos last dim ({}) must equal {} ({})",
+        cos.padded_shape()[-1],
+        args.rotary_dim > 0 ? "rotary_dim" : "the input head dim",
+        cos_dim);
 
     if (args.is_decode_mode) {
         // Decode mode: input [1, batch, num_heads, head_dim], cos/sin [1, batch, 1, head_dim]
@@ -139,6 +160,9 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
 
 ttnn::Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.rotary_dim > 0) {
+        return tensor_args.input_tensor;  // in place
+    }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
@@ -152,13 +176,15 @@ ttnn::Tensor rotary_embedding_hf(
     const ttnn::Tensor& sin,
     bool is_decode_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t rotary_dim) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingHfDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .rotary_dim = rotary_dim,
     };
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input, .cos_cache = cos, .sin_cache = sin};
 

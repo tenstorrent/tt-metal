@@ -214,6 +214,8 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(1);  // Wt: tiles per row
+    writer_compile_time_args.push_back(1);  // page stride between rows
 
     KernelDescriptor::Defines writer_kernel_defines;
     if (out_sharded) {
@@ -348,9 +350,12 @@ ProgramDescriptor create_multi_tile_descriptor(
 
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    // Partial in-place mode: Wt = rotated tiles per row; Wt_in = tiles per row in the input/output buffer.
+    const uint32_t Wt_in = input.padded_shape()[-1] / TILE_WIDTH;
+    const bool partial = operation_attributes.rotary_dim > 0;
+    uint32_t Wt = partial ? operation_attributes.rotary_dim / TILE_WIDTH : Wt_in;
     uint32_t half_Wt = Wt / 2;
-    uint32_t HtWt = Ht * Wt;
+    uint32_t HtWt = Ht * Wt;  // cos/sin tiles per head-slab (cos/sin last dim == Wt * 32)
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -521,9 +526,12 @@ ProgramDescriptor create_multi_tile_descriptor(
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(Wt_in);  // page stride between rows of the input (== Wt when not partial)
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(Wt);     // tiles written per row
+    writer_compile_time_args.push_back(Wt_in);  // page stride between rows of the output (== Wt when not partial)
 
     KernelDescriptor::Defines writer_kernel_defines;
     if (out_sharded) {
@@ -600,23 +608,18 @@ ProgramDescriptor create_multi_tile_descriptor(
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0, rows_done = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
-        uint32_t cos_sin_start_id = num_tiles_written % HtWt;
+        uint32_t cos_sin_start_id = (rows_done * Wt) % HtWt;
+        uint32_t start_page = rows_done * Wt_in;  // first input/output page of this core's first row
 
         reader_desc.emplace_runtime_args(
             core,
-            {src_buffer,
-             cos_buffer,
-             sin_buffer,
-             num_rows_per_core,
-             num_tiles_written,
-             num_tiles_written / Wt % Ht,
-             cos_sin_start_id});
+            {src_buffer, cos_buffer, sin_buffer, num_rows_per_core, start_page, rows_done % Ht, cos_sin_start_id});
 
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
-        num_tiles_written += num_rows_per_core * Wt;
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, start_page});
+        rows_done += num_rows_per_core;
     }
 
     desc.kernels.push_back(std::move(reader_desc));

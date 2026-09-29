@@ -49,6 +49,22 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+def _rope_partial_inplace_enabled():
+    """QWEN36_ROPE_PARTIAL_INPLACE (code default 0): partial RoPE as one in-place rotary_embedding_hf call."""
+    return _os.environ.get("QWEN36_ROPE_PARTIAL_INPLACE", "0") == "1"
+
+
+def _rope_partial_inplace_ok(x, rotary_dim):
+    # In-place op: interleaved TILE input, prefill (>1 row), rotary_dim multiple of 64 and < head dim.
+    return (
+        _rope_partial_inplace_enabled()
+        and x.shape[-2] > 1
+        and rotary_dim % 64 == 0
+        and rotary_dim < x.shape[-1]
+        and not x.is_sharded()
+    )
+
+
 def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
     """Apply RoPE to query and key tensors using the fused ttnn.experimental.rotary_embedding_hf op.
 
@@ -73,6 +89,12 @@ def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
         q_embed = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, memory_config=memory_config)
         k_embed = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, memory_config=memory_config)
         return q_embed, k_embed
+
+    if _rope_partial_inplace_ok(q, rotary_dim) and _rope_partial_inplace_ok(k, rotary_dim):
+        # One in-place op per tensor: rotates dims [0, rotary_dim), leaves the rest untouched (bit-exact vs below).
+        ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        return q, k
 
     q_rot = q[..., :rotary_dim]
     q_pass = q[..., rotary_dim:]
@@ -107,6 +129,9 @@ def apply_rotary_pos_emb_fused_one(x, cos, sin, memory_config=None):
     rotary_dim = cos.shape[-1]
     if rotary_dim == x.shape[-1]:
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, memory_config=memory_config)
+    if _rope_partial_inplace_ok(x, rotary_dim):
+        ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        return x
     x_rot = x[..., :rotary_dim]
     x_pass = x[..., rotary_dim:]
     x_rot_embed = ttnn.experimental.rotary_embedding_hf(
@@ -1166,11 +1191,17 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(gate)
 
     # Output projection (M2 LASTROW: 1 row -> the decode program config, never the M = T one)
+    _o_mc = memory_config
+    if T == 2048 and not prefill_last_row_only:
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc_hs
+
+        if _tpc_hs.resid_hs_active():
+            _o_mc = _tpc_hs.resid_hs_mc()  # P11 RESID_HS: b written HEIGHT_SHARDED (shard k on norm core k)
     attn_output = ttnn.linear(
         attn_output,
         o_proj_weight,
         compute_kernel_config=ckc,
-        memory_config=memory_config,
+        memory_config=_o_mc,
         program_config=_pc_row(attn_output, o_proj_weight)
         if prefill_last_row_only
         else _pc(attn_output, o_proj_weight),

@@ -17,7 +17,7 @@ namespace ttnn::prim {
 
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
+    if (tensor_args.input.is_sharded() && !layernorm_is_hs_tile_rows(tensor_args.input)) {
         return LayerNormShardedProgramFactory{};
     }
     return LayerNormMultiCoreProgramFactory{};
@@ -160,7 +160,16 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 beta.value().dtype());
         }
     }
-    if (a.is_sharded()) {
+    const bool hs_rows = layernorm_is_hs_tile_rows(a);
+    if (hs_rows) {
+        TT_FATAL(
+            std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config),
+            "HEIGHT_SHARDED tile-row input needs LayerNormDefaultProgramConfig");
+        if (b.has_value() && b.value().is_sharded()) {
+            TT_FATAL(layernorm_is_hs_tile_rows(b.value()), "sharded residual must be HEIGHT_SHARDED tile rows");
+        }
+    }
+    if (a.is_sharded() && !hs_rows) {
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
             a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
@@ -276,8 +285,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 !std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config).use_welford,
             "residual_output_tensor requires LayerNormDefaultProgramConfig without Welford");
         TT_FATAL(
-            a.layout() == Layout::TILE && !a.is_sharded() && !b.value().is_sharded(),
-            "residual_output_tensor requires interleaved TILE input and residual tensors");
+            a.layout() == Layout::TILE && (!a.is_sharded() || hs_rows) &&
+                (!b.value().is_sharded() || (hs_rows && layernorm_is_hs_tile_rows(b.value()))),
+            "residual_output_tensor requires interleaved (or HEIGHT_SHARDED tile-row) TILE input and residual tensors");
         TT_FATAL(
             a.dtype() == DataType::BFLOAT16, "residual_output_tensor requires a BFLOAT16 input, got: {}", a.dtype());
         TT_FATAL(h.storage_type() == StorageType::DEVICE, "residual_output_tensor must be on device");
@@ -285,8 +295,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(a.device() == h.device(), "Input and residual_output tensors must be on same device");
         TT_FATAL(h.layout() == Layout::TILE, "residual_output_tensor must have TILE layout, got: {}", h.layout());
         TT_FATAL(
-            h.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "residual_output_tensor must be interleaved, got: {}",
+            h.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                (hs_rows && layernorm_is_hs_tile_rows(h)),
+            "residual_output_tensor must be interleaved (or HEIGHT_SHARDED tile rows), got: {}",
             h.memory_config().memory_layout());
         TT_FATAL(
             h.dtype() == a.dtype(),
