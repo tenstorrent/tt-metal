@@ -2239,6 +2239,160 @@
   "started": "2026-09-29T07:18:21",
   "status": "PASS"
  },
+ "S.dsa_moe.05": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "fea221f5-6b7d-4d86-adde-84f247ac3ff9"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/S.dsa_moe.05.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/S.dsa_moe.05.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 931.4,
+    "session_id": "fea221f5-6b7d-4d86-adde-84f247ac3ff9",
+    "t": "2026-09-29T07:59:46"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 73.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T08:03:15"
+   }
+  ],
+  "last_run": "2026-09-29T08:03:15",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/S.dsa_moe.05.log",
+  "metrics": {
+   "comb_col_sum_err_swap_attn_hc": 0.0030819177627563477,
+   "flipped_rows_swap_out_collapse_share": 0,
+   "flipped_rows_swap_out_cpu": 29,
+   "flipped_rows_swap_out_golden": 48,
+   "flipped_rows_swap_out_idx_share": 8,
+   "flipped_rows_swap_out_norm_share": 5,
+   "flipped_rows_swap_out_qa_share": 6,
+   "max_abs_swap_attn_hc_comb": 0.0068359375,
+   "max_abs_swap_attn_hc_post": 0.0001373291015625,
+   "max_abs_swap_attn_hc_pre": 0.004881799221038818,
+   "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": 1.0001492500305176,
+   "norm_ratio_max_swap_attn_collapse_vs_golden": 1.0033224821090698,
+   "norm_ratio_max_swap_attn_norm_vs_cpu_same_input": 1.0004925727844238,
+   "norm_ratio_max_swap_attn_norm_vs_golden": 1.0019631385803223,
+   "norm_ratio_max_swap_attn_out_idx_share": 1.0013145208358765,
+   "norm_ratio_max_swap_index_key_vs_cpu_same_input": 0.9996362328529358,
+   "norm_ratio_max_swap_index_key_vs_golden": 1.0001211166381836,
+   "norm_ratio_max_swap_q_a_vs_cpu_same_input": 1.0004100799560547,
+   "norm_ratio_max_swap_q_a_vs_golden": 1.000501036643982,
+   "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": 0.9998380541801453,
+   "norm_ratio_min_swap_attn_collapse_vs_golden": 0.9979142546653748,
+   "norm_ratio_min_swap_attn_norm_vs_cpu_same_input": 0.9991248846054077,
+   "norm_ratio_min_swap_attn_norm_vs_golden": 0.9984898567199707,
+   "norm_ratio_min_swap_attn_out_idx_share": 0.9968549609184265,
+   "norm_ratio_min_swap_index_key_vs_cpu_same_input": 0.9982894659042358,
+   "norm_ratio_min_swap_index_key_vs_golden": 0.9980650544166565,
+   "norm_ratio_min_swap_q_a_vs_cpu_same_input": 0.9989409446716309,
+   "norm_ratio_min_swap_q_a_vs_golden": 0.9988309741020203,
+   "pcc_swap_attn_hc": 0.9999980915721566,
+   "pcc_swap_attn_in": 0.9999925312725014,
+   "pcc_swap_attn_norm": 0.9999906920231791,
+   "pcc_swap_attn_out": 0.9999891434092235,
+   "pcc_swap_experts_out": 0.9999911930072484,
+   "pcc_swap_ffn_hc": 0.9999991268707507,
+   "pcc_swap_ffn_in": 0.999993648492984,
+   "pcc_swap_ffn_norm": 0.9999937660385789,
+   "pcc_swap_h_mid": 0.9999973500295456,
+   "pcc_swap_mlp_out": 0.9999932266925374,
+   "pcc_swap_out": 0.999994820436366,
+   "pcc_swap_q_resid": 0.9999860314415361,
+   "pcc_swap_router": 0.9998053957581154,
+   "pcc_swap_shared_out": 0.9999972017758985,
+   "pcc_swap_topk": 0.002441168064251542,
+   "rel_l2_same_routing_swap_out_collapse_share": 3.712411489686929e-05,
+   "rel_l2_same_routing_swap_out_cpu": 0.001974433660507202,
+   "rel_l2_same_routing_swap_out_golden": 0.002724739722907543,
+   "rel_l2_same_routing_swap_out_idx_share": 0.00026322234771214426,
+   "rel_l2_same_routing_swap_out_norm_share": 0.00025924507644958794,
+   "rel_l2_same_routing_swap_out_qa_share": 0.0002145804901374504,
+   "rel_l2_swap_attn_collapse_vs_cpu_same_input": 0.0016580396331846714,
+   "rel_l2_swap_attn_collapse_vs_golden": 0.00392187712714076,
+   "rel_l2_swap_attn_hc_comb": 0.0019372879760339856,
+   "rel_l2_swap_attn_hc_post": 0.003025189507752657,
+   "rel_l2_swap_attn_hc_pre": 0.0021263835951685905,
+   "rel_l2_swap_attn_norm_vs_cpu_same_input": 0.0016828915104269981,
+   "rel_l2_swap_attn_norm_vs_golden": 0.004317880608141422,
+   "rel_l2_swap_attn_out_idx_share": 0.001559077063575387,
+   "rel_l2_swap_index_key_vs_cpu_same_input": 0.0020314634311944246,
+   "rel_l2_swap_index_key_vs_golden": 0.0031663142144680023,
+   "rel_l2_swap_out": 0.0035664725583046675,
+   "rel_l2_swap_q_a_vs_cpu_same_input": 0.002108258195221424,
+   "rel_l2_swap_q_a_vs_golden": 0.005289165768772364,
+   "row_norm_ratio_max_swap_out_collapse_share": 1.0002362728118896,
+   "row_norm_ratio_max_swap_out_cpu": 1.0074968338012695,
+   "row_norm_ratio_max_swap_out_golden": 1.0070600509643555,
+   "row_norm_ratio_max_swap_out_idx_share": 1.0005133152008057,
+   "row_norm_ratio_max_swap_out_norm_share": 1.000623345375061,
+   "row_norm_ratio_max_swap_out_qa_share": 1.000560998916626,
+   "row_norm_ratio_min_swap_out_collapse_share": 0.999656617641449,
+   "row_norm_ratio_min_swap_out_cpu": 0.9923796057701111,
+   "row_norm_ratio_min_swap_out_golden": 0.99219810962677,
+   "row_norm_ratio_min_swap_out_idx_share": 0.9986803531646729,
+   "row_norm_ratio_min_swap_out_norm_share": 0.9989117980003357,
+   "row_norm_ratio_min_swap_out_qa_share": 0.9990834593772888,
+   "row_rel_l2_max_swap_attn_collapse_vs_cpu_same_input": 0.001738831982947886,
+   "row_rel_l2_max_swap_attn_collapse_vs_golden": 0.006987893022596836,
+   "row_rel_l2_max_swap_attn_norm_vs_cpu_same_input": 0.0019009688403457403,
+   "row_rel_l2_max_swap_attn_norm_vs_golden": 0.006811587139964104,
+   "row_rel_l2_max_swap_attn_out_idx_share": 0.013323062099516392,
+   "row_rel_l2_max_swap_index_key_vs_cpu_same_input": 0.0026831142604351044,
+   "row_rel_l2_max_swap_index_key_vs_golden": 0.004227109253406525,
+   "row_rel_l2_max_swap_q_a_vs_cpu_same_input": 0.0024118274450302124,
+   "row_rel_l2_max_swap_q_a_vs_golden": 0.008141596801578999,
+   "topk_overlap_mean_swap_indexer_vs_cpu_same_input": 0.9991937875747681,
+   "topk_overlap_mean_swap_indexer_vs_golden": 0.9985714554786682,
+   "topk_overlap_swap_qa_share": 0.9996702671051025,
+   "topk_overlap_worst_row_swap_indexer_vs_cpu_same_input": 0.994140625,
+   "topk_overlap_worst_row_swap_indexer_vs_golden": 0.9921913146972656,
+   "worst_col_rel_l2_swap_attn_hc": 0.03430662304162979
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T08:02:01",
+  "status": "PASS"
+ },
  "S.kda_dense.01": {
   "agent": {
    "defs": {
