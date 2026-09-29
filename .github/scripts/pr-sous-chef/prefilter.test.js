@@ -19,7 +19,7 @@ const path = require('node:path');
 const https = require('node:https');
 
 const {
-  run, FLOW_LABEL, HANDOFF_LABEL, WORKFLOW_ID, HANDOFF_MARKER, MAX_NUDGES_PER_PR, COOLDOWN_MS, PRE_ACTIVATION_LOGIN,
+  run, FLOW_LABEL, HANDOFF_LABEL, WORKFLOW_ID, HANDOFF_MARKER, MAX_NUDGES_PER_PR, COOLDOWN_MS, SESSION_STALE_MS, PRE_ACTIVATION_LOGIN,
   matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
   makeIdentity, verifyFix, buildHandoffComment
 } = require('./prefilter.js');
@@ -151,6 +151,8 @@ const nudgeAt = (minutesAgo) => ({ user: bot, body: `@copilot pr-gate failed, pl
 const handoffAt = (minutesAgo) => ({ user: bot, body: `${HANDOFF_MARKER}\nhanding off`, created_at: ago(minutesAgo) });
 const humanAt = (minutesAgo) => ({ user: { login: 'alice', type: 'User' }, body: 'looking', created_at: ago(minutesAgo) });
 const labelEvent = (event, name, minutesAgo) => ({ event, label: { name }, actor: { login: 'maintainer' }, created_at: ago(minutesAgo) });
+const workEvent = (kind, minutesAgo) => ({ event: `copilot_work_${kind}`, created_at: ago(minutesAgo) });
+const SESSION_STALE_MIN = SESSION_STALE_MS / MIN;
 const failingCheck = { __typename: 'CheckRun', name: 'pr-gate', status: 'COMPLETED', conclusion: 'FAILURE', startedAt: ago(200), detailsUrl: 'https://x/pr-gate' };
 const greenCheck = { __typename: 'CheckRun', name: 'pr-gate', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: ago(200), detailsUrl: 'https://x/pr-gate' };
 
@@ -223,6 +225,27 @@ test('run(): a failing, never-nudged flow PR is eligible and nothing is written'
   assert.deepEqual(r.selected.map(p => [p.number, p.needs_nudge, p.nudge_count]), [[1, true, 0]]);
   assert.equal(r.created + r.labeled, 0);
   assert.equal(r.outputs.eligible_numbers, '1');
+});
+
+test('run(): a recent copilot_work_started with no finished event is treated as an active session', async () => {
+  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN - 1)] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 1);
+  assert.equal(r.counters.eligible, 0);
+});
+
+test('run(): a copilot_work_started older than SESSION_STALE_MS with no finished event is treated as stale, not active (PR #58341)', async () => {
+  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN + 1)] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 0, 'a stale started event must not block the PR forever');
+  assert.equal(r.counters.session_stale_override, 1);
+  assert.equal(r.counters.eligible, 1);
+  assert.ok(r.logs.info.some(m => m.includes('treating the session as stale')));
+});
+
+test('run(): copilot_work_finished after a started event is not affected by the staleness override', async () => {
+  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN + 100), workEvent('finished', 5)] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 0);
+  assert.equal(r.counters.session_stale_override, undefined, 'the override only applies when the LATEST event is a started with no finished after it');
+  assert.equal(r.counters.eligible, 1);
 });
 
 test('run() finding 1: an UNANSWERED 6th nudge (no push since) reaches the hand-off instead of dying at Filter 4', async () => {
