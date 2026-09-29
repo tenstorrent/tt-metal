@@ -113,6 +113,7 @@ def _run_sfpu_binary_llk_golden(
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
+    max_ulp=None,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -211,7 +212,9 @@ def _run_sfpu_binary_llk_golden(
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
+    )
 
     if post_check is not None:
         post_check(res_tensor)
@@ -374,11 +377,14 @@ def _check_div_special_cases(res_tensor):
         ), f"x/x special case at lane {lane}: expected 1.0, got {actual}"
 
 
+_DIV_FP32_MAX_ULP = 4
+
 _FLOAT_OPS = [
     ("ADD", MathOperation.SfpuElwadd, ApproximationMode.No),
     ("SUB", MathOperation.SfpuElwsub, ApproximationMode.No),
     ("MUL", MathOperation.SfpuElwmul, ApproximationMode.No),
     ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
+    ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.Yes),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
     # COPY_DEST ignores APPROXIMATION_MODE (stateless copy); only one entry needed.
@@ -417,6 +423,14 @@ def test_eltwise_binary_sfpu_float_quasar(
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     )
+    # A 32-bit Dest DIV runs two Newton-Raphson steps in every approximation mode; the
+    # default 5% tolerance would also pass the bare LUT seed, so gate it by ULP instead.
+    max_ulp = (
+        _DIV_FP32_MAX_ULP
+        if mathop == MathOperation.SfpuElwdiv
+        and formats.output_format == DataFormat.Float32
+        else None
+    )
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
@@ -432,6 +446,7 @@ def test_eltwise_binary_sfpu_float_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
         format_variant=format_variant,
+        max_ulp=max_ulp,
     )
 
 
