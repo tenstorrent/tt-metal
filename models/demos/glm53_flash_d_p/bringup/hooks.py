@@ -32,7 +32,7 @@ def hf_model(spec, num_layers):
 # Device steps of the hybrid model, per block type: each passed its component gate on the device. Every other step
 # runs on the CPU reference.
 DEVICE_STEPS = {
-    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm", "attention"},
+    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm", "attention", "attn_residual"},
     "dsa_moe": set(),
     "kda_moe": set(),
 }
@@ -40,6 +40,7 @@ DEVICE_STEPS = {
 _HC_STEPS = {"attn_hc": "attn", "ffn_hc": "ffn"}
 _COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
+_RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
 
 
 def _loader_cfg(spec):
@@ -84,6 +85,26 @@ def _collapse_host_fn(mesh, module, n):
         for t in (xd, hd, yd):
             ttnn.deallocate(t)
         return y
+
+    return fn
+
+
+def _residual_host_fn(mesh, module, n):
+    """fn(ctx, x_host [S * n, H], hc_host [S, K], y_host [S, H]) -> host [S * n, H] bf16 (harness boundary: x, y bf16,
+    hc fp32, read chip 0)."""
+    import ttnn
+    from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+    def fn(ctx, x, hc, y):
+        s = x.shape[0] // n
+        xd = replicate(mesh, x.reshape(1, 1, s, n * x.shape[-1]).to(torch.bfloat16))
+        hd = replicate(mesh, hc.reshape(1, 1, s, hc.shape[-1]).float(), dtype=ttnn.float32)
+        yd = replicate(mesh, y.reshape(1, 1, s, y.shape[-1]).to(torch.bfloat16))
+        od = module(xd, hd, yd)
+        out = replicated_to_host(od).reshape(s * n, -1)
+        for t in (xd, hd, yd, od):
+            ttnn.deallocate(t)
+        return out
 
     return fn
 
@@ -154,6 +175,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.collapse import build_collapse
 
         return _collapse_host_fn(mesh, build_collapse(cfg), cfg.hc_mult)
+    if step in _RESIDUAL_STEPS:
+        from models.demos.glm53_flash_d_p.tt.residual import build_residual
+
+        return _residual_host_fn(mesh, build_residual(cfg), cfg.hc_mult)
     if step in _NORM_STEPS:
         from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
 
