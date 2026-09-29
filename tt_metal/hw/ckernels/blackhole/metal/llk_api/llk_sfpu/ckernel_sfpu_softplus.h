@@ -193,10 +193,17 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
-    // The three runtime scalars, converted to vectors once and kept in LRegs (per row they would each be
+    // The runtime scalars, converted to vectors once and kept in LRegs (per row they would each be
     // RISC-built SFPLOADIs); the polynomial's lowest coefficients come from Prgm0/1/2 (softplus_init).
+    // The fp32-input body (degree-8 poly plus the exp tail) leaves room for only two of them: a third
+    // loop-carried LReg fails to compile ("too few lregs"), so beta_reciprocal stays a float there.
+#ifdef INP_FLOAT32
+    using BetaReciprocal = float;
+#else
+    using BetaReciprocal = sfpi::vFloat;
+#endif
     sfpi::vFloat beta = Converter::as_float(param0);
-    sfpi::vFloat beta_reciprocal = Converter::as_float(param1);
+    BetaReciprocal beta_reciprocal = Converter::as_float(param1);
     sfpi::vFloat threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(

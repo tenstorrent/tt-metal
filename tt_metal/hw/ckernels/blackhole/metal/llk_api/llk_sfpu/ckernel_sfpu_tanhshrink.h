@@ -73,7 +73,7 @@ inline void calculate_tanhshrink() {
                 // +/-inf stay exact and the exp argument is bounded to [-18, -2].
                 sfpi::vFloat axc = ax;
                 axc = sfpi::min(axc, 9.0f);
-                sfpi::vFloat e = _sfpu_exp_fp32_accurate_<true>(
+                sfpi::vFloat e = _sfpu_exp_fp32_accurate_</*unsafe=*/true>(
                     -2.f * axc, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2, EXP_FP32_P0, EXP_FP32_P1);
                 sfpi::vFloat sig = sfpu_reciprocal_iter<2>(1.0f + e);  // sigmoid(2|x|)
                 sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
