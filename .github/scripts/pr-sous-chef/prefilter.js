@@ -47,6 +47,11 @@ const COOLDOWN_MS = 60 * 60 * 1000;
 // queues can hold a job QUEUED much longer; 90 min keeps nudges from firing during a
 // merely slow (not stuck) pipeline.
 const PENDING_CHECK_MAX_AGE_MS = 90 * 60 * 1000;
+// NEW vs upstream: age past which an unmatched `copilot_work_started` (no later `finished`
+// or `finished_failure`) is treated as stale rather than "still running" (see Filter 2).
+// Same 90 min reasoning as PENDING_CHECK_MAX_AGE_MS above it: sessions run up to 59 min per
+// the COOLDOWN_MS comment, so 90 min is well past a genuine one but still bounded.
+const SESSION_STALE_MS = 90 * 60 * 1000;
 // Upstream default: a PR with zero changed files 24h after creation is "stalled".
 const ZERO_DIFF_AGE_MS = 24 * 60 * 60 * 1000;
 // NEW vs upstream: after this many actionable nudges on one PR, stop mentioning Copilot
@@ -226,6 +231,7 @@ async function run({ github, context, core }) {
       // latest copilot_work_* timeline event is copilot_work_started.
       const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
       let session = 'none';
+      let sessionAt = null;
       // Nudge-count baseline (the documented RESET): a maintainer puts a handed-off PR back
       // under Sous Chef by removing `copilot-flow-handoff`. Only nudges and hand-off comments
       // posted AFTER the most recent such removal count; everything before it is history.
@@ -235,12 +241,26 @@ async function run({ github, context, core }) {
       let nudgeBaseline = 0;
       for (const ev of timeline) {
         if (typeof ev.event !== 'string') continue;
-        if (ev.event.startsWith('copilot_work_')) session = ev.event;
+        if (ev.event.startsWith('copilot_work_')) { session = ev.event; sessionAt = ev.created_at || null; }
         if (ev.event === 'unlabeled' && (ev.label?.name || '').toLowerCase() === HANDOFF_LABEL) {
           nudgeBaseline = Math.max(nudgeBaseline, new Date(ev.created_at || 0).getTime());
         }
       }
-      if (session === 'copilot_work_started') { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
+      // A `copilot_work_started` with no later `copilot_work_finished*` normally means the
+      // session is genuinely running (comment above: up to 59 min). But the finished event is
+      // occasionally never emitted at all (observed on PR #58341: started 05:23, no commit or
+      // finished event for 2h+) and this filter has no other way to notice — unlike Filter 1's
+      // checks-pending, which self-heals once a check actually completes. Without an age cutoff
+      // a dropped finished event blocks the PR forever. SESSION_STALE_MS is deliberately looser
+      // than PENDING_CHECK_MAX_AGE_MS: a real session can legitimately run close to 59 min, and
+      // being slow to unstick a merely-slow one is much cheaper than nudging Copilot mid-session.
+      if (session === 'copilot_work_started') {
+        const startedAt = sessionAt ? new Date(sessionAt).getTime() : null;
+        const stale = startedAt !== null && now - startedAt >= SESSION_STALE_MS;
+        if (!stale) { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
+        counters.session_stale_override = (counters.session_stale_override || 0) + 1;
+        core.info(`#${number}: copilot_work_started at ${sessionAt} has no finished event after ${SESSION_STALE_MS / 60000} min; treating the session as stale, not blocking`);
+      }
 
       // ALL issue comments (REST, paginated, newest first). They are the persistence for
       // the nudge cap, the cooldown and the hand-off marker, so a recency window is not
@@ -548,7 +568,7 @@ module.exports = {
   run,
   // exported for prefilter.test.js
   FLOW_LABEL, HANDOFF_LABEL, HANDOFF_MARKER, WORKFLOW_ID, MAX_NUDGES_PER_PR, MAX_ELIGIBLE,
-  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, PRE_ACTIVATION_LOGIN,
+  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, SESSION_STALE_MS, PRE_ACTIVATION_LOGIN,
   matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
   makeIdentity, verifyFix, buildHandoffComment
 };
