@@ -1718,3 +1718,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
+
+## S.moe_full.09 test (attempt 1)
+
+What
+- Replaced the rendered 25-line swap test (moe_full layer 1, steps 1-9, last ffn_hc_pre) with the reviewed swap 08
+  test (test_swap_moe_full_08_ffn_hc.py): every check kept at its limits. Added the ffn_hc_pre checks from the layer-0
+  swap 09 / layer-1 component test: device ffn_x vs the CPU ffn_hc_pre on the same device h_mid and gates (rel <= 0.003,
+  worst row <= 0.006), and the module run again with each row's pre gates rotated by row mod 4 vs the CPU step
+  (0.004 / 0.01). ffn_x vs golden (0.01 / 0.05) and out vs the CPU tail (rel 0.01) now see the device step too.
+- CPU mutation study in /tmp/hy4_sm9/study.py (outside the repo; log study.log). Table in the test docstring.
+
+Decisions
+- Kept the component's vs-CPU limits (0.003 / 0.006), not fp32-exact ones. The device TtHcPre is bit-identical, but a
+  bf16-output module (0.0017) is valid, and the one bug left between (pre + 3e-4, 0.0010) is below gate 2's bf16
+  rounding. The gates are the step's input, so the module cannot make that error by itself.
+- No scaled-input probe: ffn_hc_pre has no eps.
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU check 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999983. ffn_hc_pre vs CPU rel 0 / row 0, rotated 0 / 0. ffn_x vs golden
+  0.0043 / 0.0128. Tail 0.0033. Router 0.99377. Out rel 0.00608 (same as swap 08).
+
+Gotchas
+- pre x 1.02 moves the tail by only 0.0011: ffn_norm removes a row scale of ffn_x. Only the vs-CPU check sees it.
+- Router overlap 0.99377 vs 0.99 is inherited from swap 07 / 08.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
