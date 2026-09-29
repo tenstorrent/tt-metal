@@ -269,6 +269,6 @@ CI files also trigger the same jobs via the per-arch/common/SFPI/CI flags.
 | Test silently skips with *"Skipping: test requires slow dispatch"* | Fixture is `LLKMeshDeviceFixtureSlowDispatchOnly`. Either set `TT_METAL_SLOW_DISPATCH_MODE=1` or move the test to `LLKMeshDeviceFixture`. |
 | Test silently skips with *"This suite can only be run with fast dispatch …"* | Fixture is (or inherits) `UnitMeshCQFixture`. Either unset `TT_METAL_SLOW_DISPATCH_MODE` or move the test to `LLKMeshDeviceFixture`. |
 | Test silently skips with *"Not a Quasar device"* / on a non-Blackhole machine | Fixture is `LLKQuasar*` / `LLKBlackholeSingleCardFixture`. By design — runs only on matching hardware. |
-| `Mixing fast and slow dispatch is prohibited!` | Test is calling `tt_metal::detail::LaunchProgram(...)` (slow-dispatch only) inside a process running FD. Convert to `EnqueueMeshWorkload` + `Finish`. |
+| `Mixing fast and slow dispatch is prohibited!` | Test is calling `tt_metal::internal::LaunchProgram(...)` (slow-dispatch only) inside a process running FD. Convert to `EnqueueMeshWorkload` + `Finish`. |
 | `device->close()` issues at shutdown | Don't add per-test device-open/close logic; rely on the suite-shared fixtures in `llk_device_fixture.hpp`. |
 | Merge-gate `llk-fd-unit-tests-*` not triggered | Check `find-changed-files.sh` — the `llk-unit-tests-changed` case must match your file path (currently `tests/tt_metal/tt_metal/llk/**`). Note the merge gate (not the PR gate) runs these. |

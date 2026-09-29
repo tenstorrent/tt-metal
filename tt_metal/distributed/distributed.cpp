@@ -14,6 +14,7 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <internal/program_launch.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -108,7 +109,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                    tt::tt_metal::internal::LaunchProgram(device, program, false, true);
                 }
             }
             return;
@@ -171,21 +172,6 @@ void Synchronize(
             device.mesh_command_queue(cq_id).finish(sub_device_ids);
         }
     }
-}
-
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
-    if (!device->is_initialized()) {
-        return;
-    }
-    if (cq_id.has_value()) {
-        Synchronize(*device, device->mesh_command_queue(cq_id), sub_device_ids);
-    } else {
-        Synchronize(*device, std::nullopt, sub_device_ids);
-    }
-}
-
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
-    return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
 }
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
