@@ -309,18 +309,36 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         Standalone chunked Gated Delta Rule forward (flash-linear-attention algorithm).
 
         Args:
-            q (ttnn.Tensor):    [B, T, H,  K]
-            k (ttnn.Tensor):    [B, T, H,  K]
-            v (ttnn.Tensor):    [B, T, HV, V]
+            q (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (bf16 or castable; see Input layouts)
+            k (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]
+            v (ttnn.Tensor):    [B, T, HV, V]  or flat [B, T, HV*V]
             g (ttnn.Tensor):    [B, T, HV]   log-space decay
             beta (ttnn.Tensor): [B, T, HV]
 
+        Input layouts (selected by the rank of q/k/v; there is no flag):
+            Rank 4, head-split: q/k/v carry an explicit head axis. q/k are expected L2-normalized
+                (use_qk_l2norm stays False); the op applies `scale` to q, casts q/k/v to bf16, permutes
+                them head-major, expands H -> HV for GQA and pads T to a multiple of chunk_size on the
+                host. Any chunk_size that is a multiple of 32; every device path.
+            Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal
+                conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
+                tile-addresses each head's chunk out of the flat grid, maps value heads to key heads for
+                GQA at read time, and applies the L2 norm over K and `scale` in the kernel. Requires
+                K == V (H is inferred as the flat q width / V, HV from beta's last dim), chunk_size == 32
+                and T a multiple of chunk_size; fused and phased paths only (mono rejects it). The rank of
+                q/k and of v is checked independently, but pass all three the same way. g, beta and
+                initial_state keep the shapes above on both paths. This is the zero-relayout entry point
+                for callers whose q/k/v are already token-major.
+
         Keyword Args:
-            scale (float, optional): defaults to K**-0.5.
-            initial_state (ttnn.Tensor, optional): [B, HV, K, V].
+            scale (float, optional): defaults to K**-0.5; multiplied into q on the host (rank 4) or in
+                the kernel (rank 3).
+            initial_state (ttnn.Tensor, optional): [B, HV, K, V] fp32 (cast if not); zeros when omitted.
             output_final_state (bool): default False.
-            chunk_size (int): default 64.
-            use_qk_l2norm (bool): default False.
+            chunk_size (int): default 64; 32 is what the models use and the only value the rank-3 path
+                accepts.
+            use_qk_l2norm (bool): default False and currently the only accepted value: the rank-4 path
+                expects host-normalized q/k, the rank-3 path always normalizes in the kernel.
             output_head_major (bool): default False. When True, o is returned head-major as
                 [B*HV, T, V] in TILE layout; otherwise token-major [B, T, HV, V] ROW_MAJOR.
             program_config (ChunkGdnFusedProgramConfig | ChunkGdnPhasedProgramConfig |

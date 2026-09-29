@@ -20,11 +20,20 @@ namespace ttnn::transformer {
  * one Tensix core per (B*HV) head, sequential over chunks, holding the recurrent
  * state on-core. Matches FLA `naive_chunk_gated_delta_rule` numerics (fp32/HiFi4).
  *
- *   q    [B, T, H,  K]
- *   k    [B, T, H,  K]
- *   v    [B, T, HV, V]
+ *   q    [B, T, H,  K]   or flat [B, T, H*K]
+ *   k    [B, T, H,  K]   or flat [B, T, H*K]
+ *   v    [B, T, HV, V]   or flat [B, T, HV*V]
  *   g    [B, T, HV]      log-space decay
  *   beta [B, T, HV]
+ *
+ * The rank of q/k/v selects the input path (no flag):
+ *   rank 4, head-split: L2-normalized q/k expected (use_qk_l2norm stays false); the host applies
+ *     scale, casts to bf16, permutes head-major, expands H -> HV for GQA and pads T to the chunk.
+ *   rank 3, flat token-major: raw (unnormalized, unscaled) per-head concatenations as a projection or
+ *     the causal conv emits them; no host relayout — the prep reader addresses each head's chunk out of
+ *     the flat grid, maps value heads to key heads and applies the L2 norm and scale in-kernel.
+ *     Requires K == V (H = flat q width / V, HV from beta), chunk_size == 32 and T % chunk_size == 0;
+ *     fused and phased paths only.
  *
  * Returns:
  *   o           [B, T, HV, V]           (default; ROW_MAJOR)
