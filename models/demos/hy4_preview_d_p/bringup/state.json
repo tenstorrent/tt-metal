@@ -3680,6 +3680,113 @@
   "started": "2026-09-29T10:39:07",
   "status": "PASS"
  },
+ "S.moe_full.04": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "23dad080-0216-4ee0-9c89-cbf18a2de05f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/S.moe_full.04.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/S.moe_full.04.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 489.1,
+    "session_id": "23dad080-0216-4ee0-9c89-cbf18a2de05f",
+    "t": "2026-09-29T10:52:33"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 52.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T10:54:59"
+   }
+  ],
+  "last_run": "2026-09-29T10:54:59",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/S.moe_full.04.log",
+  "metrics": {
+   "max_col_rel_l2_swap_attn_hc": 0.005363833624869585,
+   "pcc_swap_attn_hc": 0.9999984247714285,
+   "pcc_swap_attn_norm": 0.9999958656504252,
+   "pcc_swap_attn_out": 0.9999981542066912,
+   "pcc_swap_attn_x": 0.9999975639430312,
+   "pcc_swap_experts_out": 0.999984142251247,
+   "pcc_swap_ffn_hc": 0.9999987328178235,
+   "pcc_swap_ffn_norm": 0.9999967868961899,
+   "pcc_swap_ffn_x": 0.9999974093311217,
+   "pcc_swap_h_mid": 0.9999975817409131,
+   "pcc_swap_mlp_out": 0.9999894606925175,
+   "pcc_swap_out": 0.9999958786328712,
+   "pcc_swap_q_resid": 0.9999975857078487,
+   "pcc_swap_router": 0.9991988948301341,
+   "pcc_swap_shared_out": 0.9999979290513604,
+   "pcc_swap_topk": 0.7522525787353516,
+   "post_worst_row_rel_l2_swap_attn_hc": 0.006542115472257137,
+   "rel_l2_swap_attn_hc": 0.0014920178800821304,
+   "rel_l2_swap_attn_norm": 0.0029830813873559237,
+   "rel_l2_swap_attn_norm_vs_cpu": 0.0019557869527488947,
+   "rel_l2_swap_attn_out": 0.0019207261502742767,
+   "rel_l2_swap_attn_x": 0.0022324430756270885,
+   "rel_l2_swap_attn_x_vs_cpu": 4.642263817800085e-08,
+   "rel_l2_swap_h_mid": 0.002218181500211358,
+   "rel_l2_swap_out": 0.002885657362639904,
+   "rel_l2_swap_q_resid": 0.0022141614463180304,
+   "rel_l2_swap_q_resid_vs_cpu": 0.0017743651987984776,
+   "rot_rel_l2_swap_attn_x": 4.269541165058399e-08,
+   "router_overlap_swap": 0.99774169921875,
+   "syn_rel_l2_swap_attn_norm": 0.0018342226976528764,
+   "syn_rel_l2_swap_q_resid": 0.001749709015712142,
+   "syn_worst_row_rel_l2_swap_attn_norm": 0.0024894424714148045,
+   "syn_worst_row_rel_l2_swap_q_resid": 0.002021531108766794,
+   "topk_overlap_swap": 0.9990651607513428,
+   "worst_row_rel_l2_swap_attn_norm": 0.0034636470954865217,
+   "worst_row_rel_l2_swap_attn_norm_vs_cpu": 0.0024596594739705324,
+   "worst_row_rel_l2_swap_attn_out": 0.0037273885682225227,
+   "worst_row_rel_l2_swap_attn_x": 0.0027583015616983175,
+   "worst_row_rel_l2_swap_h_mid": 0.00372356828302145,
+   "worst_row_rel_l2_swap_out": 0.03560396656394005,
+   "worst_row_rel_l2_swap_q_resid": 0.0028078581672161818,
+   "worst_row_rel_l2_swap_q_resid_vs_cpu": 0.0020496465731412172
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T10:54:07",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T22:36:12",

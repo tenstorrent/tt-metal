@@ -1358,3 +1358,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
+
+## S.moe_full.04 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_full layer 1, attn_hc + attn_hc_pre + attn_norm + q_a on device, rest
+  CPU) with swap 03's checks plus the dense_full swap 04 q_a checks at the component limits: q_resid vs golden (rel
+  0.008, row ratio [0.994, 1.006], worst row 0.015), vs the CPU q_a on the device attn_norm (same limits), and the q_a
+  module on the device attn_norm x 0.01 vs CPU (0.01 / 0.02, the eps check). The gated pcc_swap_out (0.98) and the
+  trail are unchanged. Swap 03's downstream q_resid rel <= 0.01 became the full q_a check.
+- CPU mutation study at layer 1 (/tmp/hy4_sm4/study.py, outside the repo, 9 s per variant). The table is in the test
+  docstring. 13 of 17 q_a mutations pass the 0.98 out gate, including the missing K reduce (0.99909), a norm per K
+  partial (0.99517) and swapped norm-weight halves. Only no norm weight (0.9785), 1 + w (0.9770), swapped SP row
+  halves (0.9698) and the zero stub (0.9315) fail it. The q_resid checks catch all of them except eps; the x 0.01
+  check catches eps (1e-5 0.168, 0 0.026, 2e-6 0.024).
+
+Decisions
+- Kept swap 03's limits for gates, attn_x, attn_norm, topk (0.995), attn_out, h_mid (0.005 / 0.02) and router (0.99).
+  x 1.02 on q_a gives router 0.9921, so the router check stays a backstop, not the q_a check.
+- Out worst (row, stream) is recorded, not asserted: the fp32 reference already gives 0.056 (near-tie expert flips).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999997, q_resid 0.00180, topk 0.99909, router 0.99866, out rel 0.00242).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device TtHcGates + TtHcPre + attn_norm + TtQa): PASS. pcc_swap_out 0.999996. q_resid 0.00221, ratio
+  [0.99892, 1.00052], worst row 0.0028. vs CPU 0.00177. x0.01 0.00175. attn_norm 0.00298. topk 0.99907. attn_out
+  0.00192. h_mid 0.00222 / 0.0037. router 0.99774. out rel 0.00289.
+
+Gotchas
+- As before, the first block of printed metrics (pcc 0 / rel 1.0) comes from the precompile collect pass. Only the
+  second block is the real run.
+- The test file is untracked (rendered by the orchestrator), so `git diff` does not show it.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py
