@@ -106,11 +106,9 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  *
  * @tparam DEST_SYNC_MODE: In SyncHalf, flips the DEST section base to the other bank after each section, values = <SyncFull/SyncHalf>
  * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
- *         @ref _update_dest_register_offset_). This is a producer/consumer stride agreement, not a statement about the DEST
- *         mode: it must equal the value the pack thread passes to @ref _llk_sync_advance_dest_section_ for this op, or the
- *         two sides address different DEST halves (the pins live in different TRISC TUs, so no static_assert can compare
- *         them). true is valid in either DEST mode (a 16-bit DEST just uses half of each bank), which is why callers (e.g.
- *         tt-metal's llk_unpack_A) pin it to true to match the pack side. values = <true/false>
+ *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
+ *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
+ *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
  * @param l1_tile_idx: Index into the L1 buffer of the first tile of this section
  * @note Call @ref _llk_unpack_unary_operand_to_dest_init_ before this function. Unpack-to-dest counterpart of
  *       @ref _llk_unpack_unary_operand_.
