@@ -29,6 +29,24 @@ Category 4: composite binary math
  7. ttnn.bias_gelu / bias_gelu_                - gelu(a + b)
  8. ttnn.prelu                                 - a if a >= 0 else a * w
 
+Working range of the accuracy sweep. "Full grid" is the stratified bfloat16
+grid: finite values and +0, no -0, inf, or NaN. In-place ops share the range.
+
+  op                    a                              b or weight
+  ────────────────────  ─────────────────────────────  ──────────────────────────
+  ldexp                 full grid                      [-126, 127]
+  logaddexp             [-80, 80]                      [-80, 80]
+  logaddexp2            [-120, 120]                    [-120, 120]
+  squared_difference    [-1e19, 1e19]                  [-1e19, 1e19]
+  xlogy                 [-1e30, 1e30]                  positive normals, (0, max]
+  hypot                 ±[2^-62, 2^62], or 0           same as a
+  bias_gelu             [-100, 100]                    [-100, 100]
+  prelu                 full grid                      full grid, one per channel
+
+  Outside that range the chain has already flushed or overflowed, and a
+  separate test pins it: ldexp for b < -126 and b > 127, hypot on the full
+  grid, xlogy for b <= 0. The others stop at the bound.
+
 Most of these are lowered to a pre-op / binary / post-op chain rather than a
 single SFPU instruction (see OpConfig::OpConfig in binary_ng_utils.cpp), so
 they inherit the domain of their pre-op. ldexp cannot see a scale factor its
@@ -56,13 +74,16 @@ values the way torch does, and inconsistently so — ldexp(inf, -1) comes back a
 max bfloat16 rather than inf, while ldexp(inf, inf) comes back as 0. Pinning
 that down is a separate contract from measuring accuracy. Ops are swept
 together with their in-place spelling, which shares the kernel and must
-therefore share the thresholds.
+therefore share the thresholds. Tensor-scalar overloads — every op here
+except hypot — are covered by test_tensor_scalar at those same thresholds.
 """
 
-# Below this magnitude a bfloat16 result has passed through the fp32 dest's
-# LoFi rounding and subnormal flush, which costs far more than the ULP
-# thresholds above; category 1 uses the same fence for multiply and divide.
-# These elements are checked with an absolute tolerance instead.
+# Below this magnitude a bfloat16 result has passed through the dest's LoFi
+# rounding and subnormal flush, which costs far more than the ULP thresholds
+# above; category 1 uses the same fence for multiply and divide. These
+# elements are checked with an absolute tolerance instead. bf16 in / bf16 out
+# leaves fp32 dest accumulation off, so the intermediate is rounded to
+# bfloat16 in dest rather than kept in fp32.
 UNDERFLOW_BAND = 2.0**-120
 
 # The exponents EXP2 can turn into a bfloat16 scale factor: outside
@@ -71,9 +92,11 @@ UNDERFLOW_BAND = 2.0**-120
 LDEXP_MIN_EXPONENT = -126.0
 LDEXP_MAX_EXPONENT = 127.0
 
-# ldexp and squared_difference both carry an intermediate in fp32 dest that
-# their golden rounds to bfloat16 first — 2**b for one, a - b for the other —
-# so the third ULP is the golden's. Against an fp32 golden both hold at 2.
+# ldexp and squared_difference both round an intermediate to bfloat16 in dest
+# before the next op (fp32 dest accumulation is off for bf16). The golden
+# rounds that same intermediate — 2**b, or a - b — to bfloat16 on its side.
+# The third ULP is those two roundings, not an fp32 value the golden lacks.
+# Against an fp32 golden both hold at 2.
 COMPOSITE_INTERMEDIATE_ULP = 3
 
 # SFPU log's error is absolute, not relative, near its zero crossing: it
@@ -86,9 +109,9 @@ XLOGY_LOG_ATOL = 0.02
 XLOGY_NEAR_ONE_LOW = 0.25
 XLOGY_NEAR_ONE_HIGH = 4.0
 
-# sqrt(a**2 + b**2) squares both operands in fp32 dest, so an operand below
-# 2^-63 squares to an fp32 subnormal that hardware flushes to zero, and one
-# above 2^63 squares past fp32's range. One binade of margin on each side.
+# sqrt(a**2 + b**2) squares both operands before the add. An operand below
+# 2^-63 squares to a subnormal that hardware flushes to zero, and one above
+# 2^63 overflows the square. One binade of margin on each side.
 HYPOT_MIN_OPERAND = 2.0**-62
 HYPOT_MAX_OPERAND = 2.0**62
 
@@ -128,12 +151,13 @@ def _assert_nonfinite_match(golden, result, desc):
 def test_ldexp(device, ttnn_op):
     """a over the full grid, b over the exponents EXP2 can represent.
 
-    The third ULP is the golden's: torch rounds 2**b to bfloat16 before
-    multiplying, while the device's EXP2 pre-op leaves it in fp32 dest. For
-    a = 5.995e-36 and b = -0.9961 that rounds 2**b from 0.50272 to 0.5, so the
-    golden halves a exactly (2.9975e-36) where the device returns 3.0328e-36,
-    and the true 3.0056e-36 sits between them. Against an fp32 golden the
-    sweep holds at 2 ULP.
+    The third ULP is a bfloat16 rounding of the scale. Dest accumulation is
+    off, so EXP2's result is rounded to bfloat16 before the multiply, and
+    torch rounds 2**b to bfloat16 on the golden's side. For a = 5.995e-36 and
+    b = -0.9961 that rounds 2**b from 0.50272 to 0.5, so the golden halves a
+    exactly (2.9975e-36) where the device returns 3.0328e-36, and the true
+    3.0056e-36 sits between them. Against an fp32 golden the sweep holds at
+    2 ULP.
 
     Both saturation directions are the FPU multiply's, already documented for
     ttnn.multiply in category 1:
@@ -156,10 +180,14 @@ def test_ldexp(device, ttnn_op):
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
     overflow_to_zero = torch.isinf(golden) & (result == 0)
+    # An empty mask rewrites nothing. The infs then match on sign and the finite
+    # slice drops them, so this saturation could disappear without a failure.
+    assert overflow_to_zero.any(), "expected the FPU overflow-to-zero pairs in this sweep"
     result = torch.where(overflow_to_zero, golden, result)
     overflow_to_inf = (
         (golden.abs() == MAX_BF16) & torch.isinf(result) & (torch.signbit(golden) == torch.signbit(result))
     )
+    assert overflow_to_inf.any(), "expected the FPU overflow-to-inf pairs in this sweep"
     result = torch.where(overflow_to_inf, golden, result)
     _assert_nonfinite_match(golden, result, ttnn_op.__name__)
 
@@ -191,6 +219,38 @@ def test_ldexp_exponent_underflow(device):
     golden = torch.ldexp(input_a, input_b)
     assert (golden != 0).any(), "expected some representable results in the EXP2 underflow region"
     assert_equal(torch.zeros_like(result), result)
+
+
+def test_ldexp_exponent_overflow(device):
+    """b > 127, the half of EXP2's range test_ldexp does not cover.
+
+    EXP2's bf16 path clamps the biased exponent at 255, so every b >= 128
+    delivers the same scale as b == 128. The product is ldexp(a, 128), not
+    ldexp(a, b): 2^-126 * 2^128 comes back as 4, while a standalone exp2(128)
+    is already +inf. 127.5 is the one grid value above 127 whose scale is
+    still the real 2^b.
+
+    Overflow-to-zero is the same FPU multiply case test_ldexp masks (golden
+    ±inf, device +0). Everything else, including the sign of the infs that
+    remain, matches that saturated golden exactly.
+    """
+    input_a, input_b = pairwise_from_values(
+        binary_grid_values(), binary_grid_values(low=LDEXP_MAX_EXPONENT + 0.5, include_zero=False)
+    )
+    result = ttnn.to_torch(ttnn.ldexp(to_tt_tensor(input_a, device), to_tt_tensor(input_b, device)))
+
+    assert (input_b >= 128).any() and (input_b < 128).any(), "expected both the saturated and the 127.5 scales"
+    saturated_b = torch.where(input_b >= 128, torch.full_like(input_b, 128.0), input_b)
+    golden = torch.ldexp(input_a.double(), saturated_b.double()).to(torch.bfloat16)
+
+    overflow_to_zero = torch.isinf(golden) & (result == 0)
+    assert overflow_to_zero.any(), "expected the FPU overflow-to-zero pairs in this sweep"
+    result = torch.where(overflow_to_zero, golden, result)
+    _assert_nonfinite_match(golden, result, "ldexp exponent overflow")
+
+    finite = torch.isfinite(golden)
+    assert finite.any(), "expected some products to stay finite under the saturated scale"
+    assert_with_ulp(expected_result=golden[finite], actual_result=result[finite], ulp_threshold=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,12 +304,13 @@ def test_squared_difference(device, ttnn_op):
     all but the couple of dozen widest-spread pairs; those saturate to +inf on
     both sides and drop out with the finite mask.
 
-    The third ULP is the golden's, not the kernel's: the golden rounds a - b to
-    bfloat16 before squaring it, while the device squares the exact fp32
-    difference the subtract left in dest. a = 3.375e-21, b = -9.216e-19 is the
-    clearest case — the exact square is 8.555e-37, and the device's 8.640e-37
-    and the golden's twice-rounded 8.464e-37 straddle it. Against an fp32
-    golden the whole sweep is within 2 ULP.
+    The third ULP is the bfloat16 rounding of a - b. Dest accumulation is off,
+    so the subtract rounds to bfloat16 before the square, and the golden rounds
+    a - b to bfloat16 on its side. a = 3.375e-21, b = -9.216e-19 is the
+    clearest case — the exact square is 8.555e-37, the device's 8.640e-37 is
+    the square of a - b rounded up one bfloat16 step, and the golden's
+    twice-rounded 8.464e-37 sits on the other side. Against an fp32 golden
+    the whole sweep is within 2 ULP.
     """
     values = binary_grid_values(-1e19, 1e19)
     input_a, input_b = pairwise_from_values(values)
@@ -277,7 +338,7 @@ def test_squared_difference(device, ttnn_op):
 
 def test_xlogy(device):
     """b over the positive normals, a capped at 1e30 so a * log(b) (|log b| <=
-    87.3) stays inside bfloat16.
+    87.3) stays inside bfloat16. b <= 0 is test_xlogy_nonpositive.
 
     Away from b = 1 the sweep is within 2 ULP. Around it, log's error stops
     being relative: the kernel returns 4.4e-4 for log(1) and is off by up to
@@ -314,13 +375,33 @@ def test_xlogy(device):
         )
 
 
+def test_xlogy_nonpositive(device):
+    """b <= 0, which the accuracy sweep drops.
+
+    b < 0 takes the kernel's NaN path. bfloat16 packing reads that NaN back as
+    +inf, for every a, where torch returns NaN (and 0 when a == 0).
+
+    b == 0 matches torch's signed inf: +a gives -inf and -a gives +inf, because
+    log(0) is -inf. The one disagreement is a == 0, where torch returns 0 and
+    the device returns -inf.
+    """
+    input_a, input_b = pairwise_from_values(binary_grid_values(), binary_grid_values(high=0.0))
+    result = ttnn.to_torch(ttnn.xlogy(to_tt_tensor(input_a, device), to_tt_tensor(input_b, device)))
+
+    assert (input_b < 0).any() and (input_b == 0).any(), "expected both negative b and zero"
+
+    expected = torch.full_like(result, float("inf"))
+    expected = torch.where((input_b == 0) & (input_a >= 0), torch.full_like(result, float("-inf")), expected)
+    assert_equal(expected, result)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # hypot — SQUARE on both operands, add, then a SQRT post-op
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_hypot(device):
-    """Operands restricted to the magnitudes whose square survives fp32 dest,
+    """Operands restricted to the magnitudes whose square stays a normal value,
     [2^-62, 2^62] plus 0. Both squares, the add and the sqrt are exact enough
     there that the sweep is within 1 ULP."""
     values = binary_grid_values(-HYPOT_MAX_OPERAND, HYPOT_MAX_OPERAND, min_magnitude=HYPOT_MIN_OPERAND)
@@ -332,13 +413,13 @@ def test_hypot(device):
 
 def test_hypot_outside_square_range(device):
     """Over the full grid hypot is not sqrt(a**2 + b**2) but sqrt of whatever
-    the SQUARE pre-ops left in fp32 dest, and this pins that to 1 ULP.
+    the SQUARE pre-ops left after flushing, and this pins that to 1 ULP.
 
-    An operand below 2^-63 squares to an fp32 subnormal that is flushed, so it
-    drops out of the sum entirely: hypot(2^-126, b) returns |b| exactly, and
+    An operand below 2^-63 squares to a subnormal that is flushed, so it drops
+    out of the sum entirely: hypot(2^-126, b) returns |b| exactly, and
     hypot(2^-126, 2^-126) is 0 rather than 1.66e-38. An operand above 2^63
-    squares past fp32's range, so the sum is +inf and so is the result, well
-    before |hypot| itself would overflow bfloat16.
+    overflows the square, so the sum is +inf and so is the result, well before
+    |hypot| itself would overflow bfloat16.
     """
     input_a, input_b = pairwise_from_values(binary_grid_values())
     result = ttnn.to_torch(ttnn.hypot(to_tt_tensor(input_a, device), to_tt_tensor(input_b, device)))
@@ -402,10 +483,12 @@ def test_prelu(device):
     weight is one grid value per channel, which makes column j of the result
     prelu(grid[i], grid[j]) and still covers every (value, weight) pair.
 
-    prelu selects between a and a * w, so it is bit-exact wherever the multiply
-    is: the only elements that move are the 31126 whose product underflows
-    (a = -1.175e-38 with w = 0.996 gives 0 instead of -1.175e-38), which is the
-    multiply's flush and not prelu's.
+    prelu selects between a and a * w. Positive a, including the small ones,
+    takes the identity and is exact. The absolute tolerance is only the
+    negative branch, whose product underflows (a = -1.175e-38 with w = 0.996
+    gives 0 instead of -1.175e-38). Products that overflow bfloat16 come back
+    as signed inf, matching the golden, so they stay in the non-finite check
+    rather than an overflow-to-zero mask.
     """
     weight = binary_grid_values()
     input_a, _ = pairwise_from_values(weight)
@@ -414,8 +497,11 @@ def test_prelu(device):
     result = ttnn.to_torch(ttnn.prelu(to_tt_tensor(input_a, device), to_tt_tensor(weight, device)))
 
     _assert_nonfinite_match(golden, result, "prelu")
-    underflow = golden.abs() < UNDERFLOW_BAND
+    underflow = (input_a < 0) & (golden.abs() < UNDERFLOW_BAND)
     assert underflow.any(), "expected the product's underflow band to be non-empty for this sweep"
+    assert (
+        (input_a > 0) & (golden.abs() < UNDERFLOW_BAND)
+    ).any(), "expected small positive inputs, which take the identity branch"
 
     assert_with_ulp(
         expected_result=golden[~underflow], actual_result=result[~underflow], ulp_threshold=0, allow_nonfinite=True
@@ -423,3 +509,154 @@ def test_prelu(device):
     assert_allclose(
         expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=SMALLEST_NORMAL_BF16
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tensor-scalar — the other overload of the same kernels
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _square_inputs(values):
+    """Repeat the value set across rows and columns so the scalar path crosses tiles.
+
+    A 1-D tensor in tile layout sits in a single tile band. Category 3's
+    scalar test uses the same expansion.
+    """
+    return values.unsqueeze(1).expand(values.numel(), values.numel()).contiguous()
+
+
+def _run_scalar(device, ttnn_op, values, scalar):
+    input_a = _square_inputs(values)
+    tt_a = to_tt_tensor(input_a, device)
+    scalar_tensor = torch.tensor(scalar, dtype=input_a.dtype)
+    golden = ttnn.get_golden_function(ttnn_op)(input_a, scalar_tensor).to(torch.bfloat16)
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, scalar)
+        result = ttnn.to_torch(tt_a)
+    else:
+        result = ttnn.to_torch(ttnn_op(tt_a, scalar))
+    return input_a, golden, result
+
+
+def _check_ldexp_scalar(golden, result, desc):
+    overflow_to_zero = torch.isinf(golden) & (result == 0)
+    result = torch.where(overflow_to_zero, golden, result)
+    overflow_to_inf = (
+        (golden.abs() == MAX_BF16) & torch.isinf(result) & (torch.signbit(golden) == torch.signbit(result))
+    )
+    result = torch.where(overflow_to_inf, golden, result)
+    _assert_nonfinite_match(golden, result, desc)
+    finite = torch.isfinite(golden)
+    underflow = finite & (golden.abs() < UNDERFLOW_BAND)
+    kept = finite & ~underflow
+    assert kept.any(), f"{desc}: expected some results outside the underflow band"
+    assert_with_ulp(expected_result=golden[kept], actual_result=result[kept], ulp_threshold=COMPOSITE_INTERMEDIATE_ULP)
+    if underflow.any():
+        assert_allclose(
+            expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=4 * SMALLEST_NORMAL_BF16
+        )
+
+
+def _check_logaddexp_scalar(golden, result, desc, ulp_threshold, small_atol):
+    _assert_nonfinite_match(golden, result, desc)
+    large = golden.abs() >= 1.0
+    if large.any():
+        assert_with_ulp(expected_result=golden[large], actual_result=result[large], ulp_threshold=ulp_threshold)
+    if (~large).any():
+        assert_allclose(expected_result=golden[~large], actual_result=result[~large], rtol=0, atol=small_atol)
+
+
+def _check_squared_difference_scalar(golden, result, desc):
+    _assert_nonfinite_match(golden, result, desc)
+    finite = torch.isfinite(golden)
+    underflow = finite & (golden.abs() < UNDERFLOW_BAND)
+    kept = finite & ~underflow
+    assert kept.any(), f"{desc}: expected some results outside the underflow band"
+    assert_with_ulp(expected_result=golden[kept], actual_result=result[kept], ulp_threshold=COMPOSITE_INTERMEDIATE_ULP)
+    if underflow.any():
+        assert_allclose(
+            expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=2 * SMALLEST_NORMAL_BF16
+        )
+
+
+def _check_xlogy_scalar(input_a, golden, result, scalar):
+    _assert_nonfinite_match(golden, result, "xlogy")
+    near_one = XLOGY_NEAR_ONE_LOW <= scalar <= XLOGY_NEAR_ONE_HIGH
+    if near_one:
+        error = (golden.float() - result.float()).abs()
+        tolerance = XLOGY_LOG_ATOL * input_a.abs().float() + SMALLEST_NORMAL_BF16
+        assert not (error > tolerance).any(), "xlogy scalar near log's zero crossing"
+    else:
+        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
+
+
+def _check_prelu_scalar(input_a, golden, result):
+    _assert_nonfinite_match(golden, result, "prelu")
+    underflow = (input_a < 0) & (golden.abs() < UNDERFLOW_BAND)
+    assert_with_ulp(
+        expected_result=golden[~underflow], actual_result=result[~underflow], ulp_threshold=0, allow_nonfinite=True
+    )
+    if underflow.any():
+        assert_allclose(
+            expected_result=golden[underflow], actual_result=result[underflow], rtol=0, atol=SMALLEST_NORMAL_BF16
+        )
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, kind, scalar",
+    [
+        (ttnn.ldexp, "ldexp", -126.0),
+        (ttnn.ldexp, "ldexp", 127.0),
+        (ttnn.ldexp_, "ldexp", 1.0),
+        (ttnn.logaddexp, "logaddexp", -80.0),
+        (ttnn.logaddexp, "logaddexp", 0.0),
+        (ttnn.logaddexp_, "logaddexp", 80.0),
+        (ttnn.logaddexp2, "logaddexp2", -120.0),
+        (ttnn.logaddexp2, "logaddexp2", 0.0),
+        (ttnn.logaddexp2_, "logaddexp2", 120.0),
+        (ttnn.squared_difference, "squared_difference", -1.0e19),
+        (ttnn.squared_difference, "squared_difference", 1.0),
+        (ttnn.squared_difference_, "squared_difference", 0.0),
+        (ttnn.bias_gelu, "bias_gelu", -100.0),
+        (ttnn.bias_gelu, "bias_gelu", 0.0),
+        (ttnn.bias_gelu_, "bias_gelu", 100.0),
+        (ttnn.xlogy, "xlogy", 1.0),
+        (ttnn.xlogy, "xlogy", 16.0),
+        (ttnn.prelu, "prelu", 0.5),
+        (ttnn.prelu, "prelu", -1.0),
+        (ttnn.prelu, "prelu", 2.0),
+    ],
+)
+def test_tensor_scalar(device, ttnn_op, kind, scalar):
+    """Tensor-scalar coverage of the category-4 overloads.
+
+    The value set is the same domain as the tensor-tensor sweep, expanded to a
+    square so the broadcast crosses tiles. Thresholds match that sweep. hypot
+    has no scalar overload.
+    """
+    domains = {
+        "ldexp": binary_grid_values(),
+        "logaddexp": binary_grid_values(-80.0, 80.0),
+        "logaddexp2": binary_grid_values(-120.0, 120.0),
+        "squared_difference": binary_grid_values(-1.0e19, 1.0e19),
+        "bias_gelu": binary_grid_values(-100.0, 100.0),
+        "xlogy": binary_grid_values(-1.0e30, 1.0e30),
+        "prelu": binary_grid_values(),
+    }
+    input_a, golden, result = _run_scalar(device, ttnn_op, domains[kind], scalar)
+    desc = f"{ttnn_op.__name__}(tensor, {scalar})"
+    if kind == "ldexp":
+        _check_ldexp_scalar(golden, result, desc)
+    elif kind == "logaddexp":
+        _check_logaddexp_scalar(golden, result, desc, ulp_threshold=1, small_atol=2.0**-6)
+    elif kind == "logaddexp2":
+        _check_logaddexp_scalar(golden, result, desc, ulp_threshold=2, small_atol=2.0**-5)
+    elif kind == "squared_difference":
+        _check_squared_difference_scalar(golden, result, desc)
+    elif kind == "bias_gelu":
+        _assert_nonfinite_match(golden, result, desc)
+        assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=0.05)
+    elif kind == "xlogy":
+        _check_xlogy_scalar(input_a, golden, result, scalar)
+    else:
+        _check_prelu_scalar(input_a, golden, result)

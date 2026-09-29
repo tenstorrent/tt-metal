@@ -183,10 +183,13 @@ def binary_grid_values(
     """Binary-grid values restricted to a domain, for ops that are only defined
     (or only well-conditioned) on part of the bfloat16 range.
 
-    Keeps the grid's stratification — every surviving exponent still carries all
-    4 mantissa codes and both signs — so an outer product of two restricted
-    value sets stays a few million elements instead of the billions an
-    exhaustive in-range sweep would need.
+    Keeps the grid's stratification. An exponent that lies wholly inside
+    [low, high] still carries all 4 mantissa codes and both signs. A bound
+    that cuts a binade keeps only the codes that fall inside it — the
+    mantissas are 1.0, 1.0078, 1.0625, 1.9922, so ±80, ±100, and ±1e19 each
+    drop a code at the edge. The filter is by value, not by exponent. An
+    outer product of two restricted sets stays a few million elements
+    instead of the billions an exhaustive in-range sweep would need.
 
     Args:
         low, high (float, optional): Inclusive value bounds. Default unbounded.
