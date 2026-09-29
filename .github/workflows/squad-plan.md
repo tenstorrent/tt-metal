@@ -93,7 +93,7 @@ engine: copilot
 # downstream, unlike issue-monster.md's cheap pick-2-from-a-filtered-list judgment call.
 # Opus over the Sonnet this repo otherwise pins for review workflows
 # (mattpocock-skills-reviewer.md, test-command.md) for that reason.
-model: claude-opus-5-5
+model: claude-opus-5.5
 
 # Cost backstop, matching test-command.md. `/squad-plan` is invoked by hand, so spend
 # scales with how often maintainers reach for it; this caps a runaway day.
