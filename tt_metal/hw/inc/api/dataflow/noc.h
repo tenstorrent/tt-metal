@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dfb_access.h"
 #include "internal/debug/noc_zero_guard.h"
 #include "noc_address_backend.h"
 template <typename DSpecT>
@@ -13,7 +14,6 @@ class TensorAccessor;
 struct UnicastEndpoint;
 struct MulticastEndpoint;
 class CircularBuffer;
-#include "api/dataflow/dfb_access.h"  // DFBAccess + DataflowBuffer forward decl
 
 // Concrete arg struct for the DFB-specific Noc overloads.
 // Defined here so noc.h can use it in async_read/async_write specializations defined in
@@ -829,11 +829,9 @@ public:
      * Selects this overload when NocOptions::TXN_ID is specified and the destination is a DataflowBuffer.
      * No trid is accepted here because the DataflowBuffer manages txn_ids internally
      * via its private prepare/commit helpers.
-     * No size either: a BLOCKED producer reads one whole block per call (one NoC transaction, so
-     * the block's pages must be contiguous in the source); any other producer reads one page per
-     * call and the DataflowBuffer tracks the share.
+     * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
      */
-    template <NocOptions opts, typename Src, DFBAccess Pap, DFBAccess Cap>
+    template <NocOptions opts, typename Src, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
     std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
         DataflowBuffer<Pap, Cap>& dst,
@@ -846,10 +844,9 @@ public:
      * Selects this overload when NocOptions::TXN_ID is specified and the source is a DataflowBuffer.
      * No trid is accepted here because the DataflowBuffer manages txn_ids internally
      * via its private prepare/commit helpers.
-     * No size either: a BLOCKED consumer writes one whole block per call (pages contiguous in the
-     * destination); any other consumer writes one page per call.
+     * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
      */
-    template <NocOptions opts, typename Dst, DFBAccess Pap, DFBAccess Cap>
+    template <NocOptions opts, typename Dst, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
     std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
         DataflowBuffer<Pap, Cap>& src,
         const Dst& dst,

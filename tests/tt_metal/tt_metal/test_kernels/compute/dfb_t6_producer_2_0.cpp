@@ -38,11 +38,7 @@ void kernel_main() {
 
     // One reserve/push per share (1 on a plain ring, more when a side is BLOCKED). Nothing is
     // packed: the host pre-fills the ring.
-#ifdef ARCH_QUASAR
-    const uint32_t share = dfb.get_produce_share();
-#else
-    const uint32_t share = 1;
-#endif
+    const uint32_t share = dfb.get_producer_share();
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id += share) {
         dfb.reserve_back(share);
         // TEN-4746: a real packer op must sit between reserve_back's WAIT_FREE and push_back's

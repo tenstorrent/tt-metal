@@ -29,13 +29,8 @@ static inline void consume_one_dfb(
     uint32_t num_consumers,
     uint32_t consumer_idx) {
     const uint32_t entry_size = dfb.get_entry_size();
-#ifdef ARCH_QUASAR
-    const uint32_t share = dfb.get_consume_share();
-    const uint32_t stride_bytes = entry_size * dfb.get_consume_stride_tiles();
-#else
-    const uint32_t share = 1;
-    const uint32_t stride_bytes = entry_size;
-#endif
+    const uint32_t share = dfb.get_consumer_share();
+    const uint32_t stride_bytes = entry_size * dfb.get_consumer_stride_tiles();
     const uint32_t page_step = is_blocked ? 1u : num_consumers;
     for (uint32_t tile_id = 0; tile_id < entries_per_consumer; tile_id += share) {
         const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx;

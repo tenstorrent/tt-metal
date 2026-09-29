@@ -312,79 +312,79 @@ unit_tests_debug_tools:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S_2_0/ImplicitSyncFalse"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx1S/ImplicitSyncFalse"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB2Sx4S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB2Sx4S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx4A_2_0/ImplicitSyncFalse"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB1Sx4A/ImplicitSyncFalse"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB4Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB4Sx1S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB_RingPressure_3Sx3S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest1xDFB_RingPressure_3Sx3S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest3xDFB_1Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest3xDFB_1Sx1S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest4xDFB_Mixed_2_0/ImplicitSyncFalse"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTest4xDFB_Mixed/ImplicitSyncFalse"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB1Sx1S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB2Sx4S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB2Sx4S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB6Sx2A_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.DMTensixTest1xDFB6Sx2A/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB1Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest1xDFB1Sx1S/ImplicitSyncTrue"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest4xDFB_1Sx1S_2_0/ImplicitSyncFalse"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.TensixDMTest4xDFB_1Sx1S/ImplicitSyncFalse"
     config: 1x3
     back2back: true
     env:
@@ -420,7 +420,7 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.MultiCoreDMTest2Core_1Sx1S_2_0/ImplicitSyncTrue"
+  - filter: "M2ImplicitSync/DFBImplicitSyncParamFixture_2_0.MultiCoreDMTest2Core_1Sx1S/ImplicitSyncTrue"
     config: 2x3
     back2back: true
     env:

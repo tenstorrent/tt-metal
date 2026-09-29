@@ -75,6 +75,12 @@ inline uint32_t DataflowBuffer::get_ring_span_bytes() const { return get_total_s
 
 inline uint32_t DataflowBuffer::get_ring_span_num_entries() const { return get_total_num_entries(); }
 
+// A tt-1xx DFB is a plain circular buffer: every op moves one contiguous entry.
+inline uint16_t DataflowBuffer::get_producer_share() const { return 1; }
+inline uint16_t DataflowBuffer::get_consumer_share() const { return 1; }
+inline uint16_t DataflowBuffer::get_producer_stride_tiles() const { return 1; }
+inline uint16_t DataflowBuffer::get_consumer_stride_tiles() const { return 1; }
+
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
     PACK((llk_wait_for_free_tiles<false, false, false>(logical_dfb_id_, num_entries)));

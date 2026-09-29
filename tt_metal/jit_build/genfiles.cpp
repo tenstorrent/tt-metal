@@ -133,9 +133,9 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
 // DFBBindingToken template argument for a dfb::AccessPattern code (STRIDED 0, ALL 1, BLOCKED 2).
 static const char* dfb_access_name(uint8_t code) {
     switch (code) {
-        case 0: return "DFBAccess::STRIDED";
-        case 1: return "DFBAccess::ALL";
-        case 2: return "DFBAccess::BLOCKED";
+        case 0: return "dfb::AccessPattern::STRIDED";
+        case 1: return "dfb::AccessPattern::ALL";
+        case 2: return "dfb::AccessPattern::BLOCKED";
         default: TT_THROW("Unknown DFB access pattern code {}", code);
     }
 }
@@ -403,7 +403,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
     }
     emit_programmatic_binding_token_getter(
-        content, dfb_entries, "DFBBindingToken<DFBAccess::UNKNOWN, DFBAccess::UNKNOWN>");
+        content, dfb_entries, "DFBBindingToken<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>");
     content << "}  // namespace dfb\n";
 
     // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.

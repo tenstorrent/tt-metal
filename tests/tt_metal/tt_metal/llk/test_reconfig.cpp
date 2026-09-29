@@ -419,13 +419,13 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     };
 
     using DFBEndpoint = experimental::DFBEndpointType;
-    using DFBAccess = experimental::DFBAccessPattern;
+    using dfb::AccessPattern = experimental::DFBAccessPattern;
     auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
         return experimental::DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name.get(),
             .endpoint_type = endpoint,
-            .access_pattern = DFBAccess::STRIDED,
+            .access_pattern = dfb::AccessPattern::STRIDED,
         };
     };
 
@@ -472,7 +472,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             .dfb_spec_name = OUT_DFB,
             .accessor_name = "in",
             .endpoint_type = DFBEndpoint::CONSUMER,
-            .access_pattern = DFBAccess::STRIDED,
+            .access_pattern = dfb::AccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
@@ -764,13 +764,13 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     };
 
     using DFBEndpoint = experimental::DFBEndpointType;
-    using DFBAccess = experimental::DFBAccessPattern;
+    using dfb::AccessPattern = experimental::DFBAccessPattern;
     auto dfb_binding = [](const experimental::DFBSpecName& name, DFBEndpoint endpoint) {
         return experimental::DFBBinding{
             .dfb_spec_name = name,
             .accessor_name = name.get(),
             .endpoint_type = endpoint,
-            .access_pattern = DFBAccess::STRIDED,
+            .access_pattern = dfb::AccessPattern::STRIDED,
         };
     };
     auto make_writer_spec = [&](const experimental::KernelSpecName& writer_id,
