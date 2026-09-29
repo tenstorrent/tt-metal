@@ -8301,6 +8301,113 @@
   "started": "2026-09-29T13:29:07",
   "status": "PASS"
  },
+ "S.kda_moe.02": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a93ff603-9e1a-4c97-8149-0dd1f4b5a6cd"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/S.kda_moe.02.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/S.kda_moe.02.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 989.9,
+    "session_id": "a93ff603-9e1a-4c97-8149-0dd1f4b5a6cd",
+    "t": "2026-09-29T13:51:20"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 94.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T13:56:05"
+   }
+  ],
+  "last_run": "2026-09-29T13:56:05",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/S.kda_moe.02.log",
+  "metrics": {
+   "comb_col_sum_err_swap_attn_hc": 0.0034618377685546875,
+   "flipped_rows_swap_out_collapse_share": 5,
+   "flipped_rows_swap_out_cpu": 33,
+   "flipped_rows_swap_out_golden": 39,
+   "max_abs_swap_attn_hc_comb": 0.0078125,
+   "max_abs_swap_attn_hc_post": 0.001953125,
+   "max_abs_swap_attn_hc_pre": 0.006346642971038818,
+   "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": 1.000133752822876,
+   "norm_ratio_max_swap_attn_collapse_vs_golden": 0.9994010329246521,
+   "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": 0.9998306035995483,
+   "norm_ratio_min_swap_attn_collapse_vs_golden": 0.9889911413192749,
+   "pcc_swap_attn_hc": 0.999993591221996,
+   "pcc_swap_attn_in": 0.9999935098992264,
+   "pcc_swap_attn_norm": 0.9999947780400994,
+   "pcc_swap_attn_out": 0.9999965833932362,
+   "pcc_swap_experts_out": 0.9998589067888599,
+   "pcc_swap_ffn_hc": 0.9999992172768857,
+   "pcc_swap_ffn_in": 0.9999941979393058,
+   "pcc_swap_ffn_norm": 0.999994416099649,
+   "pcc_swap_h_mid": 0.999997166209614,
+   "pcc_swap_mlp_out": 0.9998713653509782,
+   "pcc_swap_out": 0.9999943356869395,
+   "pcc_swap_router": 0.999504195627125,
+   "pcc_swap_shared_out": 0.999978039054413,
+   "rel_l2_same_routing_swap_out_collapse_share": 0.0001474255113862455,
+   "rel_l2_same_routing_swap_out_cpu": 0.0011850002920255065,
+   "rel_l2_same_routing_swap_out_golden": 0.002617234829813242,
+   "rel_l2_swap_attn_collapse_vs_cpu_same_input": 0.001658658031374216,
+   "rel_l2_swap_attn_collapse_vs_golden": 0.007135967258363962,
+   "rel_l2_swap_attn_hc_comb": 0.003099772846326232,
+   "rel_l2_swap_attn_hc_post": 0.004023618996143341,
+   "rel_l2_swap_attn_hc_pre": 0.004723271820694208,
+   "rel_l2_swap_out": 0.00349367200396955,
+   "row_norm_ratio_max_swap_out_collapse_share": 1.0004653930664062,
+   "row_norm_ratio_max_swap_out_cpu": 1.0032089948654175,
+   "row_norm_ratio_max_swap_out_golden": 1.0033469200134277,
+   "row_norm_ratio_min_swap_out_collapse_share": 0.9996606111526489,
+   "row_norm_ratio_min_swap_out_cpu": 0.9929450154304504,
+   "row_norm_ratio_min_swap_out_golden": 0.9925028085708618,
+   "row_rel_l2_max_swap_attn_collapse_vs_cpu_same_input": 0.0017429764848202467,
+   "row_rel_l2_max_swap_attn_collapse_vs_golden": 0.01144920289516449,
+   "worst_col_rel_l2_swap_attn_hc": 0.02453300729393959
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T13:54:31",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/glm53_prefill",
   "created": "2026-09-29T00:16:27",

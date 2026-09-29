@@ -1,0 +1,173 @@
+{
+ "metrics": {
+  "comb_col_sum_err_swap_attn_hc": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.0034618377685546875
+  },
+  "flipped_rows_swap_out_collapse_share": {
+   "t": "2026-09-29T13:56:01",
+   "value": 5
+  },
+  "flipped_rows_swap_out_cpu": {
+   "t": "2026-09-29T13:55:48",
+   "value": 33
+  },
+  "flipped_rows_swap_out_golden": {
+   "t": "2026-09-29T13:55:35",
+   "value": 39
+  },
+  "max_abs_swap_attn_hc_comb": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.0078125
+  },
+  "max_abs_swap_attn_hc_post": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.001953125
+  },
+  "max_abs_swap_attn_hc_pre": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.006346642971038818
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T13:55:49",
+   "value": 1.000133752822876
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.9994010329246521
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.9998306035995483
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.9889911413192749
+  },
+  "pcc_swap_attn_hc": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.999993591221996
+  },
+  "pcc_swap_attn_in": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999935098992264
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999947780400994
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999965833932362
+  },
+  "pcc_swap_experts_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9998589067888599
+  },
+  "pcc_swap_ffn_hc": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999992172768857
+  },
+  "pcc_swap_ffn_in": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999941979393058
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.999994416099649
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.999997166209614
+  },
+  "pcc_swap_mlp_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9998713653509782
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9999943356869395
+  },
+  "pcc_swap_router": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.999504195627125
+  },
+  "pcc_swap_shared_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.999978039054413
+  },
+  "rel_l2_same_routing_swap_out_collapse_share": {
+   "t": "2026-09-29T13:56:01",
+   "value": 0.0001474255113862455
+  },
+  "rel_l2_same_routing_swap_out_cpu": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.0011850002920255065
+  },
+  "rel_l2_same_routing_swap_out_golden": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.002617234829813242
+  },
+  "rel_l2_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.001658658031374216
+  },
+  "rel_l2_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.007135967258363962
+  },
+  "rel_l2_swap_attn_hc_comb": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.003099772846326232
+  },
+  "rel_l2_swap_attn_hc_post": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.004023618996143341
+  },
+  "rel_l2_swap_attn_hc_pre": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.004723271820694208
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.00349367200396955
+  },
+  "row_norm_ratio_max_swap_out_collapse_share": {
+   "t": "2026-09-29T13:56:01",
+   "value": 1.0004653930664062
+  },
+  "row_norm_ratio_max_swap_out_cpu": {
+   "t": "2026-09-29T13:55:48",
+   "value": 1.0032089948654175
+  },
+  "row_norm_ratio_max_swap_out_golden": {
+   "t": "2026-09-29T13:55:35",
+   "value": 1.0033469200134277
+  },
+  "row_norm_ratio_min_swap_out_collapse_share": {
+   "t": "2026-09-29T13:56:01",
+   "value": 0.9996606111526489
+  },
+  "row_norm_ratio_min_swap_out_cpu": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.9929450154304504
+  },
+  "row_norm_ratio_min_swap_out_golden": {
+   "t": "2026-09-29T13:55:35",
+   "value": 0.9925028085708618
+  },
+  "row_rel_l2_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.0017429764848202467
+  },
+  "row_rel_l2_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T13:55:49",
+   "value": 0.01144920289516449
+  },
+  "worst_col_rel_l2_swap_attn_hc": {
+   "t": "2026-09-29T13:55:48",
+   "value": 0.02453300729393959
+  }
+ },
+ "task": "S.kda_moe.02"
+}
