@@ -241,29 +241,40 @@ class Qwen38Decoder(LightweightModule):
                 self.dram_weights[name] = ttnn.to_memory_config(tensor, memory)
         return self
 
+    def state_shapes(self, *, batch_size, num_pages=None):
+        """Per-slot cache shapes for this layer, keyed by DecoderState field.
+
+        Every head count here is already per-device, so the shapes narrow with the
+        tensor-parallel width. Serving validates an externally allocated cache against this,
+        so it has to stay the only place the geometry is written down.
+        """
+        c = self.config
+        if self.kind == "full_attention":
+            if num_pages is None or num_pages < 1:
+                raise ValueError("Full attention requires num_pages")
+            page = (num_pages, c.num_key_value_heads, self.PAGE_SIZE, c.head_dim)
+            return {"key": page, "value": page}
+        width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
+        return {
+            "recurrent": (batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim),
+            "conv": (batch_size, 3, width),
+        }
+
     def allocate_state(self, *, batch_size, num_pages=None):
         """Setup only. Page ownership and page-table construction belong to caller."""
 
         def zeros(shape, dtype, layout=ttnn.TILE_LAYOUT):
             return ttnn.zeros(
-                shape, dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                list(shape), dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
+        shapes = self.state_shapes(batch_size=batch_size, num_pages=num_pages)
         if self.kind == "full_attention":
-            if num_pages is None or num_pages < 1:
-                raise ValueError("Full attention requires num_pages")
-            shape = [num_pages, self.config.num_key_value_heads, self.PAGE_SIZE, self.config.head_dim]
-            return DecoderState(
-                key=zeros(shape, getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))),
-                value=zeros(shape, getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))),
-            )
-        c = self.config
-        width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
+            kv = getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))
+            return DecoderState(key=zeros(shapes["key"], kv), value=zeros(shapes["value"], kv))
         return DecoderState(
-            recurrent=zeros(
-                [batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim], ttnn.float32
-            ),
-            conv=zeros([batch_size, 3, width], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            recurrent=zeros(shapes["recurrent"], ttnn.float32),
+            conv=zeros(shapes["conv"], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         )
 
     def _role(self, name):

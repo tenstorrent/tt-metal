@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full text autoregressive path over the validated Blackhole TP4 decoder."""
+"""Full text autoregressive path over the validated tensor-parallel decoder."""
 
 import json
 import os
