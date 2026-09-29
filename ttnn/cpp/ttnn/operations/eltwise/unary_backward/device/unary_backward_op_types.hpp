@@ -16,6 +16,7 @@ namespace ttnn::operations::unary_backward {
 // op types can never share a cache entry even though they share this device operation.
 enum class UnaryBackwardOpType : uint8_t {
     SIGMOID_BW,
+    TANH_BW,
 };
 
 }  // namespace ttnn::operations::unary_backward
