@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_profile_zones.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -30,11 +31,6 @@
 #endif
 #ifndef PV_MATH_FIDELITY
 #define PV_MATH_FIDELITY -1
-#endif
-// Kernel profiler zones (device-profiler builds); the ring-joint factory sets it from TT_SDPA_PROFILE_ZONES.
-// The joint and exp-ring factories do not emit it, so their zones stay off.
-#ifndef SDPA_PROFILE_ZONES
-#define SDPA_PROFILE_ZONES 0
 #endif
 // Fixed-offset softmax (SDPAProgramConfig::fixed_offset_softmax): P = exp(scale * S) with a constant zero row
 // max: no reduce, subtract or SALAD rescale; O and the row sum L1-accumulate in place across K chunks.
@@ -59,28 +55,7 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
-// Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
-// When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
-// When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_STREAMING)
-// Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
-#define MaybeDeviceZoneScopedN(ENABLED, name)
-#elif defined(PROFILE_KERNEL)
-template <bool Enabled, uint32_t timer_id>
-struct MaybeProfileScope {
-    inline __attribute__((always_inline)) MaybeProfileScope() {}
-    inline __attribute__((always_inline)) ~MaybeProfileScope() {}
-};
-template <uint32_t timer_id>
-struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
-
-#define MaybeDeviceZoneScopedN(ENABLED, name)                                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    MaybeProfileScope<ENABLED, hash> zone;
-#else
-#define MaybeDeviceZoneScopedN(ENABLED, name)
-#endif
+// MaybeDeviceZoneScopedN / MaybeDeviceZoneScopedNIf and the profiling window: sdpa_profile_zones.hpp.
 
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
@@ -684,7 +659,7 @@ void sub_exp_block_bcast_cols(
     const uint32_t max_row_base = q_subblock * tiles_per_row;
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "SUB_EXP_BLOCK_INIT", sdpa_profile::nested_gate());
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
 
@@ -693,7 +668,7 @@ void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "SUB", sdpa_profile::nested_gate());
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
@@ -707,7 +682,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_wait();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "EXP", sdpa_profile::nested_gate());
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
@@ -720,7 +695,7 @@ void sub_exp_block_bcast_cols(
     }
 
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "PACK SUB_EXP", sdpa_profile::nested_gate());
         // Pack back to inout_cb at the same absolute positions.
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
@@ -916,7 +891,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "NORM_MATMUL_RECIP", sdpa_profile::nested_gate());
             constexpr uint32_t N = 1;
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
@@ -971,7 +946,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "NORM_MUL_BCAST", sdpa_profile::nested_gate());
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
@@ -1499,7 +1474,11 @@ static void sdpa_inner_loop_step(
     // CB receiving the row sum on a ring iter's last K chunk, and the scratch CB for each chunk's row sums.
     const bool seed_from_prev = false,
     const uint32_t save_sum_cb = INVALID_CB,
-    const uint32_t chunk_sum_cb = INVALID_CB) {
+    const uint32_t chunk_sum_cb = INVALID_CB,
+    // Profiling window: this chunk records its zones (always true without SDPA_PROFILE_ITER/QCHUNK/KCHUNK_*).
+    [[maybe_unused]] const bool prof_win = true) {
+    MaybeDeviceZoneScopedNWindow(profiling_enabled, "K_CHUNK", prof_win);
+    sdpa_profile::set_nested_gate(prof_win);
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1577,10 +1556,13 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    {
+        MaybeDeviceZoneScopedNWindow(profiling_enabled, "K_WAIT", prof_win);
+        CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+        MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)", prof_win);
         CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
         kt_index_offset = 0;
 
@@ -1643,7 +1625,7 @@ static void sdpa_inner_loop_step(
                     cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+                MaybeDeviceZoneScopedNIf(profiling_enabled, "Q@KT MM+Pack", prof_win);
                 if (dest_exp) {
                     if constexpr (fixed) {
                         blocked_matmul_exp_pack<KT_stride, KT_stride, QK_MATH_FIDELITY>(
@@ -1764,7 +1746,7 @@ static void sdpa_inner_loop_step(
 
         // Max reduce: reads from cb_qkt_im at q_subblock position (fixed mode: cur.max already holds zeros)
         if constexpr (!fixed) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Reduce max", prof_win);
             CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
@@ -1863,12 +1845,13 @@ static void sdpa_inner_loop_step(
         const bool split_group0 = !(fixed && dest_exp);
         const uint32_t first_pv_group = split_group0 ? 1 : 0;
         if (!split_group0) {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "V_WAIT", prof_win);
             CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
         }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         if (split_group0) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)@V", prof_win);
             const uint32_t matmul_inner = actual_sbw;
 
             // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
@@ -1898,6 +1881,7 @@ static void sdpa_inner_loop_step(
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                        MaybeDeviceZoneScopedNWindow(profiling_enabled, "V_WAIT", prof_win);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                     }
                     if (kt_sub > 0 || !acc_overwrite) {
@@ -1905,7 +1889,7 @@ static void sdpa_inner_loop_step(
                     }
 
                     {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                        MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                         uint32_t v_index_offset = 0;
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
@@ -1968,7 +1952,7 @@ static void sdpa_inner_loop_step(
                 }
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                 {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                    MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
                     pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, qktv_h, KT_stride);
@@ -1997,11 +1981,15 @@ static void sdpa_inner_loop_step(
         // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
         // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
         // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
-        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER", prof_win);
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        }
 
         if constexpr (fixed) {
+            MaybeDeviceZoneScopedNWindow(profiling_enabled, "FOLD", prof_win);
             // Every row group's P is summed by now: fold this chunk's row sums into the running total.
             sdpa_fold_chunk_sum(chunk_sum_cb, cur.sum, Sq_chunk_t, dst_size);
             reconfig_data_format_srca(cb_qkt_im);
@@ -2012,7 +2000,7 @@ static void sdpa_inner_loop_step(
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "ROW_NORM", prof_win);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
             normalize_row_streaming<
@@ -2039,7 +2027,7 @@ static void sdpa_inner_loop_step(
             if constexpr (!fixed) {
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+                    MaybeDeviceZoneScopedNIf(profiling_enabled, "S_CORR_FUSED", prof_win);
                     // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
                     // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                     if constexpr (has_qktv_remainder) {
@@ -2069,7 +2057,7 @@ static void sdpa_inner_loop_step(
             exp_packthread_tile_init<EXP_APPROX_MODE>();
         }
         for (uint32_t q_subblock = first_pv_group; q_subblock < total_v_row_groups; ++q_subblock) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)@V", prof_win);
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
             const uint32_t cur_h = is_remainder_iter ? qktv_remainder_h : qktv_h;
             uint32_t salad_row = q_subblock - 1;
@@ -2097,7 +2085,7 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                MaybeDeviceZoneScopedNIf(profiling_enabled, "QKT@V MM+Pack", prof_win);
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                     out_cb, out_cb);
@@ -3203,6 +3191,7 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.k_local_start_tile = source_k_chunk * Sk_chunk_t;
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
+            [[maybe_unused]] const bool prof_win = sdpa_profile::window_hit(ring_iter, q - global_q_start, k_chunk);
 
             sdpa_inner_loop_step<
                 SDPA_PROFILE_ZONES == 1,  // profiling_enabled
@@ -3268,7 +3257,8 @@ void sdpa_ring_v2(
                 q_base_tiles,
                 step_seed_from_prev,
                 step_save_sum_cb,
-                acc_state.prev.sum);  // fixed mode: per-chunk row-sum scratch (the idle A half)
+                acc_state.prev.sum,  // fixed mode: per-chunk row-sum scratch (the idle A half)
+                prof_win);
 
             if constexpr (fixed) {
                 // No ping-pong: q_cur accumulates in place. A staging restore leaves the writer's max and sum

@@ -23,6 +23,7 @@
 #include <map>
 #include <optional>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <deque>
@@ -1800,6 +1801,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";
+        // "iter,q,klo,khi": zones only for ring iter, Q chunk (index within the core) and K chunks [klo, khi);
+        // -1 leaves a bound open. Keeps a steady-state window inside the 125 zones each RISC can hold.
+        if (const char* window = std::getenv("TT_SDPA_PROFILE_WINDOW"); window != nullptr) {
+            std::array<int, 4> bounds{};
+            char trailing = 0;
+            const int parsed =
+                std::sscanf(window, "%d,%d,%d,%d%c", &bounds[0], &bounds[1], &bounds[2], &bounds[3], &trailing);
+            TT_FATAL(
+                parsed == 4 && std::ranges::all_of(bounds, [](int b) { return b >= -1; }),
+                "TT_SDPA_PROFILE_WINDOW must be \"iter,q,klo,khi\" with each value >= -1, got \"{}\"",
+                window);
+            defines["SDPA_PROFILE_ITER"] = std::to_string(bounds[0]);
+            defines["SDPA_PROFILE_QCHUNK"] = std::to_string(bounds[1]);
+            defines["SDPA_PROFILE_KCHUNK_LO"] = std::to_string(bounds[2]);
+            defines["SDPA_PROFILE_KCHUNK_HI"] = std::to_string(bounds[3]);
+        }
     }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
