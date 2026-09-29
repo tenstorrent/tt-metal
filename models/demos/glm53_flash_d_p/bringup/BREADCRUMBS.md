@@ -1369,3 +1369,33 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53
 - `GLM_EXPERTS_MODE=loop` keeps the per-expert fallback: extract -> ttnn.linear fp32 -> min / clamp -> silu * u ->
   down -> insert. It was not run on this gate.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_experts.py`
+
+## S.dsa_moe.12 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through experts on the device. I rewrote it from
+swap 11's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new experts-share block (every device output up to router fixed, CPU experts and tail) is the
+  base of the experts' share. The router share is now that block vs the router-share block, and it reproduces swap 11
+  exactly (6 / 0.00088 / [0.9980, 1.0023]).
+- New experts checks (`_experts_checks`):
+  - vs the fp32 CPU experts of the same (ffn_norm, router): the component limits. Rel <= 0.012, ratio
+    [0.985, 1.015], worst row <= 0.025, coefficient [0.997, 1.003], every 128-row block [0.995, 1.005]. Also run on
+    chunk 0.
+  - vs golden on the rows whose top-8 is the golden's: the same limits, with worst row <= 0.03. The flipped rows get
+    ratio [0.8, 1.25].
+  - Experts share at block out: no routing difference, rel <= 0.007, ratio [0.994, 1.006].
+- Changed one inherited limit: block out vs the all-CPU block, same-routing rel L2, 0.005 -> 0.0075. The device scored
+  0.00498. No norm follows the experts, so their error reaches block out at about 0.59x (share 0.0044). Proposed as a
+  known issue.
+- Sensitivity: CPU host script /tmp/dsas12/sens.py (not kept). The numbers are in the test docstring. The tail is
+  linear in experts_out: x1.01 shows as block out 0.0059 / max ratio 1.0079, dropping the coldest expert as 0.014.
+- A stub makes every row flip, so the vs-golden row subset can be empty. That case returns a failure instead of
+  raising.
+Results:
+- Device passes: PCC 0.999982 (c0 0.999975), identical over 2 runs.
+  - Experts vs CPU same input: 0.00736 / [0.9968, 1.0054] / 0.0113 / 1.00045.
+  - Experts share: 0.00441 / [0.9982, 1.0034].
+  - About 113 s.
+- Reference passes (exact). Stub fails (AssertionError).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_12_experts.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
