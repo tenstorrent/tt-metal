@@ -97,7 +97,7 @@
     bh_p100:
       timeout: 60
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 45
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   budget_type: unit

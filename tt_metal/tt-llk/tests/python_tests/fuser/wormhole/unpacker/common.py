@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
-from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -21,12 +20,6 @@ def is_unary_unpacker(compute_node: FpuNode) -> bool:
     return False
 
 
-def get_operand_b(compute_node: FpuNode):
-    if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-        return compute_node.src_a
-    return compute_node.src_b if compute_node.src_b is not None else compute_node.src_a
-
-
 def hw_configure_unpack(
     compute_node: FpuNode,
     dest_acc: str,
@@ -35,11 +28,10 @@ def hw_configure_unpack(
     unpack_B_src: DataFormat,
     unpack_B_dst: DataFormat,
 ) -> str:
-    face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-    num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
-    tile_size_a = compute_node.src_a.tile_size
-
-    operand_b = get_operand_b(compute_node)
+    operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
+    face_r_dim_a = operand_a.tile_shape.face_r_dim
+    num_faces_a = operand_a.tile_shape.total_num_faces()
+    tile_size_a = operand_a.tile_size
     face_r_dim_b = operand_b.tile_shape.face_r_dim
     num_faces_b = operand_b.tile_shape.total_num_faces()
     tile_size_b = operand_b.tile_size
@@ -69,10 +61,11 @@ def configure_unpack(
     srcb_tile_changed: bool,
 ) -> str:
     code = ""
+    operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
 
     if srca_changed:
-        new_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-        new_num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
+        new_face_r_dim_a = operand_a.tile_shape.face_r_dim
+        new_num_faces_a = operand_a.tile_shape.total_num_faces()
 
         to_from_int8 = (
             "true"
@@ -86,14 +79,13 @@ def configure_unpack(
         )
         code += (
             f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-            f"    {new_A_src.cpp_underlying_value}, {new_A_dst.cpp_underlying_value}, {compute_node.src_a.tile_size}"
+            f"    {new_A_src.cpp_underlying_value}, {new_A_dst.cpp_underlying_value}, {operand_a.tile_size}"
         )
         if srca_tile_changed:
             code += f", {new_face_r_dim_a}, {new_num_faces_a}"
         code += "\n);\n"
 
     if srcb_changed:
-        operand_b = get_operand_b(compute_node)
         srcb_tile_size = operand_b.tile_size
         new_face_r_dim_b = operand_b.tile_shape.face_r_dim
         new_num_faces_b = operand_b.tile_shape.total_num_faces()

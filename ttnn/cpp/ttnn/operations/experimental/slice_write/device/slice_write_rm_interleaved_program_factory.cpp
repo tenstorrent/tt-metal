@@ -190,7 +190,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     const auto& stride = operation_attributes.step;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
