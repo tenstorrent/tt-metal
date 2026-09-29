@@ -91,7 +91,7 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
             page_table=page_rows[row].unsqueeze(0),
             kv_cache=tt_kv_cache,
             prompt_lens=torch.tensor([plen]),
-            empty_slots=[i],  # local slot; lane = slot % lanes (modulo convention)
+            empty_slots=[row],  # global slot = decode row (block convention: lane = slot // 32)
             enable_trace=False,
             sampling_params=None,
             warmup_prefill=False,

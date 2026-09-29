@@ -90,7 +90,7 @@ def test_lane_prefill_parallel(mesh_device, reset_seeds, request):
                 page_table=block_ids.unsqueeze(0),
                 kv_cache=tt_kv_cache,
                 prompt_lens=torch.tensor([plens[i]]),
-                empty_slots=[i],
+                empty_slots=[i * SLOTS_PER_LANE],  # lane i's slot 0 (block convention)
                 enable_trace=False,
                 sampling_params=None,
                 warmup_prefill=False,

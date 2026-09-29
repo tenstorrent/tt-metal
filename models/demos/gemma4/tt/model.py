@@ -1865,7 +1865,11 @@ class Gemma4Model:
         def _lane_stack(table):
             lanes = self.mesh_config.lanes
             gid = global_user_id if global_user_id is not None else user_id
-            owner = 0 if gid is None else int(gid) % lanes  # slot -> lane by modulo
+            # Block convention, matching the decode reshape [global] ->
+            # [lanes, local]: global slot s lives on lane s // lane_slots at
+            # per-lane row s % lane_slots (row = slot identity for callers).
+            slots = int(getattr(self, "lane_slots", 0) or 32)
+            owner = 0 if gid is None else (int(gid) // slots) % lanes
             stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
             stacked[owner] = table
             # Flatten to [lanes*rows, blocks]: dim-0 sharding then hands each
@@ -2516,10 +2520,10 @@ class Gemma4Model:
         full vocab.
         """
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
-        if lane_sharded:
-            # Callers pass the per-model batch (32); the reassembled host
-            # tensor carries every lane's rows in lane-major order.
-            B = B * self.mesh_config.lanes
+        # Under lanes the generator-visible batch IS the global slot space
+        # (from_pretrained patches model_args to lanes x per-column), so the B
+        # callers pass already covers every lane's rows; the per-column shards
+        # are reassembled below in lane order.
 
         def _lane_shards():
             # Row-major device order over (rows, cols): row 0 holds one device
