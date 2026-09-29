@@ -53,6 +53,11 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
     return k_chunk / 32;
 }
 
+uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles) {
+    const bool paired = policy.recurrent_state == RecurrentState::CompensatedBF16;
+    return paired && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
+}
+
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
 
 namespace {
@@ -332,7 +337,8 @@ static std::vector<Tensor> run_recipe_segments(
         outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
     }
     const auto& output = outputs.front();
-    auto program = recipe_compute_program(policy, grid, k_chunks, q_tiles, k_tiles, d_tiles);
+    const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles);
+    auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
     // QK row-group height the compute consumes the mask in: FAST uses legacy streaming subblocks
     // (two rows for even Q chunks), FP32 recipes single rows, paired BF16 recipes row pairs.
     const uint32_t mask_group_rows = policy.fp32_destination             ? 1
@@ -384,6 +390,7 @@ static std::vector<Tensor> run_recipe_segments(
         reader.defines.emplace_back("SDPA_JOINT", "1");
     }
     reader.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
+    reader.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
     reader.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(d_tiles));
     if (qs[1] != k.logical_shape()[1]) {
         reader.defines.emplace_back("SDPA_RECIPE_Q_PER_KV_HEAD", std::to_string(qs[1] / k.logical_shape()[1]));
@@ -412,6 +419,7 @@ static std::vector<Tensor> run_recipe_segments(
         writer.defines.emplace_back("SDPA_JOINT", "1");
     }
     writer.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(d_tiles));
+    writer.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
     for (const auto& tensor : outputs) {
         TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
     }
