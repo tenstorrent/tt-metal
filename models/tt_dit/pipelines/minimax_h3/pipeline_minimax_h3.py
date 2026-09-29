@@ -134,6 +134,7 @@ from .policy import (
     served_reference_image_sizes,
     served_reference_video_canvases,
 )
+from .prompt_cache import DEFAULT_CAPACITY, PromptEmbedCache, prompt_cache_key
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
 from .weights_minimax_h3 import resolve_weights_dir
@@ -316,6 +317,11 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "vae_output_type": "uint8",
         "precomputed_adaln": True,
         "dit_quant_profile": "bf8_weights",
+        # `text_encoder_device: "host"`: measured on a p150, the on-device conditioner runs out of
+        # DRAM in decoder layer 30 of 50 -- 31.83 GiB gone with the DiT not yet loaded. Its 50 GB
+        # would have to be quantized AND swapped against the DiT for every request; the host has
+        # 249 GB and AVX-512 bf16. See DECISIONS for the A/B.
+        "text_encoder_device": "host",
     },
     # The QB2: two p300 boards, 4 chips on a line. TP takes the full mesh on axis 1 (14 heads and
     # 5376 / (32 * 4) both divide) and SP is the size-1 axis 0 -- the same assignment Wan's (1, 4)
@@ -514,6 +520,8 @@ class MiniMaxH3Pipeline:
         coresident: bool | None = None,
         precomputed_adaln: bool | None = None,
         dit_quant_profile: str | MiniMaxH3QuantProfile | None = None,
+        text_encoder_device: str | None = None,
+        prompt_cache_size: int | None = None,
         task: str = "t2va",
         lora_path: str | os.PathLike | None = None,
         lora_strength: float = 1.0,
@@ -577,6 +585,22 @@ class MiniMaxH3Pipeline:
         # direct to quant and the bf16 stack is never resident. `None` builds bf16.
         self.dit_quant_profile = resolve_quant_profile(
             preset.get("dit_quant_profile") if dit_quant_profile is None else dit_quant_profile
+        )
+        # Where the Qwen3-VL conditioner runs. "device" is the default everywhere it fits. On a
+        # 1-chip mesh it does not: the first 50 layers are ~50 GB at bf16 against 31.83 GiB, and a
+        # device encode dies partway through the stack with the DiT not even loaded yet.
+        self.text_encoder_device = (
+            preset.get("text_encoder_device", "device") if text_encoder_device is None else text_encoder_device
+        )
+        if self.text_encoder_device not in ("host", "device"):
+            raise ValueError(f"text_encoder_device must be 'host' or 'device', got {self.text_encoder_device!r}")
+        # Conditioner taps, keyed on the exact conditioner input. Worth far more here than on a
+        # Galaxy: with `coresident: False` a device encode also pays a full swap in each direction,
+        # and the host path pays a CPU forward. The disk tier rides TT_DIT_CACHE_DIR when it is set.
+        cache_root = os.environ.get("TT_DIT_CACHE_DIR")
+        self.prompt_cache = PromptEmbedCache(
+            capacity=DEFAULT_CAPACITY if prompt_cache_size is None else prompt_cache_size,
+            disk_dir=Path(cache_root) / "minimax-h3-prompt" if cache_root else None,
         )
         self._adaln_table = None
         self._adaln_cache: MiniMaxH3AdalnCache | None = None
@@ -720,15 +744,24 @@ class MiniMaxH3Pipeline:
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
-        if not self.coresident:
+        if not self.coresident and self.text_encoder_device == "device":
             self._text_encoder.register_coresident_exclusions(self._transformer, *self._vae.modules)
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
+        elif not self.coresident:
+            # Host conditioner: only the DiT and the VAE contend for the device.
+            self._transformer.register_coresident_exclusions(*self._vae.modules)
+            for module in self._vae.modules:
+                module.register_coresident_exclusions(self._transformer)
 
         if self.coresident:
             self._prepare_transformer()
-        self._prepare_text_encoder()
+        # On the host path the device conditioner's weights are never read at all -- not at init,
+        # not per request -- so its ~50 GB never competes with the DiT for DRAM. The module object
+        # stays built (it holds no device memory unloaded) so nothing downstream has to branch.
+        if self.text_encoder_device == "device":
+            self._prepare_text_encoder()
         self._prepare_audio_decoder()
 
         if warmup:
@@ -764,6 +797,8 @@ class MiniMaxH3Pipeline:
         coresident: bool | None = None,
         precomputed_adaln: bool | None = None,
         dit_quant_profile: str | MiniMaxH3QuantProfile | None = None,
+        text_encoder_device: str | None = None,
+        prompt_cache_size: int | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -806,6 +841,8 @@ class MiniMaxH3Pipeline:
             coresident=coresident,
             precomputed_adaln=precomputed_adaln,
             dit_quant_profile=dit_quant_profile,
+            text_encoder_device=text_encoder_device,
+            prompt_cache_size=prompt_cache_size,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1157,6 +1194,20 @@ class MiniMaxH3Pipeline:
             input_ids = torch.nn.functional.pad(input_ids, (0, seq_len - true_seq_len))
             type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
 
+        # One key for both paths, over the padded ids: a host tap and a device tap are the same
+        # conditioner output to within its own tolerance, so a run that switches paths must not be
+        # able to re-encode a prompt it already has.
+        cache_key = prompt_cache_key(input_ids, type_ids, pixel_values)
+        hit = self.prompt_cache.get(cache_key)
+        if hit is not None:
+            self._log(f"conditioner tap for {seq_len} tokens served from the prompt cache")
+            return bf16_tensor(hit.to(torch.float32), device=self.mesh_device), tags
+
+        if self.text_encoder_device == "host":
+            embeds = self._encode_presentation_on_host(input_ids, type_ids, pixel_values, grid_thw, vision_kinds)
+            stored = self.prompt_cache.put(cache_key, embeds)
+            return bf16_tensor(stored.to(torch.float32), device=self.mesh_device), tags
+
         encoder = self._prepare_text_encoder()
 
         # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
@@ -1247,6 +1298,10 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
+        # The tap is read back to fill the cache and handed straight on. The readback is a few MB
+        # against an encode that costs seconds (and, without co-residency, two full stage swaps),
+        # and it is what lets a device-path run reuse a tap after the encoder has been evicted.
+        self.prompt_cache.put(cache_key, local_device_to_torch(taps[0]))
         return taps[0], tags
 
     def _prepare_host_text_encoder(self):
@@ -1291,6 +1346,30 @@ class MiniMaxH3Pipeline:
             vision_kwargs["pixel_values_videos"] = video_pixels.to(dtype)
             vision_kwargs["video_grid_thw"] = video_grids
         return vision_kwargs
+
+    def _encode_presentation_on_host(self, input_ids, type_ids, pixel_values, grid_thw, vision_kinds):
+        """Run the released conditioner on the CPU over an already-built, already-padded presentation.
+
+        The padding is applied to the ids rather than to the resulting rows so the host and device
+        paths encode literally the same input. The stack is causal, so the pad tail cannot change a
+        real row either way -- doing it this way just means the two paths can be compared row for
+        row, including the pad rows.
+        """
+        encoder = self._prepare_host_text_encoder()
+        vision_kwargs = self._split_host_vision_inputs(pixel_values, grid_thw, vision_kinds, encoder.dtype)
+        self._log(f"encoding {input_ids.shape[1]} presentation tokens on the HOST conditioner")
+        started = time.time()
+        with torch.no_grad():
+            outputs = encoder(
+                input_ids=input_ids,
+                attention_mask=torch.ones_like(input_ids),
+                mm_token_type_ids=type_ids,
+                use_cache=False,
+                output_hidden_states=True,
+                **vision_kwargs,
+            )
+        self._host_log(f"host conditioner forward took {time.time() - started:.1f} s")
+        return outputs.hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER].float()
 
     def encode_prompt_host(
         self,
