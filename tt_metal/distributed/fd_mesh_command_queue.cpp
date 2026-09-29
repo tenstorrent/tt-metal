@@ -1364,6 +1364,7 @@ void FDMeshCommandQueue::enqueue_command_list(
     SubDeviceManagerId sub_device_manager_id,
     bool blocking) {
     auto lock = lock_api_function_();
+    TT_FATAL(!trace_id_.has_value(), "Command-list replay is not supported during trace capture.");
     TT_FATAL(
         mesh_device_->get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed after the command list was built");
@@ -1436,25 +1437,6 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
-// Erase elements from the vector using the indices in the index vector.
-// The index vector is expected to be sorted and unique. Returns an iterator to one past the end of the new range.
-template <typename VecIt, typename IndexIt>
-static VecIt remove_by_index(VecIt begin, VecIt end, IndexIt index_begin, IndexIt index_end) {
-    if (index_begin == index_end) {
-        return end;
-    }
-    return std::remove_if(std::next(begin, *index_begin), end, [&](auto& value) {
-        if (index_begin == index_end) {
-            return false;
-        }
-        if (*index_begin == (&value - &*begin)) {
-            ++index_begin;
-            return true;
-        }
-        return false;
-    });
-}
-
 void FDMeshCommandQueue::record_end() {
     MetalContext& metal_ctx = MetalContext::instance(mesh_device_->impl().get_context_id());
     const auto& hal = metal_ctx.hal();
@@ -1475,41 +1457,7 @@ void FDMeshCommandQueue::record_end() {
             if (!local_device_range.has_value()) {
                 continue;
             }
-            bool intersection_found = false;
-            std::vector<size_t> device_range_idxs_to_invalidate;
-            for (size_t i = 0; i < device_ranges.size(); i++) {
-                auto& existing_range = device_ranges[i];
-                TT_FATAL(
-                    existing_range.dims() == local_device_range->dims(),
-                    "Invalid mismatching dimensions for existing {} vs device range {}",
-                    existing_range.dims(),
-                    local_device_range->dims());
-                if (existing_range.intersects(*local_device_range)) {
-                    intersection_found = true;
-                    auto intersection = *existing_range.intersection(*local_device_range);
-                    if (intersection != existing_range) {
-                        auto complement = subtract(existing_range, intersection);
-                        device_range_idxs_to_invalidate.push_back(i);
-                        for (const auto& complement_range : complement.ranges()) {
-                            device_ranges.push_back(complement_range);
-                        }
-                        device_ranges.push_back(intersection);
-                    }
-                }
-            }
-            if (intersection_found) {
-                if (!device_range_idxs_to_invalidate.empty()) {
-                    device_ranges.erase(
-                        remove_by_index(
-                            device_ranges.begin(),
-                            device_ranges.end(),
-                            device_range_idxs_to_invalidate.begin(),
-                            device_range_idxs_to_invalidate.end()),
-                        device_ranges.end());
-                }
-            } else {
-                device_ranges.push_back(*local_device_range);
-            }
+            partition_mesh_coordinate_ranges(device_ranges, *local_device_range);
         }
     }
     std::vector<uint32_t> exec_buf_end = {};

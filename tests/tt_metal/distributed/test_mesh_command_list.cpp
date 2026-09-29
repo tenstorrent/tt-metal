@@ -252,7 +252,7 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
 }
 
 TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
-    // A live builder owns the device-wide builder lock.
+    // A live builder owns the device-wide active-builder reservation.
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "builder_lifecycle");
     auto& cq = mesh_device_->mesh_command_queue(0);
 
@@ -274,8 +274,8 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     builder.add(workload);
     auto command_list = builder.build(cq);
 
-    // Moving transfers the recording and lock; explicit deallocation invalidates
-    // the destination and releases the lock for a replacement builder.
+    // Moving transfers the recording and reservation; explicit deallocation invalidates
+    // the destination and releases the reservation for a replacement builder.
     CommandListBuilder moved_builder(std::move(builder));
     EXPECT_THAT(
         [&] { builder.add(workload); },
@@ -297,7 +297,8 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
 
     EXPECT_NO_THROW({ CommandListBuilder replacement(*mesh_device_); });
 
-    // A built list owns everything it needs and remains replayable without its builder.
+    // A built list owns its serialized commands and required kernel binaries, so it
+    // remains replayable without its builder.
     write_l1(mesh_device_, kAddressA, 0);
     command_list.replay(/*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);

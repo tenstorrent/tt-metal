@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
-#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -50,14 +49,9 @@ struct CommandListData {
 struct CommandListDescriptor {
     std::unordered_map<SubDeviceId, TraceWorkerDescriptor> worker_descriptors;
     std::vector<SubDeviceId> sub_device_ids;
-    // NOTE: Reserved for argument patching, which keeps this host-side copy to
-    // update selected command bytes before rewriting the affected device ranges.
-    std::vector<CommandListData> ordered_data;
     uint32_t total_size = 0;
 };
 
-// NOTE: Reserved for the argument locations captured from each program while
-// it is staged.
 struct CapturedProgram {
     MeshCoordinateRange device_range;
     TraceNode trace_node;
@@ -91,20 +85,16 @@ struct SerializedRange {
     std::unordered_map<SubDeviceId, TraceWorkerDescriptor> worker_descriptors;
 };
 
-// NOTE: Reserved for the resolved argument-patch registry.
 struct CommandListAssembly {
     CommandListDescriptor descriptor;
+    std::vector<CommandListData> serialized_ranges;
 };
 
-uint32_t append_command_bytes(std::vector<uint32_t>& output, const void* data, uint32_t size_bytes) {
+void append_command_bytes(std::vector<uint32_t>& output, const void* data, uint32_t size_bytes) {
     TT_ASSERT(size_bytes % sizeof(uint32_t) == 0);
-    // NOTE: The returned offset is reserved for mapping captured program
-    // arguments into the assembled command stream.
-    const uint32_t byte_offset = static_cast<uint32_t>(output.size() * sizeof(uint32_t));
     const size_t old_size = output.size();
     output.resize(old_size + size_bytes / sizeof(uint32_t));
     std::memcpy(output.data() + old_size, data, size_bytes);
-    return byte_offset;
 }
 
 void append_go_signal_sequence(
@@ -129,23 +119,6 @@ void append_go_signal_sequence(
         dispatch_metadata,
         std::nullopt);
     append_command_bytes(output, commands.data(), commands.size_bytes());
-}
-
-template <typename VecIt, typename IndexIt>
-VecIt remove_by_index(VecIt begin, VecIt end, IndexIt index_begin, IndexIt index_end) {
-    if (index_begin == index_end) {
-        return end;
-    }
-    return std::remove_if(std::next(begin, *index_begin), end, [&](auto& value) {
-        if (index_begin == index_end) {
-            return false;
-        }
-        if (*index_begin == static_cast<size_t>(&value - &*begin)) {
-            ++index_begin;
-            return true;
-        }
-        return false;
-    });
 }
 
 FDMeshCommandQueue& as_fd_queue(MeshCommandQueue& cq) {
@@ -240,34 +213,7 @@ private:
                 if (!local_device_range.has_value()) {
                     continue;
                 }
-                bool intersection_found = false;
-                std::vector<size_t> invalid_indices;
-                for (size_t i = 0; i < device_ranges.size(); ++i) {
-                    auto& existing = device_ranges[i];
-                    TT_FATAL(
-                        existing.dims() == local_device_range->dims(),
-                        "Mismatching command-list mesh range dimensions");
-                    if (!existing.intersects(*local_device_range)) {
-                        continue;
-                    }
-                    intersection_found = true;
-                    const auto intersection = *existing.intersection(*local_device_range);
-                    if (intersection != existing) {
-                        invalid_indices.push_back(i);
-                        for (const auto& complement : subtract(existing, intersection).ranges()) {
-                            device_ranges.push_back(complement);
-                        }
-                        device_ranges.push_back(intersection);
-                    }
-                }
-                if (!intersection_found) {
-                    device_ranges.push_back(*local_device_range);
-                } else if (!invalid_indices.empty()) {
-                    device_ranges.erase(
-                        remove_by_index(
-                            device_ranges.begin(), device_ranges.end(), invalid_indices.begin(), invalid_indices.end()),
-                        device_ranges.end());
-                }
+                partition_mesh_coordinate_ranges(device_ranges, *local_device_range);
             }
         }
         return device_ranges;
@@ -435,7 +381,8 @@ public:
         auto& mesh_device = *cq.device();
         OfflineDispatchState dispatch_state(mesh_device, static_cast<uint8_t>(cq.id()));
 
-        CommandListDescriptor descriptor;
+        CommandListAssembly assembly;
+        auto& descriptor = assembly.descriptor;
         const auto local_mesh_range = mesh_device.get_view().get_local_mesh_coord_range();
         const auto device_ranges = compute_device_ranges(staged_nodes, local_mesh_range);
 
@@ -451,7 +398,7 @@ public:
         for (const auto& range : device_ranges) {
             auto serialized = serialize_range(mesh_device, dispatch_state, staged_nodes, range, exec_buf_end);
             max_command_list_size = std::max(max_command_list_size, serialized.data.data.size());
-            descriptor.ordered_data.push_back(std::move(serialized.data));
+            assembly.serialized_ranges.push_back(std::move(serialized.data));
             if (!overall_worker_descriptors) {
                 overall_worker_descriptors = std::move(serialized.worker_descriptors);
             } else {
@@ -470,7 +417,7 @@ public:
             descriptor.sub_device_ids.push_back(sub_device_id);
         }
         std::ranges::sort(descriptor.sub_device_ids, {}, [](SubDeviceId id) { return *id; });
-        return {.descriptor = std::move(descriptor)};
+        return assembly;
     }
 
     uint32_t get_num_workers(bool multicast, bool unicast, SubDeviceId sub_device) const {
@@ -605,7 +552,10 @@ public:
 namespace {
 
 std::shared_ptr<MeshBuffer> allocate_and_commit(
-    MeshDevice& device, MeshCommandQueue& cq, const CommandListDescriptor& descriptor) {
+    MeshDevice& device,
+    MeshCommandQueue& cq,
+    const CommandListDescriptor& descriptor,
+    const std::vector<CommandListData>& serialized_ranges) {
     const size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         descriptor.total_size, device.allocator()->get_num_banks(BufferType::DRAM));
     const size_t padded_size = round_up(descriptor.total_size, page_size);
@@ -628,7 +578,7 @@ std::shared_ptr<MeshBuffer> allocate_and_commit(
                 DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .bottom_up = bottom_up},
                 &device);
         }
-        for (const auto& data : descriptor.ordered_data) {
+        for (const auto& data : serialized_ranges) {
             std::vector<uint32_t> padded = data.data;
             padded.resize(round_up(padded.size() * sizeof(uint32_t), page_size) / sizeof(uint32_t), 0);
             cq.enqueue_write_shard_to_sub_grid(
@@ -664,7 +614,7 @@ CommandList CommandListBuilder::build(MeshCommandQueue& cq) const {
     (void)as_fd_queue(cq);
     auto staged_nodes = impl_->staged_nodes;
     auto assembly = CommandListBuilder::Impl::assemble(cq, staged_nodes);
-    auto command_buffer = allocate_and_commit(impl_->mesh_device, cq, assembly.descriptor);
+    auto command_buffer = allocate_and_commit(impl_->mesh_device, cq, assembly.descriptor, assembly.serialized_ranges);
     return CommandList(std::make_unique<CommandList::Impl>(
         impl_->mesh_device,
         std::move(assembly.descriptor),

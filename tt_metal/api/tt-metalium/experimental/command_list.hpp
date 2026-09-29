@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <cstdint>
@@ -6,6 +10,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 
+// Experimental API; subject to change without notice.
 namespace tt::tt_metal::experimental {
 
 using distributed::MeshCommandQueue;
@@ -32,8 +37,8 @@ public:
     // required kernel binaries through the current thread's command queue.
     void add(MeshWorkload& workload);
 
-    // Builds an independent command list bound to cq. Recorded device addresses
-    // must remain valid through replay.
+    // Builds an independent command list bound to cq. User allocations are not
+    // retained; replay uses the raw device addresses encoded in the recorded commands.
     CommandList build(MeshCommandQueue& cq) const;
 
     MeshDevice& device() const;
@@ -41,7 +46,7 @@ public:
     // Clears all recorded workloads.
     void clear();
 
-    // Releases the builder lock and invalidates the builder. Repeated calls
+    // Releases the active-builder reservation and invalidates the builder. Repeated calls
     // have no effect.
     void deallocate();
 

@@ -265,7 +265,7 @@ public:
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
-    // Command List builder lifecycle. The lock is device-wide; the active
+    // Command List builder lifecycle. The reservation is device-wide; the active
     // SubDeviceManagerId is captured separately by the builder for validation.
     SubDeviceManagerId acquire_command_list_builder();
     void release_command_list_builder();
