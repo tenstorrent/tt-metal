@@ -1,0 +1,85 @@
+# GLM-5.3-Flash text prefill, layers 0-4, on the 2x2 Blackhole p300c mesh (4 chips, 32 GB each, FABRIC_2D).
+# Reasoning in plan.md. Chip (r, c); TP index d = 2r + c; mesh axis 0 = rows, axis 1 = columns.
+# - 4-stream mHC residual [S, 4 x 4096] replicated; mHC, collapse, norms, residual mixes, router replicated.
+# - KDA (layers 0-2, 4): TP=2 by head on axis 1 (32 heads per chip), SP=2 over the chunk on axis 0 (ttKDA's 2D mode).
+# - DSA (layer 3): weights replicated, queries split 4 ways by sequence (S/4 rows per chip, all 64 heads, which
+#   sparse_sdpa needs: H a multiple of 32); latent and pooled-key caches replicated; one all_gather after o_proj.
+# - Dense MLP and shared expert: TP=4 by intermediate + all_reduce (axis 1 then axis 0).
+# - Routed experts: EP=4 (72 per chip) with the DeepSeek 2D dispatch (axis 0, one group per column), bfp8.
+# Layers 5-44, the MTP layer 45 and the vision tower are skipped (spec subset; owner rule: text only, no MTP).
+headroom_frac: 0.15
+users: 1
+placements:
+  # --- not part of the text decoder
+  - {pattern: "model.visual.*", placement: skip, why: text only (vision tower, owner rule)}
+  - {pattern: "model.language_model.layers.45.*", placement: skip, why: MTP layer (owner rule)}
+
+  # --- layer subset: the spec runs layers 0-4 (3 kda_dense, 1 dsa_moe, 1 kda_moe)
+  - {pattern: "model.language_model.layers.[5-9].*", placement: skip, why: layer subset 0-4 (spec layers)}
+  - {pattern: "model.language_model.layers.[1-4][0-9].*", placement: skip, why: layer subset 0-4 (spec layers)}
+
+  # --- FP8 128x128 block scales: folded into the device weight at load (fp8 x scale -> bf16, experts -> bfp8)
+  - {pattern: "model.language_model.layers.*.weight_scale_inv", placement: skip, why: fp8 block scales folded into the device weight at load}
+
+  # --- embedding (replicated), untied LM head (vocab-sharded, 38720 rows per chip), final norm
+  - {pattern: "model.language_model.embed_tokens.weight", placement: replicate, dtype: bf16, group: embedding}
+  - {pattern: "lm_head.weight", placement: shard, dtype: bf16, group: lm_head (vocab-sharded)}
+  - {pattern: "model.language_model.norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- mHC (both blocks per layer): fp32 projection [24, 16384], base, scale; replicated (Sinkhorn needs fp32)
+  - {pattern: "model.language_model.layers.*.hc_*", placement: replicate, dtype: fp32, group: mHC}
+
+  # --- DSA attention (layer 3): replicated weights, queries split by sequence. fp8 ones dequantized to bf16.
+  #     q_b [16384, 1536] and o_proj [4096, 16384] are used per S/4 query rows; kv_b is split into the absorbed
+  #     w_uk / w_uv [64, 256, 512] at load. Indexer weights (bf16) replicated.
+  - {pattern: "model.language_model.layers.*.self_attn.indexer.*", placement: replicate, dtype: bf16, group: DSA indexer}
+  - {pattern: "model.language_model.layers.3.self_attn.*", placement: replicate, dtype: bf16, group: DSA attention (replicated)}
+
+  # --- KDA attention (layers 0-2, 4): TP=2 over mesh columns (heads 32c .. 32c + 31 on column c), bf16 as stored.
+  #     A_log / dt_bias kept fp32 (the reference keeps them fp32). f_a / g_a (rank-128 inputs) and o_norm are small
+  #     and counted as column-split too (each TP rank carries its own copy inside the fused input projection).
+  - {pattern: "model.language_model.layers.*.self_attn.A_log", placement: shard_cols, dtype: fp32, group: KDA attention (TP=2)}
+  - {pattern: "model.language_model.layers.*.self_attn.dt_bias", placement: shard_cols, dtype: fp32, group: KDA attention (TP=2)}
+  - {pattern: "model.language_model.layers.*.self_attn.[fg]_a_proj.weight", placement: replicate, dtype: bf16, group: KDA attention (TP=2)}
+  - {pattern: "model.language_model.layers.*.self_attn.o_norm.weight", placement: replicate, dtype: bf16, group: KDA attention (TP=2)}
+  - {pattern: "model.language_model.layers.*.self_attn.*", placement: shard_cols, dtype: bf16, group: KDA attention (TP=2)}
+
+  # --- routed experts (layers 3, 4): EP=4, 72 experts per chip (chip (r, c): experts 144c + 72r .. + 71), bfp8
+  #     (owner rule: the checkpoint is 8-bit, never bfp4)
+  - {pattern: "model.language_model.layers.*.mlp.experts.*", placement: expert, dtype: bfp8, group: routed experts}
+
+  # --- router: replicated, fp32 (sigmoid + correction bias, near-tie top-8 over 288)
+  - {pattern: "model.language_model.layers.*.mlp.gate.*", placement: replicate, dtype: fp32, group: router}
+
+  # --- shared expert (layers 3, 4) and dense MLP (layers 0-2): TP=4 by intermediate, fp8 -> bf16
+  - {pattern: "model.language_model.layers.*.mlp.shared_experts.*", placement: shard, dtype: bf16, group: shared expert (TP=4)}
+  - {pattern: "model.language_model.layers.*.mlp.*_proj.weight", placement: shard, dtype: bf16, group: dense MLP (TP=4)}
+
+  # --- per-layer RMSNorm weights
+  - {pattern: "model.language_model.layers.*_layernorm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+state:
+  # DSA (layer 3): replicated on every chip (each chip's S/4 query rows can select any earlier token).
+  - {layers: [3], what: MLA latent (after kv_a_layernorm), heads_per_chip: 1, head_dim: 512, tensors: 1, dtype: bf16, replicated: true}
+  - {layers: [3], what: indexer pooled keys (1 row per 4 tokens), heads_per_chip: 1, head_dim: 128, tensors: 1, dtype: bf16, seq_stride: 4, replicated: true}
+  # KDA (layers 0-2, 4): fixed size. TP-local 32 heads per chip, replicated over the SP axis.
+  - {layers: "0-2,4", what: KDA recurrent state (128 x 128 per head), heads_per_chip: 32, head_dim: 16384, tensors: 1, dtype: fp32, per_token: false, kv_heads: 64}
+  - {layers: "0-2,4", what: KDA conv tail (3 rows x q|k|v 3 x 128 per head), heads_per_chip: 32, head_dim: 1152, tensors: 1, dtype: bf16, per_token: false, kv_heads: 64}
+
+extra_gb_per_chip:
+  # The returned KDA state is a new tensor while the old one is alive (4 layers x (8 MB + small)), and the serving
+  # contract's own copy of the state (mixed layout, K.1; MLA latent + pooled keys + KDA state, about 0.1 GB).
+  KDA state double buffer and contract state copy: 0.15
+  # Built once at load, sliced on device: dense index rows for queries before position 2047 (2047 x 2176 uint32,
+  # 18 MB), tail-token and pool-causal tables per chunk size, chunk-start scalars, sparse_sdpa sentinel pad,
+  # mHC Sinkhorn constants, dispatch tables; plus program-cache slack.
+  constant tables, dispatch tables, misc: 0.3
+
+# Peak transient for one 8192-token chunk (the s16384 rung; the target chunk is 5120): the replicated 4-stream
+# residual is [S, 16384] bf16 = 268 MB per copy, and the mHC residual step holds in, 4 output streams and the concat
+# (about 4 copies, 1.1 GB) plus an fp32 copy for the projection (537 MB). MoE: dispatch buffer 8 x S x 4096 bf16
+# (0.54 GB), combine [S/2, 8, 4096] (0.27 GB), expert fp32 partials and intermediates (0.3 GB). KDA per chip (S/2 rows,
+# 32 heads): fused projection [S/2, 16.5k] (135 MB) and fp32 recurrence temporaries (about 0.3 GB). DSA per chip
+# (S/4 rows): q_lat [64, S/4, 512] and the sparse_sdpa output (134 MB each), indexer scores [S/4, 14080] (58 MB at
+# 56k). Dense MLP [S, 3072] fp32 intermediates (100 MB each), CCL buffers. About 3.5 GB, x2 for fragmentation.
+activations_gb_per_chip: 7.0

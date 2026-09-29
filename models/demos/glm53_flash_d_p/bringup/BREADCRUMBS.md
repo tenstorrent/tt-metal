@@ -53,3 +53,39 @@ models.demos.common.bringup.reference.check_hf --seq 4096` (about 14 min).
 Also run locally (R.3's check, not this gate): check_reference --seq 4096 --chunk 2048: hidden pcc 1.000000000,
 state min pcc 1.000000000, graph replay max abs 0 for kda_dense (L0, 10 steps), dsa_moe (L3, 15), kda_moe (L4, 13);
 4 min. Gate run: 13 min 23 s, all R.2 metrics pass.
+
+## PL.1 plan (attempt 1)
+
+What was done:
+- `plan.yaml`: placements for every checkpoint tensor (76108, whole-model map from `bringup_trim.json`): vision, MTP
+  layer 45 and layers 5-44 skipped; fp8 block scales folded at load. State: MLA latent [56320, 512] and pooled keys
+  (seq_stride 4) replicated for layer 3; KDA recurrent (32 heads x 128 x 128 fp32) and conv tail per chip for 0-2, 4.
+  Activations 7.0 GiB (8192-token chunk, 4-stream residual replicated). Gate: 13.59 of 27.20 GiB per chip.
+- `components.yaml`: all 41 steps (kda_dense 10, dsa_moe 15, kda_moe 13, model 3), NATIVE or COMPOSED, none CPU or
+  OPGEN.
+- `plan.md`: per-layer tables, per-chip total, collectives, departures. `tasks.yaml` unchanged.
+
+Decisions:
+- KDA is TP=2 (axis 1) x SP=2 (axis 0), because ttKDA requires distinct SP / TP axes. Fallback: SP=1 on 1x2 row
+  submeshes.
+- DSA attention: replicated weights, query rows split 4 ways, all 64 heads per chip (sparse_sdpa needs H % 32 == 0).
+  Caches replicated, every chip computes latent and pooled keys for all S rows, one all_gather after o_proj.
+- Indexer is composed, not OPGEN: key pooling is reshape + 4 slices + an elementwise softmax. indexer_score_dsa runs
+  unmasked (chunk_start_idx = kv_len - 1) plus a constant pool-causal mask on the chunk's own pools. Sentinel
+  compaction: for q >= 2047 the pool part has no sentinels, so [pools | tail | pad] ends in sentinels; for q < 2047
+  the row is the constant "all tokens 0..q".
+- Experts EP=4 via the MiMo 2x2 dispatch (axis 0, groups = columns, 72 per chip), high_precision unified kernel with
+  ClampedSiluGlu. Dense MLP and shared expert TP=4 + all_reduce(cluster_axis=None). Router fp32 (MiMo TtRouter).
+- mHC: DeepSeek mhc_split_sinkhorn matches GLM's Sinkhorn order and pre/post forms (checked against
+  reference/mhc/mhc_reference.py); RMS eps 1e-5 is a config field.
+
+Gotchas / to verify at implement: ttnn.topk at width 288; unified_routed_expert_moe and the dispatch tables with 72
+local / 288 global experts; ttKDA's SP segment order under a chunk-aligned actual_start; sparse_sdpa scale must be
+passed explicitly as 1/16 (its default is 512^-0.5); KDA recurrence and o_proj default to HiFi2 in the Kimi config
+(set HiFi4); core grids from the device (p300c 11x10). The gate builds the CPU reference for layers 0, 3 and 4 (14 s
+here, page cache warm).
+
+Result: plan_fits 1, unplaced_tensors 0, plan_errors 0, component_errors 0, ledger_errors 0; plan_approved 0 (waits
+for the person's approval).
+
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`.
