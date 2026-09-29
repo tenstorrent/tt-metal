@@ -202,8 +202,12 @@ def _prepare_tt_inputs(
     rope_freq_dim: int,
     rope_theta: float,
     B: int = 1,
+    host_inputs: dict | None = None,
 ) -> SimpleNamespace:
-    """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts."""
+    """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts.
+
+    `host_inputs` (video_input, audio_input, prompt_input, timestep tensors) replaces the random draws, so a run can be
+    scored against a reference computed elsewhere on the same inputs (tools/cpu_reference_forward.py)."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
     cond_blocks = per_modality["cond_blocks"]
@@ -244,6 +248,11 @@ def _prepare_tt_inputs(
         width = video_patch_dim if block["modality"] == "video" else audio_channels
         block["input"] = torch.randn((B, block["rows"], width), dtype=torch.float32)
     timestep = torch.rand((num_timesteps,), dtype=torch.float32)
+    if host_inputs is not None:
+        video_input = host_inputs["video_input"].to(torch.float32).reshape(B, num_video, video_patch_dim)
+        audio_input = host_inputs["audio_input"].to(torch.float32).reshape(B, num_audio, audio_channels)
+        prompt_input = host_inputs["prompt_input"].to(torch.float32).reshape(B, num_text, text_dim)
+        timestep = host_inputs["timestep"].to(torch.float32).reshape(num_timesteps)
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
