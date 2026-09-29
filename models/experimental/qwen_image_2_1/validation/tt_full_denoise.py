@@ -52,14 +52,14 @@ def _write_json(path: Path, document: object) -> None:
     temporary.replace(path)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cuda-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device-bdf", required=True)
     parser.add_argument("--max-steps", type=int, help="stop a fresh diagnostic run after this many steps")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(args.output_dir)
     if args.checkpoint.name != MODEL_REVISION:

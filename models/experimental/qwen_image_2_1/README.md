@@ -27,9 +27,11 @@ does not include `QwenImage21Pipeline`.
 - `tests/test_denoiser.py`: hardware integration test with per-step PCC checks.
 
 Use a tt-metal Python environment with a matching TTNN runtime, PyTorch,
-pytest, and the Python reference dependencies in `requirements-reference.txt`.
-The card must be explicitly reserved before running a test. The test runner
-uses `TT_VISIBLE_DEVICES` to restrict TTNN to the supplied physical PCI BDF.
+pytest, pytest-timeout, and the Python reference dependencies in
+`requirements-reference.txt`. The timeout plugin bounds the long hardware test.
+The card must be explicitly reserved before running a test. Set
+`TT_VISIBLE_DEVICES` to its physical PCI BDF before starting pytest so TTNN
+sees the same card even if the test environment imports TTNN during collection.
 Commands below run from the tt-metal repository root. Keep checkpoints,
 reference captures, and outputs on a data disk outside Git.
 
@@ -55,7 +57,7 @@ their paths. The pinned checkpoint must also be available on that host. Then:
 ```bash
 export QWEN_IMAGE21_CUDA_CAPTURE="$DATA/qwen-image-2-1/cuda"
 export QWEN_IMAGE21_CHECKPOINT="$HF_SNAPSHOT/790c92633540aa0cb11d9abf19eb46d861714758"
-export QWEN_IMAGE21_DEVICE_BDF=0000:e1:00.0
+export TT_VISIBLE_DEVICES=0000:e1:00.0
 export QWEN_IMAGE21_TEST_STEPS=full
 mkdir -p "$DATA/qwen-image-2-1/test-artifacts"
 pytest -q models/experimental/qwen_image_2_1/tests/test_denoiser.py \
