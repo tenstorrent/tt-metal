@@ -63,7 +63,7 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm"},
+    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a"},
     "moe_full": set(),
     "moe_shared": set(),
 }
@@ -74,6 +74,8 @@ _HC_STEPS = {"attn_hc": "hc_attn_layer"}
 _HC_PRE_STEPS = {"attn_hc_pre"}
 # Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
+# q_a stem (tt/q_a.py:TtQa): K-split q_a_proj -> all_reduce over axis 1 -> q_a_layernorm (eps 1e-6).
+_QA_STEPS = {"q_a"}
 
 
 def _loader(spec):
@@ -155,6 +157,39 @@ def _norm_module(mesh, spec, layer, step, loader=None, cfg=None):
     return TtDistributedRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1)
 
 
+def _qa_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtQa (q_a_proj [2048, 6144] K-split over mesh columns, bf16; all_reduce over axis 1; q_a_layernorm eps 1e-6)."""
+    from models.demos.hy4_preview_d_p.reference.hy4_ref import LATENT_NORM_EPS
+    from models.demos.hy4_preview_d_p.tt.q_a import TtQa
+
+    loader = loader or _loader(spec)
+    p = f"model.layers.{layer}.self_attn."
+    return TtQa(
+        mesh,
+        loader.get(p + "q_a_proj.weight").float(),
+        loader.get(p + "q_a_layernorm.weight").float(),
+        LATENT_NORM_EPS,
+        cluster_axis=1,
+    )
+
+
+def _qa_host_fn(mesh, module):
+    """fn(ctx, attn_norm_host [S, H]) -> q_resid host [S, 2048] fp32 (harness boundary: column-split bf16 in, the
+    row-split output replicated over axis 1 read back from column 0)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = col_split_to_device(mesh, x, dtype=ttnn.bfloat16)
+        yd = module(xd)
+        y = row_split_to_host(mesh, yd).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
 def _col_split_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> host [S, H] fp32 for a module on column-split [1, 1, S/2, H/2] tensors (harness
     boundary)."""
@@ -177,6 +212,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
     if step in _HC_STEPS:
         return _hc_host_fn(mesh, _hc_module(mesh, spec, layer, step, loader, cfg), cfg.hidden_size)
+    if step in _QA_STEPS:
+        return _qa_host_fn(mesh, _qa_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -185,7 +222,7 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
 
 
 def device_component(mesh, spec, layer, step):
-    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS:
+    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS or step in _QA_STEPS:
         loader = _loader(spec)
         return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
