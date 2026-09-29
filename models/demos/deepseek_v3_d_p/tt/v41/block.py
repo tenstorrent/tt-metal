@@ -69,12 +69,13 @@ class TtV41Block(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-    def forward(self, x, pre_mix, state, length: int):
+    def forward(self, x, pre_mix, state, length: int, image_mask=None):
         """x [1, 1, S/sp, hc*hidden/tp] fp32, pre_mix [1, 1, S/sp, hc] fp32 for the chunk at ``state.start``
-        with ``length`` valid tokens -> (x, next pre_mix)."""
+        with ``length`` valid tokens -> (x, next pre_mix). ``image_mask`` [1, 1, S/sp, 1] (1 = image token; None =
+        text only) selects the MoE gate's ``bias_vl`` (reference ``Block.forward``)."""
         return self.residual(
             x,
             pre_mix,
             attention=lambda h: self.attn(self.attn_norm(h), state, length),
-            ffn=lambda h: self.ffn(self.ffn_norm(h)),
+            ffn=lambda h: self.ffn(self.ffn_norm(h), image_mask=image_mask),
         )

@@ -935,3 +935,153 @@ def vision_oracle(
     torch.save(result, tmp)
     tmp.replace(path)
     return result
+
+
+# ------------------------------------------------------------------------------ merged (VL) prompts
+# Bead 10.2: the text reference run on a prompt with image spans (``Transformer.forward`` with ``images`` /
+# ``token_types``). Image features are teacher-forced: the aligner rows of each span are given (e.g. a
+# ``vision_oracle`` result), so a merged-sequence result depends on the backbone only. The VL reference is the
+# text reference of the same spec (identical text weights, synthetic or checkpoint) plus the VL-only parameters:
+# each layer's gate ``bias_vl`` and the ``image_start`` / ``image_end`` / ``image_newline`` span embeddings
+# (synthetic: seeded per name; checkpoint: stored). The prompt enters every cache key of ``oracle`` /
+# ``tail_logits`` / ``noise_drift`` through ``asdict(spec.args)`` (``VLArgs.vl_prompt``), so text-only keys are
+# unchanged. Bump ``VL_VERSION`` whenever the VL parameter derivation changes.
+
+VL_VERSION = 1
+_VL_SOURCES = ("image_processor.py",)
+VL_FEATURE_STD = 0.04  # RMS of real aligner rows (checkpoint, 640x480 image: 0.041)
+VL_DELIMITER_STD = 0.025  # RMS of the checkpoint's image_start / image_end / image_newline (0.021-0.028)
+VL_BIAS_STD = 0.5  # synthetic bias_vl, drawn like testing.init_weights draws the text gate bias
+
+
+@dataclass
+class VLArgs(v41.ModelArgs):
+    """ModelArgs of a merged-sequence spec: ``vl_prompt`` (``VLPrompt.digest``) keys every result by the prompt's
+    image spans; the model built from it is the text model (``vision_n_layers`` stays 0, no ViT)."""
+
+    vl_prompt: str = ""
+
+
+@dataclass(frozen=True, eq=False)
+class VLPrompt:
+    """The image side of a merged prompt: ``token_types`` [S] int64 (``image_processor`` TEXT = -1, IMAGE_START,
+    IMAGE, IMAGE_NEW_LINE, IMAGE_END) and ``features``: per image span in prompt order its aligner rows
+    ``[T_i, dim]`` bf16, T_i = the span's IMAGE slots (reading order)."""
+
+    token_types: torch.Tensor
+    features: tuple[torch.Tensor, ...]
+
+    def spans(self) -> list[tuple[int, int]]:
+        """(start, end) of each image span, end exclusive, in prompt order."""
+        from models.demos.deepseek_v3_d_p.reference.deepseek_v41.image_processor import IMAGE_END, IMAGE_START
+
+        starts = (self.token_types == IMAGE_START).nonzero().flatten().tolist()
+        ends = (self.token_types == IMAGE_END).nonzero().flatten().tolist()
+        if len(starts) != len(ends) or any(e < s for s, e in zip(starts, ends)):
+            raise ValueError("image spans must be IMAGE_START ... IMAGE_END")
+        return [(s, e + 1) for s, e in zip(starts, ends)]
+
+    def digest(self) -> str:
+        h = hashlib.sha256(self.token_types.to(torch.int64).contiguous().numpy().tobytes())
+        for f in self.features:
+            h.update(str(list(f.shape)).encode())
+            h.update(f.to(torch.bfloat16).contiguous().view(torch.uint16).numpy().tobytes())
+        for name in _VL_SOURCES:
+            h.update((_HERE / name).read_bytes())
+        h.update(f"vl{VL_VERSION}".encode())
+        return h.hexdigest()[:20]
+
+
+def merged_prompt(
+    tokens: torch.Tensor, spans: list[tuple[int, int, int, torch.Tensor]], args: v41.ModelArgs | None = None
+) -> tuple[torch.Tensor, VLPrompt]:
+    """Overwrite text ``tokens`` [1, S] with image spans ``(start, n_llm_h, n_llm_w, features [h*w, dim])``, laid out
+    as ``image_processor.prepare_vl_inputs`` does (``image_token_id`` at every span position, the default
+    ``image_token_types`` layout). Returns (tokens [1, S], VLPrompt)."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v41.image_processor import TEXT, image_token_types
+
+    image_token_id = (args or v41.ModelArgs()).image_token_id
+    tokens, types = tokens.clone(), torch.full((tokens.size(1),), TEXT, dtype=torch.int64)
+    features = []
+    for start, n_h, n_w, feats in sorted(spans, key=lambda s: s[0]):
+        span = image_token_types(n_h, n_w)
+        if feats.shape[0] != n_h * n_w:
+            raise ValueError(f"{feats.shape[0]} feature rows for a {n_h}x{n_w} token grid")
+        if start + span.numel() > tokens.size(1) or (types[start : start + span.numel()] != TEXT).any():
+            raise ValueError(f"image span at {start} ({span.numel()} tokens) overlaps or leaves the prompt")
+        tokens[0, start : start + span.numel()] = image_token_id
+        types[start : start + span.numel()] = span
+        features.append(feats.to(torch.bfloat16))
+    return tokens, VLPrompt(types, tuple(features))
+
+
+def synthetic_image_features(n_rows: int, dim: int, seed: int = 0) -> torch.Tensor:
+    """``[n_rows, dim]`` bf16 N(0, VL_FEATURE_STD^2) stand-in aligner rows."""
+    g = torch.Generator().manual_seed(_unit_seed(seed, f"image_features.{n_rows}x{dim}"))
+    return (torch.randn(n_rows, dim, generator=g) * VL_FEATURE_STD).to(torch.bfloat16)
+
+
+def vl_spec(spec: OracleSpec, prompt: VLPrompt) -> OracleSpec:
+    """``spec`` for the merged prompt: the same model, results keyed additionally by the prompt's image spans."""
+    fields = {k: getattr(spec.args, k) for k in v41.ModelArgs.__dataclass_fields__}
+    return replace(spec, args=VLArgs(**fields, vl_prompt=prompt.digest()))
+
+
+def vl_parameters(spec: OracleSpec) -> dict[str, torch.Tensor]:
+    """The VL-only parameters by checkpoint name: ``layers.<id>.ffn.gate.bias_vl`` (fp32) of every backbone layer
+    and ``image_start`` / ``image_end`` / ``image_newline`` (bf16 ``[dim]``); synthetic (seeded per name) or stored."""
+    names = [f"layers.{lid}.ffn.gate.bias_vl" for lid in spec.layer_ids]
+    names += ["image_start", "image_end", "image_newline"]
+    if spec.checkpoint is None:
+        out = {}
+        for name in names:
+            g = torch.Generator().manual_seed(_unit_seed(spec.seed, f"vl{VL_VERSION}:{name}"))
+            if name.startswith("layers."):
+                out[name] = VL_BIAS_STD * torch.randn(spec.args.n_routed_experts, generator=g)
+            else:
+                out[name] = (VL_DELIMITER_STD * torch.randn(spec.args.dim, generator=g)).to(torch.bfloat16)
+        return out
+    from safetensors import safe_open
+
+    weight_map = json.loads((spec.checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+    out = {}
+    for name in names:
+        with safe_open(spec.checkpoint / weight_map[name], framework="pt") as f:
+            out[name] = f.get_tensor(name)
+    return out
+
+
+def build_vl_reference(spec: OracleSpec, prompt: VLPrompt) -> v41.Transformer:
+    """The reference for a merged prompt (``spec`` from ``vl_spec``): ``build_reference`` plus the VL parameters,
+    with ``forward`` bound to the prompt's images / token types (the IMAGE slots take ``prompt.features``: the
+    encoder is teacher-forced) and the Engram hash to its image mask, so ``oracle`` / ``tail_logits`` /
+    ``noise_drift`` run the merged prefill unchanged."""
+    import functools
+
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v41.image_processor import ImageInput
+
+    if not isinstance(spec.args, VLArgs) or spec.args.vl_prompt != prompt.digest():
+        raise ValueError("spec is not vl_spec(..., prompt) for this prompt")
+    spans = prompt.spans()
+    if len(spans) != len(prompt.features):
+        raise ValueError(f"{len(spans)} image spans, {len(prompt.features)} feature sets")
+    model = build_reference(spec)
+    params = vl_parameters(spec)
+    for pos, layer in enumerate(model.layers):
+        bias_vl = params[f"layers.{spec.layer_ids[pos]}.ffn.gate.bias_vl"].float()
+        layer.ffn.gate.bias_vl = torch.nn.Parameter(bias_vl, requires_grad=False)
+    for name in ("image_start", "image_end", "image_newline"):
+        setattr(model, name, torch.nn.Parameter(params[name].to(torch.bfloat16), requires_grad=False))
+    images = [[ImageInput(s, f, 0, 0, prompt.token_types[s:e]) for (s, e), f in zip(spans, prompt.features)]]
+    model.encode_image = lambda features, n_vit_h, n_vit_w: features  # teacher-forced aligner rows
+    token_types = prompt.token_types[None]
+    model.forward = functools.partial(type(model).forward, model, images=images, token_types=token_types)
+    if model.engram_hash is not None:
+        hash_state, text = model.engram_hash, token_types < 0
+
+        def masked_hash(input_ids, start_pos, token_mask=None):
+            mask = text[:, start_pos : start_pos + input_ids.size(1)] if token_mask is None else token_mask
+            return type(hash_state).forward(hash_state, input_ids, start_pos, mask)
+
+        hash_state.forward = masked_hash
+    return model

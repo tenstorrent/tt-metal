@@ -26,6 +26,11 @@ Correction bias: the device gate holds ``e_score_correction_bias`` in bf16. The 
 the selection (measured top-6 recall 0.90 on real layer 2). Selection is ``topk(scores + bias)`` and the
 weights come from the unbiased scores, so subtracting the mean bias changes nothing in the reference
 semantics while keeping the offsets within bf16 precision (CPU: recall 0.998 with bf16 logits).
+
+VL routing bias (bead 10.2): image-span tokens select with ``bias_vl`` instead (reference ``Gate``; checkpoint layer
+0: mean 21.2, spread 0.10). A per-row constant does not change a row's top-k either, so ``bias_vl`` is recentred by
+its own mean. With an image mask the gate reads a per-token bias ``where(image, bias_vl, bias)`` for that call
+(``moe_grouped_topk`` takes a bias of the scores' shape, one row per token); without one it is the text path.
 """
 
 from types import SimpleNamespace
@@ -57,6 +62,7 @@ class TtV41Moe(LightweightModule):
         if gate is not None:
             bias = gate["e_score_correction_bias"].float()
             weights = {**weights, "gate_weights": {**gate, "e_score_correction_bias": bias - bias.mean()}}
+        bias_vl = weights.get("gate_bias_vl")  # not cached with the MoE tensors: always in the dense weights
         self.moe = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
             model_cfg=config,
@@ -79,19 +85,44 @@ class TtV41Moe(LightweightModule):
             layer_idx=layer,
             weight_cache_path=weight_cache_path,
         )
+        self.bias_vl = None
+        if bias_vl is not None:
+            text_bias = self.moe.gate.bias  # [tokens per chip, experts], one row per token
+            assert bias_vl.shape == (text_bias.shape[-1],), (tuple(bias_vl.shape), tuple(text_bias.shape))
+            bias_vl = bias_vl.float() - bias_vl.float().mean()
+            self.bias_vl = ttnn.from_torch(
+                bias_vl.repeat(text_bias.shape[0], 1),
+                device=mesh_device,
+                dtype=text_bias.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
-    def forward(self, x: ttnn.Tensor, return_intermediates: bool = False):
-        """x ``[1, 1, S/sp, hidden/tp]`` bf16, the sequence a contiguous SP shard -> same shape.
+    def forward(self, x: ttnn.Tensor, return_intermediates: bool = False, image_mask: ttnn.Tensor | None = None):
+        """x ``[1, 1, S/sp, hidden/tp]`` bf16, the sequence a contiguous SP shard -> same shape. ``image_mask``
+        ``[1, 1, S/sp, 1]`` (1 = image token, same sharding; None = text only) selects ``bias_vl`` per token.
 
         With ``return_intermediates`` also returns ``TtMoe``'s intermediates (gate logits/scores/indices,
         shared and routed outputs) for op acceptance."""
-        out, intermediates = self.moe(
-            ttnn.squeeze(x, dim=0),
-            return_intermediates=return_intermediates,
-            actual_isl=None,
-            padding_side="right",
-            actual_start=0,
-            expert_x=ttnn.squeeze(fp8_qdq(x), dim=0),
-        )
+        gate, text_bias = self.moe.gate, self.moe.gate.bias
+        if image_mask is not None:
+            assert self.bias_vl is not None, "image tokens need the layer's gate_bias_vl"
+            rows = image_mask.shape[2]
+            assert rows == text_bias.shape[0], f"mask of {rows} rows for a {text_bias.shape[0]}-row gate"
+            gate.bias = ttnn.where(ttnn.reshape(image_mask, (rows, 1)), self.bias_vl, text_bias)
+        try:
+            out, intermediates = self.moe(
+                ttnn.squeeze(x, dim=0),
+                return_intermediates=return_intermediates,
+                actual_isl=None,
+                padding_side="right",
+                actual_start=0,
+                expert_x=ttnn.squeeze(fp8_qdq(x), dim=0),
+            )
+        finally:
+            if image_mask is not None:
+                ttnn.deallocate(gate.bias)
+                gate.bias = text_bias
         out = ttnn.unsqueeze(out, dim=0)
         return (out, intermediates) if return_intermediates else out
