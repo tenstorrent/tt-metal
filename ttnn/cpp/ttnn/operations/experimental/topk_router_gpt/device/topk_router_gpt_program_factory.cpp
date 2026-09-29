@@ -57,7 +57,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
 
     constexpr uint32_t num_groups = 4;
     // Wormhole exposes 12 DRAM-aligned workers and uses two senders per
-    // expert group. Blackhole exposes 8, so split each K dimension between
+    // expert group. Blackhole P150 exposes 8, so split each K dimension between
     // one sender and one worker instead. The rest of the four-group routing
     // and collection pipeline is identical.
     const uint32_t cores_per_group = num_cores >= 12 ? 3 : 2;

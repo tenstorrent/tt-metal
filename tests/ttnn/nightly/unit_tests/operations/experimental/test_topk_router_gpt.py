@@ -35,6 +35,13 @@ TEST_SHAPES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def require_router_topology(device):
+    workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if len(workers) < 8:
+        pytest.skip("fused router requires at least eight DRAM-aligned workers (P150 or Wormhole)")
+
+
 def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
     """Run the fused op and return the torch result."""
     torch_bias_bcast = torch_bias.expand(B, N).contiguous()
