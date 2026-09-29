@@ -3362,6 +3362,80 @@
   "started": "2026-09-29T20:20:03",
   "status": "PASS"
  },
+ "C.moe_shared.shared_expert": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "e5bc7928-f8e0-4afe-8d5f-8257f27cfbaa"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_shared.shared_expert.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_shared.shared_expert.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 180.0,
+    "session_id": "e5bc7928-f8e0-4afe-8d5f-8257f27cfbaa",
+    "t": "2026-09-29T21:17:43"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 24.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T21:18:59"
+   }
+  ],
+  "last_run": "2026-09-29T21:18:59",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_shared.shared_expert.log",
+  "metrics": {
+   "pcc_shared_expert_L02": 0.9999979605486429,
+   "rel_l2_shared_expert_L02": 0.002090387511998415,
+   "row_norm_ratio_max_shared_expert_L02": 0.9999733567237854,
+   "row_norm_ratio_min_shared_expert_L02": 0.9989199042320251,
+   "syn_rel_l2_shared_expert_L02": 0.0007420206093229353,
+   "syn_row_norm_ratio_max_shared_expert_L02": 0.9996422529220581,
+   "syn_row_norm_ratio_min_shared_expert_L02": 0.9991676211357117,
+   "syn_worst_row_rel_l2_shared_expert_L02": 0.0009849288035184145,
+   "worst_row_rel_l2_shared_expert_L02": 0.002634614473208785
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T21:18:34",
+  "status": "PASS"
+ },
  "C.moe_shared.topk_shared": {
   "agent": {
    "defs": {
