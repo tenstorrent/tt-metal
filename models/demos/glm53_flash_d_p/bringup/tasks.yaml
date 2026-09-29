@@ -1136,6 +1136,13 @@ tasks:
     - attention
     - attn_residual
     layer: 3
+  frozen:
+    at: '2026-09-29T09:39:44'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_07_attn_residual.py: 4ccdc17e47aa66308d166fbfeffc3b57e782ac7ea34e1a357d19c2b930c26fe3
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.ffn_hc
   title: dsa_moe ffn_hc (op) on device, layer 3
   step: implement
