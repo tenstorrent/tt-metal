@@ -6199,15 +6199,19 @@ def _hf_snapshots(model_id: str) -> list:
 
 
 def _hf_cache_weight_bytes(model_id: str) -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent import model_bytes as _mb
+
     best = 0
     for snap in _hf_snapshots(model_id):
         total = 0
-        for p in snap.iterdir():
-            if p.suffix.lower() in (".safetensors", ".bin", ".pt", ".pth"):
-                try:
-                    total += os.path.getsize(os.path.realpath(p))
-                except OSError:
-                    pass
+        # Where the checkpoint says its weights are -- the top level and every declared component's
+        # subfolder (model_bytes.weight_files) -- not the top level alone.
+        for _prefix, p in _mb.weight_files(snap, _mb._WEIGHT_SUFFIXES):
+            try:
+                total += os.path.getsize(os.path.realpath(p))
+            except OSError:
+                pass
         best = max(best, total)
     return best
 
@@ -6352,6 +6356,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
     src = "checkpoint bytes + HF config"
     analytic_params = 0
+    _unread_w: list = []  # weight files the checkpoint holds that no lookup read (the gate below)
     _unit = ""  # bound before the try below, which can raise before assigning it (params_basis reads it)
     # ANALYTIC FIRST: every tensor's shape and dtype from the safetensors header, with the on-device
     # widths applied per name pattern. The checkpoint's FILE SIZE counts the stored dtype -- 15.0 GB of
@@ -6377,6 +6382,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         # SIZE as the divisor: 1.34 GB of float32 instead of its param count, i.e. ~4 B/param, so the
         # xB -> xGB rule was bypassed for exactly the models least able to report the error themselves.
         if _snap:
+            _unread_w = _mb.unread_weight_files(_snap)
             _an = _mb.weight_bytes(
                 _snap,
                 # Unknown unit -> count as "token", which EXCLUDES lookup-only tensors. One row of an
@@ -6470,6 +6476,20 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         "dominant_dtype": str(cfg.get("torch_dtype") or "bfloat16"),
         "source": src,
     }
+    # EVERY WEIGHT FILE IS READ, OR THE RUN SAYS WHICH WERE NOT. A layout the reader does not know used
+    # to cost the whole roofline without a word -- it simply rendered "n/a -- not measured". Recorded in
+    # the facts (so the report and the dashboard carry it) and printed as an ERROR; not raised, because
+    # a ceiling must never cost a run.
+    if _unread_w:
+        facts["weights_unread"] = list(_unread_w)
+        print(
+            "  [optimize/cc] ERROR: %d weight file(s) in the checkpoint were NOT read (%s%s) -- every "
+            "number derived from the weights (params, roofline, fidelity ladder) is missing or short. "
+            "The checkpoint's layout is not one model_bytes.weight_files knows."
+            % (len(_unread_w), ", ".join(_unread_w[:4]), ", ..." if len(_unread_w) > 4 else ""),
+            file=sys.stderr,
+            flush=True,
+        )
     # PARAMS drive the ceiling (xB -> xGB). Exact count from the headers when readable, else the count
     # the model NAME publishes; for MoE the A-suffix ("30B-A3B") is the ACTIVE count, which is the read
     # set a routed token streams.

@@ -259,6 +259,53 @@ def unit_word(unit) -> str:
     return "inference"
 
 
+# WHERE A CHECKPOINT'S WEIGHTS ARE, as the checkpoint itself says. A single model keeps its weight files
+# at the top of the snapshot. A multi-component checkpoint (a diffusers pipeline) lists its parts in
+# model_index.json -- each component name mapped to its [library, class] -- and keeps each part's weights
+# in the subfolder of that name. Reading only the top level found nothing at all for Qwen-Image-Edit
+# (2026-09-29: transformer/ 9, text_encoder/ 4, vae/ 1 files, none at the top), so every roofline value
+# of its run read "n/a -- not measured" while 28.85 B params sat one folder down.
+_COMPONENT_INDEX = "model_index.json"
+_HEADER_SUFFIXES = (".safetensors",)
+# Every suffix a weight file is stored under -- what the unread-files gate looks for.
+_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
+
+
+def weight_files(snapshot_dir, suffixes=_HEADER_SUFFIXES) -> list:
+    """[(tensor-name prefix, file)] for every weight file the checkpoint declares: the top level with
+    no prefix, then each model_index.json component's subfolder with "<component>." -- the name the
+    pipeline holds that part under, so tensor names read as the module paths it runs."""
+    d = Path(snapshot_dir or "")
+    if not d.is_dir():
+        return []
+    out = [("", f) for f in sorted(d.iterdir()) if f.suffix.lower() in suffixes and f.is_file()]
+    try:
+        comps = json.loads((d / _COMPONENT_INDEX).read_text())
+    except (OSError, ValueError):
+        comps = {}
+    for name, spec in sorted((comps or {}).items()):
+        sub = d / str(name)
+        if str(name).startswith("_") or not isinstance(spec, (list, tuple)) or not sub.is_dir():
+            continue
+        out += [("%s." % name, f) for f in sorted(sub.iterdir()) if f.suffix.lower() in suffixes and f.is_file()]
+    return out
+
+
+def unread_weight_files(snapshot_dir) -> list:
+    """Weight files anywhere under the snapshot that weight_files does not return: the gate. Empty for
+    every layout the tool reads; anything here is a checkpoint shape nobody taught it, and every number
+    derived from the weights would silently be missing or short."""
+    d = Path(snapshot_dir or "")
+    if not d.is_dir():
+        return []
+    read = {f.resolve() for _, f in weight_files(d, _WEIGHT_SUFFIXES)}
+    return sorted(
+        p.relative_to(d).as_posix()
+        for p in d.rglob("*")
+        if p.suffix.lower() in _WEIGHT_SUFFIXES and p.is_file() and p.resolve() not in read
+    )
+
+
 def _headers(path: Path):
     """{tensor_name: {dtype, shape}} from a safetensors file, reading only its header."""
     with path.open("rb") as fh:
@@ -297,8 +344,7 @@ def weight_bytes(
 
     Returns {bytes, tensors, skipped_lookup_bytes, by_pattern, shards} or {} when nothing was read.
     """
-    d = Path(snapshot_dir or "")
-    files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
+    files = weight_files(snapshot_dir)
     if not files:
         return {}
     compiled = [(re.compile(pat), dt) for pat, dt in (overrides or ())]
@@ -308,9 +354,9 @@ def weight_bytes(
     # the embedding table is lookup-only or is itself the projection, and it cannot be known from the
     # embedding tensor alone.
     shards = []
-    for f in files:
+    for prefix, f in files:
         try:
-            shards.append(_headers(f))
+            shards.append({prefix + k: v for k, v in _headers(f).items()})
         except Exception:  # noqa: BLE001
             continue
     tied = not any(_OUTPUT_PROJ.search(n) for hdr in shards for n in hdr)
@@ -392,16 +438,15 @@ def untowered_sections(snapshot_dir, stage_roots: dict) -> list:
         _roots = {str(v) for v in (stage_roots or {}).values() if v}
         if len(_roots) < 2:
             return []  # one subtree, or none: nothing can be a separate tower
-        d = Path(snapshot_dir or "")
-        files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
         _size: dict = {}
-        for f in files:
+        for prefix, f in weight_files(snapshot_dir):
             try:
                 with open(f, "rb") as fh:
                     n = struct.unpack("<Q", fh.read(8))[0]
                     if not (0 < n <= 200_000_000):
                         continue
-                    for k, meta in json.loads(fh.read(n)).items():
+                    _hdr = json.loads(fh.read(n))
+                    for k, meta in ((prefix + k, v) for k, v in _hdr.items() if k != "__metadata__"):
                         if k == "__metadata__" or not isinstance(meta, dict) or "." not in str(k):
                             continue
                         _ne = 1
