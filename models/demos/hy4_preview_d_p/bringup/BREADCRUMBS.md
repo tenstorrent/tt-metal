@@ -651,3 +651,48 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_06_attention.py
+
+## C.dense_full.attn_residual test (attempt 1)
+
+What was done
+- Reviewed the rendered test for h_mid_j = in_j + post_j * attn_out (4 iHC streams, post = attn_hc cols 4-7). Kept
+  the gated PCC (0.99) and added, vs golden: not a CPU bridge, size, finite, rel L2 <= 0.01, per-token per-stream norm
+  ratio [0.98, 1.02]; per stream on the addend (delta_j = out_j - in_j vs post_j * attn_out): coefficient in
+  [0.97, 1.03], rel L2 <= 0.03, worst row rel <= 0.1.
+- CPU mutation study (/tmp/hy4_c_res/study.py, outside the repo) in the test docstring. The addend is large here
+  (||attn_out|| 510 vs ||in|| 245), unlike MiMo's sink-dominated residual; 1.1 x attn_out (PCC 0.9978), last row
+  zeroed (0.9994) and last 32 columns zeroed (0.9977) pass PCC and are caught by rel L2 / ratio / addend checks.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999996, rel 0.00267 = golden bf16 rounding, ratio [0.9959, 1.0043], addend exact).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device): FAIL, NotImplementedError: no device module for attn_residual yet (expected before implement).
+
+Gotchas
+- Layer 0 streams are identical, so an input-stream permutation is invisible; post-column permutations are caught.
+- The first result line of run_safe_pytest (collect pass) prints pcc 0; only the second is real.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py
+
+## C.dense_full.attn_residual implement (attempt 1)
+
+What was done
+- `tt/ihc.py:TtHcPost`: iHC post, h_j = stream_j + post_j * y, fp32. Per chip: 4 x (slice stream j's
+  [S/2, 3072] block, slice gate column 4+j [S/2, 1], `ttnn.addcmul(stream_j, y, post_j)`) -> `ttnn.concat` back to
+  [1, 1, S/2, 4 x 3072]. No collective, no weights, no host work (y is typecast to fp32 on the device if it is not).
+  Reuse: deepseek_v3_d_p tt_mhc `TtMHCWrap.hc_post` without the comb terms.
+- hooks.py: `_HC_POST_STEPS = {"attn_residual"}`, `_hc_post_host_fn` (streams / row-split gates / column-split
+  attn_out in, streams out; harness boundary only), wired into `_device_step_fn` and `device_component`;
+  "attn_residual" added to `DEVICE_STEPS["dense_full"]`.
+
+Decisions
+- Kept the output fp32 (the residual streams are fp32 on the device, as TtHcGates / TtHcPre expect).
+- TtHcPost is generic for ffn_residual too (same layout: y column-split [S/2, H/2]); only the step set needs extending.
+
+Results
+- Gate (device): PASS. pcc 0.999996, rel L2 0.00267 (= golden bf16 rounding), stream norm ratio [0.9959, 1.0043],
+  addend coef 1.0 / rel 0.0 on every stream (bit-identical to the fp32 CPU step).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py
