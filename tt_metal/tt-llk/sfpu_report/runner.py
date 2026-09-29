@@ -18,6 +18,9 @@ from pathlib import Path
 from overlay import LLK_RELPATH
 
 TOOL_LLK = Path(__file__).resolve().parents[1]
+
+#: Run on ttsim ($TT_METAL_SIMULATOR) instead of a device: tool development only.
+SIMULATOR = False
 PYTHON_TESTS = TOOL_LLK / "tests" / "python_tests"
 
 
@@ -63,7 +66,8 @@ def side_env(side, arch, extra=None):
         CHIP_ARCH=arch,
         TT_LLK_DISABLE_ASSERTS="1",
     )
-    env.pop("TT_METAL_DISABLE_SFPLOADMACRO", None)
+    if not SIMULATOR:  # ttsim does not model SFPLOADMACRO; keep the caller's setting
+        env.pop("TT_METAL_DISABLE_SFPLOADMACRO", None)
     env.update(extra or {})
     return env
 
@@ -71,6 +75,8 @@ def side_env(side, arch, extra=None):
 def pytest(side, arch, args, *, env=None, log=None, check=True):
     """One pytest invocation from the tool's python_tests dir."""
     side.build.mkdir(parents=True, exist_ok=True)
+    if SIMULATOR and "--compile-producer" not in args:
+        args = ["--run-simulator", *args]
     cmd = [sys.executable, "-m", "pytest", "-q", "--override-ini=log_cli=false", *args]
     with open(log, "a") if log else open(os.devnull, "w") as out:
         out.write(f"\n$ ({side.name}) {' '.join(cmd)}\n")

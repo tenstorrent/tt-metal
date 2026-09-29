@@ -129,7 +129,15 @@ post-steps:
           if dispatched or item.get("workflow_name") != "llk-sfpu-report":
               continue
           inputs = item.get("inputs") or {}
-          ops = [valid[o.strip().lower()] for o in str(inputs.get("ops", "")).split(",") if o.strip().lower() in valid]
+          def resolve(name):
+              # Binary ops carry harness prefixes: `logsigmoid` -> SfpuLogsigmoid,
+              # `max` -> SfpuBinaryMax, `lt` -> SfpuElwLt.
+              n = name.strip().lower()
+              for cand in (n, "sfpu" + n, "sfpuelw" + n, "sfpubinary" + n):
+                  if cand in valid:
+                      return valid[cand]
+              return None
+          ops = [r for r in (resolve(o) for o in str(inputs.get("ops", "")).split(",")) if r]
           arch = inputs.get("arch") if inputs.get("arch") in ("all", "wormhole", "blackhole") else "all"
           base = inputs.get("base") if inputs.get("base") in ("merge-base", "main") else "merge-base"
           try:
@@ -206,7 +214,8 @@ Free text is a hint too: "just fp32 tanh on blackhole" means `ops=Tanh`, `arch=b
 ## Deciding the inputs
 
 1. **`ops`**: comma-separated names from `valid-ops.txt`, exact spelling (`Tanh`,
-   `Exp`, `Acosh`). Leave it **empty** unless the request names ops. Empty means the
+   `Exp`, `Acosh`; binary SFPU ops carry a prefix: `SfpuLogsigmoid`, `SfpuAtan2`,
+   `SfpuBinaryMax`, `SfpuElwLt`, `SfpuDivInt32`). Leave it **empty** unless the request names ops. Empty means the
    report detects the changed ops from the compiled code, which also catches ops that
    share a changed header (a change to `ckernel_sfpu_exp.h` reaches sigmoid and gelu),
    which a reading of the diff would miss. If the request names an op that is not in

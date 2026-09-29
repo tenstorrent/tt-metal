@@ -221,59 +221,91 @@ def _row_prefix(key):
     return f"| {_ARCH[arch]} | {op} | {_fmt_pair(f'{i}->{o}')} | {dest} | {approx} "
 
 
+def _exact_cells(rec):
+    b, h = rec["base"], rec["head"]
+    flag = "⚠️ " if h["wrong"] > b["wrong"] or rec["worse"] > rec["better"] else ""
+    return (
+        _num(h["lanes"]),
+        _num(b["wrong"]),
+        f"{flag}{_bold_if_better(h['wrong'], b['wrong'])}",
+        f"{_num(rec['worse'])} / {_num(rec['better'])}",
+    )
+
+
+def _table(rows, header, cells):
+    return header + [
+        _row_prefix(k) + "| " + " | ".join(c) + " |"
+        for k, _, c in _merge_approx(rows, cells)
+    ]
+
+
 def accuracy_section(summaries):
-    head = [
+    ulp_head = [
         "| arch | op | format | dest_acc | approx | max old | max new | mean old → new | ≤1 ULP old → new | worse / better | non-finite old → new |",
         "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
-    changed, same = [], []
+    exact_head = [
+        "| arch | op | format | dest_acc | approx | lanes | wrong old | wrong new | newly wrong / newly right |",
+        "|---|---|---|---|---|---:|---:|---:|---:|",
+    ]
+    groups = {
+        ("ulp", False): [],
+        ("ulp", True): [],
+        ("exact", False): [],
+        ("exact", True): [],
+    }
+    binary = False
     for s in summaries:
         for rec in s["accuracy"]:
             if "base" not in rec:
                 continue
-            key = (
-                s["arch"],
-                *rec["key"][:2],
-                rec["key"][2],
-                rec["key"][3],
-                rec["key"][4],
-            )
-            (same if rec.get("bit_identical") else changed).append((key, rec))
+            binary |= bool(rec.get("binary"))
+            key = (s["arch"], *rec["key"])
+            metric = rec["base"].get("metric", "ulp")
+            groups[(metric, bool(rec.get("bit_identical")))].append((key, rec))
     lines = [
         "### Accuracy",
         "",
-        "ULP steps against the correctly rounded reference (the golden of the nightly ULP sweep), "
-        "over every finite input of the format (fp32: every 65,536th value). Lanes a step count "
-        "cannot describe (NaN, subnormal input, padding) are left out here and covered by the edge "
-        "cases below. `worse / better` counts lanes whose error changed.",
+        "ULP steps against the correctly rounded reference (the golden of the functional tests). "
+        "Unary ops: every finite input of the format (fp32: every 65,536th value). Binary ops: "
+        "random operand pairs from the op's functional-test domain, the same draw on both sides. "
+        "Lanes a step count cannot describe (NaN, subnormal input, padding) are left out here and "
+        "covered by the edge cases below. `worse / better` counts lanes whose error changed.",
         "",
     ]
-    if changed:
-        lines += head + [
-            _row_prefix(k) + "| " + " | ".join(cells) + " |"
-            for k, _, cells in _merge_approx(changed, _acc_cells)
+    changed_ulp, same_ulp = groups[("ulp", False)], groups[("ulp", True)]
+    changed_exact, same_exact = groups[("exact", False)], groups[("exact", True)]
+    if changed_ulp:
+        lines += _table(changed_ulp, ulp_head, _acc_cells)
+    if changed_exact:
+        lines += [
+            "",
+            "Comparisons and integer ops have no ULP: a lane is right or wrong.",
+            "",
+            *_table(changed_exact, exact_head, _exact_cells),
         ]
-    else:
+    if not changed_ulp and not changed_exact:
         lines.append(
-            "The PR does not change any result: every swept variant returns the same bits on both sides."
+            "The PR does not change any result: every measured variant returns the same bits on both sides."
         )
+    same = len(same_ulp) + len(same_exact)
     if same:
         lines += [
             "",
-            f"<details><summary>{len(same)} variant(s) return bit-identical results on both sides</summary>",
+            f"<details><summary>{same} variant(s) return bit-identical results on both sides</summary>",
             "",
-            *head,
-            *[
-                _row_prefix(k) + "| " + " | ".join(cells) + " |"
-                for k, _, cells in _merge_approx(same, _acc_cells)
-            ],
-            "",
-            "</details>",
         ]
+        if same_ulp:
+            lines += _table(same_ulp, ulp_head, _acc_cells)
+        if same_exact:
+            lines += ["", *_table(same_exact, exact_head, _exact_cells)]
+        lines += ["", "</details>"]
     return lines + [""]
 
 
 def _val(x):
+    if isinstance(x, (list, tuple)):
+        return "(" + ", ".join(_val(v) for v in x) + ")"
     if x != x:
         return "nan"
     if x == 0:

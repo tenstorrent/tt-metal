@@ -24,13 +24,16 @@ import runner
 MODULES = {
     "unary": "perf_eltwise_unary_sfpu.py",
     "typecast": "perf_eltwise_unary_typecast.py",
+    "binary": "perf_eltwise_binary_sfpu.py",
 }
 #: The kernel source each module compiles; its artefacts live under sources/<name>/.
 SOURCES = {
     "unary": "eltwise_unary_sfpu_perf.cpp",
     "typecast": "eltwise_unary_typecast_perf.cpp",
+    "binary": "eltwise_binary_sfpu_perf.cpp",
 }
 
+_BINARY_OP = re.compile(r"SFPU_BINARY_OPERATION\s*=\s*ckernel::BinaryOp::(\w+)")
 _SFPU_OP = re.compile(r"SFPU_UNARY_OPERATION\s*=\s*SfpuType::(\w+)")
 _TYPECAST = re.compile(r"TYPECAST_(?:IN|OUT)\w*\s*=\s*[\w:]*?(\w+)\s*;")
 
@@ -53,7 +56,7 @@ def op_of(build_h_text, family):
     if family == "typecast":
         found = _TYPECAST.findall(build_h_text)
         return "typecast" + ("(" + "->".join(found) + ")" if found else "")
-    m = _SFPU_OP.search(build_h_text)
+    m = (_BINARY_OP if family == "binary" else _SFPU_OP).search(build_h_text)
     return m.group(1) if m else None
 
 
@@ -96,7 +99,7 @@ def compile_all(side, arch, family, log, jobs=8, only_ops=()):
 
 
 def changed_ops(
-    base, head, arch, log, families=("unary", "typecast"), jobs=8, only_ops=()
+    base, head, arch, log, families=("unary", "typecast", "binary"), jobs=8, only_ops=()
 ):
     """Returns ``{family: {"changed": [...], "unchanged": [...], "unmatched": [...]}}``.
 

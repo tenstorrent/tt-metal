@@ -128,6 +128,20 @@ def _prioritize(ops, changed_files):
     return sorted(ops, key=lambda op: not direct(op))
 
 
+def _binary_enum_to_op():
+    """``ckernel::BinaryOp`` names (detect.py) -> MathOperation names (``--op``)."""
+    sys.path.insert(0, str(runner.PYTHON_TESTS))
+    from helpers.llk_params import SFPU_BINARY_OPERATIONS
+
+    return {op.cpp_enum_value: op.name for op in SFPU_BINARY_OPERATIONS}
+
+
+def _family_of(op):
+    if op == "Typecast":
+        return "typecast"
+    return "binary" if op.startswith("Sfpu") else "unary"
+
+
 class _Incompatible(Exception):
     """The side's C++ harness does not build with the tool's Python harness."""
 
@@ -143,6 +157,9 @@ def _harness_compiles(side, arch, log, jobs):
 
 def cmd_run(args):
     t0 = time.time()
+    if args.simulator:
+        args.no_perf = True
+        runner.SIMULATOR = True
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     log = work / "run.log"
@@ -161,12 +178,15 @@ def cmd_run(args):
         found = None
     else:
         found = detect.changed_ops(base, head, args.arch, log, jobs=args.jobs)
-        changed = sorted({o for fam in found.values() for o in fam["changed"]})
-        ops, not_covered = _sfpu_type_to_op(
-            [c for c in changed if not c.startswith("typecast")]
-        )
-        ops = _prioritize(ops, plan.applied)
-        if any(c.startswith("typecast") for c in changed):
+        unary = [o for o in found.get("unary", {}).get("changed", [])]
+        ops, not_covered = _sfpu_type_to_op(unary)
+        binary_names = _binary_enum_to_op()
+        for enum in found.get("binary", {}).get("changed", []):
+            (ops if enum in binary_names else not_covered).append(
+                binary_names.get(enum, enum)
+            )
+        ops = _prioritize(list(dict.fromkeys(ops)), plan.applied)
+        if found.get("typecast", {}).get("changed"):
             ops.append("Typecast")
         why = "auto-detected: their compiled SFPU code differs between the two sides"
         if len(ops) > MAX_OPS:
@@ -180,34 +200,41 @@ def cmd_run(args):
     if not ops and sfpu_files:
         notes.append(
             "This PR changes SFPU kernel files, but the machine code of no op this report covers "
-            "(elementwise unary SFPU and typecast) changed. The changed kernels may be binary or "
-            "ternary SFPU ops, which a later version will cover: "
+            "(elementwise unary and binary SFPU, typecast) changed. The changed kernels may be "
+            "ternary or structural SFPU ops (reduce, topk, ...), which a later version will cover: "
             + ", ".join(f"`{Path(p).name}`" for p in sfpu_files[:8])
             + "."
         )
     print(f"ops: {ops}  not covered: {not_covered}")
 
     perf_rows = {}
-    families = {
-        "typecast": [o for o in ops if o == "Typecast"],
-        "unary": [o for o in ops if o != "Typecast"],
-    }
-    for family, fam_ops in families.items():
-        if not fam_ops:
-            continue
-        runs = perf.sweep(
-            base,
-            head,
-            args.arch,
-            family,
-            fam_ops,
-            work / "perf",
-            log,
-            iterations=args.iterations,
-            jobs=args.jobs,
-        )
-        verdicts = perf.compare(runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"])
-        perf_rows[family] = perf.rows(runs, verdicts)
+    if args.no_perf:
+        notes.append("Perf was not measured in this run (`--no-perf`).")
+    else:
+        families = {}
+        for op in ops:
+            families.setdefault(_family_of(op), []).append(op)
+        for family, fam_ops in families.items():
+            runs = perf.sweep(
+                base,
+                head,
+                args.arch,
+                family,
+                fam_ops,
+                work / "perf",
+                log,
+                iterations=args.iterations,
+                jobs=args.jobs,
+            )
+            if runs is None:
+                notes.append(
+                    f"No perf test covers {', '.join(f'`{o}`' for o in fam_ops)}: accuracy only."
+                )
+                continue
+            verdicts = perf.compare(
+                runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"]
+            )
+            perf_rows[family] = perf.rows(runs, verdicts)
 
     acc_ops = [o for o in ops if o != "Typecast"]
     acc = []
@@ -219,10 +246,24 @@ def cmd_run(args):
             head, args.arch, acc_ops, work / "accuracy" / "head", log, jobs=args.jobs
         )
         acc = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
+        measured = {r["key"][0] for r in acc}
+        missing = [o for o in acc_ops if o not in measured]
+        if missing:
+            notes.append(
+                "No accuracy driver covers "
+                + ", ".join(f"`{o}`" for o in missing)
+                + " (not an elementwise function of its inputs, or the harness cannot feed it)."
+            )
+        for cov in sorted(
+            {(r["key"][0], r["coverage"]) for r in acc if r.get("coverage")}
+        ):
+            notes.append(f"`{cov[0]}` accuracy: {cov[1]}.")
     if "Typecast" in ops:
         notes.append(
             "Typecast accuracy is not in this version of the report; its perf is."
         )
+    if args.simulator:
+        notes.append("Run on ttsim, the functional simulator: accuracy only, no perf.")
 
     cmd = " ".join(["python3", "tt_metal/tt-llk/sfpu_report/cli.py", *sys.argv[1:]])
     summary = {
@@ -300,6 +341,12 @@ def main(argv=None):
         "--ops", help="comma-separated MathOperation names; skips detection"
     )
     run.add_argument("--iterations", type=int, default=3)
+    run.add_argument("--no-perf", action="store_true", help="accuracy only")
+    run.add_argument(
+        "--simulator",
+        action="store_true",
+        help="run on ttsim ($TT_METAL_SIMULATOR): implies --no-perf; for developing the tool",
+    )
     run.add_argument("--run-url")
     run.add_argument(
         "--head-moved-to", help="the PR's current head, if it moved after the command"
