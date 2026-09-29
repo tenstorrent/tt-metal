@@ -9,6 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <map>
+#include <string>
 #include <numeric>
 #include <tuple>
 #include <utility>
@@ -53,24 +56,33 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 std::tuple<
     std::vector<tt::tt_metal::CoreCoord>,  // T cores
     std::vector<tt::tt_metal::CoreCoord>,  // MM cores
-    CoreRangeSet,            // T CoreRangeSet
-    CoreRangeSet,            // MM CoreRangeSet
-    CoreRangeSet,            // T + MM CoreRangeSet
-    CoreRangeSet,            // Combine CoreRangeSet
-    CoreRangeSet,            // C + MM CoreRangeSet
-    CoreRangeSet,            // All worker cores (T + MM + C)
+    CoreRangeSet,                          // T CoreRangeSet
+    CoreRangeSet,                          // MM CoreRangeSet
+    CoreRangeSet,                          // T + MM CoreRangeSet
+    CoreRangeSet,                          // Combine CoreRangeSet
+    CoreRangeSet,                          // C + MM CoreRangeSet
+    CoreRangeSet,                          // All worker cores (T + MM + C)
     std::vector<tt::tt_metal::CoreCoord>,  // Combine vector of CoreCoord
-    CoreRange,               // T bounding box
-    CoreRange>               // MM bounding box
+    CoreRange,                             // T bounding box
+    CoreRange,                             // MM bounding box
+    std::vector<tt::tt_metal::CoreCoord>,  // every prefill ring's cores, ring-major (ring 0 = MM)
+    CoreRangeSet>                          // their CoreRangeSet
 get_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
     uint32_t bh_ring_size,
-    const CoreRangeSet& mux_core_range_set) {
+    const CoreRangeSet& mux_core_range_set,
+    uint32_t prefill_rings) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size,
+        prefill_rings);
 
     return {
         selection.tilize_cores,
@@ -83,7 +95,9 @@ get_cores(
         selection.all_worker_cores_range_set,
         selection.combine_cores,
         selection.tilize_bounding_box,
-        selection.matmul_bounding_box};
+        selection.matmul_bounding_box,
+        selection.ring_cores,
+        selection.ring_core_range_set};
 }
 
 std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& cores, const ttnn::MeshDevice& device) {
@@ -188,7 +202,8 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
             args.num_data_parallel_cores,
             hidden_size,
             args.bh_ring_size,
-            args.combine_params->mux_core_range_set);
+            args.combine_params->mux_core_range_set,
+            args.prefill_rings);
 
         const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
@@ -340,17 +355,30 @@ MoEComputeMeshWorkloadFactory::create_at(
          all_worker_cores_range_set,
          combine_cores,
          tilize_bounding_box,
-         matmul_bounding_box] =
+         matmul_bounding_box,
+         ring_cores,
+         ring_core_range_set] =
             get_cores(
                 mesh_device,
                 combine_token_parallel_cores,
                 combine_data_parallel_cores,
                 hidden_size,
                 args.bh_ring_size,
-                args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{});
+                args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{},
+                args.prefill_rings);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
+    // The ring size (one core per DRAM bank; the a2a ring, the W2 split, the tilize credits per chunk). With R
+    // prefill rings there are R x matmul_num_cores ring cores (ring_cores / ring_core_range_set): the CBs, the
+    // semaphores and the kernels go on all of them, the per-ring arithmetic keeps the ring size.
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
+    const uint32_t num_rings = args.prefill_rings < 2 ? 1u : args.prefill_rings;
+    TT_FATAL(
+        ring_cores.size() == static_cast<std::size_t>(num_rings) * matmul_num_cores,
+        "moe_compute: {} ring cores for {} ring(s) of {}",
+        ring_cores.size(),
+        num_rings,
+        matmul_num_cores);
 
     // Which output stage this program carries. FullCcl/FullLocal build the fused combine kernels on
     // the combine cores; LocalOutput builds none and dm1 writes the final output itself;
@@ -369,12 +397,25 @@ MoEComputeMeshWorkloadFactory::create_at(
         expected_matmul_n,
         matmul_num_cores);
     const uint32_t a2a_cb_pages = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
+    // The a2a pipeline (2026-09-26): the ring cores run W0/W1 of their next owned chunk while dm1 exchanges the
+    // current chunk's in2 partials, so the in2 buffers (the core's own partial and the landed shards) come in two
+    // parity slots and the ready credits hold two chunks; dm1 exchanges the next chunk before it finishes this one's
+    // output rows and the feed carries three chunk slots. The streaming decode ring only (explicitly enabled by the
+    // caller; the replay ring's whole-slice CB and the multi-ring chunk owners assume one chunk in flight); the named
+    // arg is in the kernel hash.
+    const uint32_t a2a_pipeline = (args.enable_a2a_pipeline ? 1u : 0u);
+    const uint32_t a2a_parity_slots = a2a_pipeline ? 2u : 1u;
 
     // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 20
     // for the 2560/640 expert on the 8-bank ring), passed to the kernels as the "tiles_per_txn" compile arg.
     const uint32_t weight_tiles_per_txn =
         moe_ring::tiles_per_txn_for_shape(hidden_tiles, intermediate_tiles, args.has_bias, matmul_num_cores);
     const uint32_t weight_tiles_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK * weight_tiles_per_txn;
+    // The weight CB's blocks: the shape's rule, plus one on the streaming decode ring (2026-09-26: three blocks = 69 KB
+    // of DRAM reads in flight per ring core, 10.88 -> 10.68 us per distinct local expert on the 1x4 line; five and six
+    // no better). The prefill ring forms keep the rule: their larger feed halves leave no L1 for a fourth block.
+    const uint32_t weight_slots = a2a_pipeline ? moe_ring::weight_cb_slots(weight_tiles_per_txn) + 1
+                                               : moe_ring::weight_cb_slots(weight_tiles_per_txn);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -443,12 +484,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
     auto tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
-    // Since both reader and writer are using NoC1, we have the readers wait until all writers have sent their
-    // chunk portion to the matmul cores before reading in another set of tokens to tilize. This frees up NoC1
-    // to do the mcast, which is also a requirement for doing linked mcasts.
-    auto previous_chunk_sent_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-
-    // For the gather phase scheme used for the first chunk
+    // On the secondary multicaster: the drain's count of credited input halves (tilize_writer.cpp == 1 ==)
     auto initial_gather_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
@@ -458,7 +494,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
     // reuse the same semaphore location for signaling combine cores that per expert data is available
-    const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, matmul_core_range_set, INVALID);
+    const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, ring_core_range_set, INVALID);
+    // The ring exchange's credit (dm1): a core's successor counts the chunks whose a2a buffers it has read.
+    const uint32_t a2a_free_semaphore_id = tt::tt_metal::CreateSemaphore(program, ring_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize and Matmul semaphores
@@ -468,14 +506,28 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize drain-sync core signals to matmul cores that final metadata results are ready
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
-    // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
-    auto matmul_chunk_available_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
-
     // Tilize drain-sync core signals to all matmul cores that a full chunk is ready
     auto matmul_chunk_ready_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
+
+    // One credit semaphore per chunk half of the ring cores' input buffer: a ring core's dm1 increments half
+    // g % chunk_halves on the drain after consuming chunk g; the drain multicasts into a half only when every ring
+    // core has credited the chunk that last used it. Ids are passed one by one: consecutive CreateSemaphore calls
+    // need not give consecutive ids.
+    const uint32_t chunk_halves = moe_ring::rings::feed_halves(args.prefill_rings, a2a_pipeline != 0);
+    std::array<uint32_t, moe_ring::rings::MAX_CHUNK_HALVES> half_free_semaphore_ids{};
+    for (uint32_t h = 0; h < chunk_halves; ++h) {
+        half_free_semaphore_ids[h] = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
+    }
+
+    // The steady-state gather protocol: the drain counts the other tilize cores' sub-chunks per staging slot (one
+    // semaphore per slot), and multicasts the number of chunks it has multicast so far (feed_go), which frees the
+    // slot a core is about to gather into (tilize_writer.cpp, == 3b == / == 5b == / == 10 ==).
+    const auto feed_go_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+    std::array<uint32_t, moe_ring::rings::MAX_CHUNK_HALVES> gather_semaphore_ids{};
+    for (uint32_t h = 0; h < chunk_halves; ++h) {
+        gather_semaphore_ids[h] = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+    }
 
     //-------------------------------------------------------------------------
     // Tilize/MatMul and Combine sync semaphore
@@ -491,14 +543,14 @@ MoEComputeMeshWorkloadFactory::create_at(
     // tilize_reader still calls get_semaphore() on it (a local L1 address lookup), so we still need
     // it to be allocated on at least the matmul core range set.
     const auto tilize_combine_sync_semaphore_id = tt::tt_metal::CreateSemaphore(
-        program, combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : matmul_core_range_set, INVALID);
+        program, combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : ring_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free.
     // Without combine kernels dm1 still calls get_semaphore() to look up the local L1 address, but the
     // wait/increment/set are all gated off via the compute_only / local_output CT args.
     const auto matmul_combine_sync_semaphore_id = tt::tt_metal::CreateSemaphore(
-        program, combine_built ? combine_matmul_core_range_set : matmul_core_range_set, INVALID);
+        program, combine_built ? combine_matmul_core_range_set : ring_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split
@@ -539,6 +591,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     // All cores (not just Tilize and Matmul)
     const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
+    TT_FATAL(
+        shared_cb_num_pages == chunk_halves * hidden_tiles,
+        "The chunk input buffer's {} pages per core must be {} chunk slots of {} tiles",
+        shared_cb_num_pages,
+        chunk_halves,
+        hidden_tiles);
 
     auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
@@ -622,16 +680,38 @@ MoEComputeMeshWorkloadFactory::create_at(
         std::max(tilize_units_per_core_work_group_1, tilize_units_per_core_work_group_2) *
         tilize_subtoken_bytes_aligned;
 
-    constexpr uint32_t tokens_per_chunk = 32;  // Hardcoding for now, can adjust when tiny tiles support added
+    constexpr uint32_t tokens_per_chunk = moe_ring::TOKENS_PER_CHUNK;
 
-    // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
-    tt::tt_metal::create_cb(
-        e_t_cb_id,
-        program,
-        tilize_core_range_set,
-        tilize_e_t_output_page_size,
-        experts_per_device,  // number of experts on the device
-        tilize_e_t_output_data_format);
+    // Per-token L1 on the tilize cores: the fused-combine paths keep dense token lists and activation rows (about
+    // 4.6 KB per token); the local output path keeps pair lists (c_9 NCRISC, c_10 BRISC), the non-drain cores' lists
+    // staged on the drain (c_12) and the packed page (c_7, moe_ring::token_list), which admits a whole prefill slab.
+    uint32_t pairs_capacity_bytes = 0;
+    if (local_output) {
+        // The last tilize core takes the remainder of the token split (the runtime args below); each RISC
+        // processes half of its core's range.
+        const uint32_t max_tokens_per_tilize_core = tokens - (tilize_num_cores - 1) * (tokens / tilize_num_cores);
+        pairs_capacity_bytes = tt::align(
+            tt::div_up(max_tokens_per_tilize_core, 2) * selected_experts_k * moe_ring::token_list::PAIR_BYTES,
+            l1_alignment);
+        const uint32_t page_words =
+            moe_ring::token_list::page_words(tokens, selected_experts_k, experts_per_device, tokens_per_chunk);
+        TT_FATAL(
+            tilize_e_t_output_page_size == page_words * sizeof(uint32_t),
+            "moe_compute: the packed token-list page is {} B, the kernels expect {} words",
+            tilize_e_t_output_page_size,
+            page_words);
+        tt::tt_metal::create_cb(
+            e_t_cb_id, program, tilize_core_range_set, tilize_e_t_output_page_size, 1, tilize_e_t_output_data_format);
+    } else {
+        // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
+        tt::tt_metal::create_cb(
+            e_t_cb_id,
+            program,
+            tilize_core_range_set,
+            tilize_e_t_output_page_size,
+            experts_per_device,  // number of experts on the device
+            tilize_e_t_output_data_format);
+    }
 
     // Assume indices tensor is sharded in L1
     const auto indices_cb_output = tt::tt_metal::create_cb(
@@ -667,8 +747,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize input buffer: holds subtokens for tokens_per_chunk tokens
     // Each tilize core reads its subtoken portion of incoming tokens
-    // Single buffered so we don't start reading in next set of tokens
-    // before previous chunk fully sent to matmul cores
+    // One chunk deep: the reader reads the next chunk's rows while the previous one is tilized, and no further
     tt::tt_metal::create_cb(
         tilize_input_cb_id,
         program,
@@ -676,26 +755,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         max_tilize_subtoken_size,
         tokens_per_chunk,
         tilize_input_data_format);
-
-    tt::tt_metal::create_cb(
-        expert_activation_cb_id,
-        program,
-        tilize_core_range_set,
-        tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
-        tokens,
-        tt::DataFormat::UInt32);
-
-    // BRISC's e_t buffer for parallel metadata processing
-    // BRISC processes the second half of tokens (tokens/2 to tokens)
-    // Single page containing all experts' token lists, each with capacity ceil(tokens/2)
-    // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
-    tt::tt_metal::create_cb(
-        brisc_e_t_cb_id,
-        program,
-        tilize_core_range_set,
-        tt::div_up(tokens, 2) * l1_alignment * experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
-        1,
-        tt::DataFormat::UInt32);
 
     // BRISC's per-expert token counts to communicate to NCRISC
     // Single page containing counts for all experts
@@ -707,27 +766,68 @@ MoEComputeMeshWorkloadFactory::create_at(
         1,
         tt::DataFormat::UInt32);
 
-    // BRISC's expert activation buffer - same format as main expert_activation buffer
-    // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
-    // Single page containing all activation rows (max ceil(tokens/2))
-    uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
-    tt::tt_metal::create_cb(
-        brisc_expert_activation_cb_id,
-        program,
-        tilize_core_range_set,
-        brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
-        1,
-        tt::DataFormat::UInt32);
+    // Each non-drain core's record for the drain: its per-expert counts and an activated-token count, or under
+    // local_output its per-expert counts and both pair-list lengths; 16B aligned per core's data.
+    const uint32_t counts_per_remote_core = experts_per_device + (local_output ? 2 : 1);
+    const uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
 
-    // BRISC's activated token count (single uint32_t to communicate to NCRISC)
-    tt::tt_metal::create_cb(
-        brisc_activated_count_cb_id, program, tilize_core_range_set, sizeof(uint32_t), 1, tt::DataFormat::UInt32);
+    if (local_output) {
+        // Pair lists: NCRISC's (c_9) and BRISC's (c_10), one page each.
+        for (const auto pairs_cb_id : {expert_activation_cb_id, brisc_e_t_cb_id}) {
+            tt::tt_metal::create_cb(
+                pairs_cb_id, program, tilize_core_range_set, pairs_capacity_bytes, 1, tt::DataFormat::UInt32);
+        }
+        // Staging on the drain: the two lists of every non-drain core (one page per core); the remote cores write
+        // it directly, like the counts record.
+        if (tilize_num_cores > 1) {
+            tt::tt_metal::create_cb(
+                brisc_expert_activation_cb_id,
+                program,
+                tilize_core_range_set,
+                2 * pairs_capacity_bytes,
+                tilize_num_cores - 1,
+                tt::DataFormat::UInt32);
+        }
+    } else {
+        tt::tt_metal::create_cb(
+            expert_activation_cb_id,
+            program,
+            tilize_core_range_set,
+            tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
+            tokens,
+            tt::DataFormat::UInt32);
 
-    // CB for receiving counts from non-drain tilize cores (only used on drain core)
-    // Each non-drain core sends: [e_t_count_expert0, e_t_count_expert1, activated_count]
-    // Layout: 3 values per core × (tilize_num_cores - 1) cores, 16B aligned per core's data
-    uint32_t counts_per_remote_core = experts_per_device + 1;  // e_t counts + activated count
-    uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
+        // BRISC's e_t buffer for parallel metadata processing
+        // BRISC processes the second half of tokens (tokens/2 to tokens)
+        // Single page containing all experts' token lists, each with capacity ceil(tokens/2)
+        // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
+        tt::tt_metal::create_cb(
+            brisc_e_t_cb_id,
+            program,
+            tilize_core_range_set,
+            tt::div_up(tokens, 2) * l1_alignment *
+                experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
+            1,
+            tt::DataFormat::UInt32);
+
+        // BRISC's expert activation buffer - same format as main expert_activation buffer
+        // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
+        // Single page containing all activation rows (max ceil(tokens/2))
+        uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
+        tt::tt_metal::create_cb(
+            brisc_expert_activation_cb_id,
+            program,
+            tilize_core_range_set,
+            brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
+            1,
+            tt::DataFormat::UInt32);
+
+        // BRISC's activated token count (single uint32_t to communicate to NCRISC)
+        tt::tt_metal::create_cb(
+            brisc_activated_count_cb_id, program, tilize_core_range_set, sizeof(uint32_t), 1, tt::DataFormat::UInt32);
+    }
+
+    // CB for receiving the records from non-drain tilize cores (only used on drain core)
     tt::tt_metal::create_cb(
         remote_counts_cb_id,
         program,
@@ -762,9 +862,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         ----------------------------------------------------------------------------------------------------------
         | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
         | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | slots*2*t |  84 |  84 | 3 blocks W0/W1 + W2 (txn=  |
-        |                |              |           |       |           |     |     | 14 tiles; 20 -> 3 x 40)    |
+        |                |              |           |       |           |     |     | 14 tiles; 20 -> 3 x 40);   |
+        |                |              |           |       |           |     |     | replay ring: one slice     |
         | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
-        | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
+        | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | num_cores |   — |   — | Writer->compute ready      |
         | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
         | cb_w2c_md      | CBIndex::c_7 | UInt32    | false | 2         |   — |   — | Metadata (token counts)    |
         ----------------------------------------------------------------------------------------------------------
@@ -772,19 +873,109 @@ MoEComputeMeshWorkloadFactory::create_at(
         so LLK fifo_* fields (16 B words; circular_buffer_constants.h) are non-zero on compute push/pop.
     */
 
+    // Create optimal ring ordering for NOC1 to minimize traffic conflicts
+    // NOC1 routes: decreasing y (top) first, then decreasing x (left)
+    // Sort cores by (descending y, descending x) to create a ring that flows naturally
+    std::vector<uint32_t> ring_pos2bank_id(matmul_num_cores);
+    std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
+
+    std::sort(
+        ring_pos2bank_id.begin(),
+        ring_pos2bank_id.end(),
+        [mesh_device, &matmul_cores](uint32_t bank_id_a, uint32_t bank_id_b) {
+            const auto& pa = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_a]);
+            const auto& pb = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_b]);
+            if (pa.y != pb.y) {
+                return pa.y > pb.y;  // Descending y
+            }
+            return pa.x > pb.x;  // Descending x
+        });
+
+    // Build a map where key = bank_id, value = {ring position (i), neighbor's bank_id}
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> bank2ring_pos;
+    for (uint32_t ring_pos = 0; ring_pos < matmul_num_cores; ++ring_pos) {
+        uint32_t this_bank = ring_pos2bank_id[ring_pos];
+        uint32_t next_bank = ring_pos2bank_id[(ring_pos + 1) % matmul_num_cores];
+        bank2ring_pos[this_bank] = {ring_pos, next_bank};
+    }
+
+    // The weight CB (c_3). Today: dm0's slots of one block each (moe_ring::weight_cb_slots: 3 for 14- and 20-tile
+    // transactions), whole blocks so the ring buffer wraps on a block boundary. The replay ring (prefill_rings = 1):
+    // one whole expert slice per ring position -- its W0/W1 blocks plus its W2 blocks -- so dm0 reads the slice once
+    // per expert and re-presents it for every further chunk; the capacity must equal the slice exactly (the pointers
+    // wrap to the base), and the slice differs between positions with an even and an odd column count, so the CB is
+    // created per group of positions with the same slice.
+    const bool replay_slice = args.prefill_rings >= 1;  // several rings forward blocks by their place in the slice
+    // The replay CB holds exactly one slice per position; a TP-split shared expert has a shorter one (dm0 sizes the
+    // slice from w0_w1_prod_cols, the CB below from the stored columns), so the two must not meet.
+    TT_FATAL(
+        !replay_slice || num_shared_experts == 0,
+        "prefill_rings>=1 replays one whole expert slice per ring core; shared experts (TP-split slices) are not "
+        "admitted");
+    const auto weight_cb_config = [&](uint32_t tiles) {
+        return tt::tt_metal::CircularBufferConfig(
+                   tiles * tt::tile_size(tt::DataFormat::Bfp4_b), {{tt::CBIndex::c_3, tt::DataFormat::Bfp4_b}})
+            .set_page_size(tt::CBIndex::c_3, tt::tile_size(tt::DataFormat::Bfp4_b));
+    };
+    if (replay_slice) {
+        const uint32_t k_dram_tiles = args.has_bias ? hidden_tiles + 1 : hidden_tiles;
+        const uint32_t blocks_per_col = tt::div_up(k_dram_tiles, moe_ring::block_tiles_h(weight_tiles_per_txn));
+        const uint32_t blocks_per_half_col =
+            tt::div_up(k_dram_tiles, moe_ring::half_block_tiles_h(weight_tiles_per_txn));
+        const uint32_t w2_blocks = moe_ring::w2_core_blocks_per_expert(
+            hidden_tiles,
+            args.has_bias ? intermediate_tiles + 1 : intermediate_tiles,
+            matmul_num_cores,
+            weight_tiles_per_txn);
+        std::map<uint32_t, std::vector<CoreRange>> cores_by_slice_blocks;
+        for (uint32_t dram_bank = 0; dram_bank < matmul_num_cores; ++dram_bank) {
+            const uint32_t ring_pos = bank2ring_pos[dram_bank].first;
+            const uint32_t cols = moe_ring::w0_w1_stored_cols(intermediate_tiles, ring_pos, matmul_num_cores);
+            const uint32_t slice_blocks =
+                moe_ring::w0_w1_blocks_for_cols(cols, blocks_per_col, blocks_per_half_col) + w2_blocks;
+            for (uint32_t r = 0; r < num_rings; ++r) {
+                const auto& core = ring_cores[r * matmul_num_cores + dram_bank];
+                cores_by_slice_blocks[slice_blocks].emplace_back(core, core);
+            }
+        }
+        for (const auto& [slice_blocks, ranges] : cores_by_slice_blocks) {
+            const uint32_t slice_bytes = slice_blocks * weight_tiles_per_block * tt::tile_size(tt::DataFormat::Bfp4_b);
+            // tt-metal's own fit check at finalize names no cause: say what did not fit. Half the L1 is the budget
+            // the rest of the ring core's CBs and L1 buffers leave at 2048 tokens (E; the fit check is the arbiter).
+            TT_FATAL(
+                slice_bytes <= mesh_device->l1_size_per_core() / 2,
+                "prefill_rings>=1: the expert slice of {} blocks ({} B) on {} ring core(s) does not fit the replay CB "
+                "budget (half of the {} B L1 per core)",
+                slice_blocks,
+                slice_bytes,
+                ranges.size(),
+                mesh_device->l1_size_per_core());
+            log_debug(
+                tt::LogOp,
+                "moe_compute replay CB: {} blocks = {} B on {} ring core(s)",
+                slice_blocks,
+                slice_bytes,
+                ranges.size());
+            tt::tt_metal::CreateCircularBuffer(
+                program, CoreRangeSet(ranges), weight_cb_config(slice_blocks * weight_tiles_per_block));
+        }
+    } else {
+        tt::tt_metal::CreateCircularBuffer(
+            program, ring_core_range_set, weight_cb_config(weight_slots * weight_tiles_per_block));
+    }
+
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        // dm0's slots of one block each (moe_ring::weight_cb_slots: 3 for 14- and 20-tile transactions);
-        // whole blocks so the ring buffer wraps on a block boundary.
-        {"cb_r2c_w0",
-         tt::CBIndex::c_3,
-         tt::DataFormat::Bfp4_b,
+        {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, a2a_parity_slots},
+        // one ready credit per ring step of the handshake iteration (moe_ring::a2a_handshake_iters): dm1 pushes them
+        // as the shards land and the compute pops them as it consumes each shard, neither waiting on the other
+        {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, matmul_num_cores * a2a_parity_slots},
+        {"cb_s2c_in2",
+         tt::CBIndex::c_6,
+         tt::DataFormat::Float16_b,
          true,
-         moe_ring::weight_cb_slots(weight_tiles_per_txn) * weight_tiles_per_block},
-        {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
-        {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
+         a2a_cb_pages * matmul_num_cores * a2a_parity_slots},
         {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
     if (args.has_bias) {
@@ -799,18 +990,22 @@ MoEComputeMeshWorkloadFactory::create_at(
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, ring_core_range_set, cb_config);
     }
 
-    // LOCAL_OUTPUT: dm1's per-chunk copy of the current expert's e_t entries (one 16-B entry per
-    // token: word 0 token id, word 1 k slot), read from the e_t output tensor. c_9 is free on the
-    // matmul cores (c_8 is the bias ones tile).
+    // LOCAL_OUTPUT: dm1's per-chunk copy of the current expert's packed entries (one 4-B (k slot, token id)
+    // entry per token, a whole chunk per read), read from the e_t output page in DRAM: the L1 destination of a
+    // DRAM read must be DRAM-aligned, so the CB carries one alignment of slack and dm1 aligns inside it. c_9 is
+    // free on the matmul cores (c_8 is the bias ones tile).
     constexpr uint32_t local_output_map_cb_id = tt::CBIndex::c_9;
     if (local_output) {
-        const uint32_t map_bytes = tokens_per_chunk * l1_alignment;
+        // two chunk slots under the a2a pipeline (dm1 reads chunk c+1's map while chunk c's rows read theirs)
+        const uint32_t map_bytes =
+            tt::align(tokens_per_chunk * moe_ring::token_list::ENTRY_BYTES, dram_alignment) * (a2a_pipeline ? 2u : 1u) +
+            dram_alignment;
         tt::tt_metal::CreateCircularBuffer(
             program,
-            matmul_core_range_set,
+            ring_core_range_set,
             tt::tt_metal::CircularBufferConfig(map_bytes, {{local_output_map_cb_id, tt::DataFormat::UInt32}})
                 .set_page_size(local_output_map_cb_id, map_bytes));
     }
@@ -823,7 +1018,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // phase. c_10 is free on the matmul cores (c_10..c_14 are tilize-core CBs).
     constexpr uint32_t local_output_zero_cb_id = tt::CBIndex::c_10;
     uint32_t local_output_num_rows = 0;
-    if (local_output) {
+    if (local_output && args.zero_fill_non_owned_rows) {
         uint32_t max_w2_slice_tiles = 0;
         for (uint32_t core = 0; core < matmul_num_cores; ++core) {
             max_w2_slice_tiles = std::max(
@@ -833,7 +1028,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             max_w2_slice_tiles * tt::constants::TILE_WIDTH * tt::datum_size(tilize_output_dataformat);
         tt::tt_metal::CreateCircularBuffer(
             program,
-            matmul_core_range_set,
+            ring_core_range_set,
             tt::tt_metal::CircularBufferConfig(zero_bytes, {{local_output_zero_cb_id, tilize_output_dataformat}})
                 .set_page_size(local_output_zero_cb_id, zero_bytes));
         TT_FATAL(
@@ -908,6 +1103,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mapping_pages", tilize_mapping_pages},
         {"scores_pages", tilize_input_scores_pages},
         {"shared_cb_num_pages", shared_cb_num_pages},
+        {"chunk_slot_pages", hidden_tiles},
 
         // Page sizes
         {"input_page_size", tilize_input_page_size},
@@ -985,11 +1181,26 @@ MoEComputeMeshWorkloadFactory::create_at(
         // Semaphores
         {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
-        {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
+        {"chunk_halves", chunk_halves},
+        {"half_free_semaphore_id_0", half_free_semaphore_ids[0]},
+        {"half_free_semaphore_id_1", half_free_semaphore_ids[1]},
+        {"half_free_semaphore_id_2", half_free_semaphore_ids[2]},
+        {"half_free_semaphore_id_3", half_free_semaphore_ids[3]},
+        {"half_free_semaphore_id_4", half_free_semaphore_ids[4]},
         {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
-        {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
         {"initial_gather_semaphore_id", initial_gather_semaphore_id},
+        // the secondary multicaster (the first core of the second gather group; the drain itself with one core)
+        {"secondary_mcaster_noc_x",
+         (uint32_t)tilize_cores_physical[tilize_num_cores > 1 ? primary_mcast_gather_group_num_cores : 0].x},
+        {"secondary_mcaster_noc_y",
+         (uint32_t)tilize_cores_physical[tilize_num_cores > 1 ? primary_mcast_gather_group_num_cores : 0].y},
+        {"feed_go_semaphore_id", feed_go_semaphore_id},
+        {"gather_semaphore_id_0", gather_semaphore_ids[0]},
+        {"gather_semaphore_id_1", gather_semaphore_ids[1]},
+        {"gather_semaphore_id_2", gather_semaphore_ids[2]},
+        {"gather_semaphore_id_3", gather_semaphore_ids[3]},
+        {"gather_semaphore_id_4", gather_semaphore_ids[4]},
         // Tilize -> combine: drain core signals combine when metadata is ready.
         // In ComputeOnly mode the increment is gated off in the kernel via the compute_only CT arg.
         // combine_cores is still computed in ComputeOnly mode so combine_cores[0] is valid here.
@@ -999,9 +1210,11 @@ MoEComputeMeshWorkloadFactory::create_at(
 
         // Bypass selective_reduce_combine path entirely (1=skip combine semaphore inc/wait/set).
         {"compute_only", args.path == MoEComputePath::ComputeOnly ? 1u : 0u},
-        // LocalOutput: no combine kernels either; the drain publishes the e_t tensor (token id + k
-        // slot per entry) before releasing the matmul cores, since dm1 reads it for its output rows.
-        {"local_output", local_output ? 1u : 0u}};
+        // LocalOutput: no combine kernels either; the routing is kept as packed (token, k slot) lists and the
+        // drain publishes the packed page before releasing the matmul cores, since dm1 reads it for its output
+        // rows. pairs_capacity_bytes sizes one RISC's pair list (a staging slot on the drain).
+        {"local_output", local_output ? 1u : 0u},
+        {"pairs_capacity_bytes", pairs_capacity_bytes}};
 
     std::vector<uint32_t> tilize_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.buffer()).append_to(tilize_compile_time_args);
@@ -1014,6 +1227,80 @@ MoEComputeMeshWorkloadFactory::create_at(
         .append_to(tilize_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(tilize_e_t_output_tensor.buffer()).append_to(tilize_compile_time_args);
 
+    // Study knob: TTNN_MOE_COMPUTE_ZONES=[first:count] builds the tilize and ring kernels with per-chunk device
+    // profiler zones (moe_ring_common.h MOE_ZONE_IF; recorded for `count` chunks from `first` in feed order, defaults
+    // 48:16, inside the profiler's 250-marker L1 budget per RISC). Not part of the program hash: set it for the whole
+    // process, never in production.
+    std::map<std::string, std::string> tilize_defines;
+    if (const char* zones = std::getenv("TTNN_MOE_COMPUTE_ZONES"); zones != nullptr && *zones != '\0') {
+        tilize_defines["MOE_ZONES"] = "1";
+        const std::string spec(zones);
+        if (const auto colon = spec.find(':'); colon != std::string::npos) {
+            std::size_t first_end = 0, count_end = 0;
+            const unsigned long first = std::stoul(spec.substr(0, colon), &first_end);
+            const unsigned long count = std::stoul(spec.substr(colon + 1), &count_end);
+            TT_FATAL(
+                first_end == colon && colon + 1 + count_end == spec.size() && count > 0,
+                "TTNN_MOE_COMPUTE_ZONES must be first:count (two non-negative integers, count > 0), got '{}'",
+                spec);
+            tilize_defines["MOE_ZONES_FIRST_CHUNK"] = std::to_string(first);
+            tilize_defines["MOE_ZONES_CHUNKS"] = std::to_string(count);
+        }
+        log_warning(
+            tt::LogOp, "moe_compute: the tilize and ring kernels carry profiler zones ({}): a study build", spec);
+    }
+    // Study knob: TTNN_MOE_COMPUTE_STUDY_DELAYS=POINT:iterations[,POINT:iterations] builds every moe_compute kernel
+    // with a spin of `iterations` at the named handoff of the feed protocol (moe_ring_common.h MOE_STUDY_DELAY; the
+    // points are listed there). Not part of the program hash: whole-process only, never in production.
+    if (const char* delays = std::getenv("TTNN_MOE_COMPUTE_STUDY_DELAYS"); delays != nullptr && *delays != '\0') {
+        static constexpr std::array<const char*, 18> study_points = {
+            "W_BEFORE_MCAST",
+            "W_BEFORE_SIGNAL",
+            "W_BEFORE_GO",
+            "W_BEFORE_POP",
+            "W_GATHER_BEFORE_WRITE",
+            "W_GATHER_BEFORE_INC",
+            "W_SECONDARY_BEFORE_INC",
+            "R_BEFORE_READS",
+            "O_BEFORE_CREDIT",
+            "O_A2A_BEFORE_INC",
+            "O_BEFORE_ROWS",
+            "D_BEFORE_SLICE",
+            "M_BEFORE_W0W1",
+            "O_A2A_LAG",
+            "O_A2A_LAG_POS",
+            "X_GATHER_NO_GO_WAIT",
+            "X_DRAIN_NO_FLUSH",
+            "X_DRAIN_NO_HALF_WAIT"};
+        std::string spec(delays);
+        std::size_t begin = 0;
+        while (begin <= spec.size()) {
+            const std::size_t end = std::min(spec.find(',', begin), spec.size());
+            const std::string item = spec.substr(begin, end - begin);
+            const std::size_t colon = item.find(':');
+            TT_FATAL(
+                colon != std::string::npos,
+                "TTNN_MOE_COMPUTE_STUDY_DELAYS item must be POINT:iterations, got '{}'",
+                item);
+            const std::string point = item.substr(0, colon);
+            std::size_t value_end = 0;
+            const unsigned long iterations = std::stoul(item.substr(colon + 1), &value_end);
+            const bool parameter = point.size() > 4 && point.compare(point.size() - 4, 4, "_POS") == 0;
+            TT_FATAL(
+                colon + 1 + value_end == item.size() && (iterations > 0 || parameter),
+                "TTNN_MOE_COMPUTE_STUDY_DELAYS item must be POINT:iterations (iterations > 0), got '{}'",
+                item);
+            TT_FATAL(
+                std::find(study_points.begin(), study_points.end(), point) != study_points.end(),
+                "TTNN_MOE_COMPUTE_STUDY_DELAYS: unknown point '{}' (see moe_ring_common.h)",
+                point);
+            tilize_defines["MOE_STUDY_DELAY_" + point] = std::to_string(iterations);
+            begin = end + 1;
+        }
+        log_warning(tt::LogOp, "moe_compute: every kernel carries study delays ({}): a study build", spec);
+    }
+    const std::map<std::string, std::string>& zone_defines = tilize_defines;
+
     tt::tt_metal::KernelHandle tilize_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
@@ -1023,7 +1310,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = tilize_compile_time_args,
-            .defines = {},
+            .defines = tilize_defines,
             .named_compile_args = tilize_named_compile_time_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
@@ -1036,7 +1323,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = tilize_compile_time_args,
-            .defines = {},
+            .defines = tilize_defines,
             .named_compile_args = tilize_named_compile_time_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
@@ -1048,13 +1335,15 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tokens_per_chunk", tokens_per_chunk},
         {"max_tiles_per_local_chunk", max_tiles_per_local_chunk},
         {"shared_cb_num_pages", shared_cb_num_pages},
+        {"chunk_slot_pages", hidden_tiles},
     };
 
     tt::tt_metal::KernelHandle tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_compute.cpp",
         tilize_core_range_set,
-        tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .defines = tilize_defines, .named_compile_args = compute_tilize_named_compile_time_args});
 
     std::vector<uint32_t> tilize_runtime_args = {
         tilize_input_tensor.buffer()->address(),                           // 0
@@ -1149,7 +1438,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
         // First tilize core is the drain tilize core (has indices/scores sharded to it)
         tilize_runtime_args[is_drain_tilize_core_idx] = (i == 0) ? 1 : 0;
-        tilize_runtime_args[is_secondary_mcaster_idx] = (i == primary_mcast_gather_group_num_cores) ? 1 : 0;
+        tilize_runtime_args[is_secondary_mcaster_idx] =
+            (tilize_num_cores > 1 && i == primary_mcast_gather_group_num_cores) ? 1 : 0;
 
         // Initial split mcast cores
         CoreCoord initial_mcast_gather_core_physical =
@@ -1338,11 +1628,18 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
         {"num_banks", num_dram_banks},
+        {"a2a_free_semaphore_id", a2a_free_semaphore_id},
+        {"prefill_rings", args.prefill_rings},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
-        {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
+        {"chunk_halves", chunk_halves},
+        {"half_free_semaphore_id_0", half_free_semaphore_ids[0]},
+        {"half_free_semaphore_id_1", half_free_semaphore_ids[1]},
+        {"half_free_semaphore_id_2", half_free_semaphore_ids[2]},
+        {"half_free_semaphore_id_3", half_free_semaphore_ids[3]},
+        {"half_free_semaphore_id_4", half_free_semaphore_ids[4]},
         {"per_expert_total_tokens_cb_id", per_expert_total_tokens_cb_id},
         {"tokens_per_chunk", tokens_per_chunk},
         {"tilize_drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
@@ -1357,6 +1654,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"width_shard_dim", combine_data_parallel_cores},
         {"hidden_tiles", hidden_tiles},
         {"tiles_per_txn", weight_tiles_per_txn},
+        {"weight_slots", weight_slots},
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
@@ -1364,12 +1662,17 @@ MoEComputeMeshWorkloadFactory::create_at(
         // Bypass combine signaling/wait when no combine kernels are built.
         {"compute_only", args.path == MoEComputePath::ComputeOnly ? 1u : 0u},
         // LOCAL_OUTPUT (dm1): write each token row slice straight into the final [k, T, H] output,
-        // page k * total_tokens + t from the expert's e_t entries.
+        // page k * total_tokens + t from the expert's packed token-list entries.
         {"local_output", local_output ? 1u : 0u},
         {"total_tokens", tokens},
         {"e_t_entry_size", l1_alignment},
+        {"dram_alignment", dram_alignment},
         {"local_output_map_cb_id", local_output_map_cb_id},
         // Zero fill of the rows this device does not own: the pre-zeroed row-slice CB and k x T.
+        {"zero_fill", local_output && args.zero_fill_non_owned_rows ? 1u : 0u},
+        // The replay ring (dm0): the weight CB holds one expert slice, read once per expert, replayed per chunk.
+        {"replay_slice", replay_slice ? 1u : 0u},
+        {"a2a_pipeline", a2a_pipeline},
         {"local_output_zero_cb_id", local_output_zero_cb_id},
         {"local_output_num_rows", local_output_num_rows},
     };
@@ -1378,20 +1681,21 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto matmul_dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm0.cpp",
-        matmul_core_range_set,
+        ring_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = matmul_compile_time_args,
+            .defines = zone_defines,
             .named_compile_args = matmul_named_compile_time_args});
 
-    std::map<std::string, std::string> dm1_defines = {
-        {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(combine_cores, *mesh_device)}};
+    std::map<std::string, std::string> dm1_defines = zone_defines;
+    dm1_defines["OUTPUT_SHARD_CORE_MAP"] = serialize_physical_core_coords(combine_cores, *mesh_device);
 
     auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm1.cpp",
-        matmul_core_range_set,
+        ring_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
@@ -1402,7 +1706,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
-        matmul_core_range_set,
+        ring_core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
@@ -1410,41 +1714,18 @@ MoEComputeMeshWorkloadFactory::create_at(
             .bfp8_pack_precise = false,
             .math_approx_mode = true,
             .compile_args = matmul_compile_time_args,
+            .defines = zone_defines,
             .named_compile_args = matmul_named_compile_time_args});
 
     //-------------------------------------------------------------------------
     // ring ordering
     //-------------------------------------------------------------------------
 
-    // Create optimal ring ordering for NOC1 to minimize traffic conflicts
-    // NOC1 routes: decreasing y (top) first, then decreasing x (left)
-    // Sort cores by (descending y, descending x) to create a ring that flows naturally
-    std::vector<uint32_t> ring_pos2bank_id(matmul_num_cores);
-    std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
-
-    std::sort(
-        ring_pos2bank_id.begin(),
-        ring_pos2bank_id.end(),
-        [mesh_device, &matmul_cores](uint32_t bank_id_a, uint32_t bank_id_b) {
-            const auto& pa = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_a]);
-            const auto& pb = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_b]);
-            if (pa.y != pb.y) {
-                return pa.y > pb.y;  // Descending y
-            }
-            return pa.x > pb.x;  // Descending x
-        });
-
-    // Build a map where key = bank_id, value = {ring position (i), neighbor's bank_id}
-    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> bank2ring_pos;
-    for (uint32_t ring_pos = 0; ring_pos < matmul_num_cores; ++ring_pos) {
-        uint32_t this_bank = ring_pos2bank_id[ring_pos];
-        uint32_t next_bank = ring_pos2bank_id[(ring_pos + 1) % matmul_num_cores];
-        bank2ring_pos[this_bank] = {ring_pos, next_bank};
-    }
-
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> matmul_runtime_args;
-    matmul_runtime_args.reserve(6 + matmul_tensors.size() + num_dram_banks);
+    // bank, vchannel, the tensors, the ring semaphore, ring position, successor x/y, ring index, predecessor x/y
+    // (9 slots beside the tensors), shard_to_bank, and (LocalOutput) the output and e_t addresses
+    matmul_runtime_args.reserve(9 + matmul_tensors.size() + num_dram_banks + 2);
     matmul_runtime_args.push_back(0);  // DRAM Bank ID placeholder
     matmul_runtime_args.push_back(0);  // VChannel placeholder
     for (const auto& tensor : matmul_tensors) {
@@ -1455,6 +1736,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     matmul_runtime_args.push_back(0);                  // Ring core ID placeholder
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
+    matmul_runtime_args.push_back(0);                  // Ring index (which prefill ring the core belongs to)
+    matmul_runtime_args.push_back(0);                  // Predecessor physical x (the a2a credit's target)
+    matmul_runtime_args.push_back(0);                  // Predecessor physical y
 
     // Append shard_to_bank table: shard_to_bank[i] = chip bank id holding shard i.
     //
@@ -1499,7 +1783,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     //
     // The kernel's bank-run loop computes `shard_idx = gp / pages_per_bank_total`. To find
     // the actual chip bank, it needs `bank = shard_to_bank[shard_idx]`. We pass this table
-    // as runtime args (one entry per bank, after the 9 standard args). Ring size equals the
+    // as runtime args (one entry per bank, after the 12 standard args, indices 0..11). Ring size equals the
     // live bank count, so shard_idx and ring_pos are the same (12 on WH, 7/8 on BH).
     //
     // Sanity-check the divisibility invariants the bank-run kernel relies on. The Python
@@ -1527,39 +1811,39 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
     std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
-    std::vector<uint32_t> vchannels;
-    vchannels.reserve(matmul_cores.size());
-    uint32_t dram_bank = 0;
-    for (auto core : matmul_cores) {
-        uint32_t vchannel = dram_bank & 0x3;
-
-        // Check if there is any core with the same row
-        auto it = std::find_if(matmul_cores.begin(), matmul_cores.begin() + dram_bank, [&](const auto& core_prev) {
-            return core_prev.y == core.y;
-        });
-
-        // If there is any core with the same row, make sure the VChannel is different
-        if (it != matmul_cores.begin() + dram_bank) {
-            size_t j = std::distance(matmul_cores.begin(), it);
-            if (vchannel == vchannels[j]) {
-                vchannel = (vchannel + 1) & 0x3;
-            }
-        }
-        vchannels.push_back(vchannel);
+    // One NoC virtual channel per ring core, distinct within a row (ring_core_vchannels)
+    const std::vector<uint32_t> vchannels =
+        ttnn::operations::ccl::common::ring_core_vchannels(ring_cores, matmul_num_cores);
+    // Every ring is the same ring of positions: ring r's core at position p passes to ring r's core at the next
+    // position. The DRAM bank of a position is the same on every ring (only ring 0 reads it).
+    for (uint32_t core_idx = 0; core_idx < ring_cores.size(); ++core_idx) {
+        const auto core = ring_cores[core_idx];
+        const uint32_t ring = core_idx / matmul_num_cores;
+        const uint32_t dram_bank = core_idx % matmul_num_cores;
+        const uint32_t vchannel = vchannels[core_idx];
 
         // Use the optimized ring neighbor mapping
         const auto [ring_pos, next_bank] = bank2ring_pos[dram_bank];
-        const auto& next_physical = mesh_device->worker_core_from_logical_core(matmul_cores[next_bank]);
+        const auto& next_physical =
+            mesh_device->worker_core_from_logical_core(ring_cores[ring * matmul_num_cores + next_bank]);
+        const uint32_t prev_bank = ring_pos2bank_id[(ring_pos + matmul_num_cores - 1) % matmul_num_cores];
+        const auto& prev_physical =
+            mesh_device->worker_core_from_logical_core(ring_cores[ring * matmul_num_cores + prev_bank]);
 
-        ring_pos2core[ring_pos] = core;
+        if (ring == 0) {
+            ring_pos2core[ring_pos] = core;
+        }
 
-        matmul_runtime_args[0] = dram_bank++;
+        matmul_runtime_args[0] = dram_bank;
         matmul_runtime_args[1] = vchannel;
         // matmul_runtime_args[2-4] are already set to tensor addresses
         // matmul_runtime_args[5] is already set to ring_semaphore_id
         matmul_runtime_args[6] = ring_pos;
         matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
         matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
+        matmul_runtime_args[9] = ring;
+        matmul_runtime_args[10] = static_cast<uint32_t>(prev_physical.x);
+        matmul_runtime_args[11] = static_cast<uint32_t>(prev_physical.y);
 
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm0_kernel_handle, core, matmul_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm1_kernel_handle, core, matmul_runtime_args);
@@ -1653,7 +1937,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {.tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id},
          .tilize_cores = tilize_cores,
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
-         .matmul_cores = matmul_cores,
+         .matmul_cores = ring_cores,  // every ring core: override_runtime_arguments refreshes them all
          .indices_cb_handle = indices_cb_handle,
          .scores_cb_handle = scores_cb_handle,
          .sharded_output_cb_handle = sharded_output_cb_handle,
@@ -1663,7 +1947,8 @@ MoEComputeMeshWorkloadFactory::create_at(
          .expert_tokens_cb_handle = expert_tokens_cb_handle,
          .combine_cores = std::move(combine_cores_for_shared),
          .combine_global_semaphores = std::move(combine_global_semaphores),
-         .path = args.path}};
+         .path = args.path,
+         .matmul_runtime_args_size = static_cast<uint32_t>(matmul_runtime_args.size())}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -1756,8 +2041,11 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                     // tensor_return_value[5] is the caller's optional_output_tensor when one was given
                     // (create_output_tensors returns it), so its address is what dm1 writes to.
                     TT_FATAL(
-                        tensor_return_value.size() == 6 && matmul_runtime_args.size() >= 11,
-                        "path=LocalOutput expects 6 output tensors and >= 11 matmul runtime args, got {} and {}",
+                        tensor_return_value.size() == 6 &&
+                            matmul_runtime_args.size() == shared_variables.matmul_runtime_args_size,
+                        "path=LocalOutput expects 6 output tensors and exactly {} matmul runtime args (12 leading, the "
+                        "bank table, the two trailing addresses), got {} and {}",
+                        shared_variables.matmul_runtime_args_size,
                         tensor_return_value.size(),
                         matmul_runtime_args.size());
                     matmul_runtime_args[matmul_runtime_args.size() - 2] = tensor_return_value[5].buffer()->address();

@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "api/tensor/noc_traits.h"
+#include "moe_ring_common.h"
 
 using namespace ttnn::operations::ccl::common;
 
@@ -355,21 +356,22 @@ void kernel_main() {
     constexpr uint32_t partial_metadata_ready_semaphore_id =
         get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
-    constexpr uint32_t previous_chunk_sent_semaphore_id =
-        get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 
     // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
     // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
-    // When local_output=1 (moe_compute LocalOutput) there are no combine kernels either, and
-    // moe_compute's dm1 reads the e_t tensor (token id + k slot per entry) for its output rows as
-    // soon as metadata_ready releases it, so the drain publishes that tensor before the release.
+    // When local_output=1 (moe_compute LocalOutput) there are no combine kernels either: no activation rows are
+    // built and the expert -> token lists are packed (moe_ring::token_list) from per-RISC pair lists (NCRISC c_9,
+    // BRISC c_10; the non-drain cores' lists staged on the drain in c_12) by the drain, which publishes the page
+    // before releasing the matmul cores: dm1 reads it for its output rows.
     constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
+    [[maybe_unused]] constexpr uint32_t pairs_capacity_bytes = get_named_compile_time_arg_val("pairs_capacity_bytes");
+    [[maybe_unused]] constexpr uint32_t token_list_header_words =
+        moe_ring::token_list::header_words(experts_per_device);
 
     Semaphore<> partial_metadata_ready_sem(partial_metadata_ready_semaphore_id);
     Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
-    Semaphore<> previous_chunk_sent_sem(previous_chunk_sent_semaphore_id);
 
     // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
     // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
@@ -404,7 +406,7 @@ void kernel_main() {
     uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);               // 5
     uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                             // 6
     bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                         // 7
-    [[maybe_unused]] bool is_secondary_mcaster = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 8 - not used by reader
+    bool is_secondary_mcaster = (bool)get_arg_val<uint32_t>(rt_args_idx++);                         // 8
     [[maybe_unused]] uint32_t initial_mcast_gather_core_nox_x =
         get_arg_val<uint32_t>(rt_args_idx++);  // 9 - not used by reader
     [[maybe_unused]] uint32_t initial_mcast_gather_core_nox_y =
@@ -418,6 +420,10 @@ void kernel_main() {
     uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);  // 15
     uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);    // 16
     uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);   // 17
+    // The chunk row reads go over the NoC this core's writer does not multicast on (a linked multicast needs its NoC
+    // idle on its core): the drain and the gathering cores read on NoC0, the secondary multicaster on NoC1. Reading
+    // the next chunk's rows under the current multicast is what pipelines the feed.
+    Noc noc_rows_obj(is_secondary_mcaster ? noc_index : (1 - noc_index));
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -480,9 +486,14 @@ void kernel_main() {
             {.offset_bytes = i * aligned_mapping_page_size});
     }
 
-    cb_expert_activation.reserve_back(tokens);
-    init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
-        noc_obj, cb_expert_activation);
+    if constexpr (!local_output) {
+        cb_expert_activation.reserve_back(tokens);
+        init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
+            noc_obj, cb_expert_activation);
+    } else {
+        // c_9 holds NCRISC's pair list on this path.
+        cb_expert_activation.reserve_back(one_page);
+    }
 
     // ========== NON-DRAIN CORES: Read indices/scores from drain core ==========
     // IMPORTANT: This must happen BEFORE pushing mapping_tensor_cb_id, since BRISC waits on that
@@ -525,7 +536,9 @@ void kernel_main() {
 
     // Now safe to signal BRISC - all data is in place
     cb_mapping_tensor.push_back(mapping_pages);
-    cb_expert_activation.push_back(tokens);
+    if constexpr (!local_output) {
+        cb_expert_activation.push_back(tokens);
+    }
 
     // DEBUG: print_expert_activation_buffer<experts_per_device, l1_alignment>(cb_expert_activation, 0, tokens);
 
@@ -570,7 +583,10 @@ void kernel_main() {
 
     const uint32_t indices_base = cb_indices_tensor.get_read_ptr();
     const uint32_t scores_base = cb_scores_tensor.get_read_ptr();
+    // Under local_output c_9 is NCRISC's pair list (moe_ring::token_list::PAIR_BYTES per hit), not activation rows.
     const uint32_t expert_activation_base = cb_expert_activation.get_write_ptr();
+    const uint32_t ncrisc_pairs_base = expert_activation_base;
+    [[maybe_unused]] uint32_t ncrisc_num_pairs = 0;
 
     // Cache source_device_mapping - only changes every tokens_per_device tokens
     // Reduces mapping loads from 512 to 16 (dispatch_devices)
@@ -613,26 +629,35 @@ void kernel_main() {
             // Now check if it's one of our local experts
             for (uint32_t e = 0; e < local_expert_count; e++) {
                 if (selected_expert == local_expert_ids[e]) {
-                    // First activation for this token - set up pointer and write token id
-                    if (!activated) {
-                        expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                            expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-                        expert_activation_l1_ptr[0] = t;
-                        activated = true;
+                    if constexpr (local_output) {
+                        // Pair list in arrival order (the drain scatters it into expert e's packed segment).
+                        uint32_t* pair = reinterpret_cast<uint32_t*>(
+                            ncrisc_pairs_base + ncrisc_num_pairs * moe_ring::token_list::PAIR_BYTES);
+                        pair[0] = t;
+                        pair[1] = (e << moe_ring::token_list::PAIR_EXPERT_SHIFT) | k;
+                        ncrisc_num_pairs++;
+                    } else {
+                        // First activation for this token - set up pointer and write token id
+                        if (!activated) {
+                            expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                                expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
+                            expert_activation_l1_ptr[0] = t;
+                        }
+
+                        // Write k-index and score for this expert
+                        expert_activation_l1_ptr[1 + e] = k;
+                        expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+
+                        // Write to e_t buffer (16B aligned entries for NOC DMA compatibility): word 0 is
+                        // the token id (every consumer; the -1 sentinel), word 1 the token's k slot for
+                        // this expert (moe_compute's LOCAL_OUTPUT writer). Merges copy whole entries.
+                        const uint32_t e_t_offset =
+                            (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
+                        uint32_t* e_t_entry = reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset);
+                        e_t_entry[0] = t;
+                        e_t_entry[1] = k;
                     }
-
-                    // Write k-index and score for this expert
-                    expert_activation_l1_ptr[1 + e] = k;
-                    expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
-
-                    // Write to e_t buffer (16B aligned entries for NOC DMA compatibility): word 0 is
-                    // the token id (every consumer; the -1 sentinel), word 1 the token's k slot for
-                    // this expert (moe_compute's LOCAL_OUTPUT writer). Merges copy whole entries.
-                    const uint32_t e_t_offset =
-                        (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
-                    uint32_t* e_t_entry = reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset);
-                    e_t_entry[0] = t;
-                    e_t_entry[1] = k;
+                    activated = true;
                     num_activated_tokens_per_expert[e]++;
 
                     break;  // Each k can only match one local expert, no need to check others
@@ -651,76 +676,93 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* brisc_counts =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_brisc_expert_counts.get_read_ptr());
 
-    // Wait for BRISC's e_t buffer to be ready
+    // Wait for BRISC's e_t buffer (its pair list under local_output) to be ready
     cb_brisc_e_t.wait_front(one_page);
     const uint32_t brisc_e_t_buffer_base = cb_brisc_e_t.get_read_ptr();
 
-    // Wait for BRISC's expert_activation buffer and count
-    cb_brisc_activated_count.wait_front(one_page);
-    uint32_t brisc_activated_count =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_brisc_activated_count.get_read_ptr());
-    cb_brisc_expert_activation.wait_front(one_page);
-    const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_read_ptr();
+    // Under local_output the pair lists stay where they are: the counts are merged here and the lists are
+    // scattered (drain) or pushed to the drain (non-drain) below.
+    [[maybe_unused]] uint32_t brisc_num_pairs = 0;
+    if constexpr (local_output) {
+        for (uint32_t e = 0; e < experts_per_device; e++) {
+            const uint32_t brisc_count = brisc_counts[e];
+            brisc_num_pairs += brisc_count;
+            num_activated_tokens_per_expert[e] += brisc_count;
+        }
+    } else {
+        // Wait for BRISC's expert_activation buffer and count
+        cb_brisc_activated_count.wait_front(one_page);
+        uint32_t brisc_activated_count =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_brisc_activated_count.get_read_ptr());
+        cb_brisc_expert_activation.wait_front(one_page);
+        const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_read_ptr();
 
-    // Merge BRISC's e_t buffer entries into main e_t buffer using NOC DMA
-    // For each expert: copy BRISC's tokens after NCRISC's tokens
-    for (uint32_t e = 0; e < experts_per_device; e++) {
-        uint32_t ncrisc_count = num_activated_tokens_per_expert[e];
-        uint32_t brisc_count = brisc_counts[e];
+        // Merge BRISC's e_t buffer entries into main e_t buffer using NOC DMA
+        // For each expert: copy BRISC's tokens after NCRISC's tokens
+        for (uint32_t e = 0; e < experts_per_device; e++) {
+            uint32_t ncrisc_count = num_activated_tokens_per_expert[e];
+            uint32_t brisc_count = brisc_counts[e];
 
-        if (brisc_count > 0) {
-            // Source: BRISC's e_t buffer for expert e (16B aligned entries)
-            uint32_t brisc_e_t_src_addr = brisc_e_t_buffer_base + e * brisc_tokens_capacity * e_t_entry_size;
+            if (brisc_count > 0) {
+                // Source: BRISC's e_t buffer for expert e (16B aligned entries)
+                uint32_t brisc_e_t_src_addr = brisc_e_t_buffer_base + e * brisc_tokens_capacity * e_t_entry_size;
 
-            // Destination: main e_t buffer, after NCRISC's entries (16B aligned entries)
-            uint32_t e_t_dst_addr = e_t_buffer_base + (e * (tokens + 1) + ncrisc_count) * e_t_entry_size;
+                // Destination: main e_t buffer, after NCRISC's entries (16B aligned entries)
+                uint32_t e_t_dst_addr = e_t_buffer_base + (e * (tokens + 1) + ncrisc_count) * e_t_entry_size;
 
-            // Use NOC DMA for L1-to-L1 copy (local loopback)
-            // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
-            // to form a self-loopback NoC source for local L1->L1 copy
-            uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
-            noc_async_read(src_noc_addr, e_t_dst_addr, brisc_count * e_t_entry_size);
+                // Use NOC DMA for L1-to-L1 copy (local loopback)
+                // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
+                // to form a self-loopback NoC source for local L1->L1 copy
+                uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
+                noc_async_read(src_noc_addr, e_t_dst_addr, brisc_count * e_t_entry_size);
+            }
+
+            // Update total count for this expert
+            num_activated_tokens_per_expert[e] = ncrisc_count + brisc_count;
         }
 
-        // Update total count for this expert
-        num_activated_tokens_per_expert[e] = ncrisc_count + brisc_count;
+        // Merge BRISC's expert_activation buffer using NOC DMA
+        // Copy all of BRISC's activated rows after NCRISC's activated rows
+        if (brisc_activated_count > 0) {
+            uint32_t expert_activation_dst_addr =
+                expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
+            // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
+            // to form a self-loopback NoC source for local L1->L1 copy
+            uint64_t brisc_activation_src_noc_addr = get_noc_addr(brisc_expert_activation_base);
+            noc_async_read(
+                brisc_activation_src_noc_addr,
+                expert_activation_dst_addr,
+                brisc_activated_count * aligned_activation_row_bytes);
+        }
+
+        // Wait for all NOC DMA copies to complete
+        noc_obj.async_read_barrier();
+
+        // Update total activated token count to include BRISC's tokens
+        num_activated_tokens += brisc_activated_count;
+
+        // Pop BRISC's CBs (cleanup)
+        cb_brisc_expert_counts.pop_front(one_page);
+        cb_brisc_e_t.pop_front(one_page);
+        cb_brisc_expert_activation.pop_front(one_page);
+        cb_brisc_activated_count.pop_front(one_page);
     }
 
-    // Merge BRISC's expert_activation buffer using NOC DMA
-    // Copy all of BRISC's activated rows after NCRISC's activated rows
-    if (brisc_activated_count > 0) {
-        uint32_t expert_activation_dst_addr =
-            expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
-        // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
-        // to form a self-loopback NoC source for local L1->L1 copy
-        uint64_t brisc_activation_src_noc_addr = get_noc_addr(brisc_expert_activation_base);
-        noc_async_read(
-            brisc_activation_src_noc_addr,
-            expert_activation_dst_addr,
-            brisc_activated_count * aligned_activation_row_bytes);
-    }
-
-    // Wait for all NOC DMA copies to complete
-    noc_obj.async_read_barrier();
-
-    // Update total activated token count to include BRISC's tokens
-    num_activated_tokens += brisc_activated_count;
-
-    // Pop BRISC's CBs (cleanup)
-    cb_brisc_expert_counts.pop_front(one_page);
-    cb_brisc_e_t.pop_front(one_page);
-    cb_brisc_expert_activation.pop_front(one_page);
-    cb_brisc_activated_count.pop_front(one_page);
-
-    // The drain writes the consolidated e_t buffer to the e_t output tensor, one page per expert.
+    // The drain writes the consolidated e_t buffer to the e_t output tensor: one page per expert, or under
+    // local_output the used part of the packed page (segment starts + entries).
+    [[maybe_unused]] uint32_t packed_bytes_used = 0;
     auto write_e_t_output = [&]() {
-        for (uint32_t e = 0; e < experts_per_device; ++e) {
-            noc_obj.async_write(
-                cb_e_t,
-                e_t_output_tensor_addr_gen,
-                e_t_output_page_size,
-                {.offset_bytes = e * e_t_output_page_size},
-                {.page_id = e});
+        if constexpr (local_output) {
+            noc_obj.async_write(cb_e_t, e_t_output_tensor_addr_gen, packed_bytes_used, {}, {.page_id = 0});
+        } else {
+            for (uint32_t e = 0; e < experts_per_device; ++e) {
+                noc_obj.async_write(
+                    cb_e_t,
+                    e_t_output_tensor_addr_gen,
+                    e_t_output_page_size,
+                    {.offset_bytes = e * e_t_output_page_size},
+                    {.page_id = e});
+            }
         }
     };
 
@@ -728,8 +770,67 @@ void kernel_main() {
     // Non-drain cores: send counts to drain and wait for consolidated buffer
     // Drain core: receive from non-drain, consolidate, multicast
     if (is_drain_tilize_core) {
-        // ========== Step 5: Drain receives counts from non-drain cores and consolidates ==========
-        if (num_tilize_cores > 1) {
+        if constexpr (local_output) {
+            // ========== Step 5 (packed lists): every producer's counts, the segment starts, one scatter pass
+            // ========== Remote records: [counts[experts_per_device], NCRISC pairs, BRISC pairs]; their pair lists were
+            // pushed into this core's staging CB (two slots per non-drain core) before partial_metadata_ready was
+            // raised.
+            // Indexed by tilize core (entry 0, this core, unused).
+            uint32_t remote_ncrisc_pairs[num_tilize_cores];
+            uint32_t remote_brisc_pairs[num_tilize_cores];
+            if (num_tilize_cores > 1) {
+                partial_metadata_ready_sem.wait(num_tilize_cores - 1);
+                const uint32_t remote_counts_base = cb_remote_counts.get_read_ptr();
+                for (uint32_t core_idx = 1; core_idx < num_tilize_cores; core_idx++) {
+                    volatile tt_l1_ptr uint32_t* record = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        remote_counts_base + (core_idx - 1) * remote_counts_entry_size);
+                    for (uint32_t e = 0; e < experts_per_device; e++) {
+                        num_activated_tokens_per_expert[e] += record[e];
+                    }
+                    remote_ncrisc_pairs[core_idx] = record[experts_per_device];
+                    remote_brisc_pairs[core_idx] = record[experts_per_device + 1];
+                }
+            }
+
+            // Segment starts (the page header), then the scatter. The header words double as the scatter cursors
+            // and are restored to the starts afterwards.
+            uint32_t* segment_start = reinterpret_cast<uint32_t*>(e_t_buffer_base);
+            uint32_t* entries = segment_start + token_list_header_words;
+            segment_start[0] = 0;
+            for (uint32_t e = 0; e < experts_per_device; e++) {
+                segment_start[e + 1] =
+                    moe_ring::token_list::next_segment_start(segment_start[e], num_activated_tokens_per_expert[e]);
+            }
+            auto scatter_pairs = [&](uint32_t list_base, uint32_t num_pairs) {
+                const uint32_t* pair = reinterpret_cast<const uint32_t*>(list_base);
+                for (uint32_t i = 0; i < num_pairs; i++, pair += moe_ring::token_list::PAIR_BYTES / sizeof(uint32_t)) {
+                    const uint32_t e = pair[1] >> moe_ring::token_list::PAIR_EXPERT_SHIFT;
+                    const uint32_t k = pair[1] & ((1u << moe_ring::token_list::PAIR_EXPERT_SHIFT) - 1);
+                    entries[segment_start[e]++] = moe_ring::token_list::pack_entry(pair[0], k);
+                }
+            };
+            // Producer order = the dense merge's concatenation order: this core's NCRISC then BRISC half, then each
+            // non-drain core's two halves in core order. Each list is in ascending token order, so every segment is.
+            scatter_pairs(ncrisc_pairs_base, ncrisc_num_pairs);
+            scatter_pairs(brisc_e_t_buffer_base, brisc_num_pairs);
+            if (num_tilize_cores > 1) {
+                // the staging CB exists only with non-drain cores
+                const uint32_t staging_base = cb_brisc_expert_activation.get_write_ptr();
+                for (uint32_t core_idx = 1; core_idx < num_tilize_cores; core_idx++) {
+                    const uint32_t slot = staging_base + (core_idx - 1) * 2 * pairs_capacity_bytes;
+                    scatter_pairs(slot, remote_ncrisc_pairs[core_idx]);
+                    scatter_pairs(slot + pairs_capacity_bytes, remote_brisc_pairs[core_idx]);
+                }
+            }
+            for (uint32_t e = 0; e < experts_per_device; e++) {
+                segment_start[e] -= num_activated_tokens_per_expert[e];
+            }
+            packed_bytes_used = (token_list_header_words + segment_start[experts_per_device]) * sizeof(uint32_t);
+
+            cb_brisc_expert_counts.pop_front(one_page);
+            cb_brisc_e_t.pop_front(one_page);
+        } else if (num_tilize_cores > 1) {
+            // ========== Step 5: Drain receives counts from non-drain cores and consolidates ==========
             // Wait for all non-drain cores to send their counts
             partial_metadata_ready_sem.wait(num_tilize_cores - 1);
 
@@ -801,12 +902,14 @@ void kernel_main() {
             noc_obj.async_read_barrier();
         }
 
-        // cap off e_t buffer with -1 (now includes merged counts, 16B aligned entries)
-        for (uint32_t e = 0; e < experts_per_device; e++) {
-            uint32_t e_t_buffer_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
-            uint32_t* e_t_sentinel_ptr =
-                reinterpret_cast<uint32_t*>(e_t_buffer_addr + num_activated_tokens_per_expert[e] * e_t_entry_size);
-            *e_t_sentinel_ptr = static_cast<uint32_t>(-1);
+        if constexpr (!local_output) {
+            // cap off e_t buffer with -1 (now includes merged counts, 16B aligned entries)
+            for (uint32_t e = 0; e < experts_per_device; e++) {
+                uint32_t e_t_buffer_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
+                uint32_t* e_t_sentinel_ptr =
+                    reinterpret_cast<uint32_t*>(e_t_buffer_addr + num_activated_tokens_per_expert[e] * e_t_entry_size);
+                *e_t_sentinel_ptr = static_cast<uint32_t>(-1);
+            }
         }
 
         // Push per-expert token counts to CB for writer to read
@@ -825,20 +928,24 @@ void kernel_main() {
         *reinterpret_cast<uint32_t*>(cb_total_chunks.get_write_ptr()) = total_chunks;
         cb_total_chunks.push_back(one_page);
 
-        // ========== Write expert_activation buffer to DRAM ==========
-        // Write to DRAM: activated rows (num_activated_tokens) rows
-        uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
-        uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
-        if (num_activated_tokens > 0) {
-            // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t DRAM
-            // NoC address from get_noc_addr(0, accessor)
-            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        if constexpr (!local_output) {
+            // ========== Write expert_activation buffer to DRAM ==========
+            // Write to DRAM: activated rows (num_activated_tokens) rows
+            uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
+            uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
+            if (num_activated_tokens > 0) {
+                // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t DRAM
+                // NoC address from get_noc_addr(0, accessor)
+                noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+            }
+            // Barrier for this write is at the very end of the kernel
         }
-        // Barrier for this write is at the very end of the kernel
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(cb_e_t);
 
-        // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain-sync cores
+        // Multicast e_t buffer (the used part of the packed page under local_output), per_expert_counts, and
+        // total_chunks to non-drain-sync cores
+        const uint32_t e_t_mcast_bytes = local_output ? packed_bytes_used : e_t_buffer_total_size;
         if (num_tilize_cores > 1) {
             uint32_t e_t_cb_read_ptr = cb_e_t.get_read_ptr();
             uint32_t per_expert_total_tokens_cb_read_ptr = cb_per_expert_total_tokens.get_read_ptr();
@@ -866,7 +973,7 @@ void kernel_main() {
             // with precomposed uint64_t multicast destination address; Noc::async_write_multicast does
             // not take a raw uint64_t multicast destination
             noc_async_write_multicast(
-                e_t_cb_read_ptr, e_t_mcast_addr, e_t_buffer_total_size, tilize_bounding_box_num_cores - 1);
+                e_t_cb_read_ptr, e_t_mcast_addr, e_t_mcast_bytes, tilize_bounding_box_num_cores - 1);
 
             // Multicast per_expert_counts to all tilize cores
             // Device 2.0 migration: legacy primitive retained: see above
@@ -960,7 +1067,32 @@ void kernel_main() {
         for (uint32_t e = 0; e < experts_per_device; e++) {
             counts_ptr[e] = num_activated_tokens_per_expert[e];
         }
-        counts_ptr[experts_per_device] = num_activated_tokens;
+        if constexpr (local_output) {
+            // The record carries both pair-list lengths, and the lists go into the drain's staging slots for this
+            // core (CBs sit at the same address on every tilize core), ahead of the same barrier and signal.
+            counts_ptr[experts_per_device] = ncrisc_num_pairs;
+            counts_ptr[experts_per_device + 1] = brisc_num_pairs;
+            const uint32_t staging_slot =
+                cb_brisc_expert_activation.get_write_ptr() + (tilize_core_idx - 1) * 2 * pairs_capacity_bytes;
+            const uint32_t list_bytes[2] = {
+                ncrisc_num_pairs * moe_ring::token_list::PAIR_BYTES,
+                brisc_num_pairs * moe_ring::token_list::PAIR_BYTES};
+            const uint32_t list_base[2] = {ncrisc_pairs_base, brisc_e_t_buffer_base};
+            for (uint32_t half = 0; half < 2; half++) {
+                if (list_bytes[half] > 0) {
+                    noc_obj.async_write(
+                        CoreLocalMem<uint32_t>(list_base[half]),
+                        UnicastEndpoint{},
+                        list_bytes[half],
+                        {},
+                        {.noc_x = drain_core_noc_x,
+                         .noc_y = drain_core_noc_y,
+                         .addr = staging_slot + half * pairs_capacity_bytes});
+                }
+            }
+        } else {
+            counts_ptr[experts_per_device] = num_activated_tokens;
+        }
 
         // Write counts to drain core's remote_counts_cb
         noc_obj.async_write(
@@ -970,6 +1102,10 @@ void kernel_main() {
             {},
             {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_counts_addr + remote_counts_offset});
         noc_obj.async_write_barrier();
+        if constexpr (local_output) {
+            cb_brisc_expert_counts.pop_front(one_page);
+            cb_brisc_e_t.pop_front(one_page);
+        }
 
         // Signal drain core via semaphore increment
         partial_metadata_ready_sem.up(noc_obj, drain_core_noc_x, drain_core_noc_y, 1);
@@ -1022,41 +1158,51 @@ void kernel_main() {
     // std::max(num_activated_tokens_per_expert[0], num_activated_tokens_per_expert[1]));
 
     // ========== ALL CORES: Read activated tokens from sparse buffer and pack into tilize input CB ==========
-    // The e_t buffer contains sparse token IDs for each expert, with 16B aligned entries
+    // The e_t buffer contains sparse token IDs for each expert, with 16B aligned entries; under local_output it is
+    // the packed page (segment starts, then 4-B entries whose low bits are the token id).
+    const uint32_t* packed_segment_start = reinterpret_cast<const uint32_t*>(e_t_buffer_base);
+    const uint32_t* packed_entries = packed_segment_start + token_list_header_words;
     uint32_t num_chunks_sent = 0;
     for (uint32_t e = 0; e < experts_per_device; e++) {
         uint32_t num_tokens = num_activated_tokens_per_expert[e];
         uint32_t e_t_expert_addr = e_t_buffer_base + e * (tokens + 1) * e_t_entry_size;
+        const uint32_t* packed_segment = packed_entries + packed_segment_start[e];
 
         // Process tokens in chunks of tokens_per_chunk
         for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {
             uint32_t tokens_in_chunk = std::min(tokens_per_chunk, num_tokens - chunk_start);
-
-            cb_tilize_input.reserve_back(tokens_per_chunk);
-
-            // Read each activated token from the sparse input buffer
-            for (uint32_t i = 0; i < tokens_in_chunk; i++) {
-                // Get sparse token ID from e_t buffer (16B aligned entries)
-                uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
-                // read the token from the input tensor at the tilize subtoken offset and size
-                noc_obj.async_read(
-                    input_tensor_addr_gen,
-                    cb_tilize_input,
-                    subtoken_size,
-                    {.page_id = token_id, .offset_bytes = global_subtoken_offset},
-                    {.offset_bytes = i * subtoken_size});
+            // Study zones (MOE_ZONES): this chunk's phases, recorded inside the profiler window only
+            const bool zone_on = moe_ring::zones::in_window(num_chunks_sent);
+            {
+                MOE_ZONE_IF(zone_on, "mz_r_reserve");
+                cb_tilize_input.reserve_back(tokens_per_chunk);
             }
-            noc_obj.async_read_barrier();
+            {
+                MOE_ZONE_IF(zone_on, "mz_r_reads");
+                MOE_STUDY_DELAY(R_BEFORE_READS);
+                // Read each activated token from the sparse input buffer
+                for (uint32_t i = 0; i < tokens_in_chunk; i++) {
+                    // Get sparse token ID from e_t buffer (16B aligned entries) or the packed segment
+                    uint32_t token_id;
+                    if constexpr (local_output) {
+                        token_id = moe_ring::token_list::entry_token(packed_segment[chunk_start + i]);
+                    } else {
+                        token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
+                    }
+                    // read the token from the input tensor at the tilize subtoken offset and size
+                    noc_rows_obj.async_read(
+                        input_tensor_addr_gen,
+                        cb_tilize_input,
+                        subtoken_size,
+                        {.page_id = token_id, .offset_bytes = global_subtoken_offset},
+                        {.offset_bytes = i * subtoken_size});
+                }
+                noc_rows_obj.async_read_barrier();
+            }
             cb_tilize_input.push_back(tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
             num_chunks_sent++;
 
-            // Wait until previous chunk arrives on the matmul cores before reading in another chunk of tokens.
-            // Since both the reader and writer use NoC1, we want writer to have priority access so that chunks
-            // arrive at the matmul cores earlier. Also, to do linked mcast transactions we need NoC to be completely
-            // idle during mcast. The very last wait is technically redundant since we won't be reading in another chunk
-            // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
-            // last linked mcast completes.
-            previous_chunk_sent_sem.wait(num_chunks_sent);
+            // The next chunk's rows are read at once: the one-chunk input CB (the tilize's pop) bounds the run-ahead.
         }
     }
 }

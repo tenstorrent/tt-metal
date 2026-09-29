@@ -18,7 +18,7 @@
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#include "../../../moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -183,6 +183,12 @@ void kernel_main() {
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    // Chunk g arrives in half g % chunk_halves of cb_s2c_in (2 halves today, R + 1 with R prefill rings)
+    constexpr uint32_t chunk_halves = get_named_compile_time_arg_val("chunk_halves");
+    // Chunk ownership over the prefill rings: every role derives the same table from the per-expert counts
+    // (moe_ring::rings::ChunkOwners); one ring today, so every chunk is this core's.
+    constexpr uint32_t prefill_rings = get_named_compile_time_arg_val("prefill_rings");
+    constexpr uint32_t num_rings = prefill_rings < 2 ? 1u : prefill_rings;
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -195,6 +201,9 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto ring_index = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_predecessor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_predecessor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CB ids
     constexpr auto cb_s2c_in_id = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -318,23 +327,166 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
 
-    // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
-    uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
+    // The tilize cores' chunk-ready count is the number of chunks delivered: chunk g has arrived at g + 1
     uint32_t matmul_chunk_ready_semaphore_addr = cb_w2c_md_read_ptr[1];
 
     // Zero out dest registers
     MATH((ckernel::zeroacc()));
 
+    // The W2 phase of one owned chunk: its 8 shards in cb_s2c_in2 from tile `in2_base` (the chunk's parity slot,
+    // see a2a_pipeline), the ring's ready credits in order, the W2 blocks in the weight stream's order, the output
+    // rows into cb_c2s_out.  Under the a2a pipeline it runs after the NEXT owned chunk's W0/W1 (whose in2 lands in
+    // the other parity slot while dm1 exchanges this one's); otherwise right after this chunk's W0/W1, as before.
+    auto w2_phase = [&](uint32_t in2_base, bool zone_on) {
+        //---------------------------------------------------------------------
+        // Compute in2 @ W2 (in pairs of 4)
+        //---------------------------------------------------------------------
+
+        cb_c2s_out.reserve_back(num_w0_w1_tiles_h);
+
+        // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+        // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
+        // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
+        // execution and produces garbage output (NaN/Inf) on BH silicon.
+        pack_untilize_dest_init<
+            /*block_ct_dim=*/w2_tiles_per_iter_w,
+            /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out_id);
+
+        for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
+            MOE_ZONE_IF(zone_on, "mz_m_a2a_iter");
+            // Half-width last iteration (non-default transaction size): 2 output tiles, blocks of 2 wide x
+            // half_block_tiles_h K rows. The pack below stays 4 wide: DEST tiles 2 and 3 are zero
+            // (cleared at the previous release of this DEST half) and dm1 copies only the valid tiles.
+            const bool half_iter = Cfg::w2_last_iter_half && iter == Cfg::num_a2a_iters - 1;
+            const uint32_t w2_row_tiles = half_iter ? moe_ring::W2_HALF_A2A_ITER_TILES_W : w2_tiles_per_iter_w;
+            const uint32_t w2_blocks_this_iter = half_iter ? Cfg::w2_blocks_per_half_a2a_iter : w2_blocks_per_a2a_iter;
+            if (half_iter) {
+                matmul_block_init(
+                    cb_s2c_in2_id,
+                    cb_r2c_w2_id,
+                    /*transpose=*/false,
+                    /*ct_dim=*/moe_ring::W2_HALF_A2A_ITER_TILES_W,
+                    /*rt_dim=*/1,
+                    /*kt_dim=*/1);
+            }
+            uint32_t src_core = ring_core_id;
+            uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
+            // The shards arrive during the ring's handshake iterations and stay resident for the chunk (the
+            // a2a_free credit follows this chunk's W2 output): the per-shard rendezvous over cb_w2c_rdy runs in
+            // those iterations only and the later ones read the buffers as they are (dm1.cpp runs the ring for
+            // the same count).
+            const bool a2a_handshake = iter < moe_ring::a2a_handshake_iters;
+            if (a2a_handshake) {
+                cb_w2c_rdy.wait_front(1);
+            }
+
+            uint32_t in2_offset = in2_base, in2_index = in2_base;
+
+            tile_regs_acquire();
+
+            uint32_t w2_k_tracker = 0;
+            for (uint32_t block_id = 0; block_id < w2_blocks_this_iter; ++block_id) {
+                cb_r2c_w2.wait_front(w2_tiles_per_block);
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_row_tiles) {
+                    if constexpr (has_bias) {
+                        if (w2_k_tracker == num_w2_tiles_h) {
+                            // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
+                            matmul_block(
+                                cb_c2c_ones_tile_id,
+                                cb_r2c_w2_id,
+                                0,
+                                /*in1_index=*/k,
+                                /*idst=*/0,
+                                /*transpose=*/false,
+                                /*ct_dim=*/w2_row_tiles,
+                                /*rt_dim=*/1,
+                                /*kt_dim=*/1);
+                            w2_k_tracker++;
+                            continue;
+                        }
+                    }
+                    if (w2_k_tracker >= num_w2_tiles_h) {
+                        continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
+                    }
+                    if (dm1_tiles_remaining == 0) {
+                        if (a2a_handshake) {
+                            cb_w2c_rdy.pop_front(1);
+                            cb_w2c_rdy.wait_front(1);
+                        }
+                        src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
+                        dm1_tiles_remaining = shard_tiles_lut[src_core];
+                        in2_offset += tiles_per_step;
+                        in2_index = in2_offset;
+                    }
+                    dm1_tiles_remaining--;
+
+                    matmul_block(
+                        cb_s2c_in2_id,
+                        cb_r2c_w2_id,
+                        in2_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/w2_row_tiles,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    w2_k_tracker++;
+                }
+                cb_r2c_w2.pop_front(w2_tiles_per_block);
+            }
+            if (a2a_handshake) {
+                cb_w2c_rdy.pop_front(1);
+            }
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
+                cb_c2s_out_id, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+
+            tile_regs_release();
+        }
+
+        // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+        pack_untilize_uninit(cb_c2s_out_id);
+
+        cb_c2s_out.push_back(num_w0_w1_tiles_h);
+
+        // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+        pack_reconfig_data_format(cb_s2c_in2_id);
+    };
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
 
-    // This decides which half of the buffer will have the valid data sent by tilize cores
-    bool use_second_half_buffer = false;
+    // Chunks are numbered in feed order over all experts; chunk g sits in half g % chunk_halves of the buffer.
+    uint32_t chunk_index = 0;
+    // a2a pipeline (moe_ring / the factory's a2a_pipeline): owned chunk c packs its in2 partial into parity slot c % 2
+    // and its W2 runs after the next owned chunk's W0/W1; dm1 exchanges slot c % 2 meanwhile.
+    constexpr uint32_t a2a_pipeline = get_named_compile_time_arg_val("a2a_pipeline");
+    constexpr uint32_t in2_parity_tiles = a2a_pipeline ? tiles_per_step * num_cores : 0u;
+    uint32_t owned_ordinal = 0;
+    bool w2_pending = false;
+    uint32_t pending_in2_base = 0;
+    bool pending_zone_on = false;
+    moe_ring::rings::ChunkOwners<num_rings> owners;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         const uint32_t num_expert_chunks = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        owners.begin_expert(num_expert_chunks);
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            const uint32_t chunk_g = chunk_index++;
+            if (owners.owner(chunk) != ring_index) {
+                // Another ring's chunk: it lands in this core's buffer too, but nothing here reads it. The W2 output
+                // staging (cb_c2s_out) is the same L1 as the input halves, so its pointer must stay in step with the
+                // input half g % chunk_halves: an empty push here, matched by dm1's empty pop, keeps every chunk's
+                // output over its own (consumed) input and never over a later chunk's pending input.
+                cb_c2s_out.reserve_back(num_w0_w1_tiles_h);
+                cb_c2s_out.push_back(num_w0_w1_tiles_h);
+                continue;
+            }
+            const uint32_t chunk_half = chunk_g % chunk_halves;
             // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
@@ -349,9 +501,16 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            ::detail::noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
-                matmul_chunk_ready_semaphore_wait_value++);
+            // Study zones (MOE_ZONES): this chunk's wait for the feed and its compute body
+            const bool zone_on = moe_ring::zones::in_window(chunk_g);
+            {
+                MOE_ZONE_IF(zone_on, "mz_m_wait_chunk");
+                ::detail::noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr), chunk_g + 1);
+            }
+            const uint32_t in2_base = (owned_ordinal++ & 1u) * in2_parity_tiles;
+            MOE_ZONE_IF(zone_on, "mz_m_body");
+            MOE_STUDY_DELAY(M_BEFORE_W0W1);
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -366,7 +525,7 @@ void kernel_main() {
             const uint32_t prod_tiles_per_step = Cfg::w0_w1_prod_cols(ring_core_id, is_shared_expert);
             const uint32_t prod_pair_tiles = prod_tiles_per_step & ~1u;
             for (uint32_t tile_id = 0; tile_id < prod_pair_tiles; tile_id += 2) {
-                uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
+                uint32_t in0_index = chunk_half * num_w0_w1_tiles_h;
 
                 tile_regs_acquire();
                 [[maybe_unused]] uint32_t k_tracker = 0;
@@ -434,8 +593,8 @@ void kernel_main() {
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
-                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2_id, /*output_tile_index=*/tile_id + 1);
+                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/in2_base + tile_id);
+                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2_id, /*output_tile_index=*/in2_base + tile_id + 1);
                 tile_regs_release();
             }
 
@@ -449,7 +608,7 @@ void kernel_main() {
                     /*ct_dim=*/moe_ring::W0_W1_HALF_BLOCK_TILES_W,
                     /*rt_dim=*/1,
                     /*kt_dim=*/1);
-                uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
+                uint32_t in0_index = chunk_half * num_w0_w1_tiles_h;
 
                 tile_regs_acquire();
                 [[maybe_unused]] uint32_t k_tracker = 0;
@@ -511,7 +670,8 @@ void kernel_main() {
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/prod_pair_tiles);
+                pack_tile</*out_of_order_output=*/true>(
+                    0, cb_s2c_in2_id, /*output_tile_index=*/in2_base + prod_pair_tiles);
                 tile_regs_release();
 
                 // Restore the 4-wide matmul for the W2 phase.
@@ -531,7 +691,7 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t tile_id = prod_tiles_per_step; tile_id < num_w0_w1_tiles_w; ++tile_id) {
-                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/in2_base + tile_id);
                 }
                 tile_regs_release();
             }
@@ -540,116 +700,25 @@ void kernel_main() {
             cb_c2w_rdy.reserve_back(1);
             cb_c2w_rdy.push_back(1);
 
-            //---------------------------------------------------------------------
-            // Compute in2 @ W2 (in pairs of 4)
-            //---------------------------------------------------------------------
-
-            cb_c2s_out.reserve_back(num_w0_w1_tiles_h);
-
-            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
-            // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
-            // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
-            // execution and produces garbage output (NaN/Inf) on BH silicon.
-            pack_untilize_dest_init<
-                /*block_ct_dim=*/w2_tiles_per_iter_w,
-                /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out_id);
-
-            for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
-                // Half-width last iteration (non-default transaction size): 2 output tiles, blocks of 2 wide x
-                // half_block_tiles_h K rows. The pack below stays 4 wide: DEST tiles 2 and 3 are zero
-                // (cleared at the previous release of this DEST half) and dm1 copies only the valid tiles.
-                const bool half_iter = Cfg::w2_last_iter_half && iter == Cfg::num_a2a_iters - 1;
-                const uint32_t w2_row_tiles = half_iter ? moe_ring::W2_HALF_A2A_ITER_TILES_W : w2_tiles_per_iter_w;
-                const uint32_t w2_blocks_this_iter =
-                    half_iter ? Cfg::w2_blocks_per_half_a2a_iter : w2_blocks_per_a2a_iter;
-                if (half_iter) {
-                    matmul_block_init(
-                        cb_s2c_in2_id,
-                        cb_r2c_w2_id,
-                        /*transpose=*/false,
-                        /*ct_dim=*/moe_ring::W2_HALF_A2A_ITER_TILES_W,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+            if constexpr (a2a_pipeline) {
+                if (w2_pending) {
+                    w2_phase(pending_in2_base, pending_zone_on);
                 }
-                uint32_t src_core = ring_core_id;
-                uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
-                cb_w2c_rdy.wait_front(1);
-
-                uint32_t in2_offset = 0, in2_index = 0;
-
-                tile_regs_acquire();
-
-                uint32_t w2_k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w2_blocks_this_iter; ++block_id) {
-                    cb_r2c_w2.wait_front(w2_tiles_per_block);
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_row_tiles) {
-                        if constexpr (has_bias) {
-                            if (w2_k_tracker == num_w2_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
-                                matmul_block(
-                                    cb_c2c_ones_tile_id,
-                                    cb_r2c_w2_id,
-                                    0,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/w2_row_tiles,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                w2_k_tracker++;
-                                continue;
-                            }
-                        }
-                        if (w2_k_tracker >= num_w2_tiles_h) {
-                            continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
-                        }
-                        if (dm1_tiles_remaining == 0) {
-                            cb_w2c_rdy.pop_front(1);
-                            cb_w2c_rdy.wait_front(1);
-                            src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
-                            dm1_tiles_remaining = shard_tiles_lut[src_core];
-                            in2_offset += tiles_per_step;
-                            in2_index = in2_offset;
-                        }
-                        dm1_tiles_remaining--;
-
-                        matmul_block(
-                            cb_s2c_in2_id,
-                            cb_r2c_w2_id,
-                            in2_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/w2_row_tiles,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                        w2_k_tracker++;
-                    }
-                    cb_r2c_w2.pop_front(w2_tiles_per_block);
-                }
-                cb_w2c_rdy.pop_front(1);
-
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
-                    cb_c2s_out_id, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-
-                tile_regs_release();
+                pending_in2_base = in2_base;
+                pending_zone_on = zone_on;
+                w2_pending = true;
+            } else {
+                w2_phase(in2_base, zone_on);
             }
-
-            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
-            pack_untilize_uninit(cb_c2s_out_id);
-
-            cb_c2s_out.push_back(num_w0_w1_tiles_h);
-
-            // Toggle the buffer to use
-            use_second_half_buffer = !use_second_half_buffer;
-            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
-            pack_reconfig_data_format(cb_s2c_in2_id);
 
         }  // end for (chunk)
     }  // end for (expert_id)
+
+    if constexpr (a2a_pipeline) {
+        if (w2_pending) {
+            w2_phase(pending_in2_base, pending_zone_on);
+        }
+    }
 
     // Drain the pipeline - the last dummy push
     cb_r2c_w2.wait_front(w2_tiles_per_block);

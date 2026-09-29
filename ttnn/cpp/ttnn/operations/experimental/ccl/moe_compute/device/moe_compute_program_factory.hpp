@@ -57,6 +57,10 @@ struct MoEComputeMeshWorkloadFactory {
 
         // Path used to build this workload (FullCcl/FullLocal = combine kernels built; ComputeOnly = bypassed).
         MoEComputePath path = MoEComputePath::FullCcl;
+
+        // The ring kernels' runtime-argument count: 12 leading args, dm0's bank table, and (LocalOutput) the two
+        // trailing addresses that override_runtime_arguments refreshes -- the exact size it checks.
+        uint32_t matmul_runtime_args_size = 0;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

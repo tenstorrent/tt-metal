@@ -274,7 +274,8 @@ void kernel_main() {
         token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
         token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
     }
-    cb_token_counts.pop_front(1);
+    // token_counts_l1_ptr stays in use inside the expert loop (raw per-expert counts gate the
+    // fused compute sync); the page is popped after the loop with the other metadata CBs.
 
     cb_data.reserve_back(1);
     const uint32_t src_data_l1_base_addr = cb_data.get_write_ptr();
@@ -317,6 +318,17 @@ void kernel_main() {
 
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
+        if constexpr (double_buffer_source) {
+            // Fused moe_compute source: the matmul writer (dm1) skips the combine handshake
+            // for zero-token experts, gated on these same tilize-produced device-global
+            // counts. Gate on the raw counts -- NOT token_split_counts, which can be locally
+            // zero on one token-parallel core for a globally active expert -- and skip the
+            // wait, its val advance, and ++db so semaphore totals and source double-buffer
+            // parity stay aligned with dm1.
+            if (token_counts_l1_ptr[e] == 0) {
+                continue;
+            }
+        }
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
@@ -389,6 +401,7 @@ void kernel_main() {
 
     compute_sync_sem.set(0);
 
+    cb_token_counts.pop_front(1);
     cb_dense_token_maps.pop_front(num_local_experts);
     cb_token_activations.pop_front(1);
     cb_data.push_back(1);
