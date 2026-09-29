@@ -128,3 +128,36 @@ class TtHcGates:
         out = ttnn.slice(g, [0, 0, 0, 0], [1, 1, s2, 2 * HC], memory_config=dram)
         ttnn.deallocate(g)
         return out
+
+
+class TtHcPre:
+    """iHC pre-mix (HF HYV4HyperConnection, sublayer input): x = sum_j pre_j * stream_j, fp32.
+
+    Call with the per-chip streams [1, 1, S/2, 4 x H/2] fp32 TILE (tt/layout.py) and the gates [1, 1, S/2, 8] fp32
+    TILE (TtHcGates, replicated over axis 1); returns this chip's columns of the sublayer input [1, 1, S/2, H/2]
+    (``dtype``, fp32 by default), split by rows over axis 0 and by hidden columns over axis 1. No collective: each
+    chip mixes its own column block of every stream (deepseek_v3_d_p/tt/mhc/tt_mhc.py:_streams / _cols / _mix)."""
+
+    def __init__(self, mesh, hidden: int, dtype=ttnn.float32):
+        self.mesh = mesh
+        self.hidden = hidden
+        self.dtype = dtype
+
+    def __call__(self, x: ttnn.Tensor, gates: ttnn.Tensor) -> ttnn.Tensor:
+        s2, w = x.shape[-2], x.shape[-1] // HC
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        # Stream j is local columns [j*w, (j+1)*w) (stream-major packing); pre_j is gate column j ([S/2, 1]).
+        st = [ttnn.slice(x, [0, 0, 0, j * w], [1, 1, s2, (j + 1) * w], memory_config=dram) for j in range(HC)]
+        pre = [ttnn.slice(gates, [0, 0, 0, j], [1, 1, s2, j + 1], memory_config=dram) for j in range(HC)]
+        y = ttnn.multiply(st[0], pre[0], dtype=ttnn.float32, memory_config=dram)
+        for s, p in zip(st[1:], pre[1:]):
+            y2 = ttnn.addcmul(y, s, p, memory_config=dram)
+            ttnn.deallocate(y)
+            y = y2
+        for t in st + pre:
+            ttnn.deallocate(t)
+        if self.dtype != ttnn.float32:
+            y2 = ttnn.typecast(y, self.dtype)
+            ttnn.deallocate(y)
+            y = y2
+        return y

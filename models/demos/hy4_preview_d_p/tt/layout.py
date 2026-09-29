@@ -62,3 +62,22 @@ def row_split_to_host(mesh, t: ttnn.Tensor, width: int | None = None) -> torch.T
     w = t.shape[-1]
     out = full[..., :w].reshape(-1, w)
     return out if width is None else out[:, :width]
+
+
+def row_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
+    """Host [S, W] -> device [1, 1, S/2, W] per chip, split by rows over axis 0, replicated over axis 1, TILE, DRAM."""
+    s, w = x.shape
+    return ttnn.from_torch(
+        x.float().reshape(1, 1, s, w),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None)),
+    )
+
+
+def col_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
+    """A tensor split by rows over axis 0 and by columns over axis 1 ([1, 1, S/2, W/2] per chip) -> host [S, W]."""
+    full = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=tuple(mesh.shape), dims=(2, 3)))
+    return full.reshape(-1, full.shape[-1])

@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_attn_hc_pre_L00": {
+   "t": "2026-09-29T05:14:36",
+   "value": 0.9999995672161003
+  },
+  "rel_l2_attn_hc_pre_L00": {
+   "t": "2026-09-29T05:14:36",
+   "value": 0.0009471761295571923
+  },
+  "syn_rel_l2_attn_hc_pre_L00": {
+   "t": "2026-09-29T05:14:36",
+   "value": 0.0
+  },
+  "worst_row_rel_l2_attn_hc_pre_L00": {
+   "t": "2026-09-29T05:14:36",
+   "value": 0.0025767828337848186
+  }
+ },
+ "task": "C.dense_full.attn_hc_pre"
+}
