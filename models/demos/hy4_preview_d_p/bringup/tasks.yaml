@@ -1115,6 +1115,13 @@ tasks:
     kind: op
     layer: 1
     stateful: true
+  frozen:
+    at: '2026-09-29T10:59:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py: 392550b652fe80171fcea99da9617efb48dced6fb585ffc3fbe7a85b2420fa86
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_full.05
   title: 'moe_full block with steps 1-5 on device (last: indexer)'
   step: implement
