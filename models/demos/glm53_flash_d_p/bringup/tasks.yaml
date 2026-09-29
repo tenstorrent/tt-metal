@@ -1261,6 +1261,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 3
+  frozen:
+    at: '2026-09-29T10:24:16'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_09_ffn_collapse.py: a4094cbac87d0eea5dc1b8b51fe2e8326be562ced31b99cd8cdb0494f31d9649
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.ffn_norm
   title: dsa_moe ffn_norm (norm) on device, layer 3
   step: implement
