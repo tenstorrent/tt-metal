@@ -749,3 +749,31 @@ Next (implement): the module needs no change. Add `attn_norm` to `DEVICE_STEPS["
 attn_collapse are not there either). Keep eps exactly 1e-5 and fp32 accumulation of the squares.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.03 test (attempt 1)
+
+Reviewed the rendered swap test (dsa_moe layer 3, with attn_hc, attn_collapse and attn_norm on device). I rewrote it
+from swap dsa_moe 02 and kept every check that test had. `_collapse_checks` became `_out_checks(step, ...)`; the metric
+names are unchanged. Changes and additions:
+- Collapse share: the CPU block that isolates the collapse now also runs the device attn_norm, so the only difference
+  left is the collapse. Limits are unchanged. Device: 0 flips, rel 0.00002.
+- attn_norm vs golden: the component test's limits (rel 0.01, ratio [0.99, 1.01], worst row 0.015). Its input is the
+  device attn_in. Device: 0.0043 / [0.9985, 1.0020] / 0.0068.
+- attn_norm vs the fp32 CPU norm of the same device attn_in: rel 0.0045, ratio [0.996, 1.004], worst row 0.008.
+  Device: 0.0017 / [0.9991, 1.0005] / 0.0019.
+- Norm share of block out: a fourth CPU block run, with attn_hc and attn_collapse fixed to the device outputs and the
+  CPU norm. Limits: flips <= 20, same-routing rel 0.001, ratio [0.995, 1.005]. Device: 4 flips / 0.00015 /
+  [0.9997, 1.0007].
+Sensitivity (CPU host script /tmp/dsas03/sens.py, not kept; the numbers are in the test docstring). At layer 3, post is
+<= 0.024 and the attention's internal norms remove row scale. So block out cannot see a norm scale error (x0.98..x1.02
+gives share rel <= 0.0003), a zeroed last row, or one row scaled by 1.05. A wrong or missing weight scores PCC
+>= 0.99989. The same-input check catches every scale, eps, mean-subtraction and row bug. The share check catches eps
+0 / 1e-6, wrong weights, mean subtraction, and zeroed blocks of rows or columns. Noise from bf16 rounding and 0.3%
+element noise passes both checks. bf16 square accumulation and 5e-3 rsqrt row noise fail the same-input ratio.
+Results: device passes (PCC 0.999994; block out vs CPU 29 flips / 0.0020 / [0.9924, 1.0075]). Reference passes (every
+same-input and share check is 0). Stub fails (PCC 0 and every check). The test runs in about 29 s, with four CPU block
+runs.
+Watch: the attention-side swaps next (q_a, indexer, attention) have the same blind spot in block out. Give each one a
+same-input check and a share check.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_03_attn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
