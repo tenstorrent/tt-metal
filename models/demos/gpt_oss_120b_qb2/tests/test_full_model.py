@@ -27,8 +27,8 @@ def load_reference(path):
     if digest != REFERENCE_SHA256:
         raise ValueError(f"GPT-OSS reference SHA256 must be {REFERENCE_SHA256}, got {digest}")
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload["hf_model_id"] != "openai/gpt-oss-120b" or len(payload["entries"]) != 1:
-        raise ValueError("Expected one openai/gpt-oss-120b reference entry")
+    if payload["hf_model_id"] != f"openai/gpt-oss-120b@{MODEL_REVISION}" or len(payload["entries"]) != 1:
+        raise ValueError(f"Expected one openai/gpt-oss-120b@{MODEL_REVISION} reference entry")
     entry = payload["entries"][0]
     if entry["generated_tokens"].shape != (1, 100) or entry["topk_tokens"].shape != (100, 100):
         raise ValueError("Expected exactly 100 teacher-forced tokens and 100 reference candidates per step")
