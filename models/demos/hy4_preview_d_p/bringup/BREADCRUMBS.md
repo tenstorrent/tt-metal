@@ -724,3 +724,49 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py
+
+## C.dense_full.ffn_hc test (attempt 1)
+
+What was done
+- Reviewed the rendered component test for ffn_hc (iHC gates [S, 8] fp32 from h_mid, hc_mlp_layer weights, layer 0,
+  s4096 chunk 1, bf16 golden). Kept the gated PCC; added, vs the golden: finite, element count, rel L2 <= 0.01,
+  post columns (4-7) rel L2 <= 0.006 each and worst row <= 0.015, and the pre gates through the CPU ffn_hc_pre on the
+  golden h_mid (ffn_x from device gates vs from golden gates: rel <= 0.005, worst row <= 0.02). Asserts
+  device_component is not a CPU bridge.
+- CPU mutation study (/tmp/hy4_ffnhc/study*.py, outside the repo); the table is in the test docstring.
+
+Decisions
+- Not a copy of the attn_hc checks: here the pre gates are small (col means 0.094, ~1e-5, 0.0009, 0.018), so a
+  per-column max abs 0.015 sees nothing on pre, and per-column rel is meaningless on col 1 (~1e-5, hc_eps included).
+  The downstream ffn_x measures what an absolute pre error does (1e-3 abs -> ffn_x rel 0.029; 3e-4 -> 0.0085).
+- No synthetic distinct-stream probe: h_mid's streams are already distinct (18 % / 6 % / 111 % vs stream 0), and
+  every tried stream permutation fails (ffn_x rel >= 0.019).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00167, post col rel <= 0.0017, post row 0.0031, ffn_x 0.0012 /
+  row 0.0035). BRINGUP_IMPL=stub: FAIL (pcc 0).
+- Gate (device): FAIL, NotImplementedError: no device module for ffn_hc yet (expected before implement).
+
+Gotchas for implement
+- TtHcGates with hc_mlp_layer (add "ffn_hc" to `_HC_STEPS`) should pass; the sigmoid must be accurate in absolute
+  terms on outputs near 0 (a few 1e-4), keep the default Accurate sigmoid and fp32.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py
+
+## C.dense_full.ffn_hc implement (attempt 1)
+
+- No new module: ffn_hc is the same iHC gate block as attn_hc (`tt/ihc.py:TtHcGates`), with the `hc_mlp_layer`
+  fn / base / scale, applied to h_mid. hooks.py: `_HC_STEPS["ffn_hc"] = "hc_mlp_layer"` (so `device_component` and
+  `_device_step_fn` route it through `_hc_module` / `_hc_host_fn`), and "ffn_hc" added to `DEVICE_STEPS["dense_full"]`
+  for the hybrid ladder model.
+- Device, layer 0, s4096 chunk 1: PCC 0.999997, rel L2 0.00173 (CPU fp32 reference 0.00167); post col rel <= 0.00177,
+  post worst row 0.00327; ffn_x rel 0.00202, worst row 0.00463 (limits 0.005 / 0.02). Max abs error on the pre
+  columns is 5.4e-4 / 1.6e-7 / 2.0e-5 / 1.6e-4. The fp32 SFPU sigmoid is accurate enough for the small pre gates, so
+  no change was needed.
+- The streams are distinct at h_mid, so this gate also confirms that the chip-major fn permutation
+  (`streams_cols_to_chip_major`) matches the stream order.
+- Gotcha: the log's first `FAIL pcc_ffn_hc_L00: pcc=0.000000` line comes from the precompile collect pass, not the
+  real run.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py`
