@@ -1020,6 +1020,20 @@ void Cluster::noc_multicast_write(
             sz_in_bytes);
     }
 
+    if (this->target_type_ == tt::TargetDevice::Emule) {
+        // The emulated chip has no NOC multicast: write each worker core of the rectangle, as UMD's simulation
+        // backends do. Watcher sanitized the rectangle above; write_core sanitizes each core again.
+        const auto& worker_cores = this->virtual_worker_cores_.at(chip_id);
+        for (auto x = std::min(core_start.x, core_end.x); x <= std::max(core_start.x, core_end.x); x++) {
+            for (auto y = std::min(core_start.y, core_end.y); y <= std::max(core_start.y, core_end.y); y++) {
+                if (worker_cores.contains(tt::tt_metal::CoreCoord(x, y))) {
+                    this->write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(chip_id, x, y), addr);
+                }
+            }
+        }
+        return;
+    }
+
     tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);
     tt::umd::CoreCoord end_coord = soc_desc.get_coord_at(core_end, CoordSystem::TRANSLATED);
 
