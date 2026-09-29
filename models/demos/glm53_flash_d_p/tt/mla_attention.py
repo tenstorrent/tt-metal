@@ -87,17 +87,21 @@ class TtMLA:
         ttnn.experimental.slice_write(lrm, self.cache, [0, 0, start, 0], [1, 1, start + s, self.r], [1, 1, 1, 1])
         ttnn.deallocate(lrm)
 
-    def __call__(self, x: ttnn.Tensor, q_resid: ttnn.Tensor, idx: ttnn.Tensor, start: int) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, idx: ttnn.Tensor, start: int, split: bool = False
+    ) -> ttnn.Tensor:
         """x (attn_norm) [1, 1, S, H], q_resid [1, 1, S, 1536], both replicated bf16 TILE; idx this chip's
         [1, 1, S/4, 2176] uint32 ROW_MAJOR token ids (the indexer's output). Returns [1, 1, S, H] replicated bf16.
+        split: q_resid and the output are this chip's S/4 rows (the split residual layout; no output gather).
         Writes the chunk's latent rows into the cache."""
         s = x.shape[-2]
         assert start + s <= self.max_seq, f"chunk end {start + s} past max_seq {self.max_seq}"
         self._write_latent(x, start)
 
-        qr = self._local_rows(q_resid)
+        qr = q_resid if split else self._local_rows(q_resid)
         q = ttnn.linear(qr, self.w_qb, dtype=self.mid, compute_kernel_config=self.mm, memory_config=MC)
-        ttnn.deallocate(qr)
+        if qr is not q_resid:
+            ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
         )
@@ -142,6 +146,8 @@ class TtMLA:
             yb = ttnn.typecast(y, ttnn.bfloat16, memory_config=MC)
             ttnn.deallocate(y)
             y = yb
+        if split:
+            return y
         g1 = ttnn.all_gather(y, dim=-2, cluster_axis=1, memory_config=MC)
         ttnn.deallocate(y)
         g2 = ttnn.all_gather(g1, dim=-2, cluster_axis=0, memory_config=MC)
