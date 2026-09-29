@@ -528,7 +528,7 @@ def test_native_batching_guards_refuse(arm):
 
 # --- Borrowed L1 shards ------------------------------------------------------------------------------
 #
-# With all three operands L1-sharded with one shard spec the factory borrows the resident shards: each
+# With all three operands L1-sharded with one memory config the factory borrows the resident shards: each
 # DFB is the shard itself, the reader publishes credits, the writer has nothing to do, and no byte moves
 # over the NoC. A shard below is (name, strategy, shard shape in elements, inclusive core range (x0, y0, x1,
 # y1), tensor shape[, options]). Every grid fits the simulator's 8x4 worker grid.

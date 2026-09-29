@@ -479,7 +479,7 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
     // read/written over the NoC) OR L1-sharded (height/block/width). The DFB kernels are per-operand
     // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED). The factory borrows
-    // all-or-nothing: only when all three operands are L1-sharded with one shard spec are their resident
+    // all-or-nothing: only when all three operands are L1-sharded with one memory config are their resident
     // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand or a
     // different shard spec — NONE are borrowed and every operand is read/written over the NoC via a
     // sharding-aware TensorAccessor.
@@ -708,7 +708,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
             !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
             return false;
         }
-        // Reports all three volumes only for identical shard specs on one grid (is_native_L1_sharding).
+        // Reports all three volumes only for one memory config (is_native_L1_sharding).
         const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
         if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
             !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {

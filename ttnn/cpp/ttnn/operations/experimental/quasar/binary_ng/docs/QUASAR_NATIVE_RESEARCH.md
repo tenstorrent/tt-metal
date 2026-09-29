@@ -1799,20 +1799,27 @@ Only the first row is architecture, and a `TT_FATAL` of our own is not evidence 
 
 ### 5.0.14 F3: borrowed L1 shards on the native path
 
-**What borrowed means.** All three operands L1-sharded, tiled, with one shard spec on one grid. Each DFB
+**What borrowed means.** All three operands L1-sharded, tiled, with one memory config. Each DFB
 is the resident shard (`borrowed_from`, `num_entries = S`, the per-core shard tile count). The reader
 publishes credits, the compute unpacks and packs in place, the writer has nothing to do for the
 borrowed part, and none of it moves over the NoC. Only the tiles past the largest multiple of `C` are
 copied, through the tail rings (below). Mixed layouts stay on the fallback (F4).
 
-**The spec must match, not only the grid.** Review of the staged change found that `is_native_L1_sharding`
-compared input and output shard *grids*; inputs height-sharded `[32,128]` and an output width-sharded
-`[128,32]` on the same four cores passed, both factories borrowed all three in place, and core i added
-the height shards of row i into the width shard of column i: 12274 of 16384 elements wrong, through the
-native gate and through the fallback alike. The predicate now requires the output's exact shard spec on
-every sharded input, so that case takes the resharding path over the NoC, and a negative test routes it
-and checks the bits. A same-grid mixed-layout case in `test_binary_ng_no_bcast.py` holds it without the
-native flag: with the check reverted to grids, it failed through both factories (PCC 0.06).
+**The memory config must match, not only the grid or the shard spec.** Review of the staged change found
+that `is_native_L1_sharding` compared input and output shard *grids*; inputs height-sharded `[32,128]` and
+an output width-sharded `[128,32]` on the same four cores passed, both factories borrowed all three in
+place, and core i added the height shards of row i into the width shard of column i: 12274 of 16384
+elements wrong, through the native gate and through the fallback alike. The first fix compared the shard
+spec, and a same-grid mixed-layout case in `test_binary_ng_no_bcast.py` held it without the native flag
+(with the check reverted to grids, it failed through both factories, PCC 0.06). The PR review then found
+that a shard spec does not hold the layout. Height shards and block shards of `[256,512]` on one 2x2
+grid have identical shard specs, but height sharding puts the second shard on `(1,0)` and block sharding,
+one shard column wide, on `(0,1)`. The spec-only check borrowed them in place: 2046 of 4096 elements
+wrong on craq-sim through both factories, and a near-constant output on the real Wormhole through the
+Metal 2.0 factory. The predicate now compares the full memory config (layout, shard spec, allocation
+mode) whenever an input and the output are both sharded, before the uneven-shard branch. New cases hold
+it without the native flag, so the WH and BH nightly jobs run them: `H.H.B@same-spec`, a supplied output
+tensor whose config differs from `memory_config`, and a row-major against column-major case.
 
 **The rule that shapes the feature.** The DFB host asserts `num_entries % max(producers, consumers) == 0`
 for a STRIDED ring (`dataflow_buffer.cpp`, the capacity computation), and a borrowed ring cannot be rounded
@@ -1971,7 +1978,7 @@ that session, with the draining writer, and "shipped" is the committed kernels):
 
 **Verification.** RED first (4 arms failed on routing alone), then GREEN 5 of 5; module native ON 44
 passed, 1 skipped, 2 expected failures, OFF 1 / 46 (with the tail-ring tests); the sharded and ResNet
-suites 22 / 22 and the mixed-layout and mixed-grid suites 40 / 40 through each factory; a
+suites 24 / 24 and the mixed-layout and mixed-grid suites 44 / 44 through each factory; a
 mismatched-spec case falls back and is bit-exact.
 Uneven shards are covered at all three borrowed splits: the last height or width cluster holds 1 real
 tile of 4, and block corners hold 1 of 4 and 1 of 16. Shards that do not divide by 4 -- 1, 2, 6, 9 and

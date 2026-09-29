@@ -63,7 +63,7 @@
 // matches_quasar_native_slice is strictly narrower still -- see below): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards with one shard spec; everything else (interleaved output OR
+// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
 // input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
 // operand is L1-sharded-tiled (height/block/width).
 
@@ -753,11 +753,11 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // A borrowed ring is the shard's first tiles, a multiple of the compute count, so it divides by the
     // ring's max(producers, consumers) as the DFB host asserts, and the reader's publish fills each
-    // counter exactly.
-    const uint32_t a_entries = a_borrowed ? *shard_volumes->a_shard_volume - tail_tiles : in_entries;
+    // counter exactly. Borrowed operands share one shape and memory config, so c's count serves a and b.
+    const uint32_t a_entries = a_borrowed ? c_main_tiles : in_entries;
     // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or the
     // derived NoC ring.
-    const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? *shard_volumes->b_shard_volume - tail_tiles : in_entries);
+    const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? c_main_tiles : in_entries);
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
 
     std::vector<m2::DataflowBufferSpec> dfbs;

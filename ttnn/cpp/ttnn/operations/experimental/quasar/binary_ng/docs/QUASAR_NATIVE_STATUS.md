@@ -22,12 +22,12 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 ## 1. TL;DR
 
 - **Borrowed L1-sharded operands run on the native factory** (F3). When all three operands are L1
-  shards with one shard spec, each DFB is the resident shard: the reader publishes credits, the writer
+  shards with one memory config, each DFB is the resident shard: the reader publishes credits, the writer
   has nothing to do for the borrowed part, and none of it moves over the NoC. Only the 1-3 tiles past
   the largest multiple of `C` are copied, through the tail rings (slide 6). Height, block and width shards are bit-exact at `1,1,1`, `1,4,1` and
   `4,4,2`; the module is 44 passed, 1 skipped and 2 expected failures native ON, and 1 / 46 OFF; the
-  ResNet-add and sharded no-broadcast suites pass through both factories, 22 / 22, and the
-  mixed-layout suites 40 / 40 (slide 4).
+  ResNet-add and sharded no-broadcast suites pass through both factories, 24 / 24, and the
+  mixed-layout suites 44 / 44 (slide 4).
 - **The stride guard is lifted, and borrowed `1,4,1` at N=8 measures `1231 + 11.69*T`**: 3.98x the
   throughput of N=1 (`851 + 46.50*T`). It is exactly `1,1,1` at N=8 (46.75) divided by `C = 4`: the
   four Neos split the batched compute chain evenly. The output is wrong until tt-metal#56194: 74.9% of
@@ -53,11 +53,14 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   small owned tail rings (slide 6); a shard of 1-3 tiles goes through the rings whole. The tail rings
   stay until the DFB can give each tile counter its own capacity. The reader and the writer run one
   thread each. Every borrowed shape stays native.
-- **Review found one real defect, in the shared predicate**: `is_native_L1_sharding` compared only the
-  grids of input and output shards, so inputs height-sharded and an output width-sharded on one grid
-  were borrowed in place by both factories and came out wrong (12274 of 16384 elements). It compares
-  the full shard spec now. Two tests hold it: a negative test in the native module, and a same-grid
-  mixed-layout case that runs without the native flag (slide 4).
+- **Reviews found two real defects, both in the shared predicate**: `is_native_L1_sharding` compared
+  only the grids of input and output shards, so inputs height-sharded and an output width-sharded on
+  one grid were borrowed in place by both factories and came out wrong (12274 of 16384 elements). The
+  first fix compared the shard spec, and the PR review found that this is still not enough: height
+  inputs and a block output with an identical shard spec put the second shard on different cores (2046
+  of 4096 elements wrong on craq-sim, and a near-constant output on the real Wormhole). The predicate
+  now compares the full memory config. Mixed-layout cases that run without the native flag hold both,
+  in the WH and BH nightly jobs as well (slide 4).
 
 ---
 
@@ -68,7 +71,7 @@ no borrowed branch, and the factory set `num_tiles_per_cycle = min(8, S)` whenev
 borrowed, which above `1,1,1` batches at a ring stride above 1, where the pack path loses tiles (#56194).
 
 **Gate and thread counts.** Sharded operands are admitted when all three are L1-sharded tiled shards
-with one shard spec on one grid (`get_shard_volumes` reports all three), at any per-core tile count `S`.
+with one memory config (`get_shard_volumes` reports all three), at any per-core tile count `S`.
 A borrowed DFB has `num_entries = S`, cannot be rounded up past its backing shard, and the DFB host
 asserts that `S` divides by `max(producers, consumers)`. So the factory picks the thread counts per
 program: the compute always runs the tuned `C`, the borrowed rings take the first `S - (S mod C)`
@@ -76,9 +79,9 @@ tiles, and the leftover tiles go through the tail rings (slide 6); a shard small
 borrowed ring. The reader and writer run one thread each, since they copy only the tail tiles. Both
 ring strides then equal the compute count and divide the borrowed part by construction. At `C = 4`,
 every shard runs on four Neos. Mixed layouts stay on the fallback (F4). The shared
-predicate behind `get_shard_volumes` now requires the output's exact shard spec on every sharded input,
-not only its grid: in-place borrowing cannot be right when core i's input shards and its output shard
-cover different tiles, and every factory that borrows inherits the check.
+predicate behind `get_shard_volumes` now requires the output's exact memory config on every sharded
+input, not only its grid or its shard spec: in-place borrowing cannot be right when core i's input
+shards and its output shard cover different tiles, and every factory that borrows inherits the check.
 
 **Reader and writer.** The reference kernels publish with one `reserve_back(S)`, `push_back(S)`, which
 is right only for one thread on one counter: `push_back(n)` credits the active counter and rotates once,
@@ -177,11 +180,11 @@ about 5%. Compare only within one basis.
   5 of 5.
 - Module native ON 44 passed, 1 skipped, 2 expected failures (slide 5); OFF 1 passed / 46 skipped. The
   count includes the tail-ring tests of slide 6.
-- `test_binary_ng_no_bcast.py -k sharded` and `test_binary_ng_resnet_add.py`: 22 / 22 native ON, where
+- `test_binary_ng_no_bcast.py -k sharded` and `test_binary_ng_resnet_add.py`: 24 / 24 native ON, where
   every all-sharded bf16 ADD without activations now routes to `kernels_qsr` at the default `1,1,1`
-  with `n = min(8, S)`; 22 / 22 native OFF. The mixed-layout, mixed-grid and interleaved-output cases,
-  which the predicate change can re-route: 40 / 40 through each factory, with the same-grid case of the
-  third review.
+  with `n = min(8, S)`; 24 / 24 native OFF. The mixed-layout, mixed-grid and interleaved-output cases,
+  which the predicate change can re-route: 44 / 44 through each factory, with the cases of the third
+  review and the PR review.
 - Shards: 16 tiles per core height, block and width; 12 (one full chunk of 8 plus a tail of 4); 1 and
   2 per core, including the uneven column whose boundary core holds a partial shard; height inputs with
   a width output on one grid, which must fall back and stay bit-exact.
@@ -225,6 +228,27 @@ about 5%. Compare only within one basis.
   - the profiler test strips the DPRINT and streaming-profiler variables that the runtime refuses next
     to the device profiler, and skips on a build without Tracy;
   - comments and docs that the tail rings made stale.
+- **Rebase onto main** found a conflict that the text merge and the host build did not show: main's
+  fused-activation SrcA fix made the shared Quasar preprocess helper name `dfb::pre_lhs`, and a program
+  with no borrowed ring has no such DFB, so every shard smaller than `C` failed to JIT-compile. The
+  compute kernel now includes that helper only when a borrowed ring exists. The default `1,1,1` suites
+  never build tail rings, so only the native module caught it.
+- **PR review** (the PR bots and an AI-assisted review by blozano-tt) found a second hole in the shared
+  predicate. Height inputs and a block output on one 2x2 grid had identical shard specs, but the second
+  shard sits on `(1,0)` in one layout and on `(0,1)` in the other. The spec-only check borrowed them in
+  place: 2046 of 4096 elements wrong on craq-sim through both factories, and a near-constant output on
+  the real Wormhole through the Metal 2.0 factory. Applied:
+  - the predicate compares the full memory config when both are sharded, before the uneven-shard branch,
+    so that branch is covered too; the comment says why `b` needs no check of its own;
+  - new cases that run without the native flag: `H.H.B@same-spec`, `H.H.Hcol@same-grid` (row-major
+    inputs into a column-major output), and a supplied output tensor whose config differs from
+    `memory_config`. The same-spec and output-tensor cases failed before the fix on craq-sim and on the
+    real Wormhole; the orientation case passed before too, since the shard spec holds the orientation;
+  - the borrowed rings of `a`, `b` and `c` take one count, since borrowing needs one config.
+
+  Kept by decision: the batching-above-stride-1 warning, rather than a refusal with an opt-in; and the
+  `TTNN_QSR_NATIVE` skip, because the WH and BH nightly jobs collect this directory and the native
+  factory does not run there.
 - Two more `ad401613` limits met on the way, neither ours: fp32 add stalls in UnpackToDest, and an lhs
   RELU activation aborts the simulator on an undecoded SFPGT. Both are fixed in later craq-sim.
 

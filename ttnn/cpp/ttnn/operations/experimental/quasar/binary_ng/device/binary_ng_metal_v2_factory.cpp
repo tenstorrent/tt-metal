@@ -38,7 +38,7 @@
 // Deferred to the descriptor (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards with one shard spec; everything else (interleaved output OR
+// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
 // input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
 // operand is L1-sharded-tiled (height/block/width).
 

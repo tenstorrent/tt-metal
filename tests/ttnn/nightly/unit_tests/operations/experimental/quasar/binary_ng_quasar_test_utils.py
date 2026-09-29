@@ -166,13 +166,15 @@ def _run_mixed(
     rhs_act=None,
     post_act=None,
     pcc=None,
+    output_tensor_mem=None,
 ):
     # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
     # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
-    # all three are L1-sharded on one matching grid; otherwise every operand is NoC-read/written). Also
+    # all three are L1-sharded with one memory config; otherwise every operand is NoC-read/written). Also
     # like _run, optionally fuses lhs/rhs (pre) and post activation params -- used by the sharded-broadcast-
     # operand activation-over-broadcast cases, e.g. a height-sharded broadcast operand feeding the bcast
-    # reader's NoC path rather than the fully-interleaved one.
+    # reader's NoC path rather than the fully-interleaved one. output_tensor_mem preallocates the output
+    # with that config and passes it as output_tensor, next to memory_config=out_mem.
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
     torch_fn = _OPS[op_name][1]
@@ -209,6 +211,14 @@ def _run_mixed(
         kwargs["input_tensor_a_activations"] = _act(lhs_act)
     if rhs_act is not None:
         kwargs["input_tensor_b_activations"] = _act(rhs_act)
+    if output_tensor_mem is not None:
+        kwargs["output_tensor"] = ttnn.from_torch(
+            torch.zeros(golden.shape),
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=output_tensor_mem,
+        )
 
     out_tt = ttnn_fn(a_tt, b_tt, **kwargs)
     out_torch = ttnn.to_torch(out_tt)
