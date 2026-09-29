@@ -2599,3 +2599,29 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+
+## S.moe_shared.05.test.1 (test review)
+
+What
+- Rewrote test_swap_moe_shared_05_topk_shared.py from test_swap_moe_shared_04_q_a.py. It keeps the layer-2 setup
+  (ctx.extra["shared_topk"] = golden L1.topk in both contexts) and every swap 04 check and limit, and adds the topk
+  checks of test_c_moe_shared_topk_shared.py. The rendered test would have raised the reference's KeyError.
+- topk checks: integer S x 2048 output, pads normalized; exact per-row set equality vs golden L2.topk and vs the
+  shared input; causal; no repeats; contiguous pad tail; >= 1 valid key per row; the topk_shared module run again
+  on chunk 0 (golden chunk-0 L1.topk, 2047 padded rows) must be exact too. Order within a row is free.
+
+Decisions
+- Exact checks, because every topk mutation passes the 0.98 out gate on the CPU (/tmp/hy4_ssh5/study.py). Even an
+  all-zero top-k passes (0.99346), and so do the chunk-0 top-k (0.99951) and SP halves swapped (0.99985). Shuffled
+  or reversed rows leave attn_out bit-identical. Table in the test docstring; known issue proposed.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out rel 0.00304, topk exact, chunk 0 exact with 2096128 pads).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98, every check fails).
+- Gate (device): PASS. pcc_swap_out 0.999994. topk exact on both chunks. attn_out 0.00235, h_mid 0.00092 (stream
+  max 0.0031), router 0.99689, out rel 0.00347. The smallest margin is still gate column 0 (0.0045 vs 0.01).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
