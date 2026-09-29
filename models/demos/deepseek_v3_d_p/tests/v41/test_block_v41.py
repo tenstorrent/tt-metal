@@ -13,6 +13,7 @@ Bars (G1): block >= 0.99 synthetic / >= 0.98 real; caches >= 0.998.
 """
 
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -99,7 +100,11 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
 
     # MoE device tensors are cached on disk: the first build converts 1152 expert matrices per layer on the
     # host (minutes); later builds load them. A marker records a completed layer.
-    cache_root = WEIGHT_CACHE / f"{weights}-{orc.cache_path(spec, tokens).stem}"
+    # keyed by weight identity (dims, seed, checkpoint revision / synthetic init), not by the oracle result
+    identity = orc._digest(
+        asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=ckpt is None)
+    )
+    cache_root = WEIGHT_CACHE / f"{weights}-{identity}"
     cache_root.mkdir(parents=True, exist_ok=True)
     init_checker(cache_root)
     blocks = {}
