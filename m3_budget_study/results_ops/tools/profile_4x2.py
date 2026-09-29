@@ -20,6 +20,7 @@ PROFILE_READ_EVERY / PROFILE_SKIP_PREFIX / PROFILE_SKIP_COMPILE / PREFILL_TRACE_
 M3_CCL_TOPOLOGY / EXPERT_DTYPE / HF_MODEL / TT_CACHE_PATH:
   PROFILE_MESH     SPxTP, e.g. 4x2. Sub-mesh k = create_submeshes(MeshShape(SP, TP))[k]         [required]
   PROFILE_STAGE    sub-mesh / stage index; stage k owns layers [k*60/S, (k+1)*60/S), S=(8/SP)*(4/TP)  [0]
+  PROFILE_PARENT_MESH / PROFILE_SUBMESH  open e.g. the 4x4 sub-torus and carve tile k of it (profile_prefill.py)
   PROFILE_KV_PCC   1 -> after the last chunk, per-layer K / V / index_k PCC vs PREFILL_TRACE_DIR/kv_cache
                    over the first min(capacity, golden length) tokens: the tokens are the golden's own,
                    tiled past its end, and a causal prefix does not depend on what follows           [0]
@@ -319,11 +320,13 @@ def main():
         return pp.main()
 
     pp.set_fabric_config_from_env(fabric_config)
-    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=pp.L1_SMALL_SIZE)
+    parent_shape, submesh_idx = pp.parent_mesh_from_env(stage)
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(*parent_shape), l1_small_size=pp.L1_SMALL_SIZE)
     try:
         from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
 
-        mesh = galaxy.create_submeshes(ttnn.MeshShape(sp_req, tp_req))[stage] if stages > 1 else galaxy
+        carve = stages > 1 and (sp_req, tp_req) != tuple(parent_shape)
+        mesh = galaxy.create_submeshes(ttnn.MeshShape(sp_req, tp_req))[submesh_idx] if carve else galaxy
         print(f"[4x2] mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()} fabric={fabric_config}", flush=True)
         sp, tp = tuple(mesh.shape)
         t0 = time.perf_counter()

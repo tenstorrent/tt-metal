@@ -15,10 +15,12 @@ busy="$(pgrep -u "$(id -u)" -af 'minimax_m3/tests/perf/[a-z_]+\.py|tools/profile
 cd "$TT_METAL_HOME"; source python_env/bin/activate
 export PYTHONPATH="$TT_METAL_HOME" LOGURU_LEVEL=INFO
 export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
-export TT_MESH_GRAPH_DESC_PATH="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+# CFG_* / CFG_DESC override the transport (e.g. the 4x4 sub-torus: pass TT_VISIBLE_DEVICES and PROFILE_PARENT_MESH too).
+export TT_MESH_GRAPH_DESC_PATH="${CFG_DESC:-$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto}"
 export TT_CACHE_PATH="${TT_CACHE_PATH:-/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill}"
-export M3_FABRIC=1d EXPERT_DTYPE=bf4 M3_PROFILE_ZONES=0 TT_METAL_DEVICE_PROFILER=0
-export M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128 M3_MOE_DISPATCH=v1 M3_MOE_COMBINE=v1 M3_MOE_TOPOLOGY=linear M3_CCL_TOPOLOGY=linear
+export M3_FABRIC="${CFG_FABRIC:-1d}" EXPERT_DTYPE=bf4 M3_PROFILE_ZONES=0 TT_METAL_DEVICE_PROFILER=0
+export M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128 M3_MOE_DISPATCH="${CFG_DISPATCH:-v1}" M3_MOE_COMBINE="${CFG_COMBINE:-v1}"
+export M3_MOE_TOPOLOGY="${CFG_MOE_TOPOLOGY:-linear}" M3_CCL_TOPOLOGY="${CFG_CCL_TOPOLOGY:-linear}"
 ulimit -Su "$(ulimit -Hu)"
 { echo "run_id=$RUN_ID"; echo "git_sha=$(git rev-parse HEAD)"; echo "dirty=$(git status --porcelain -uno | tr '\n' ' ')"
   echo "date=$(date -Is)"; env | grep -E '^(M3_|PROFILE_|TT_|EXPERT_|HF_|PREFILL_)' | sort; } > "$ENVF"

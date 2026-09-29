@@ -44,10 +44,12 @@ if [ "$MESH" != 2x4 ]; then
   export MESH HARNESS="${HARNESS:-m3_budget_study/results_ops/tools/profile_4x2.py}"
 fi
 
-# Fixed configuration of every run.
-export STAGES=4 STAGE=0 FABRIC=1d M3_FABRIC=1d LAYER_IDS=0,1,2,3,4,5,6
-export M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128 M3_MOE_DISPATCH=v1 M3_MOE_COMBINE=v1
-export M3_MOE_TOPOLOGY=linear M3_CCL_TOPOLOGY=linear EXPERT_DTYPE=bf4 LEVEL=2
+# Fixed configuration of every run. CFG_* override the transport (e.g. the 4x4 sub-torus with the v2 MoE ops;
+# pass TT_VISIBLE_DEVICES / TT_MESH_GRAPH_DESC_PATH / PROFILE_PARENT_MESH through the environment).
+export STAGES=4 STAGE=0 FABRIC="${CFG_FABRIC:-1d}" M3_FABRIC="${CFG_FABRIC:-1d}" LAYER_IDS=0,1,2,3,4,5,6
+export M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128
+export M3_MOE_DISPATCH="${CFG_DISPATCH:-v1}" M3_MOE_COMBINE="${CFG_COMBINE:-v1}"
+export M3_MOE_TOPOLOGY="${CFG_MOE_TOPOLOGY:-linear}" M3_CCL_TOPOLOGY="${CFG_CCL_TOPOLOGY:-linear}" EXPERT_DTYPE=bf4 LEVEL=2
 export PROFILE_SKIP_COMPILE=1 PREFIX_QUIET=1 WARM_POINT="${WARM_POINT:-3}" PROFILE_PROGRESS_EVERY=8
 # No drains in the un-profiled forwards: every marker read is a host zone in the .tracy, so a deep prefix drained
 # every few forwards grows the capture with h (3.4 GB of tracy_ops_times.csv at h=0 already). The device buffer
@@ -109,7 +111,7 @@ run_point () {
   { echo "run_id=$id"; echo "git_sha=$(git -C "$TT_METAL_HOME" rev-parse HEAD)"
     echo "dirty=$(git -C "$TT_METAL_HOME" status --porcelain -uno | wc -l)"; echo "date=$(date -Is)"
     printf '%s\n' "${knobs[@]}"
-    env | grep -E '^(MESH|HARNESS|STAGES|STAGE|FABRIC|LAYER_IDS|LEVEL|WARM_POINT|PREFIX_QUIET|M3_|PROFILE_|TT_|EXPERT_|HF_)=' | sort
+    env | grep -E '^((MESH|HARNESS|STAGES|STAGE|FABRIC|LAYER_IDS|LEVEL|WARM_POINT|PREFIX_QUIET)=|(M3_|PROFILE_|TT_|EXPERT_|HF_))' | sort
   } > "$envf"
 
   echo "[p0a] $(date '+%F %T') START $id (W=$W h=$h B=$B input=$input${segs:+ segments=$segs})"

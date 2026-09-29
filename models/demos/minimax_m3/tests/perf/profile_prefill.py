@@ -89,6 +89,11 @@ Env:
   PROFILE_MESH        SPxTP sub-mesh shape, e.g. 4x2; overrides PROFILE_STAGES with (8/SP)*(4/TP) and carves
                       create_submeshes(MeshShape(SP, TP))[PROFILE_STAGE]. TP != 4 needs the multi-head KV cache
                       of m3_budget_study/results_ops/tools/profile_4x2.py (run through it)       [default unset]
+  PROFILE_PARENT_MESH RxC mesh to open instead of the 8x4 galaxy, e.g. 4x4 on the middle-rows sub-torus
+                      (TT_VISIBLE_DEVICES + a matching TT_MESH_GRAPH_DESC_PATH). The sub-mesh is then
+                      create_submeshes(PROFILE_MESH)[PROFILE_SUBMESH]; PROFILE_STAGE still picks the layers
+                      of the 8x4 stage split                                                     [default 8x4]
+  PROFILE_SUBMESH     sub-mesh index inside PROFILE_PARENT_MESH                   [default PROFILE_STAGE]
   PROFILE_STAGE       which stage to profile, 0..PROFILE_STAGES-1. Stage k owns global layers
                       [k*60/S, (k+1)*60/S); PROFILE_LAYER_IDS must fall inside that range and
                       PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
@@ -412,6 +417,13 @@ def build_runtime(
     return runtime, kv_cache, hf_config, global_layer_indices
 
 
+def parent_mesh_from_env(stage):
+    """(PROFILE_PARENT_MESH shape, sub-mesh index): the mesh opened and which create_submeshes tile to use."""
+    env = os.getenv("PROFILE_PARENT_MESH", "").strip().lower()
+    shape = tuple(int(x) for x in env.split("x")) if env else (8, 4)
+    return shape, int(os.getenv("PROFILE_SUBMESH", str(stage)))
+
+
 def main():
     _raise_nproc_limit()
 
@@ -430,6 +442,7 @@ def main():
         assert 8 % sub_shape[0] == 0 and 4 % sub_shape[1] == 0, f"PROFILE_MESH={mesh_env} does not tile the 8x4 galaxy"
         stages = (8 // sub_shape[0]) * (4 // sub_shape[1])
     assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
+    parent_shape, submesh_idx = parent_mesh_from_env(stage)
     fabric_config = fabric_config_from_env()
     warm_iters = int(os.getenv("PROFILE_WARM_ITERS", "2"))
     warm_point = int(os.getenv("PROFILE_WARM_POINT", "0"))
@@ -491,7 +504,7 @@ def main():
     # matching *_torus_xy mesh graph descriptor). M3_CCL_TOPOLOGY=Ring puts the legacy CCLs on the ring
     # (measured in PR #55668); high_bw_all_gather derives its own from the fabric.
     set_fabric_config_from_env(fabric_config)
-    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(*parent_shape), l1_small_size=L1_SMALL_SIZE)
     print(
         f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_config} "
         f"ccl_topology={ccl_topology_from_env()}",
@@ -507,12 +520,13 @@ def main():
             zone,
         )
 
-        if stages > 1:
+        if stages > 1 and tuple(sub_shape) != tuple(parent_shape):
             # Row-major tiles of the grid (row blocks for the default (8/S, 4) shape), in the same order the
             # pipeline bindings assign stages.
-            mesh = galaxy.create_submeshes(ttnn.MeshShape(*sub_shape))[stage]
+            mesh = galaxy.create_submeshes(ttnn.MeshShape(*sub_shape))[submesh_idx]
             print(
-                f"[zone-prof] stage {stage}/{stages} sub-mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}",
+                f"[zone-prof] stage {stage}/{stages} sub-mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
+                f"(tile {submesh_idx} of {tuple(parent_shape)})",
                 flush=True,
             )
         sp, tp = tuple(mesh.shape)
