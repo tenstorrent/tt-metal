@@ -1560,3 +1560,28 @@ streams already differ (comb not transposed: per-stream 0.997, identity comb: re
 - Next step: implement only needs to add ffn_residual to `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.15 test (attempt 1)
+Reviewed the rendered swap test for dsa_moe layer 3 with every step (attn_hc through ffn_residual) on the device. I
+rewrote it from swap 14's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new residual-share block (every device output up to mlp_out fixed, CPU ffn_residual) is the base
+  of the residual's share. Its out is exactly the fp32 CPU residual of the device (h_mid, ffn_hc, mlp_out). The add
+  share is now that block vs the add-share block (both end in the CPU residual), and it reproduces swap 14 (0.00124 /
+  [1.0000, 1.0008]). Every earlier share is unchanged.
+- New check: ffn_residual (block out) vs the CPU residual of the same device inputs, with the component test's
+  same-input limits: rel <= 0.0035, ratio [0.997, 1.003], worst row <= 0.006, per-stream <= 0.005. Each term on its
+  own: post coefficient [0.998, 1.002] / rel <= 0.007, comb coefficient [0.998, 1.002] / rel <= 0.009. It also runs
+  on chunk 0. No new sensitivity script: the residual is linear and weightless, and the component test sized these
+  limits on the layer-3 golden (post x1.005, comb x1.005, a truncating output and a zeroed last row all fail).
+- `_res_checks` now takes `step=` and `terms=`, so the ffn residual reuses it with its own term limits. Its defaults
+  keep attn_residual's limits and metric names.
+- Block-level limits are unchanged. The device residual adds its bf16 rounding (0.0017) in quadrature: vs golden
+  0.00654 of 0.01, vs the all-CPU block 0.00550 of 0.0075.
+Results:
+- Device passes: PCC 0.999979 (c0 0.999973). ffn_residual same input 0.00166 / [0.9998, 1.0010] / term coefficients
+  1.00000 (c0 the same). About 119 s.
+- Reference passes (every same-input check exact). Stub fails (AssertionError, PCC 0).
+- The add share still prints as "block out vs ma_share", but it now compares the residual-share block with the
+  add-share block.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_15_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
