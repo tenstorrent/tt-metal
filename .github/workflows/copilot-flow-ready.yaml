@@ -352,8 +352,12 @@ jobs:
                     await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
                     core.info(`#${number}: posted failed-session notice`);
                   } else if (t.type === 'zero_diff_notice') {
+                    // Literal marker, not the ZERO_DIFF_MARKER_PREFIX constant: each
+                    // actions/github-script step is a separate Node.js scope (that constant
+                    // is only defined in the scan step above), same as failed_notice's literal
+                    // marker string just above.
                     const body = [
-                      `${ZERO_DIFF_MARKER_PREFIX}${t.finished_at} -->`,
+                      `<!-- copilot-flow-zero-diff:${t.finished_at} -->`,
                       `🤖 **Copilot flow** — Copilot finished (\`copilot_work_finished\` at ${t.finished_at}) but the PR has zero changed files; left as draft rather than flipped ready — there is nothing for reviewers or CI to look at yet.`,
                       '',
                       'A maintainer decides what happens next: @-mention Copilot with guidance, or close the PR.',
