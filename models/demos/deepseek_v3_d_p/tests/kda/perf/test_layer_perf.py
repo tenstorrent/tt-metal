@@ -50,7 +50,9 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
-_GALAXY_PERF_REFERENCE_MS = 4.195
+# Galaxy SP8xTP4 calibration (2026-09-29) with the TP reduce-scatter ringed as in production: median of two
+# samples, each the median of five warm synchronized 10-replay samples.
+_GALAXY_PERF_REFERENCE_MS = 4.038
 
 
 @pytest.fixture(scope="session")
