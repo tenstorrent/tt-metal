@@ -72,6 +72,9 @@ public:
     uint32_t ring_full_wait_count() const;  // reads device L1
     // Peak count of dispatch_s waits for a free record slot (the BRISC fell a full ring behind); reads device L1.
     uint32_t record_ring_full_wait_count() const;
+    // Dispatch-stall markers received from all devices (host-side counts; no device read).
+    uint64_t dispatch_stall_events() const { return dispatch_stall_events_.load(std::memory_order_relaxed); }
+    uint64_t dispatch_stall_cycles() const { return dispatch_stall_cycles_.load(std::memory_order_relaxed); }
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
@@ -83,6 +86,9 @@ private:
         // dispatch_s core feeding this device's profiler, and the L1 address of its record_full_wait_count.
         std::optional<CoreCoord> dispatch_s_core;
         uint32_t record_full_wait_count_addr = 0;
+        // Dispatch stalls reported for this device (receiver thread only until shutdown joins it).
+        uint64_t dispatch_stall_events = 0;
+        uint64_t dispatch_stall_cycles = 0;
         std::unique_ptr<D2HSocket> socket;
         // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
         // manager's lifetime.
@@ -159,8 +165,10 @@ private:
         std::vector<uint32_t>& page_buf,
         std::vector<tt::ProgramRealtimeRecord>& record_buf);
     // Decode program records from drained pages and publish them to the broadcast ring.
+    // Count and surface one dispatch-stall marker (log on the first per device, Tracy zone + message each time).
+    void report_dispatch_stall(DeviceState& dev_state, uint64_t stall_end_timestamp, uint32_t stall_cycles);
     void publish_pages(
-        const DeviceState& dev_state,
+        DeviceState& dev_state,
         const uint32_t* page_buf,
         uint32_t num_pages,
         std::vector<tt::ProgramRealtimeRecord>& records);
@@ -197,6 +205,8 @@ private:
     uint32_t windowed_peak_fifo_pages_ = 0;           // for plotting in Tracy; gets reset each plot sample
     std::atomic<uint64_t> num_published_records_{0};  // count of records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // count of batches published to the ring
+    std::atomic<uint64_t> dispatch_stall_events_{0};  // dispatch-stall markers received
+    std::atomic<uint64_t> dispatch_stall_cycles_{0};  // device cycles those stalls lasted
 
     static constexpr size_t kMaxConsumerBatchPerDevice = 1u << 15;  // max batch size per device
     static constexpr size_t kMaxConsumerBatchCap = 1u

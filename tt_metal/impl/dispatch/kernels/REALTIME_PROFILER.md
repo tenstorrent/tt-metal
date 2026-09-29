@@ -91,6 +91,28 @@ coalesced NOC writes over PCIe — up to `NOC_MAX_BURST_SIZE` per write, chunked
 ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 `socket_push_pages` + `socket_notify_receiver` + `noc_async_write_barrier`.
 
+## Dispatch Stall Reporting
+
+A dispatch_s wait for a free record slot is reported to the host in-band, at no cost
+on the fast path:
+
+1. dispatch_s times the wait and stores it (in device cycles, never 0) in
+   `kernel_end.header` of the record it publishes next.
+2. The BRISC reader sees the nonzero word, zeroes it in dispatch_s's slot before
+   acking, and, once the following record arrives, pushes a dispatch-stall marker
+   (`REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID` in word 3; words 0-1 the time the
+   stall ended, which is that record's start; word 2 its length).
+3. The host counts it (`RealtimeProfilerManager::dispatch_stall_events()` /
+   `dispatch_stall_cycles()`), logs a warning on the first stall per device and a
+   summary at shutdown, and draws a zone on the device's **Dispatch stall** lane in
+   Tracy plus an error-level Tracy message (rate-limited to one per 100 ms per device).
+
+The markers travel through the same lossless path as records, so they can be late
+but are never lost. To exercise this path, set
+`TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK` (for example `0x3FFF`) before opening the
+device; it slows the BRISC reader with a random busy-wait of up to that many
+iterations per drain (`RealtimeProfilerStress.DispatchStallIsReportedAndLossless`).
+
 ## Measured Timing
 
 ### Signal cost (dispatch_s side)

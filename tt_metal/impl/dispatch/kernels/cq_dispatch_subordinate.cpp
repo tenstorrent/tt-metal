@@ -432,12 +432,20 @@ void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t
         rt_record_rd_idx = msg->record_rd_idx;
         if (realtime_profiler_record_ring_full(next_wr_idx)) {
             msg->record_full_wait_count = msg->record_full_wait_count + 1;
+            volatile tt_reg_ptr uint32_t* wall_clock =
+                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            const uint32_t wait_start = wall_clock[WALL_CLOCK_LOW_INDEX];
             WAYPOINT("RPFW");
             do {
                 invalidate_l1_cache();
                 rt_record_rd_idx = msg->record_rd_idx;
             } while (realtime_profiler_record_ring_full(next_wr_idx));
             WAYPOINT("RPFD");
+            // Report the wait in-band on the record about to be published; the BRISC turns it into a
+            // dispatch-stall marker for the host. 0 means "no wait", so a wait is never stored as 0.
+            const uint32_t wait_cycles = wall_clock[WALL_CLOCK_LOW_INDEX] - wait_start;
+            msg->records[rt_record_wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)].kernel_end.header =
+                wait_cycles != 0 ? wait_cycles : 1;
         }
     }
     // Move the local writers (this kernel and the compute helper) to the new slot before the BRISC can

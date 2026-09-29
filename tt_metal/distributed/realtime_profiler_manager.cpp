@@ -26,6 +26,7 @@
 #endif
 
 #include <enchantum/enchantum.hpp>
+#include <env_lib.hpp>
 #include <fmt/core.h>
 #include <tt-logger/tt-logger.hpp>
 
@@ -82,6 +83,15 @@ std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_rt_profile
 
 // Sync marker ID — must match device-side REALTIME_PROFILER_SYNC_MARKER_ID.
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
+
+// Dispatch-stall marker ID — must match device-side REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID. Page words 0-1:
+// device time the stall ended, word 2: its length in device cycles.
+constexpr uint32_t REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID = 0xFFFFFFFE;
+
+// Device cycles to microseconds; frequency is in cycles per nanosecond (0 before the first sync).
+double cycles_to_us(uint64_t cycles, double frequency) {
+    return frequency > 0.0 ? static_cast<double>(cycles) / (frequency * 1000.0) : 0.0;
+}
 
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
@@ -361,19 +371,44 @@ uint32_t RealtimeProfilerManager::record_ring_full_wait_count() const {
     return peak;
 }
 
+void RealtimeProfilerManager::report_dispatch_stall(
+    DeviceState& dev_state, uint64_t stall_end_timestamp, uint32_t stall_cycles) {
+    dev_state.dispatch_stall_events++;
+    dev_state.dispatch_stall_cycles += stall_cycles;
+    dispatch_stall_events_.fetch_add(1, std::memory_order_relaxed);
+    dispatch_stall_cycles_.fetch_add(stall_cycles, std::memory_order_relaxed);
+    if (dev_state.dispatch_stall_events == 1) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {}: dispatch stalled {:.2f} us waiting for the real-time profiler (record "
+            "ring full); profiler records are delayed, not lost. Further stalls are summarized at shutdown.",
+            dev_state.chip_id,
+            cycles_to_us(stall_cycles, dev_state.sync_frequency));
+    }
+    tracy_handler_->PushDispatchStallMarker(
+        dev_state.chip_id, stall_end_timestamp, stall_cycles, dev_state.sync_frequency);
+}
+
 void RealtimeProfilerManager::publish_pages(
-    const DeviceState& dev_state,
+    DeviceState& dev_state,
     const uint32_t* page_buf,
     uint32_t num_pages,
     std::vector<tt::ProgramRealtimeRecord>& records) {
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
-    auto is_record = [](const uint32_t* page) { return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID; };
+    auto is_record = [](const uint32_t* page) {
+        return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID &&
+               page[3] != REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID;
+    };
     records.clear();
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
     const DataCollector* const data_collector = data_collector_;
     for (uint32_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = page_buf + page * kPageWords;
+        if (rp[3] == REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID) {
+            report_dispatch_stall(dev_state, (static_cast<uint64_t>(rp[0]) << 32) | rp[1], rp[2]);
+            continue;
+        }
         if (!is_record(rp)) {
             continue;
         }
@@ -704,6 +739,12 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             brisc_config.defines["DISPATCH_RECORD_RD_IDX_ADDR"] = std::to_string(dispatch_record_rd_idx_addr);
             brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             brisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
+            // Test only: slow the BRISC reader with a random busy-wait of up to this many iterations per drain, so
+            // dispatch_s has to wait for record slots (exercises the dispatch-stall path).
+            if (const uint32_t delay_mask = tt::parse_env<uint32_t>("TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK", 0);
+                delay_mask != 0) {
+                brisc_config.defines["RT_PROFILER_TEST_BRISC_DELAY_MASK"] = std::to_string(delay_mask) + "u";
+            }
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_kernel_path, realtime_profiler_core, brisc_config);
 
@@ -1317,6 +1358,19 @@ void RealtimeProfilerManager::shutdown() {
                 "[Real-time profiler] Failed to read ring_full_wait_count for device {}: {}",
                 dev_state.chip_id,
                 e.what());
+        }
+    }
+
+    // The receiver has drained every page, so each dispatch-stall marker has been counted.
+    for (const auto& dev_state : devices_) {
+        if (dev_state.dispatch_stall_events != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: dispatch stalled {} time(s), {:.2f} us in total, waiting for the "
+                "real-time profiler (record ring full); profiler records were delayed, not lost",
+                dev_state.chip_id,
+                dev_state.dispatch_stall_events,
+                cycles_to_us(dev_state.dispatch_stall_cycles, dev_state.sync_frequency));
         }
     }
 

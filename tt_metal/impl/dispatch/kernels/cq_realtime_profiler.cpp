@@ -42,6 +42,28 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 // Latest end time among the dispatch_s records read so far.
 uint64_t last_record_end = 0;
 
+// Cycles dispatch_s waited for a free record slot, flagged on the last record read and reported once the next
+// record's start (the end of that wait) is known. 0 means none pending.
+uint32_t pending_stall_cycles = 0;
+
+// Enqueue a dispatch-stall marker: the host shows it as a stall ending at stall_end, stall_cycles long.
+__attribute__((noinline)) void realtime_profiler_enqueue_stall_marker(uint64_t stall_end, uint32_t stall_cycles) {
+    while (rt_ring_full(ring_buffer)) {
+        invalidate_l1_cache();
+    }
+    tt_l1_ptr uint32_t* l1_data =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(rt_ring_data_addr(ring_buffer, ring_buffer->write_index));
+    l1_data[0] = static_cast<uint32_t>(stall_end >> 32);
+    l1_data[1] = static_cast<uint32_t>(stall_end);
+    l1_data[2] = stall_cycles;
+    l1_data[3] = REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID;
+    l1_data[4] = 0;
+    l1_data[5] = 0;
+    l1_data[6] = 0;
+    l1_data[7] = 0;
+    ring_buffer->write_index++;
+}
+
 // Read one record slot from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t record_idx) {
     // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
@@ -76,10 +98,32 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t recor
         last_record_end = end;
     }
 
+    // A nonzero kernel_end.header means dispatch_s waited for a free slot just before publishing this record.
+    // Zero it in dispatch_s's slot before the slot is handed back (the ack below follows on the same NOC path),
+    // so a reused slot never reports the same wait twice.
+    const uint32_t stall_cycles = record->kernel_end.header;
+    if (stall_cycles != 0) {
+        record->kernel_end.header = 0;
+        noc_inline_dw_write(
+            get_noc_addr(
+                DISPATCH_CORE_NOC_X,
+                DISPATCH_CORE_NOC_Y,
+                dispatch_data_addr + offsetof(realtime_profiler_record_t, kernel_end) +
+                    offsetof(realtime_profiler_timestamp_t, header)),
+            0);
+    }
+    const uint64_t start = (static_cast<uint64_t>(record->kernel_start.time_hi) << 32) | record->kernel_start.time_lo;
+
     const uint32_t id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
     if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
         ring_buffer->write_index++;
     }
+
+    // The wait flagged on the previous record ended when dispatch_s started this record's command.
+    if (pending_stall_cycles != 0) {
+        realtime_profiler_enqueue_stall_marker(start, pending_stall_cycles);
+    }
+    pending_stall_cycles = stall_cycles;
 }
 
 // Consumer index into the dispatch_s record ring; this kernel is its only writer.
@@ -162,10 +206,33 @@ void kernel_main() {
     ring_buffer->terminate = 0;
 
     // record_wr_idx on this core is written only by dispatch_s (host zeroes it before launch).
+#ifdef RT_PROFILER_TEST_BRISC_DELAY_MASK
+    // Test only (TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK): a random busy-wait before each drain slows this
+    // reader down so dispatch_s has to wait for record slots.
+    uint32_t test_delay_lfsr = 0xACE1u;
+#endif
     while (true) {
         invalidate_l1_cache();
 
+#ifdef RT_PROFILER_TEST_BRISC_DELAY_MASK
+        if ((rt_profiler_msg->record_wr_idx & REALTIME_PROFILER_RECORD_WR_IDX_MASK) != record_rd_idx) {
+            test_delay_lfsr = test_delay_lfsr * 1103515245u + 12345u;
+            for (volatile uint32_t d = 0, n = (test_delay_lfsr >> 16) & RT_PROFILER_TEST_BRISC_DELAY_MASK; d < n; d++) {
+            }
+        }
+#endif
+
         if (realtime_profiler_drain_records()) {
+            if (pending_stall_cycles != 0) {
+                // No later record bounds this wait; end it now.
+                volatile tt_reg_ptr uint32_t* p_reg =
+                    reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+                const uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+                realtime_profiler_enqueue_stall_marker(
+                    (static_cast<uint64_t>(time_hi) << 32) | time_lo, pending_stall_cycles);
+                pending_stall_cycles = 0;
+            }
             noc_async_write_barrier();  // last record_rd_idx ack
             ring_buffer->terminate = 1;
             return;
