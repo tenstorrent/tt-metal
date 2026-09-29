@@ -190,6 +190,10 @@ ParallelConfig determine_parallel_config(
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
     // In case non native activation block height is used, we need to ensure that the amount
     // of work per core in the height dimension is a multiple of the activation block height override.
+    TT_FATAL(
+        act_block_h_override % tt::constants::TILE_HEIGHT == 0,
+        "Config Error: act_block_h_override ({}) must be a multiple of 32 (tile height).",
+        act_block_h_override);
     uint32_t act_block_h_override_ntiles =
         act_block_h_override == 0 ? 1 : act_block_h_override / tt::constants::TILE_HEIGHT;
 
@@ -274,6 +278,7 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding,
     std::array<uint32_t, 2> dilation) {
+    TT_FATAL(stride[0] > 0 && stride[1] > 0, "stride must be greater than 0, got ({}, {})", stride[0], stride[1]);
     const uint32_t output_height = ((input_image_size[0] - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) +
                                      (padding[0] + padding[1])) /
                                     stride[0]) +
@@ -442,11 +447,10 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     bool enable_activation_reuse,
     bool is_1d_depthwise_conv,
     bool coalesce_1d_depthwise_kw_reads) {
-    if (act_block_h_override > 0) {
-        TT_ASSERT(
-            act_block_h_override % 32 == 0,
-            "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
-    }
+    TT_FATAL(
+        act_block_h_override % tt::constants::TILE_HEIGHT == 0,
+        "Config Error: act_block_h_override ({}) must be a multiple of 32 (tile height).",
+        act_block_h_override);
 
     uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
 
@@ -495,6 +499,7 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
             tt::constants::TILE_WIDTH);
 
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+        TT_FATAL(act_block_w_div > 0, "Config Error: act_block_w_div must be greater than 0.");
         TT_ASSERT(
             padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0,
             "Padded In Channels = {}, num_cores = {}, act_block_w_div = {}",
