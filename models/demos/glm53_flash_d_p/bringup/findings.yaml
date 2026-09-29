@@ -19,3 +19,16 @@ findings:
     never inside a trace). The K.1 hook contract_state_pcc can rebuild the TP/SP shards with
     models/demos/deepseek_v3_d_p/tests/kda/utils.py reconstruct_state_at_sp_rank / reconstruct_convolution_at_sp_rank.
     Clamp the 0xFFFFFFFF pad token id before the embedding lookup.
+- id: attn-hc-per-column-bias-layer4
+  task: S.kda_moe.02
+  kind: ACCURACY
+  title: Device attn_hc (tt/mhc.py) at layer 4 biases pre/post per column on every token; the part checks pass it
+  detail: >-
+    Probe (tt-probe, not kept), device attn_hc vs the fp32 CPU attn_hc of the
+    golden layer-4 `in`: per-column median ratio pre [0.9951, 1.0019, 1.0013, 0.9945], post [1.0183, 1.0040, 1.0160,
+    1.0358]; median equals mean, so the error is a fixed per-column offset, not noise. Pre row sums are 0.9965x
+    (median). Most likely the fp32 matmul's reduced-mantissa path shifts each logit by a fixed amount before the
+    sigmoid (weights and consts are already fp32); a fixed logit shift is a relative error on saturated (small) post
+    entries. Not proven. The swap-01 part checks (rel <= 0.01, worst column 0.05) pass because large, accurate entries
+    dominate each column's norm. Effect so far: attn_collapse vs golden ratio [0.9890, 0.9994] (limit 0.985); block out
+    vs the CPU block 33 flips, same-routing [0.9929, 1.0032]. Worth fixing if later kda_moe swaps run out of margin.
