@@ -100,6 +100,17 @@ class MeshConfig:
 
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
 
+    def lane_shard_mapper(self, mesh_device, tensor_dim):
+        """Mapper for lane-major control tensors (slice 3b).
+
+        Control tensors carry the GLOBAL batch (lanes x 32, lane-major, with
+        vLLM-style pad rows) in one dim; sharding that dim over the lane (sp)
+        axis and replicating over tp gives every chip its own lane's slice at
+        exactly the per-chip shapes the decode ops already expect.
+        """
+        dims = (None, tensor_dim) if self.tp_axis == 0 else (tensor_dim, None)
+        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims)
+
     def fractured_mapper(self, mesh_device, axis0_dim, axis1_dim):
         """Shard two DIFFERENT tensor dims over the two mesh axes.
 
