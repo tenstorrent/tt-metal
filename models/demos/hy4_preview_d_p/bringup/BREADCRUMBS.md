@@ -2437,3 +2437,38 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
+
+## S.moe_shared.03 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_shared layer 2, attn_hc + attn_hc_pre + attn_norm on device, rest
+  CPU). It is the reviewed layer-1 test (test_swap_moe_full_03_attn_norm.py) with the layer-2 changes of swaps 01 / 02:
+  ctx.extra["shared_topk"] = golden L1 topk in both contexts, no indexer top-k check (a shared layer has no indexer;
+  golden L1 and L2 topk are identical), a per-stream h_mid limit (0.005) and router overlap >= 0.98. The other limits
+  are unchanged: gates, attn_x (vs golden, vs CPU, rotated gates), attn_norm vs golden / vs CPU (0.008, ratio
+  [0.993, 1.007], row 0.015), attn_norm on attn_x x 0.1 (0.01 / 0.02), q_resid 0.01, attn_out 0.01 / 0.05, h_mid
+  0.005 / 0.02, out rel 0.01.
+- CPU block-level mutation study: /tmp/hy4_ssh3/study.py (outside the repo, 9 s per variant). The table is in the
+  test docstring.
+
+Decisions
+- Router limit 0.98, not the layer-1 0.99. Layer-2 reference gives 0.9973 and bf16 0.9964. At the swaps 01 / 02 value
+  it is a gross check; the attn_norm checks catch the bugs.
+- 12 of 17 attn_norm mutations pass the 0.98 out gate (all eps variants, x 1.01 / 1.02, RMS subsets, LayerNorm, a
+  zeroed row, TP-swapped w). The attn_norm checks catch every one. bf16 everywhere fits: 0.0041 / [0.9939, 1.0058] /
+  0.0071.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999995, attn_norm 0.00222, router 0.99725, out rel 0.00304).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98, every extra check fails).
+- Gate (device): PASS. pcc_swap_out 0.999994. attn_norm 0.00287, ratio [0.99823, 1.00034], row 0.00341. vs CPU
+  0.00193. x0.1 0.00188. q_resid 0.00200. attn_out 0.00235. h_mid 0.00092, stream max 0.0031, row 0.0039. router
+  0.99689. out rel 0.00347.
+
+Gotchas
+- The smallest margin is still gate column 0 (0.0045 vs 0.01), carried over from swap 01.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
