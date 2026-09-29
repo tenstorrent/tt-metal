@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Row add, compute: c_16 = c_0 + c_1, tile by tile (row-major data: element-wise ops are layout agnostic).
-// CT: 0 TILES (per row)   RT: 0 n (rows)
+// CT: 0 TILES (per row)   Common RT: 0 rows, 1 rows per core, 2 grid x
 #include <cstdint>
 #include "api/compute/common.h"
+#include "core_range.hpp"
 #include "api/compute/eltwise_binary.h"
 
 void kernel_main() {
     constexpr uint32_t TILES = get_compile_time_arg_val(0);
-    const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t n =
+        core_range(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2)).n;
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     add_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     for (uint32_t i = 0; i < n; ++i) {

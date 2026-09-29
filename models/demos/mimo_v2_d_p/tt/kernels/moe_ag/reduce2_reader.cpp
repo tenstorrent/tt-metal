@@ -10,11 +10,13 @@
 // page (the pair count, word 0), then per pair TILES tiles of 1024 elements (c_0) and a scalar tile (c_1, element 0 =
 // the bf16 weight).
 // CT: 0 K, 1 ROW_BYTES, 2 TILES (row tiles = ROW_BYTES / 2048), 3 W_STRIDE (L1 bytes per staged weight page), 4 PHASE
-// RT: 0 y (row-major bf16 [rows, H]) addr, 1 y_slot addr, 2 w (gathered weights [T, K] bf16) addr, 3 g0 (within the
-//     block), 4 n, 5 chip-info addr, 6 peer partials (phase 2: the gathered phase-1 partials [2 S, H]) addr
+// Common RT: 0 y (row-major bf16 [rows, H]) addr, 1 y_slot addr, 2 w (gathered weights [T, K] bf16) addr, 3 S, 4 tokens
+//     per core (range g0, n within the block), 5 chip-info addr, 6 peer partials (phase 2: the gathered phase-1
+//     partials [2 S, H]) addr, 7 grid x
 // CBs: 0 y rows, 1 weight tiles, 2 headers, 4 y_slot block (scratch), 5 weights (scratch), 6 zero row (scratch)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(0);
@@ -24,14 +26,17 @@ void kernel_main() {
     constexpr uint32_t PHASE = get_compile_time_arg_val(4);
     constexpr uint32_t NONE = 0xFFFFFFFFu;
     constexpr uint32_t cb_y = tt::CBIndex::c_0, cb_w = tt::CBIndex::c_1, cb_h = tt::CBIndex::c_2;
-    const uint32_t y_addr = get_arg_val<uint32_t>(0), ys_addr = get_arg_val<uint32_t>(1);
-    const uint32_t w_addr = get_arg_val<uint32_t>(2), n = get_arg_val<uint32_t>(4);
-    const InterleavedAddrGen<true> pg = {.bank_base_address = get_arg_val<uint32_t>(6), .page_size = ROW_BYTES};
-    uint32_t g0 = get_arg_val<uint32_t>(3), peer0 = 0;
+    const uint32_t y_addr = get_common_arg_val<uint32_t>(0), ys_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(2);
+    const auto [g0_, n] =
+        core_range(get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4), get_common_arg_val<uint32_t>(7));
+    const InterleavedAddrGen<true> pg = {.bank_base_address = get_common_arg_val<uint32_t>(6), .page_size = ROW_BYTES};
+    uint32_t g0 = g0_, peer0 = 0;
     {
         const uint32_t l1 = get_write_ptr(tt::CBIndex::c_7);
         noc_async_read(
-            get_noc_addr(0, InterleavedAddrGen<true>{.bank_base_address = get_arg_val<uint32_t>(5), .page_size = 64}),
+            get_noc_addr(
+                0, InterleavedAddrGen<true>{.bank_base_address = get_common_arg_val<uint32_t>(5), .page_size = 64}),
             l1,
             64);
         noc_async_read_barrier();

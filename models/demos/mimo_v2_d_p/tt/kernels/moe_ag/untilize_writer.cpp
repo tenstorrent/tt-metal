@@ -5,20 +5,21 @@
 // Active-row untilize, writer (BRISC): each untilized block (32 rows x W * 32 columns bf16, c_16) into y_rm rows
 // [32 tr, 32 tr + 32), column chunk c.
 // CT: 0 NG, 1 EPC, 2 W, 3 NCH, 4 P
-// RT: 0 y_rm addr, 1 counts, 2 regions, 3 lmap, 4 me
+// Common RT: 0 y_rm addr, 1 counts, 2 regions, 3 lmap, 4 grid x
 #include "untilize_active.hpp"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t NG = get_compile_time_arg_val(0), EPC = get_compile_time_arg_val(1);
     constexpr uint32_t W = get_compile_time_arg_val(2), NCH = get_compile_time_arg_val(3);
     constexpr uint32_t P = get_compile_time_arg_val(4);
     constexpr uint32_t SEG = W * 64, ROW = SEG * NCH;
-    const InterleavedAddrGen<true> og = {.bank_base_address = get_arg_val<uint32_t>(0), .page_size = ROW};
-    const uint32_t me = get_arg_val<uint32_t>(4);
+    const InterleavedAddrGen<true> og = {.bank_base_address = get_common_arg_val<uint32_t>(0), .page_size = ROW};
+    const uint32_t me = core_index(get_common_arg_val<uint32_t>(4));
     for_my_tile_rows<NG, EPC, NCH>(
-        get_arg_val<uint32_t>(1),
-        get_arg_val<uint32_t>(2),
-        get_arg_val<uint32_t>(3),
+        get_common_arg_val<uint32_t>(1),
+        get_common_arg_val<uint32_t>(2),
+        get_common_arg_val<uint32_t>(3),
         get_write_ptr(tt::CBIndex::c_5),
         me,
         P,

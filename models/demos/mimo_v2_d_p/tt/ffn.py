@@ -149,7 +149,8 @@ class TtGate:
         self._pcs = {}
         self.mesh_device = mesh_device
 
-    def __call__(self, x):
+    def __call__(self, x, row_major=False):
+        """``row_major``: (indices, weights) both uint16 / bf16 ROW_MAJOR [1, 1, S, K] (the all-gather block's input)."""
         M = x.shape[-2]
         if M not in self._pcs:
             self._pcs[M] = router_mm_config(self.mesh_device, M, N=self.E)
@@ -167,6 +168,8 @@ class TtGate:
             score_func="sigmoid",
         )
         logits.deallocate(True)
+        if row_major:
+            return ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT)
         S = x.shape[2]
         idx = ttnn.reshape(ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), (S, self.K))
         w = ttnn.reshape(w, (S, self.K))
@@ -373,11 +376,8 @@ class TtMoE:
 
     def _call_ag(self, x):
         """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP)."""
-        S = x.shape[2]
-        idx, w = self.gate(x)
+        idx4, w_rm = self.gate(x, row_major=True)
         x_rm = self.ag.to_rm(x)
-        w_rm = ttnn.reshape(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (1, 1, S, self.K))
-        idx4 = ttnn.reshape(idx, (1, 1, S, self.K))
         gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
         ttnn.deallocate(x_rm)
         ttnn.deallocate(w_rm)

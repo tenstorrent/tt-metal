@@ -4,14 +4,16 @@
 //
 // All-gather MoE local reduce with a tiled output, writer (BRISC): each tile row (c_16, TPR tiles) of this core's
 // tokens [g0, g0 + n) (32-aligned) into the bf16 TILE [T, H] partials.
-// CT: 0 TPR (tiles per tile row = H / 32)   RT: 0 out addr, 1 g0, 2 n
+// CT: 0 TPR (tiles per tile row = H / 32)   Common RT: 0 out addr, 1 T, 2 tokens per core, 3 grid x
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t TPR = get_compile_time_arg_val(0);
-    const InterleavedAddrGen<true> o = {.bank_base_address = get_arg_val<uint32_t>(0), .page_size = 2048};
-    const uint32_t g0 = get_arg_val<uint32_t>(1), n = get_arg_val<uint32_t>(2);
+    const InterleavedAddrGen<true> o = {.bank_base_address = get_common_arg_val<uint32_t>(0), .page_size = 2048};
+    const auto [g0, n] =
+        core_range(get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2), get_common_arg_val<uint32_t>(3));
     for (uint32_t b = 0; b < n / 32; ++b) {
         cb_wait_front(tt::CBIndex::c_16, TPR);
         const uint32_t src = get_read_ptr(tt::CBIndex::c_16);

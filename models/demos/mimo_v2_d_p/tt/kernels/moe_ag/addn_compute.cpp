@@ -4,16 +4,18 @@
 //
 // N-block row sum with a tiled output, compute: per block, the N inputs' 32 row segments summed by the packer in L1
 // (c_24, 32 rows x 1024 row major; the first input overwrites), then tilized into c_16 (32 tiles).
-// CT: 0 N   RT: 0 n (blocks on this core)
+// CT: 0 N   Common RT: 0 blocks, 1 P, 2 grid x (blocks me, me + P, ...)
 #include <cstdint>
 #include "api/compute/common.h"
+#include "core_range.hpp"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t N = get_compile_time_arg_val(0);
-    const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t n = strided_count(
+        core_index(get_common_arg_val<uint32_t>(2)), get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1));
     constexpr uint32_t DST = 4;
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_24);
     for (uint32_t blk = 0; blk < n; ++blk) {

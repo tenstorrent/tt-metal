@@ -20,12 +20,13 @@
 //   D  expert core: zero its list's tile tail, write the list at its region.
 // Go signals: core 0 multicasts a 1 into every core's go semaphore; each core clears its own after the wait.
 // CT: 0 R, 1 EPC, 2 NG, 3 K, 4 IDX_STRIDE (L1 bytes per staged idx page), 5-8 the rectangle's NoC corners
-// RT: 0 idx addr, 1 lmap addr, 2 counts addr, 3 regions addr, 4 token_index addr, 5 y_slot addr, 6 me, 7 g0, 8 n,
-//     9.. the R cores' NoC xy (x << 16 | y), core 0 first
+// Common RT: 0 idx addr, 1 lmap addr, 2 counts addr, 3 regions addr, 4 token_index addr, 5 y_slot addr, 6 T, 7 tokens
+//     per range, 8 (unused), 9.. the R cores' NoC xy (x << 16 | y), core 0 first. Core me = y * 8 + x (logical)
 // CBs (scratch): 0 idx pages, 1 lmap, 2 column (expert core: hist[r][me]), 3 message (start | region | count),
 //     4 y_slot block, 5 expert list, 6 core 0: counts / regions rows, 7 core 0: counts per local expert + a 1 word
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t R = get_compile_time_arg_val(0);
@@ -38,12 +39,13 @@ void kernel_main() {
     constexpr uint32_t S_A = 0, S_C = 1, S_E = 2, G1 = 3, G2 = 4, G3 = 5;
     constexpr uint32_t NONE = 0xFFFFFFFFu;
 
-    const uint32_t idx_addr = get_arg_val<uint32_t>(0), lmap_addr = get_arg_val<uint32_t>(1);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(2), regions_addr = get_arg_val<uint32_t>(3);
-    const uint32_t tidx_addr = get_arg_val<uint32_t>(4), yslot_addr = get_arg_val<uint32_t>(5);
-    const uint32_t me = get_arg_val<uint32_t>(6), g0 = get_arg_val<uint32_t>(7), n = get_arg_val<uint32_t>(8);
+    const uint32_t idx_addr = get_common_arg_val<uint32_t>(0), lmap_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(2), regions_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t tidx_addr = get_common_arg_val<uint32_t>(4), yslot_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t me = core_index(8);
+    const auto [g0, n] = core_range(get_common_arg_val<uint32_t>(6), get_common_arg_val<uint32_t>(7), 8);
     auto noc = [](uint32_t r, uint32_t addr) {
-        const uint32_t v = get_arg_val<uint32_t>(9 + r);
+        const uint32_t v = get_common_arg_val<uint32_t>(9 + r);
         return get_noc_addr(v >> 16, v & 0xFFFF, addr);
     };
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };

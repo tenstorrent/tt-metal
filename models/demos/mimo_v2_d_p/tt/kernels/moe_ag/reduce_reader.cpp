@@ -7,10 +7,12 @@
 // local expert gets one (zero row, 0) pair. Per token: a header page (the pair count, word 0), then per pair 4 KB-row
 // chunks as TILES tiles of 1024 elements (c_0) and a scalar tile (c_1, element 0 = the bf16 weight).
 // CT: 0 K, 1 ROW_BYTES, 2 TILES (row tiles = ROW_BYTES / 2048), 3 W_STRIDE (L1 bytes per staged weight page)
-// RT: 0 y (row-major bf16 [rows, H]) addr, 1 y_slot addr, 2 w (gathered weights [T, K] bf16) addr, 3 g0, 4 n
+// Common RT: 0 y (row-major bf16 [rows, H]) addr, 1 y_slot addr, 2 w (gathered weights [T, K] bf16) addr, 3 T, 4 tokens
+//     per core (range g0, n), 5 grid x
 // CBs: 0 y rows, 1 weight tiles, 2 headers, 4 y_slot block (scratch), 5 weights (scratch), 6 zero row (scratch)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(0);
@@ -19,8 +21,10 @@ void kernel_main() {
     constexpr uint32_t W_STRIDE = get_compile_time_arg_val(3);
     constexpr uint32_t NONE = 0xFFFFFFFFu;
     constexpr uint32_t cb_y = tt::CBIndex::c_0, cb_w = tt::CBIndex::c_1, cb_h = tt::CBIndex::c_2;
-    const uint32_t y_addr = get_arg_val<uint32_t>(0), ys_addr = get_arg_val<uint32_t>(1);
-    const uint32_t w_addr = get_arg_val<uint32_t>(2), g0 = get_arg_val<uint32_t>(3), n = get_arg_val<uint32_t>(4);
+    const uint32_t y_addr = get_common_arg_val<uint32_t>(0), ys_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(2);
+    const auto [g0, n] =
+        core_range(get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4), get_common_arg_val<uint32_t>(5));
     const InterleavedAddrGen<true> yg = {.bank_base_address = y_addr, .page_size = ROW_BYTES};
     const InterleavedAddrGen<true> wg = {.bank_base_address = w_addr, .page_size = K * 2};
     const uint32_t l1_ys = get_write_ptr(tt::CBIndex::c_4), l1_w = get_write_ptr(tt::CBIndex::c_5);

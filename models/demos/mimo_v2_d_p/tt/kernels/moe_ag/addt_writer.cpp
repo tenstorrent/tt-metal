@@ -4,15 +4,16 @@
 //
 // Row add with a tiled output, writer (BRISC): each block's 32 tiles (c_16) at tile row tr, tile columns 32 c ...
 // CT: 0 NCH, 1 P, 2 TILES_PER_ROW
-// RT: 0 out addr, 1 blocks, 2 me
+// Common RT: 0 out addr, 1 blocks, 2 grid x
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t NCH = get_compile_time_arg_val(0), P = get_compile_time_arg_val(1);
     constexpr uint32_t TPR = get_compile_time_arg_val(2);
-    const InterleavedAddrGen<true> o = {.bank_base_address = get_arg_val<uint32_t>(0), .page_size = 2048};
-    const uint32_t blocks = get_arg_val<uint32_t>(1), me = get_arg_val<uint32_t>(2);
+    const InterleavedAddrGen<true> o = {.bank_base_address = get_common_arg_val<uint32_t>(0), .page_size = 2048};
+    const uint32_t blocks = get_common_arg_val<uint32_t>(1), me = core_index(get_common_arg_val<uint32_t>(2));
     for (uint32_t j = me; j < blocks; j += P) {
         const uint32_t tr = j / NCH, c = j % NCH;
         cb_wait_front(tt::CBIndex::c_16, 32);

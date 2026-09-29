@@ -6,9 +6,10 @@
 // TILES tiles of 1024 elements: element-wise ops are layout agnostic), accumulated by the packer in L1 (the first pair
 // overwrites). The pair count comes in a header page (reduce_reader.cpp).
 // CT: 0 TILES
-// RT: 0 n (tokens)
+// Common RT: 0 tokens, 1 tokens per core, 2 grid x (this core's n: core_range)
 #include <cstdint>
 #include "api/compute/common.h"
+#include "core_range.hpp"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
@@ -18,7 +19,8 @@ void kernel_main() {
     constexpr uint32_t TILES = get_compile_time_arg_val(0);
     constexpr uint32_t cb_y = tt::CBIndex::c_0, cb_w = tt::CBIndex::c_1, cb_h = tt::CBIndex::c_2;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t n =
+        core_range(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2)).n;
     compute_kernel_hw_startup(cb_y, cb_w, cb_out);
     mul_bcast_scalar_init(cb_y, cb_w);
     for (uint32_t i = 0; i < n; ++i) {

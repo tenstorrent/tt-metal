@@ -97,7 +97,6 @@ class RoutePlan:
         IDX_STRIDE = 64
         phys = [self.dev.worker_core_from_logical_core(c) for c in cores]
         xy = [(p.x << 16) | p.y for p in phys]
-        rt = ttnn.RuntimeArgs()
         addrs = [
             idx.buffer_address(),
             self.lmap.buffer_address(),
@@ -106,10 +105,6 @@ class RoutePlan:
             self.token_index.buffer_address(),
             self.y_slot.buffer_address(),
         ]
-        for r, c in enumerate(cores):
-            g0 = min(r * npr, T)
-            n = max(0, min(npr, T - g0))
-            rt[c.x][c.y] = addrs + [r, g0, n] + xy
         cbs = [
             _cb(0, max(64, npr * IDX_STRIDE), crs),
             _cb(1, NG * 4, crs),
@@ -125,7 +120,7 @@ class RoutePlan:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=crs,
             compile_time_args=[R, EPC, NG, K, IDX_STRIDE, phys[0].x, phys[0].y, phys[-1].x, phys[-1].y],
-            runtime_args=rt,
+            common_runtime_args=addrs + [T, npr, 0] + xy,  # core r (= y * 8 + x) takes tokens [r npr, r npr + npr)
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
         )
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(6)]
@@ -184,13 +179,15 @@ def _dm(proc, noc):
     )
 
 
-def _kd(src, crs, ct, rt, config, defines=()):
+def _kd(src, crs, ct, common, config, defines=()):
+    """No per-core runtime args: generic_op re-applies every per-core arg on each program-cache hit (~2-4 us per core
+    and kernel on the host); the kernels derive their core index / range from ``common`` (kernels/core_range.hpp)."""
     return ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/{src}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=crs,
         compile_time_args=ct,
-        runtime_args=rt,
+        common_runtime_args=list(common),
         defines=list(defines),
         config=config,
     )
@@ -204,9 +201,16 @@ def _tcb(i, tiles, crs, fmt=ttnn.bfloat16, page=2048):
     )
 
 
-def _ranges(total, parts, align=2):
-    per = _up(-(-total // parts), align)
-    return [(min(i * per, total), max(0, min(per, total - i * per))) for i in range(parts)]
+def _per(total, parts, align=2):
+    """Items per core when ``total`` is split over ``parts`` cores in ``align`` multiples: core i takes
+    [i per, i per + per) clipped to total (kernels/core_range.hpp core_range)."""
+    return _up(-(-total // parts), align)
+
+
+def _grid(mesh_device):
+    """The logical worker grid's cores, row major (core index = y * grid x + x), and grid x."""
+    g = mesh_device.compute_with_storage_grid_size()
+    return [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)], g.x
 
 
 class LocalReduce:
@@ -225,8 +229,7 @@ class LocalReduce:
         )
         self.tiled = tiled and not split  # the [T, H] partials as bf16 tiles (the > 2-row reduce-scatter input)
         self.D = pairs_depth
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         rows_out = chunk_size_per_chip if split else tokens
         self.own = _dram(
             mesh_device,
@@ -241,23 +244,21 @@ class LocalReduce:
         T, K, H = self.T, self.K, self.H
         RB, TILES = H * 2, H // 1024
         crs = _crs(self.cores)
-        rrt, crt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        rngs = _ranges(T, len(self.cores), 32 if self.tiled else 2)
-        npr = max(n for _, n in rngs)
-        for c, (g0, n) in zip(self.cores, rngs):
-            rrt[c.x][c.y] = [y.buffer_address(), y_slot.buffer_address(), w.buffer_address(), g0, n]
-            crt[c.x][c.y] = [n]
-            wrt[c.x][c.y] = (
-                [self.own.buffer_address(), g0, n]
-                if self.tiled
-                else [
-                    self.own.buffer_address(),
-                    self.other.buffer_address() if self.split else 0,
-                    self.info.buffer_address(),
-                    g0,
-                    n,
-                ]
-            )
+        per = _per(T, len(self.cores), 32 if self.tiled else 2)
+        npr = min(per, T)
+        rng = [T, per, self.gx]
+        rrt = [y.buffer_address(), y_slot.buffer_address(), w.buffer_address()] + rng
+        crt = rng
+        wrt = (
+            [self.own.buffer_address()] + rng
+            if self.tiled
+            else [
+                self.own.buffer_address(),
+                self.other.buffer_address() if self.split else 0,
+                self.info.buffer_address(),
+            ]
+            + rng
+        )
         cbs = [
             _tcb(0, self.D * TILES, crs),
             _tcb(1, self.D, crs),
@@ -284,22 +285,21 @@ class LocalReduce:
         K, H, S = self.K, self.H, self.S
         RB, TILES = H * 2, H // 1024
         crs = _crs(self.cores)
-        rrt, crt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        rngs = _ranges(S, len(self.cores))
-        npr = max(n for _, n in rngs)
+        per = _per(S, len(self.cores))
+        npr = min(per, S)
         out = self.other if phase == 1 else self.own
-        for c, (g0, n) in zip(self.cores, rngs):
-            rrt[c.x][c.y] = [
-                y.buffer_address(),
-                y_slot.buffer_address(),
-                w.buffer_address(),
-                g0,
-                n,
-                self.info.buffer_address(),
-                peer.buffer_address() if peer is not None else 0,
-            ]
-            crt[c.x][c.y] = [n]
-            wrt[c.x][c.y] = [out.buffer_address(), 0, 0, g0, n]
+        rrt = [
+            y.buffer_address(),
+            y_slot.buffer_address(),
+            w.buffer_address(),
+            S,
+            per,
+            self.info.buffer_address(),
+            peer.buffer_address() if peer is not None else 0,
+            self.gx,
+        ]
+        crt = [S, per, self.gx]
+        wrt = [out.buffer_address(), 0, 0, S, per, self.gx]
         cbs = [
             _tcb(0, self.D * TILES, crs),
             _tcb(1, self.D, crs),
@@ -359,19 +359,17 @@ class AddRows:
 
     def __init__(self, mesh_device, *, n_rows, hidden, info, batch=2):
         self.dev, self.n, self.H, self.info, self.B = mesh_device, n_rows, hidden, info, batch
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         self.out = _dram(mesh_device, [1, 1, n_rows, hidden], ttnn.bfloat16)
         self._prog = {}
 
     def _program(self, a, b, a_off, b_off, info_offset):
         RB, TILES = self.H * 2, self.H // 1024
         crs = _crs(self.cores)
-        rrt, crt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for c, (r0, n) in zip(self.cores, _ranges(self.n, len(self.cores), 1)):
-            rrt[c.x][c.y] = [a.buffer_address(), b.buffer_address(), self.info.buffer_address(), r0, n, b_off, a_off]
-            crt[c.x][c.y] = [n]
-            wrt[c.x][c.y] = [self.out.buffer_address(), 0, 0, r0, n]
+        rng = [self.n, _per(self.n, len(self.cores), 1)]
+        rrt = [a.buffer_address(), b.buffer_address(), self.info.buffer_address()] + rng + [b_off, a_off, self.gx]
+        crt = rng + [self.gx]
+        wrt = [self.out.buffer_address(), 0, 0] + rng + [self.gx]
         cbs = [
             _tcb(0, 2 * self.B * TILES, crs),
             _tcb(1, 2 * self.B * TILES, crs),
@@ -583,19 +581,16 @@ class UntilizeActive:
             lmap,
             W,
         )
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         self.out = _dram(mesh_device, [rows, hidden])
         self._prog = {}
 
     def _program(self, y, counts, regions):
         P, W, NCH = len(self.cores), self.W, self.H // (32 * self.W)
         crs = _crs(self.cores)
-        rrt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for me, c in enumerate(self.cores):
-            common = [counts.buffer_address(), regions.buffer_address(), self.lmap.buffer_address(), me]
-            rrt[c.x][c.y] = [y.buffer_address()] + common
-            wrt[c.x][c.y] = [self.out.buffer_address()] + common
+        common = [counts.buffer_address(), regions.buffer_address(), self.lmap.buffer_address(), self.gx]
+        rrt = [y.buffer_address()] + common
+        wrt = [self.out.buffer_address()] + common
         cbs = [
             _tcb(0, 2 * W, crs, ttnn.bfloat8_b, 1088),
             _cb(2, 64, crs),
@@ -605,7 +600,7 @@ class UntilizeActive:
         ]
         kernels = [
             _kd("untilize_reader.cpp", crs, [self.NG, self.EPC, 1088, W, NCH, P], rrt, _dm(1, 1)),
-            _kd("untilize_compute.cpp", crs, [W], ttnn.RuntimeArgs(), ttnn.ComputeConfigDescriptor()),
+            _kd("untilize_compute.cpp", crs, [W], [], ttnn.ComputeConfigDescriptor()),
             _kd("untilize_writer.cpp", crs, [self.NG, self.EPC, W, NCH, P], wrt, _dm(0, 0)),
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
@@ -627,19 +622,16 @@ class AddRowsTiled:
     def __init__(self, mesh_device, *, n_rows, hidden):
         assert n_rows % 32 == 0 and hidden % 1024 == 0
         self.dev, self.n, self.H = mesh_device, n_rows, hidden
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         self._prog = {}
 
     def _program(self, a, b, out, a_off, b_off):
         P, NCH = len(self.cores), self.H // 1024
         blocks = self.n // 32 * NCH
         crs = _crs(self.cores)
-        rrt, crt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for me, c in enumerate(self.cores):
-            rrt[c.x][c.y] = [a.buffer_address(), b.buffer_address(), a_off, b_off, blocks, me]
-            crt[c.x][c.y] = [len(range(me, blocks, P))]
-            wrt[c.x][c.y] = [out.buffer_address(), blocks, me]
+        rrt = [a.buffer_address(), b.buffer_address(), a_off, b_off, blocks, self.gx]
+        crt = [blocks, P, self.gx]
+        wrt = [out.buffer_address(), blocks, self.gx]
         cbs = [_tcb(0, 64, crs), _tcb(1, 64, crs), _tcb(24, 32, crs), _tcb(16, 64, crs)]
         kernels = [
             _kd("addt_reader.cpp", crs, [self.H * 2, NCH, P], rrt, _dm(1, 1)),
@@ -674,22 +666,19 @@ class UntilizeX:
     def __init__(self, mesh_device, *, rows, hidden):
         self.dev, self.rows, self.H = mesh_device, rows, hidden
         self.NCH = hidden // 1024
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         self._prog = {}
 
     def _program(self, x, out):
         P, NCH = len(self.cores), self.NCH
         blocks = self.rows // 32 * NCH
         crs = _crs(self.cores)
-        rrt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for me, c in enumerate(self.cores):
-            rrt[c.x][c.y] = [x.buffer_address(), blocks, me]
-            wrt[c.x][c.y] = [out.buffer_address(), blocks, me]
+        rrt = [x.buffer_address(), blocks, self.gx]
+        wrt = [out.buffer_address(), blocks, self.gx]
         cbs = [_tcb(0, 64, crs), _cb(2, 64, crs), _tcb(16, 64, crs)]
         kernels = [
             _kd("untilize_x_reader.cpp", crs, [2048, NCH, P], rrt, _dm(1, 1)),
-            _kd("untilize_compute.cpp", crs, [32], ttnn.RuntimeArgs(), ttnn.ComputeConfigDescriptor()),
+            _kd("untilize_compute.cpp", crs, [32], [], ttnn.ComputeConfigDescriptor()),
             _kd("untilize_x_writer.cpp", crs, [NCH, P], wrt, _dm(0, 0)),
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
@@ -719,19 +708,16 @@ class SumBlocksTiled:
     def __init__(self, mesh_device, *, n_rows, hidden, n_blocks):
         assert n_rows % 32 == 0 and hidden % 1024 == 0
         self.dev, self.n, self.H, self.N = mesh_device, n_rows, hidden, n_blocks
-        g = mesh_device.compute_with_storage_grid_size()
-        self.cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
+        self.cores, self.gx = _grid(mesh_device)
         self._prog = {}
 
     def _program(self, src, out):
         P, NCH = len(self.cores), self.H // 1024
         blocks = self.n // 32 * NCH
         crs = _crs(self.cores)
-        rrt, crt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for me, c in enumerate(self.cores):
-            rrt[c.x][c.y] = [src.buffer_address(), self.n, blocks, me]
-            crt[c.x][c.y] = [len(range(me, blocks, P))]
-            wrt[c.x][c.y] = [out.buffer_address(), blocks, me]
+        rrt = [src.buffer_address(), self.n, blocks, self.gx]
+        crt = [blocks, P, self.gx]
+        wrt = [out.buffer_address(), blocks, self.gx]
         cbs = [_tcb(0, 64, crs), _tcb(24, 32, crs), _tcb(16, 64, crs)]
         kernels = [
             _kd("addn_reader.cpp", crs, [self.H * 2, NCH, P, self.N], rrt, _dm(1, 1)),

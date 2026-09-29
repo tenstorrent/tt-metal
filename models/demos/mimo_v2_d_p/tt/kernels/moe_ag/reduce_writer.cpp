@@ -6,9 +6,10 @@
 // SPLIT (two mesh rows): token g of this chip's row goes to own[g % S], the other row's to other[g % S] (the row
 // comes from the per-device chip-info tensor, word 0); else out[g].
 // CT: 0 ROW_BYTES, 1 TILES, 2 S (chunk_size_per_chip), 3 SPLIT
-// RT: 0 own / out addr, 1 other addr, 2 chip-info addr, 3 g0, 4 n
+// Common RT: 0 own / out addr, 1 other addr, 2 chip-info addr, 3 rows, 4 rows per core (range g0, n), 5 grid x
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "core_range.hpp"
 
 void kernel_main() {
     constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(0);
@@ -16,14 +17,17 @@ void kernel_main() {
     constexpr uint32_t S = get_compile_time_arg_val(2);
     constexpr bool SPLIT = get_compile_time_arg_val(3) != 0;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    const uint32_t g0 = get_arg_val<uint32_t>(3), n = get_arg_val<uint32_t>(4);
-    const InterleavedAddrGen<true> own = {.bank_base_address = get_arg_val<uint32_t>(0), .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> other = {.bank_base_address = get_arg_val<uint32_t>(1), .page_size = ROW_BYTES};
+    const auto [g0, n] =
+        core_range(get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4), get_common_arg_val<uint32_t>(5));
+    const InterleavedAddrGen<true> own = {.bank_base_address = get_common_arg_val<uint32_t>(0), .page_size = ROW_BYTES};
+    const InterleavedAddrGen<true> other = {
+        .bank_base_address = get_common_arg_val<uint32_t>(1), .page_size = ROW_BYTES};
     uint32_t my_row = 0;
     if constexpr (SPLIT) {
         const uint32_t l1 = get_write_ptr(tt::CBIndex::c_7);
         noc_async_read(
-            get_noc_addr(0, InterleavedAddrGen<true>{.bank_base_address = get_arg_val<uint32_t>(2), .page_size = 64}),
+            get_noc_addr(
+                0, InterleavedAddrGen<true>{.bank_base_address = get_common_arg_val<uint32_t>(2), .page_size = 64}),
             l1,
             64);
         noc_async_read_barrier();
