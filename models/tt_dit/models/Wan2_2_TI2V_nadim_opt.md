@@ -525,8 +525,13 @@ All verified by reading the code; none implemented.
    With that final definition on the tip: transformer PCC **100.0000 / 99.9600 / 99.9600 %**
    (two-row-vs-scalar / scalar / per-token) -- 0.005 pp under the 99.9651 % recorded for the
    sprint-5 preset even though the only remaining difference is a *more* precise
-   `cross_attn_out` (bf16 weights, HiFi2, fp32 acc instead of bf8 LoFi); a same-hour PCC run
-   with the sprint-5 preset file swapped back in attributes the move (section 9). 720p x3 under
+   `cross_attn_out` (bf16 weights, HiFi2, fp32 acc instead of bf8 LoFi). A same-hour PCC run
+   with the sprint-5 preset file swapped back in reproduces **99.9651 %** exactly, so the
+   0.005 pp is the `cross_attn_out` change itself (a more precise layer lowering the PCC
+   against the fp32 reference: error cancellation between bf8 layers, not a bug). The change is
+   kept at the operator's request; it is no longer *required* now that the fused residual is
+   gone, it buys no measurable speed (the projection is bandwidth-bound either way), and
+   reverting it is the one-line `cross_attn_out=lc` in `all_bf8_lofi`. 720p x3 under
    the final definition (2026-09-29 00:00, 2cq): denoise **8.250 s** (8.217 / 8.258 / 8.274,
    spread 0.7 %), totals 9.666 / 9.316 / 9.458 s -- mean 9.48 s, median 9.46 s. Run 1's total
    carries a VAE decode of 1.33 s (the other two: 0.95 / 1.07 s), a 40 % outlier of the kind
@@ -753,10 +758,15 @@ All verified by reading the code; none implemented.
       HiFi2) for no measurable speed. The code is in the branch history for reference
       (`WanAttention.residual_ones_gate`, the `attn2(..., addcmul_residual=, addcmul_gate=)`
       call); the ones-gate mechanism itself works and is the way to fuse an ungated residual if
-      a later kernel makes the epilogue free. The capture's ops report did not post-process
-      within 90 min (the host-side csvexport pass never finished; the fix-1 capture took 4 min
-      for that step) and is being regenerated for the record; the sprint-6 tip is fix 1, so the
-      `s6_f1_blocks6` table in section 6 is the tip's Tracy table.
+      a later kernel makes the epilogue free. The capture's ops report needed a second
+      post-process pass (the first hit a 90 min watchdog in the host-side csvexport step; the
+      retry with a 3 h budget took ~70 min; `reports/2026_09_29_00_06_07/`). Per replay per
+      device, fix 3 vs fix 1: **46.02 ms kernel and 316 programs vs 45.86 ms and 328**: the 12
+      residual adds are gone (`BinaryNg` 0.44 -> 0.14 ms) but the N=768 AGMM row went from
+      264.2 to 268.7 us mean over its three call sites (+13 us on the fused `attn2.to_out`,
+      i.e. the epilogue's residual read is not hidden) and the ring SDPA read 1188 vs 1165 us
+      (run-to-run). Net +0.16 ms kernel per replay: the trim is fully absorbed. The sprint-6 tip
+      is fix 1, so the `s6_f1_blocks6` table in section 6 is the tip's Tracy table.
 
       *Preset interplay (2026-09-28):* under `all_bf8_lofi` the fused `attn2.to_out` inherits the
       preset's LoFi / no-fp32-acc compute config, and the transformer PCC fell from 99.9651 % to
@@ -899,6 +909,7 @@ the rows dated 2026-09-26 were run at the sprint-5 tip (`58bd9badfce` and after)
 | **Sprint 6, fix 3 (cross-attention residual fusion, measured and dropped, 2026-09-28)** | PCC 100.0000 / 99.9901 / 99.9902 %; cfg-hoist gate 34/34 at 0.0; trace modes bit-identical; 14B block test 99.9958 %; 720p 9.776 / 10.837 s vs same-hour control 9.780 / 10.883 s (-0.04 %); Tracy `s6_f3_blocks6` `execute_trace` 49.24 ms per replay vs 48.41 (section 7.13) |
 | **Sprint 6, `all_bf8_lofi` on the tip (final preset definition, 2026-09-29)** `test_transformer_wan_ti2v_5b` | 3 passed: 100.0000 / 99.9600 / 99.9600 % (sprint-5 preset: 99.9651 %; section 7.7) |
 | same, `test_pipeline_performance_ti2v_5b` 720p x3 | denoise 8.217 / 8.258 / 8.274 s; totals 9.666 (failed: VAE 1.33 s > 1.2 s gate, a decode outlier) / 9.316 / 9.458 s |
+| same-hour control: `all_bf8_lofi` with the sprint-5 preset file (`cross_attn_out` bf8 / LoFi) on the tip | 100.0000 / 99.9651 % -- reproduces the sprint-5 value, so the 0.005 pp is the `cross_attn_out` change (section 7.7) |
 | Sprint 6, Teja's 121 f `test_pipeline_ti2v_5b_generate`, bf16 tip (2026-09-29) | passes; CLIP mean 40.69 (min 39.84 / max 41.21), identical to sprint 5 (bit-exact change); eager 18.87 s; previews `/home/ttuser/wan5b_s6_t2v_720p_121f_{first,mid,last}.png` |
 | Sprint 6, `wan2_2_ti2v_5b_demo.py` T2V 81 f, bf16 / `all_bf8_lofi` (2026-09-29) | warm traced 10.85 s / 9.32 s; mp4 via the new OpenCV fallback (`imageio_ffmpeg` is absent from the venv); side-by-side `/home/ttuser/wan5b_s6_ab_bf16_left_bf8lofi_right.mp4` for the visual verdict |
 
