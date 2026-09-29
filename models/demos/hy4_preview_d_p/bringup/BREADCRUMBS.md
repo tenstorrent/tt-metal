@@ -2537,3 +2537,65 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
+
+## C.moe_shared.topk_shared.test.1 (test review)
+
+What
+- Rewrote test_c_moe_shared_topk_shared.py. The rendered test raised the reference's KeyError (layer 1's top-k not in
+  the reference cache) under BRINGUP_IMPL=reference, and used positional match for the integer output.
+- Now sets ctx.extra["shared_topk"] = golden L{topk_source(2)=1}.topk in both contexts (as the moe_shared swap tests).
+- Gated metric pcc_topk_shared_L02 = order-free per-row set overlap on the normalized output (-1 / 0xFFFFFFFF pads
+  as -1), 0.99. Extra asserts: integer S x 2048 output; exact per-row set equality with the golden (no repeats, no
+  non-causal positions); pads a contiguous tail and >= 1 valid key per row (sparse_sdpa preconditions); a second call
+  on chunk 0 (start 0, 2047 padded rows, its own shared_topk) must also match exactly.
+
+Decisions
+- Exactness, not a tolerance: topk_shared is an identity (components.yaml NATIVE, no op). Golden L2.topk == L1.topk
+  exactly on chunks 0 and 1 (checked on the CPU).
+- Order is not required: the all-device model hands on layer 1's unsorted topk_large_indices tensor. CPU check: a
+  shuffled-valid, sentinel-tail output passes; pads moved to the front, a chunk-1 result on chunk 0, one changed
+  entry, one dropped entry per row all fail.
+
+Results
+- BRINGUP_IMPL=reference: PASS (overlap 1.000000, chunk 0 exact, 2096128 pads).
+- BRINGUP_IMPL=stub: FAIL (overlap 0.000488).
+- Gate (device): FAIL, NotImplementedError "no device module for topk_shared yet". Expected: the implement step
+  adds it.
+
+For the implement step
+- The device fn gets (dctx, attn_norm) and must read dctx.extra["shared_topk"] (int64 host, -1 pads). Return integer
+  positions [S, 2048] (host), pads as -1 or 0xFFFFFFFF in a contiguous tail; the order within a row is free.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+
+## C.moe_shared.topk_shared implement (attempt 1)
+
+What
+- New `tt/topk_shared.py:TtTopkShared(mesh, source_layer)`: identity on the device top-k tensor (components.yaml
+  NATIVE, no op; the ReuseIndexer idea). It returns the source full layer's tensor as it is: [1, 1, S/2, 2048] uint32
+  ROW_MAJOR per chip, row-split over axis 0, replicated over axis 1, 0xFFFFFFFF tail. It never frees or copies it.
+- `tt/layout.py`: `topk_to_device` / `topk_to_host` (host int64 with -1 pads <-> the TtHy4Indexer output layout).
+  These are harness-boundary helpers only.
+- hooks.py: `_TOPK_SHARED_STEPS`, `_TopkSharedHostFn` (source = ctx.extra["shared_topk"], else `source(ctx)`),
+  `_topk_shared_module` (asserts that the layer is a shared-index layer), branches in `_device_step_fn` and
+  `device_component`. `DEVICE_STEPS["moe_shared"] = {"topk_shared"}`. HybridDeviceModel sets the fn's
+  `source = ref._shared_topk(i, ctx)`. That is the reference's per-chunk record of layer 1's top-k, which is the
+  device indexer's output (through `_record_topk`).
+
+Decisions
+- There is no device op in the step. The per-call host transfer (upload + read-back) happens only at the harness
+  boundary, because the component and hybrid contracts are host in / host out. In the all-device model the assemble
+  step must keep layer 1's indexer output tensor alive and pass it to TtTopkShared for layers 2-4.
+- `DEVICE_STEPS["moe_shared"]` lists only topk_shared. attn_hc, attn_hc_pre, attn_norm and q_a passed their moe_shared
+  component and swap gates by reusing the existing modules, but no step added them to the hybrid. I left them out
+  because they are outside this task.
+
+Results
+- Gate: PASS. pcc_topk_shared_L02 topk_overlap = 1.000000. Golden chunk: worst row 1.0, 0 pads, positional match
+  1.0. Chunk 0: exact, 2096128 pads.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
