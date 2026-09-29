@@ -3008,3 +3008,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
+
+## C.moe_shared.experts test (attempt 1)
+
+What
+- Replaced the rendered experts test (moe_shared, layer 2) with the reviewed layer-1 test (test_c_moe_full_experts.py)
+  at LAYER = 2. It keeps the gated PCC >= 0.99, the no-CPU-bridge assert, the golden checks (finite, element count,
+  rel L2 <= 0.015, per-token norm ratio in [0.98, 1.02], coef within 0.004) and the x * 2 probe vs the CPU experts.
+  The worst per-token rel L2 limit is now 0.018 (layer 1: 0.03).
+- CPU mutation study on the layer-2 golden and weights in /tmp/hy4_exp2 (outside the repo): prep.py, study.py,
+  study2.py, study3.py (logs study.log, study2.log). The table is in the test docstring.
+
+Decisions
+- Worst row 0.018: dropping expert 180 (1 token) scores 0.0197 on the golden and 0.0299 on the probe, so it passes
+  0.03. The next-smallest single-expert drop is 0.106. The device scores 0.0111 / 0.0114 and the all-bfp8 estimate
+  0.0163 / 0.0167.
+- The clamp never fires on the layer-2 golden (gate max 9.74), so the clamp bugs are detected only by the x * 2
+  probe: no clamp 0.205, clamp up only 0.097, limit 9 0.054.
+- The other limits are unchanged. The layer-2 device estimate (0.0075 / [0.994, 1.005]) is close to layer 1's.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, golden rel 0.00233 / [0.99637, 1.00349] / 0.00405 / coef 0.99994;
+  probe 0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, TtHy4Experts via _EXPERTS_STEPS, already wired for any layer): PASS. pcc_experts_L02 0.999965;
+  golden rel 0.00839, ratio [0.99370, 1.00602], worst row 0.01114, coef 1.00018; x*2 vs CPU rel 0.00799,
+  [0.99688, 1.00415], 0.01136, coef 1.00033.
+
+Gotchas
+- The first "FAIL pcc_experts_L02: pcc=0.000000" line is the precompile collect pass. Ignore it.
+- Layer-2 golden facts for implement / swap: tokens per expert 1..390 (hottest 118), 4 experts with 1 token; pairs
+  per chip 4514 / 4079 / 3894 / 3897.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
