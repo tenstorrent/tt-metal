@@ -1204,6 +1204,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         args.program_config.has_value() ? args.program_config->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
     const auto pv_math_fidelity =
         args.program_config.has_value() ? args.program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const bool fixed_offset_softmax = args.program_config.has_value() && args.program_config->fixed_offset_softmax;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1783,6 +1784,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     defines["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
     defines["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
+    if (fixed_offset_softmax) {
+        TT_FATAL(
+            use_streaming_compute, "fixed_offset_softmax requires the streaming compute path (fp32_dest_acc_en=false)");
+        defines["SDPA_FIXED_OFFSET_SOFTMAX"] = "1";
+    }
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";
     }

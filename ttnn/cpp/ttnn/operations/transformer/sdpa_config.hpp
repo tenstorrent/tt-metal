@@ -23,6 +23,9 @@ struct SDPAProgramConfig {
     // compute kernel config's fidelity.
     std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
     std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
+    // Streaming SDPA kernels: softmax with a constant zero row max (no reduce, subtract or rescale). Only
+    // valid when the caller bounds scale * QK^T so bf16 exp stays finite (|scale * S| well below ~80).
+    bool fixed_offset_softmax = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

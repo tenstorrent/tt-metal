@@ -421,6 +421,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         program_config.has_value() ? program_config->qk_math_fidelity.value_or(math_fidelity) : math_fidelity;
     const auto pv_math_fidelity =
         program_config.has_value() ? program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
+    const bool fixed_offset_softmax = program_config.has_value() && program_config->fixed_offset_softmax;
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
@@ -741,6 +742,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     defines_map["QK_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(qk_math_fidelity));
     defines_map["PV_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(pv_math_fidelity));
+    if (fixed_offset_softmax) {
+        TT_FATAL(
+            use_streaming_compute, "fixed_offset_softmax requires the streaming compute path (fp32_dest_acc_en=false)");
+        defines_map["SDPA_FIXED_OFFSET_SOFTMAX"] = "1";
+    }
     if (operation_attributes.output_concat_heads) {
         defines_map["OUT_CONCAT_HEADS"] = "1";
     }
