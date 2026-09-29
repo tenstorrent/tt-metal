@@ -23,7 +23,7 @@ void bind_minimal_matmul(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False)
+        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, swiglu_pack=False, swiglu_approx=False)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -76,6 +76,18 @@ void bind_minimal_matmul(nb::module_& mod) {
             can be used to produce this layout). The op computes silu(gate) * up and the output width is therefore N/2.
             The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
             tile-aligned halves). Mutually exclusive with fused_activation.
+
+        swiglu_pack : bool, default: False
+            Only with fuse_swiglu=True. Computes silu(gate) * up on the pack thread during the last K block
+            (overlapping the math thread) instead of a separate epilogue pass over the whole output block. Faster;
+            results differ from the default path at the bf16-ulp level (different last-K-block add order).
+            Takes effect only without bias_tensor and with an even config.subblock_w (so each gate/up tile pair
+            stays in one subblock); otherwise a warning is logged and the default path runs.
+
+        swiglu_approx : bool, default: False
+            Only with swiglu_pack=True. Uses a cheaper approximate sigmoid on the pack thread (Schraudolph exp +
+            approximate reciprocal, rescaled by 255/256 to re-centre the reciprocal's bias; no bf16 rounding of the
+            intermediate silu). Applies to bf16 dest accumulation only; with fp32_dest_acc_en the exact sigmoid is kept.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
@@ -159,7 +171,9 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("swiglu_pack") = false,
+        nb::arg("swiglu_approx") = false);
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,

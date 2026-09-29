@@ -715,6 +715,21 @@ ProgramDescriptor MinimalMatmulDeviceOperation::ProgramFactory::create_descripto
         subblock_w};
 
     auto compute_defines = defines;
+    // Pack-thread SwiGLU (swiglu_pack): no-bias only (FUSE_BIAS keeps swiglu_block), and each gate/up pair must sit
+    // in one subblock, so subblock_w has to be even; otherwise the epilogue path is kept.
+    if (fuse_swiglu && operation_attributes.swiglu_pack && !use_bias) {
+        if (subblock_w % 2 == 0) {
+            compute_defines["SWIGLU_PACK"] = "1";
+            if (operation_attributes.swiglu_approx) {
+                compute_defines["SWIGLU_APPROX"] = "1";
+            }
+        } else {
+            log_warning(
+                tt::LogOp,
+                "minimal_matmul swiglu_pack ignored: subblock_w={} is odd (gate/up pairs would straddle subblocks)",
+                subblock_w);
+        }
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(

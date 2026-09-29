@@ -38,6 +38,14 @@ struct MinimalMatmulParams {
     // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
     // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
     bool fuse_swiglu = false;
+
+    // Only with fuse_swiglu: apply silu(gate) * up on the pack thread in the last K block instead of a separate
+    // epilogue pass (overlaps the SFPU work with the math thread's next subblock). Used only without bias and with an
+    // even subblock_w; otherwise the epilogue path runs.
+    bool swiglu_pack = false;
+    // Only with swiglu_pack: cheaper sigmoid on the pack thread for bf16 dest (fp32 dest keeps the exact sigmoid):
+    // Schraudolph exp + SFPARECIP without the intermediate bf16 rounding of silu. Changes numerics slightly.
+    bool swiglu_approx = false;
 };
 
 struct MinimalMatmulInputs {

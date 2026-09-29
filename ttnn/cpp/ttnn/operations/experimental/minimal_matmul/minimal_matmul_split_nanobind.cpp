@@ -21,7 +21,7 @@ void bind_minimal_matmul_split(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul_split", "ttnn.experimental.">(
         mod,
         R"doc(
-        minimal_matmul_split(input_tensor, weight_tensor, *, chunks=3, dim=-1, bias_tensor=None, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False)
+        minimal_matmul_split(input_tensor, weight_tensor, *, chunks=3, dim=-1, bias_tensor=None, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, swiglu_pack=False, swiglu_approx=False)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with output splitting along the last dimension.
         This op performs a matmul and splits the result into `chunks` separate output tensors, fusing the common
@@ -79,6 +79,12 @@ void bind_minimal_matmul_split(nb::module_& mod) {
             per chunk is N/chunks/2. The bias (if provided) must use the same column layout. N/chunks must be
             divisible by 2*32. Mutually exclusive with fused_activation.
 
+        swiglu_pack : bool, default: False
+            Only with fuse_swiglu=True: pack-thread SwiGLU. See ttnn.experimental.minimal_matmul.
+
+        swiglu_approx : bool, default: False
+            Only with swiglu_pack=True: approximate sigmoid (bf16 dest only). See ttnn.experimental.minimal_matmul.
+
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
             sizes and kernel flags. See ttnn.experimental.minimal_matmul documentation for config details.
@@ -124,7 +130,9 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("swiglu_pack") = false,
+        nb::arg("swiglu_approx") = false);
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::detail

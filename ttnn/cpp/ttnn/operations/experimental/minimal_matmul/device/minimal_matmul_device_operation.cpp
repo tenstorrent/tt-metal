@@ -159,6 +159,12 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             N / chunks,
             2 * tt::constants::TILE_WIDTH);
     }
+    TT_FATAL(
+        !operation_attributes.swiglu_pack || operation_attributes.fuse_swiglu,
+        "minimal_matmul swiglu_pack requires fuse_swiglu");
+    TT_FATAL(
+        !operation_attributes.swiglu_approx || operation_attributes.swiglu_pack,
+        "minimal_matmul swiglu_approx requires swiglu_pack");
 
     if (chunks > 1) {
         // Validate N is divisible by chunks
@@ -346,7 +352,9 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     bool fuse_swiglu,
-    const std::optional<Tensor>& optional_input_tensor) {
+    const std::optional<Tensor>& optional_input_tensor,
+    bool swiglu_pack,
+    bool swiglu_approx) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -368,7 +376,9 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .swiglu_pack = swiglu_pack,
+            .swiglu_approx = swiglu_approx},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

@@ -26,6 +26,8 @@ std::vector<ttnn::Tensor> minimal_matmul_split(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    bool swiglu_pack = false,
+    bool swiglu_approx = false);
 
 }  // namespace ttnn::experimental
