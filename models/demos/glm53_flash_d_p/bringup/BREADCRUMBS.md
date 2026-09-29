@@ -1072,3 +1072,29 @@ Results:
 - Reference passes (exact). Stub fails.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_07_attn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.ffn_hc test (attempt 1)
+
+Reviewed the rendered component test for ffn_hc at layer 3 (the attn_hc op, with hc_ffn_* weights, on h_mid). I
+rewrote it from the dsa_moe attn_hc test and re-measured every limit on this layer's ffn_hc golden.
+- The streams differ (rel ~1.0 from stream 0), so PCC catches stream order (0.59..0.60) and the attn weights (0.92).
+- post is not saturated everywhere here: column 4 reaches 0.40, and columns 5..7 stay <= 0.009. So post max abs is
+  5e-3, not attn_hc's 5e-4, which the fp32 reference itself fails (5.4e-4).
+- New check: a per-part coefficient `<got, want> / <want, want>` in [0.995, 1.005]. x1.01 on a part sits right at
+  rel L2 0.0096..0.0102, and the coefficient catches it (1.0096..1.0100).
+- Limits: part rel L2 <= 0.01; max abs pre 0.02, post 5e-3, comb 0.02; worst column <= 0.07; coefficient
+  [0.995, 1.005]; comb column sums within 0.01; range checks. Every limit is written `not x <= lim`, so NaN fails.
+Sensitivity: CPU host script /tmp/dsaffnhc/sens.py (not kept); the numbers are in the test docstring. Caught: comb
+transposed, wrong softmax axis, 10/18/19/21 iterations, hc_eps 1e-5 and 0, comb base transposed, rms eps 1e-6 and
+2e-5, scales swapped, x1.02 on any scale, x1.01 on any part, a truncating bf16 mix, post column 6 := 7, last row
+zeroed. Not caught: rms eps 1.2e-5, pre without +hc_eps, x1.005 on one part.
+Results:
+- Device already passes, because `_device_step` builds tt/mhc.py for any layer. It scores PCC 0.999999, part rel
+  0.0011 / 0.0035 / 0.0017, max abs 2.4e-3 / 1.2e-3 / 6.4e-3, worst column 0.032 (column 10, a comb entry),
+  coefficient 0.9993 / 1.0029 / 0.9991, column sums [0.9967, 1.0008].
+- Reference passes (0.00085 / 0.0017 / 0.0012, worst column 0.0035). Stub fails (PCC 0).
+Watch: the device post coefficient (1.0029) is 5x the CPU noise models and about 1.7x inside the limit. It looks
+like the device's RMS (rms eps 1.2e-5 gives 1.0028). The next step, implement, only needs to add ffn_hc to
+`DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
