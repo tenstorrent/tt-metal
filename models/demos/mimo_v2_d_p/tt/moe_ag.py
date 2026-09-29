@@ -70,7 +70,16 @@ class RoutePlan:
         self.lmap = _per_device(mesh_device, lmap, ttnn.uint32)
         self.counts = _dram(mesh_device, [1, n_global], ttnn.uint32)
         self.regions = _dram(mesh_device, [1, n_global], ttnn.uint32)
-        self.token_index = _dram(mesh_device, [1, rows], ttnn.uint32)
+        # zero-initialized once: the plan writes only the used regions, and a consumer that reads the whole capacity
+        # (the ttnn.embedding A/B path) must only ever see valid token indices (0 or a previous plan's)
+        self.token_index = ttnn.from_torch(
+            torch.zeros(1, rows, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.y_slot = _dram(mesh_device, [1, tokens * k], ttnn.uint32)
 
     def __call__(self, idx):

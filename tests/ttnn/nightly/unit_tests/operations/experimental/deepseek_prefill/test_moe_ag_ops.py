@@ -99,13 +99,15 @@ def _marker(reference, actual):
     return ttnn.max(ttnn.ne(tile(reference), tile(actual), dtype=ttnn.bfloat16))
 
 
-def _deterministic(run, n=DET_ITERS):
-    """run() -> list of outputs; n launches compared on device (bitwise) against the first, one read at the end."""
-    ref = [ttnn.clone(t) for t in run()]
+def _deterministic(run, n=DET_ITERS, views=None):
+    """run() -> list of outputs; n launches compared on device (bitwise) against the first, one read at the end.
+    views[i] (optional): restricts output i to its specified part (e.g. the used rows) before the compare."""
+    view = lambda i, t: views[i](t) if views and views[i] else t
+    ref = [ttnn.clone(view(i, t)) for i, t in enumerate(run())]
     marker = None
     for _ in range(n):
-        for r, t in zip(ref, run()):
-            mk = _marker(r, t)
+        for i, (r, t) in enumerate(zip(ref, run())):
+            mk = _marker(r, view(i, t))
             marker = mk if marker is None else ttnn.maximum(marker, mk)
     return float(ttnn.to_torch(marker).item()) == 0.0
 
@@ -133,7 +135,10 @@ def test_moe_ag_route_plan(device, case, adversarial):
     pre = [ttnn.clone(t) for t in out]
     ops.moe_ag_route_plan(d["idx"], d["lmap"], EPC, d["rows"], outputs=pre)
     assert torch.equal(_u32(pre[3]), yslot), f"{tag}: y_slot (preallocated)"
-    assert _deterministic(lambda: ops.moe_ag_route_plan(d["idx"], d["lmap"], EPC, d["rows"])), f"{tag}: determinism"
+    used_rows = lambda t: ttnn.slice(t, [0, 0], [1, used])  # token_index past the used regions is unspecified
+    assert _deterministic(
+        lambda: ops.moe_ag_route_plan(d["idx"], d["lmap"], EPC, d["rows"]), views=[None, None, used_rows, None]
+    ), f"{tag}: determinism"
 
 
 # ---------------------------------------------------------------- local reduce
@@ -245,8 +250,10 @@ def test_moe_ag_untilize_active(device, case):
         if c[g]:
             r0, n = int(r[g]), _up(int(c[g]), 32)
             assert torch.equal(oh[r0 : r0 + n], yh[r0 : r0 + n]), f"{tag}: expert {g} rows"
+    # rows outside the active regions are never written: a zeroed output keeps them defined (no stale NaN)
+    out0 = _dev(device, torch.zeros(d["rows"], H), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
     assert _deterministic(
-        lambda: [ops.moe_ag_untilize_active(y, counts, regions, d["lmap"], EPC, tiles_per_block=W, output=out)]
+        lambda: [ops.moe_ag_untilize_active(y, counts, regions, d["lmap"], EPC, tiles_per_block=W, output=out0)]
     ), f"{tag}: determinism"
 
 
@@ -268,6 +275,21 @@ def test_moe_ag_validation(device, expect_error):
         ops.moe_ag_route_plan(d["idx"], d["lmap"], 65, d["rows"])
     with expect_error(RuntimeError, "num_rows"):
         ops.moe_ag_route_plan(d["idx"], d["lmap"], 64, 100)
+    counts, regions, *_ = ops.moe_ag_route_plan(d["idx"], d["lmap"], 64, d["rows"])
+    y33 = _dev(device, torch.randn(1, 1, 33, 1024), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "must be a multiple of 32"):  # untilize writes whole tiles
+        ops.moe_ag_untilize_active(y33, counts, regions, d["lmap"], 64, tiles_per_block=32)
+    u32 = lambda n: _dev(device, torch.zeros(1, n, dtype=torch.int32), ttnn.uint32)
+    y64 = _dev(device, torch.randn(1, 1, 64, 1024), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "multiple of 16"):  # [NG] rows at NG x 4 B strides: 64 B NoC alignment
+        ops.moe_ag_untilize_active(
+            y64,
+            u32(8),
+            u32(8),
+            _dev(device, torch.zeros(1, 1, 1, 8, dtype=torch.int32), ttnn.uint32),
+            4,
+            tiles_per_block=32,
+        )
     with expect_error(RuntimeError, "worst-case flat rows"):  # the dispatch capacity-factor sizing (1280 x 4 + 32 x 63)
         ops.moe_ag_route_plan(d["idx"], d["lmap"], 64, 7136)
     x = _dev(device, torch.randn(1, 1, 64, 1000), ttnn.bfloat16, ttnn.TILE_LAYOUT)
