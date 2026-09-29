@@ -808,7 +808,98 @@ class HybridDeviceModel:
         pass
 
 
+def _state_chunk(spec, max_seq):
+    """The chunk a state of ``max_seq`` runs with, when the spec's rungs / target say so unambiguously (else None: the
+    state then builds its geometry at the first layer call)."""
+    runs = [r for r in spec.data["ladder"]] + [spec.data["target"]]
+    chunks = {int(r["chunk"]) for r in runs if int(r["seq"]) == int(max_seq)}
+    return chunks.pop() if len(chunks) == 1 else None
+
+
+class Hy4DeviceModel:
+    """Ladder / profile adapter over tt/model.py:TtHy4Model (the all-device model).
+
+    The hidden state (4 iHC streams) is a [1, 1, S/2, 4 x 3072] fp32 device tensor per chip (tt/layout.py) from the
+    embedding to the final norm. Each layer is TtHy4Block.__call__: run_block over the reference block graph with the
+    validated device modules (one profiler section per step). RoPE tables, caches and scratch are built once per
+    (chunk, max_seq) at new_state and the ops take the chunk start; nothing in ``layer`` touches the host. Only the
+    token ids go in per chunk (``embed``); the LM head runs on the host on the ladder's sampled rows."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.hy4_preview_d_p.tt.model import TtHy4Model
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.model = TtHy4Model(mesh, spec, list(layers))
+        self.cfg = self.model.cfg
+        self._lm_head = _loader(spec).get("lm_head.weight").float() if lm_head else None  # untied, fp32 as in HF
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        from models.demos.hy4_preview_d_p.tt.model import TtHy4DeviceState
+
+        return TtHy4DeviceState(self.model, max_seq, _state_chunk(self.spec, max_seq))
+
+    def embed(self, tokens):
+        import ttnn
+
+        s = tokens.shape[-1]
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, s).to(torch.int64).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None)),
+        )
+        h = self.model.embed_ids(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.hy4_preview_d_p.tt.layout import streams_to_device
+
+        return streams_to_device(self.mesh, h, self.cfg.hidden_size)
+
+    def to_host(self, h):
+        """Streams [1, 1, S/2, 4 x H/2] -> host [S, 4H]; the final norm [1, 1, S/2, H] (replicated over axis 1) ->
+        [S, H]."""
+        from models.demos.hy4_preview_d_p.tt.layout import HC, row_split_to_host, streams_to_host
+
+        hid = self.cfg.hidden_size
+        if h.shape[-1] == HC * hid // self.mesh.shape[1]:
+            return streams_to_host(self.mesh, h, hid)
+        return row_split_to_host(self.mesh, h)
+
+    def layer(self, i, h, start, state):
+        state.activate(h.shape[-2] * self.mesh.shape[0])
+        return self.model.blocks[i](h, start, state)
+
+    def final_norm(self, h):
+        return self.model.final(h)
+
+    def logits(self, hidden, rows):
+        return torch.nn.functional.linear(self.to_host(hidden).float()[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """The hybrid harness (CPU reference + DEVICE_STEPS on the device, host in / host out per step) until the
-    assemble step builds the all-device model."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """The all-device model (default). BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on
+    the device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return Hy4DeviceModel(mesh, spec, layers, lm_head=lm_head)
