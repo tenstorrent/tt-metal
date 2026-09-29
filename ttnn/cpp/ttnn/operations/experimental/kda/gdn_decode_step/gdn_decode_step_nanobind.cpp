@@ -36,6 +36,10 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 shifts the packed history in place (slot0 <- slot1, ..., slot3 <- new token).
             conv_taps (ttnn.Tensor, optional): packed taps ``[Nv, 4, 32, 32]`` BFLOAT16 in the same layout (tap 0 = oldest).
             qkvz_dim (int): column offset of the a|b block in the projection row (= 2*Nk*Dk + 2*Nv*Dv).
+            fast_mode (bool): default False. Fused-conv mode only (needs conv_hist): the faster kernels (reads
+                ordered by first use, beta/decay gates computed in fp32 on the reader, dual-output state add). Same
+                output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
+                differs in the last bits.
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -58,7 +62,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("output_dtype") = ttnn::DataType::BFLOAT16,
         nb::arg("conv_hist") = nb::none(),
         nb::arg("conv_taps") = nb::none(),
-        nb::arg("qkvz_dim") = 0);
+        nb::arg("qkvz_dim") = 0,
+        nb::arg("fast_mode") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail

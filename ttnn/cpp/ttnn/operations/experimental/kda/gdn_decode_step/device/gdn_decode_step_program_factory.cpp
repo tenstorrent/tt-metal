@@ -177,8 +177,9 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     // ---- reader
     m2::KernelSpec reader{
         .unique_id = READER,
-        .source = std::string(kDir) +
-                  (fused ? "dataflow/reader_gdn_decode_step_conv.cpp" : "dataflow/reader_gdn_decode_step.cpp"),
+        .source = std::string(kDir) + (fused ? (a.fast_mode ? "dataflow/reader_gdn_decode_step_conv_fast.cpp"
+                                                            : "dataflow/reader_gdn_decode_step_conv.cpp")
+                                             : "dataflow/reader_gdn_decode_step.cpp"),
         .runtime_arg_schema =
             {.runtime_arg_names =
                  (fused ? std::vector<std::string>{"head", "u0", "nu"}
@@ -255,7 +256,9 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source = std::string(kDir) + (fused ? "compute/gdn_decode_step_conv.cpp" : "compute/gdn_decode_step.cpp"),
+        .source = std::string(kDir) +
+                  (fused ? (a.fast_mode ? "compute/gdn_decode_step_conv_fast.cpp" : "compute/gdn_decode_step_conv.cpp")
+                         : "compute/gdn_decode_step.cpp"),
         .compiler_options = {.opt_level = fused ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::O3},
         .compile_time_args =
             {{"Kt", Kt},

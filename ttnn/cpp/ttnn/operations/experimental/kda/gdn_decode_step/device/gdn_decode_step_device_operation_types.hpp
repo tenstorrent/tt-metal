@@ -26,6 +26,11 @@ struct GdnDecodeStepParams {
     // fused-conv mode: qkv is the full projection row [q|k|v|z|a|b]; conv + gates computed in-kernel
     bool fuse_conv = false;
     uint32_t qkvz_dim = 0;  // column offset of the a|b block (= 2*Nk*Dk + 2*Nv*Dv)
+    // fast_mode (fused-conv mode only): the *_conv_fast reader/compute kernels: reads ordered by first use, unrolled
+    // scalar-tile fills, beta/decay gates computed on the reader in fp32, late DFB waits, and a dual-output state add
+    // (the state is stored as the full fp32 sum instead of a TF32-truncated copy). o is unchanged; the state differs
+    // in the last bits. Part of the program hash (default attribute hashing).
+    bool fast_mode = false;
 };
 
 struct GdnDecodeStepInputs {
