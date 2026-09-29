@@ -1843,7 +1843,7 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
   model: tt-transformers-common
