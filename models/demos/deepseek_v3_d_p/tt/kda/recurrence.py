@@ -256,6 +256,50 @@ def _distributed_prefix(
     )
 
 
+def select_final_state(
+    rank_final: ttnn.Tensor,
+    prefix_final_state: ttnn.Tensor,
+    *,
+    selections: ChronologicalSelections,
+    actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
+    local_rows: int,
+    sequence_parallel_axis: int,
+    fused: bool = True,
+) -> ttnn.Tensor:
+    """State after the last valid token: the owning rank's final for a separated tail, else the prefix carry.
+
+    ``rank_final`` may hold every group's state as ``[B*H, groups, K, V]``; the last group is the final one.
+    ``fused`` moves only the owner's state over the fabric, and nothing when the interval is unsplit;
+    gathering every rank's final and selecting on device is its bit-exact reference.
+    """
+    if not fused:
+        if len(rank_final.shape) == 4:
+            batch_heads, groups, key_dim, value_dim = rank_final.shape
+            rank_final = ttnn.reshape(
+                ttnn.slice(
+                    rank_final,
+                    (0, groups - 1, 0, 0),
+                    (batch_heads, groups, key_dim, value_dim),
+                    memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+                ),
+                (batch_heads, key_dim, value_dim),
+            )
+        gathered = ttnn.all_gather(
+            rank_final, dim=0, cluster_axis=sequence_parallel_axis, memory_config=KDA_OUTPUT_MEMORY_CONFIG
+        )
+        return selections.select_final_state(gathered, prefix_final_state)
+    return ttnn.experimental.kda.select_final_carry(
+        rank_final,
+        prefix_final_state,
+        actual_start=actual_start,
+        actual_end=actual_end,
+        local_rows=local_rows,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
+
+
 def _last_group_state(
     grouped_final_states: ttnn.Tensor,
     geometry: _RecurrenceGeometry,
@@ -456,15 +500,16 @@ def _scan_sp_grouped_chunks(
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
-    # Keep the gather in the fixed graph: the device selector chooses the completed
-    # tail when split, or the prefix's final state when unsplit, at runtime.
-    gathered = ttnn.all_gather(
-        _last_group_state(scan.final_state, geometry, groups),
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+    # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime.
+    final_state = select_final_state(
+        ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim)),
+        prefix_final_state,
+        selections=selections,
+        actual_start=actual_start,
+        actual_end=actual_end,
+        local_rows=geometry.local_rows,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
-    final_state = selections.select_final_state(gathered, prefix_final_state)
     return RecurrenceResult(
         output, ttnn.reshape(final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
     )
