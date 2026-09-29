@@ -725,3 +725,27 @@ Note: `DEVICE_STEPS["dsa_moe"]` in hooks.py is still empty. The swap tests call 
 next implement step only needs to register attn_hc / attn_collapse there.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_02_attn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attn_norm test (attempt 1)
+
+Reviewed the rendered component test for attn_norm at layer 3 (input_layernorm, [2048, 4096] bf16). Rewrote it from
+the kda_dense attn_norm test (LAYER = 3), with ffn_norm's tighter limits: the gated PCC; finite; rel L2 <= 0.01;
+per-token norm ratio [0.99, 1.01]; worst per-token rel L2 <= 0.015. Limits are written `not x <= lim` so NaN fails.
+Sensitivity (CPU host script /tmp/dsanorm/sens.py, not kept; numbers in the test docstring):
+- Layer-3 input rows are smaller than layer 0's (row RMS 0.0015..0.0099, mean square 2.1e-6..9.7e-5, at or below
+  eps 1e-5), and w is small (0.0126..0.0286). So eps dominates the small rows: eps 1.1e-5 / 9e-6 score PCC ~1.0 but
+  rel 0.021 / 0.022 and ratio 0.961 / 1.044.
+- Hidden under PCC and caught only by the worst-row limit: LayerNorm-style mean subtraction (rel 0.0141, worst row
+  0.043). x1.01 fails rel (0.0103) and ratio (1.0102); x1.005 passes everything (0.0055).
+- PCC catches sum instead of mean, eps 0 / 1e-6 / 1e-4, no weight, 1 + w, ffn_norm's or layer 0's weight, w reversed
+  (0.994), last 32 rows zeroed.
+- Noise: fp32 CPU 0.0023 / [0.9998, 1.0002] / 0.0025; bf16 input, weight and output 0.0028 / 0.0030; 0.3% element
+  noise 0.0042 / 0.0045 (pass). Squares accumulated in bf16 (ratio [0.989, 1.025], worst row 0.025) and 5e-3 rsqrt
+  row error (0.021) fail.
+Results: device already passes: PCC 0.999996, rel 0.0028, ratio [0.9990, 1.0005], worst row 0.0031. `_device_step`
+builds `tt/rms_norm.py` for any layer. Reference passes (0.999997 / 0.0023 / [0.9998, 1.0002] / 0.0025). Stub fails
+(PCC 0).
+Next (implement): the module needs no change. Add `attn_norm` to `DEVICE_STEPS["dsa_moe"]` (still empty; attn_hc and
+attn_collapse are not there either). Keep eps exactly 1e-5 and fp32 accumulation of the squares.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
