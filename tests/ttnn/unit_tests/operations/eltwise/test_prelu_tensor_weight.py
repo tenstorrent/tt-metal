@@ -28,15 +28,7 @@ def test_prelu_tensor_weight(device, dtype, shape, channels):
     iw = ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     got = ttnn.to_torch(ttnn.prelu(ix, iw))
 
-    if dtype == ttnn.float32:
-        assert torch.equal(got, want), f"{int((got != want).sum())} of {want.numel()} differ"
-    else:
-        # bfloat16 rounds one ulp differently from the composite this replaced,
-        # on about 1.2 percent of elements; see the PR. Bound it rather than
-        # assert equality, so a larger drift fails here.
-        diff = (got.view(torch.int16).to(torch.int32) - want.view(torch.int16).to(torch.int32)).abs()
-        assert int(diff.max()) <= 1, f"max {int(diff.max())} ulp"
-        assert int((diff != 0).sum()) <= want.numel() // 20, f"{int((diff != 0).sum())} of {want.numel()} differ"
+    assert torch.equal(got, want), f"{int((got != want).sum())} of {want.numel()} differ"
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
@@ -56,6 +48,8 @@ def test_prelu_sign_boundary_and_specials(device, dtype):
     finite = torch.isfinite(want)
     assert torch.equal(got[finite], want[finite])
 
-    # NaN propagation is not asserted. The composite this replaces does not
-    # carry a NaN operand through either, and the two agree element for element
-    # on this case set, so requiring it here would be testing a separate defect.
+    if dtype == ttnn.float32:
+        # Bitwise, so the sign of -0.0 and the NaN input both count.
+        assert torch.equal(got.view(torch.int32), want.view(torch.int32))
+    # A bfloat16 NaN comes back as inf on this path, as it does for the composite
+    # this replaces, so it is not asserted there.

@@ -2266,15 +2266,15 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
         MathOperation.SfpuMask,
-        # prelu's a < 0 is the same SFPSETCC: -0.0 takes the a * w branch, so (-0.0, +/-inf)
-        # returns NaN where the golden, like torch, returns -0.0.
-        MathOperation.SfpuBinaryPrelu,
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # With a 16-bit Dest, prelu's product follows multiply (x * 0 = 0) and a NaN weight
+        # reaches the SFPU as inf, where the golden's product is NaN. The 32-bit Dest cells agree.
+        MathOperation.SfpuBinaryPrelu,
     }
 )
 
