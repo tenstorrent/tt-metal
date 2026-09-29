@@ -3197,3 +3197,15 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
+
+## C.moe_shared.ffn_residual.test.1 (test review)
+- Test `tests/bringup/test_c_moe_shared_ffn_residual.py` rebuilt from the reviewed moe_full layer-1 ffn_residual test
+  (same hc_post step: out_j = h_mid_j + post_j * mlp_out, post = ffn_hc cols 4-7), LAYER = 2.
+- Layer-2 golden (s4096 chunk 1): stream norms 51 / 42 / 56 / 335, addend norms 3.1 / 4.1 / 2.4 / 199, bf16 budget
+  r_j/||t_j|| 0.027 / 0.017 / 0.038 / 0.0038. Every stream's addend is visible (layer 1 stream 2 was not), so the
+  limits are tightened to 0.005 (rel L2, addend coef/excess), stream ratio [0.995, 1.005], as attn_residual layer 2.
+  Rotated-gate second run kept (rel L2 <= 0.004 vs the CPU step on the same inputs). Variant table in the docstring.
+- PCC 0.99 alone misses everything down to "post halved" (0.986); the extra checks catch 1.005 x mlp_out and up.
+  Blind spot: uniform post / mlp_out scale <= ~1.004.
+- reference: pass; stub: fail (PCC); gate on device: pass, pcc 0.999997, rel 0.0023, addend excess 0 (fp32 output).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_residual.py`
