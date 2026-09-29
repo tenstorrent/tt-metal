@@ -323,15 +323,17 @@ def _prepare_tt_inputs(
     a_out = torch.full((a_cap,), audio_start, dtype=torch.int64)
     a_out[:num_audio] = torch.arange(audio_start, audio_start + num_audio)
 
-    prompt_windows = None
-    if l_cap != num_text:
-        prompt_windows = from_torch(
-            torch.tensor([0, num_text, l_cap], dtype=torch.int32),
+    def upload_windows(boundaries: list[int]) -> ttnn.Tensor:
+        """`[0, true, capacity]` block-diagonal window boundaries, replicated."""
+        return from_torch(
+            torch.tensor(boundaries, dtype=torch.int32),
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[None],
         )
+
+    prompt_windows = upload_windows([0, num_text, l_cap]) if l_cap != num_text else None
 
     def cond_arena(inputs: list[torch.Tensor], cap: int) -> ttnn.Tensor | None:
         if not inputs:
@@ -343,6 +345,10 @@ def _prepare_tt_inputs(
         prompt_windows=prompt_windows,
         condition_video_1BKC=cond_arena(video_cond, kv_cap),
         condition_audio_1BKC=cond_arena(audio_cond, ka_cap),
+        # The capacity the prompt stream was padded to. Required, and the fixture was not supplying
+        # it, so every parametrization of test_minimax_h3_transformer died in the call rather than
+        # in a comparison.
+        prompt_cap=l_cap,
     )
     tt = dict(
         video_1BVC=bf16_tensor(pad_stream(video_input, v_cap).unsqueeze(0), device=mesh_device),
@@ -357,6 +363,12 @@ def _prepare_tt_inputs(
         rope_sin=tt_rope_sin,
         logical_n=logical_length_tensor(mesh_device, seq_len),
         pad_to=padded_len,
+        # SP=1 has no ring attention to mask the pad tail from logical_n, so the windows come in
+        # explicitly -- the same [0, logical, padded] the pipeline builds. None on an SP mesh, where
+        # the transformer rejects them.
+        sequence_windows=(
+            upload_windows([0, seq_len, padded_len]) if sp_factor == 1 and seq_len < padded_len else None
+        ),
     )
 
     return SimpleNamespace(
