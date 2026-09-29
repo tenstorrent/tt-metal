@@ -2857,3 +2857,28 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
+
+## S.moe_shared.09 test (attempt 1)
+
+What
+- Replaced the rendered swap test (moe_shared layer 2, attn_hc .. ffn_hc + ffn_hc_pre on device) with swap 08
+  (test_swap_moe_shared_08_ffn_hc.py), keeping every check and limit, plus the ffn_hc_pre checks of
+  test_swap_moe_full_09_ffn_hc_pre.py: device ffn_x vs the CPU ffn_hc_pre on the same device h_mid and gates
+  (rel <= 0.003, row <= 0.006), and the module again on per-row rotated pre gates vs the CPU step (0.004 / 0.01).
+  The ffn_x vs golden check (0.01 / 0.05) now sees the device step.
+
+Decisions
+- Limits are the component test's (test_c_moe_shared_ffn_hc_pre.py, the same as layer 1). No new CPU study: the
+  component test's layer-2 mutation table (/tmp/hy4_ssh_ffnhcpre2/study.py) covers the step. The rotation is what
+  catches a dropped stream 1 (gate 1 sits at hc_eps) and a 0 / 1 swap. ffn_norm hides these, so out cannot see them.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc_swap_out 0.999995, ffn_hc_pre vs CPU and rotated 0).
+- BRINGUP_IMPL=stub: FAIL (out PCC 0 and every extra check).
+- Gate (device, TtHcPre): PASS. pcc_swap_out 0.999977; ffn_hc_pre vs CPU 0 / 0, rotated 0 / 0; ffn_x vs golden
+  0.0047 / 0.0100; tail 0.0016; router 0.99341; out rel 0.00686.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py
