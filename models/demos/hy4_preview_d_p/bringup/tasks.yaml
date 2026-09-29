@@ -542,6 +542,13 @@ tasks:
     - attention
     - attn_residual
     layer: 0
+  frozen:
+    at: '2026-09-29T07:55:29'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py: f245ddbabbcb11e5df1085efc10dca91fecba21034d8c2143f1fb8e3646919c2
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.dense_full.ffn_hc
   title: dense_full ffn_hc (op) on device, layer 0
   step: implement
