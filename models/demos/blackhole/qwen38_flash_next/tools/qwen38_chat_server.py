@@ -1932,6 +1932,7 @@ def record_agreement(
     out_dir: Path,
     producer: dict[str, Any],
     full_logits_dir: Path | None = None,
+    item_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
     """A1's device column: every corpus item teacher-forced through the session (a prompt followed by the HF
     reference's argmax chain), the resolved argmax and the candidate row (every shard's top-32) per scored position as
@@ -1958,7 +1959,10 @@ def record_agreement(
     started = time.perf_counter()
     recorded = []
     gather_seconds = 0.0
-    for item in reference_corpus.select_items(items, parts, ()):
+    selected = reference_corpus.select_items(items, parts, item_ids)
+    if not selected:
+        raise Qwen38ChatChainError("agreement selection contains no corpus items")
+    for item in selected:
         if item.item_id not in hf:
             raise Qwen38ChatChainError(f"{item.item_id}: not in the HF reference {reference}")
         stream = list(item.token_ids)
@@ -2032,6 +2036,13 @@ def record_agreement(
         "records": str(records_dir),
         "items": recorded,
         "positions": score["corpus"]["positions"],
+        "coverage": {
+            "selected_items": len(selected),
+            "total_items": len(items),
+            "measured_positions": score["corpus"]["positions"],
+            "full_corpus_scored_positions": manifest["scored_positions"],
+            "item_ids": [item.item_id for item in selected],
+        },
         "prefill_mode": session.prefill_mode,
         "seconds": round(time.perf_counter() - started, 1),
         "full_logits": None if full_logits_dir is None else str(full_logits_dir),
@@ -2246,6 +2257,12 @@ def _parser() -> argparse.ArgumentParser:
         help="the corpus parts the agreement records cover (default: all)",
     )
     parser.add_argument(
+        "--agreement-items",
+        nargs="+",
+        default=[],
+        help="exact corpus item IDs within the selected parts; evidence reports subset/full coverage",
+    )
+    parser.add_argument(
         "--agreement-full-logits",
         type=Path,
         default=None,
@@ -2450,6 +2467,8 @@ def main() -> int:
         raise SystemExit("--agreement-reference needs --sampling (the records read the candidate row)")
     if args.agreement_reference is not None and not args.agreement_reference.is_file():
         raise SystemExit(f"--agreement-reference {args.agreement_reference}: not a file")
+    if args.agreement_items and args.agreement_reference is None:
+        raise SystemExit("--agreement-items needs --agreement-reference")
     if args.agreement_full_logits is not None and args.agreement_reference is None:
         raise SystemExit("--agreement-full-logits needs --agreement-reference (the positions it keeps logits for)")
     if args.bf4_stage_limit is not None and args.bf4_stage_limit <= 0:
@@ -2592,6 +2611,7 @@ def main() -> int:
                 "reference": str(args.agreement_reference),
                 "corpus": str(args.agreement_corpus),
                 "parts": list(args.agreement_parts),
+                "item_ids": list(args.agreement_items),
                 "full_logits": None if args.agreement_full_logits is None else str(args.agreement_full_logits),
             }
         ),
@@ -2946,6 +2966,7 @@ def main() -> int:
                 reference=args.agreement_reference,
                 corpus_dir=args.agreement_corpus,
                 parts=args.agreement_parts,
+                item_ids=args.agreement_items,
                 out_dir=evidence,
                 producer={
                     "kind": "device",
