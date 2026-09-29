@@ -151,8 +151,10 @@ class MiniMaxH3Transformer3DModel(Module):
 
     Padding
     -------
-    Pad rows stay outside `[0, logical_n)`, which ring attention masks internally; interior padding is
-    not allowed.
+    Pad rows stay outside `[0, logical_n)`; interior padding is not allowed. Ring attention masks
+    them from `logical_n` internally. With SP = 1 there is no ring -- attention falls back to plain
+    SDPA, which has no `logical_n` -- so the caller passes `sequence_windows` instead and the pad
+    tail is fenced off as a block-diagonal window.
 
     Precision
     ---------
@@ -349,6 +351,7 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         logical_n: ttnn.Tensor,
         pad_to: int,
+        sequence_windows: ttnn.Tensor | None = None,
         traced: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
@@ -366,6 +369,11 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        sequence_windows: `[0, logical, pad_to]` block-diagonal window boundaries as a 1-D uint32
+            device tensor, required when `sp_factor == 1` and rejected otherwise. Attention with
+            SP > 1 is ring attention, which masks the pad tail itself from `logical_n`; with SP = 1
+            it is plain SDPA, which has no `logical_n` argument and would otherwise let every real
+            row attend to the pad rows. See `MiniMaxH3Pipeline._sequence_windows`.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -382,6 +390,8 @@ class MiniMaxH3Transformer3DModel(Module):
         for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
             if stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
+        if self.sp_factor > 1 and sequence_windows is not None:
+            raise ValueError("sequence_windows is for SP=1 only; ring attention masks the pad tail from logical_n")
         static_prefix = self._static_source_state.value
         if static_prefix is None:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
@@ -412,6 +422,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            sequence_windows,
             traced=traced,
             tracer_trace_key=pad_to,
         )
@@ -449,6 +460,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        sequence_windows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         for block in self.transformer_blocks:
             hidden = block(
@@ -458,6 +470,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                cu_window_seqlens=sequence_windows,
             )
         return hidden
 

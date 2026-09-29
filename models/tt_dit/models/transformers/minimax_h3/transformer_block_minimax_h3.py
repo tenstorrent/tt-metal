@@ -230,6 +230,7 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        cu_window_seqlens: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -237,6 +238,9 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
+        cu_window_seqlens: `[0, logical_n, padded_n]` window boundaries, SP=1 only. Ring attention
+            masks the pad tail itself from `logical_n`; plain SDPA has no such argument, so on a
+            mesh with no sequence parallelism the pad rows are fenced off with a window instead.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
@@ -269,6 +273,7 @@ class MiniMaxH3TransformerBlock(Module):
             rope_sin=rope_sin,
             addcmul_residual=residual,
             addcmul_gate=modulation(_GATE_MSA),
+            cu_window_seqlens=cu_window_seqlens,
         )
 
         # 2. Modulated feed-forward.

@@ -526,6 +526,7 @@ class MiniMaxH3Pipeline:
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        self._tt_seq_windows = StateTensor()
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -1412,19 +1413,44 @@ class MiniMaxH3Pipeline:
         indices[:count] = torch.arange(start, start + count)
         return self._replicated_indices(indices)
 
-    def _prompt_windows(self, l_len: int, cap: int) -> ttnn.Tensor | None:
-        """Window boundaries `[0, l_len, cap]` for the token refiner's windowed SDPA, so no real token
-        attends to a pad row. None when the prompt fills the capacity exactly.
+    def _window_boundaries(self, true_len: int, cap: int) -> ttnn.Tensor | None:
+        """Block-diagonal window boundaries `[0, true_len, cap]` for a windowed plain SDPA, so no real
+        row attends to a pad row. `None` when the true rows fill the capacity exactly and there is
+        nothing to fence off.
+
+        Returning `None` rather than the degenerate `[0, cap, cap]` means the shape of this argument
+        is not constant across requests at a fixed capacity, so a denoise trace captured with padding
+        cannot be replayed on an exactly-full request. Neither SP=1 preset enables `trace_denoise`
+        (they are not coresident, which already rules tracing out), and the ring path never takes
+        this argument at all, so nothing currently depends on it -- but a future traced SP=1 mesh has
+        to pad the bucket rung strictly above the logical length, which the bucket ladder does.
         """
-        if l_len >= cap:
+        if true_len >= cap:
             return None
         return from_torch(
-            torch.tensor([0, l_len, cap], dtype=torch.int32),
+            torch.tensor([0, true_len, cap], dtype=torch.int32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[None],
         )
+
+    def _prompt_windows(self, l_len: int, cap: int) -> ttnn.Tensor | None:
+        """The token refiner's windows. The refiner is never sequence-parallel, so it always needs them."""
+        return self._window_boundaries(l_len, cap)
+
+    def _sequence_windows(self, logical: int, pad_to: int) -> ttnn.Tensor | None:
+        """The denoiser's windows, `None` unless SP=1.
+
+        With SP > 1 the DiT blocks run ring attention, which takes `logical_n` and masks the pad tail
+        itself. With SP = 1 `MiniMaxH3Attention` falls back to plain `scaled_dot_product_attention`,
+        which has no such argument: without a window every real row attends to the pad rows, whose
+        keys are whatever the projections make of zero rows. That is not a crash -- it is a silent
+        accuracy loss that grows with the padding fraction, so it is fenced off here.
+        """
+        if self.sp_factor > 1:
+            return None
+        return self._window_boundaries(logical, pad_to)
 
     # ------------------------------------------------------------------ decode
 
@@ -2457,6 +2483,9 @@ class MiniMaxH3Pipeline:
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
         )
         self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
+        seq_windows = self._sequence_windows(layout.sequence_length, rung)
+        if seq_windows is not None:
+            self._tt_seq_windows.update(seq_windows, traced=traced)
         audio_start = l_len + num_cond + num_cond_audio
         video_start = audio_start + a_target
         self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
@@ -2515,6 +2544,7 @@ class MiniMaxH3Pipeline:
                 rope_sin=state.rope_sin.value,
                 logical_n=self._tt_logical_n.value,
                 pad_to=rung,
+                sequence_windows=self._tt_seq_windows.value if seq_windows is not None else None,
                 traced=traced,
             )
 
