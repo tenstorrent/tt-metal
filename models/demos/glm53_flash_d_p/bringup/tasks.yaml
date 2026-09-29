@@ -2566,11 +2566,52 @@ tasks:
       opportunities_listed: '>= 1'
   paths:
   - models/demos/glm53_flash_d_p/bringup/opportunities.md
+- id: P.1
+  title: mHC residual mix as one per-token matmul (attn_residual / ffn_residual), fp32 accumulation
+  step: perf
+  role: perf
+  deps:
+  - X.2
+  device: true
+  paths:
+  - models/demos/glm53_flash_d_p/tt
+  - models/demos/glm53_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'Owner pick (opportunities.md rows 1-2, 31% of the 51200->56320 chunk: attn_residual 82.9 ms, ffn_residual 82.8
+      ms). tt/residual.py computes out_m = post[:, m] * y + sum_n comb[:, n, m] * x_n as 16 fp32 multiply/addcmul ops on the
+      replicated [1, 1, S, 4H] residual. Replace it with one batched per-token mix: the 4 streams as [S, 4, H] and comb^T
+      as [S, 4, 4] (fp32) -> one ttnn.matmul (batched over S) or an equivalent fused op, plus post * y, accumulating in fp32
+      and rounding to bf16 once, HiFi4. Keep the current path behind a switch (e.g. GLM_RESIDUAL_MIX=addcmul) and make the
+      new one the default. Same numerics contract as glm_ref.hc_residual; do not lower precision to win time. Measure both
+      paths in the profile; report the per-section device ms.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py &&
+      scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+      pcc_ffn_residual_L00: '>= 0.99'
+      pcc_attn_residual_L03: '>= 0.99'
+      pcc_ffn_residual_L03: '>= 0.99'
+      pcc_attn_residual_L04: '>= 0.99'
+      pcc_ffn_residual_L04: '>= 0.99'
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attn_residual: < 60
+      device_ms_ffn_residual: < 60
+      device_ms_total: < 500
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
   - X.2
+  - P.1
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
