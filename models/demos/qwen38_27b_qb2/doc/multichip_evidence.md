@@ -118,6 +118,12 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 
 - No PCC against a single-chip TTNN baseline, which is what would separate sharding and
   collective error from HuggingFace-versus-TTNN numerics. The measurements above bundle both.
+  The baseline itself is now known to run: `Qwen38Decoder` with `replicated_mesh=True` builds
+  and decodes an unsharded layer of either kind on this mesh once the Blackhole core counts are
+  replaced. Only four keys are illegal here, since `output_cores` at 48 and `down_cores` at 32
+  already divide the unsharded K of 192 and 544 tiles; `attention`, `gate`, `up` and `residual`
+  move from 80 to 40 cores, `rectangular_working` goes false, and the readers drop to one.
+  The remaining work is the PCC comparison itself, not the baseline.
 - No `tt-perf-report` for this path. The KDA blocker is real but narrow:
   `kda_performance_model.cpp` asserts Blackhole and `qkv_causal_conv1d_silu` and
   `sigmoid_gated_rms_norm` reach it from `create_op_performance_model`, so only the 48
@@ -131,7 +137,14 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
   explicit cases.
 - 262144 tokens is a capacity result, not a latency or quality result; no run at that length
   has been executed on this mesh.
-- No single-chip-versus-multichip speedup, which needs the baseline in the item above.
+- Single-chip-versus-multichip speedup has no valid referent and is not reported. Unsharded
+  weights are roughly 27 to 30 GiB against 12 GiB per chip, so a single-chip full model cannot
+  exist; tensor parallelism here is what makes the model representable, not a throughput
+  choice. A per-layer proxy was measured and rejected: calling `decode_forward` directly runs
+  eagerly, and at 5.0 ms per layer against the 0.968 ms traced marginal cost it is 5.2 times
+  dispatch-bound, with that overhead identical in both arms. It reports 1.05x for a GDN layer
+  and 1.21x for a full-attention layer, which measures host dispatch rather than parallel
+  efficiency.
 - The qualitative suite is in `readiness_qualitative/`, covering prompt format and answer
   quality on the shared six prompts at 256 tokens against a native-bfloat16 control. It is not
   an accuracy gate: no top-1/top-5/top-100 and no AIME24 reference exist yet.
