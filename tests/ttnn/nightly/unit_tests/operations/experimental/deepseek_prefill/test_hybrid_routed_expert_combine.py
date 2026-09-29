@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
@@ -55,7 +55,7 @@ _MESHES = {
 _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
-_MODELS = {"kimi-k27": KimiK27Config, "glm-52": GLM52Config}
+_MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
 # `-hot` cases: this share of each chip's tokens picks, as its first expert, the hot expert of the chip
 # token_index % ring points at -- one per chip, in its LAST local slot, so it is walked last.
 _HOT_SHARE = 0.4
