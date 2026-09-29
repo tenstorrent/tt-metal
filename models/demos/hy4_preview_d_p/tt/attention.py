@@ -47,6 +47,65 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 TILE = 32
 SPARSE_K_CHUNK = 128  # sparse_sdpa key chunk: a multiple of 32 dividing topk (2048), as ttMLA
 
+# Matmul program configs for the three large linears (q_b_proj, linear_gate, o_proj), P.1 perf.
+# HY4_ATTN_MM=tuned (default): explicit 2D-mcast configs from ``mm_program_config`` (same HiFi4 + fp32 dest,
+# packer_l1_acc off, same dtypes: the K accumulation stays in the fp32 dest / fp32 interm CB). HY4_ATTN_MM=default:
+# ttnn's auto-picked config (the pre-P.1 behaviour), for comparison.
+MM_GRID = (11, 10)  # as deepseek_v3_d_p mla_config.COMPUTE_GRID (12x10 avoided for di/dt)
+MM_L1_BUDGET = 1_400_000  # bytes of in0 + in1 (double-buffered) + out + interm CBs per core (L1 1.5 MB)
+
+
+def attn_mm_mode() -> str:
+    import os
+
+    mode = os.environ.get("HY4_ATTN_MM", "tuned")
+    assert mode in ("tuned", "default"), f"HY4_ATTN_MM must be tuned or default, got {mode}"
+    return mode
+
+
+def _divisors(n: int) -> list[int]:
+    return [d for d in range(1, n + 1) if n % d == 0]
+
+
+def mm_program_config(m: int, k: int, n: int, out_dtype, grid=MM_GRID):
+    """2D-mcast config for [m, k] bf16 @ [k, n] bf16 (DRAM interleaved) with fp32 dest accumulation, or None (ttnn's
+    default) if nothing fits. M over the grid rows, N over the columns; the widest K block (in0_block_w 16 > 8 > ...)
+    whose CBs fit ``MM_L1_BUDGET``, with an output block of the full per_core_M (or half) x ~8 tiles, so the fp32
+    output block no longer caps in0_block_w. Swept on the 2x2 box at m = 1024 / 2560 / 4096 (BREADCRUMBS P.1)."""
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    gx, gy = grid
+    pm, pn = -(-mt // gy), -(-nt // gx)
+    out_tile = 4096 if out_dtype == ttnn.float32 else 2048
+    interm_tile = 0 if out_dtype == ttnn.float32 else 4096  # fp32 interm shares the out CB only when out is fp32
+    obws = [w for w in (8, 9, 6, 12) if pn % w == 0] or [pn]
+    obhs = [pm] + ([pm // 2] if pm % 2 == 0 else [])
+    for bw in (16, 8, 6, 4, 3, 2, 1):
+        if kt % bw:
+            continue
+        for obh in obhs:
+            for obw in obws:
+                l1 = 2 * obh * bw * 2048 + 2 * obw * bw * 2048 + obh * obw * (out_tile + interm_tile)
+                if l1 > MM_L1_BUDGET:
+                    continue
+                sh, sw = max(
+                    ((h, w) for h in _divisors(obh) for w in _divisors(obw) if h * w <= 4),
+                    key=lambda hw: (hw[0] * hw[1], hw[1]),
+                )
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=bw,
+                    out_subblock_h=sh,
+                    out_subblock_w=sw,
+                    out_block_h=obh,
+                    out_block_w=obw,
+                    per_core_M=pm,
+                    per_core_N=pn,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                )
+    return None
+
 
 def rope_tables(positions: torch.Tensor, theta: float, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Interleaved (Meta pair) cos / sin [N, dim]: entries 2i, 2i+1 hold cos / sin of pos * theta^(-2i/dim)."""
@@ -102,6 +161,18 @@ class _Geometry:
             tp_axis=att.tp_axis,
         )
         self._topology = self.cache.tensor_topology()
+        # Per-chunk matmul program configs (host structs, built once here; {} = ttnn's default configs).
+        s_loc, hid, hv, q_lora = self.chunk_local, att.hidden, att.heads_local * att.v_dim, att.q_lora
+        self.mm = {}
+        if att.mm_mode == "tuned":
+            for name, (k, n, dt) in {
+                "q_b": (q_lora, att.heads_local * (att.nope_dim + att.rope_dim), ttnn.bfloat16),
+                "gate": (hid, hv, ttnn.float32),
+                "o_proj": (hv, hid, ttnn.float32),  # K split over TP (row-parallel), N = hidden
+            }.items():
+                pc = mm_program_config(s_loc, k, n, dt, grid=att.mm_grid)
+                if pc is not None:
+                    self.mm[name] = {"program_config": pc}
         # Replicated scratch the full-mesh gather writes the populated prefix into (block-cyclic order kept;
         # sparse_sdpa remaps natural positions in-kernel). Allocated once.
         self.kv_all = ttnn.from_torch(
@@ -210,6 +281,10 @@ class TtHy4Attention:
             )
 
         q_lora = q_b.shape[1]
+        self.hidden, self.q_lora = hidden, q_lora
+        self.mm_mode = attn_mm_mode()
+        g = mesh.compute_with_storage_grid_size()
+        self.mm_grid = (min(MM_GRID[0], g.x), min(MM_GRID[1], g.y))
         # Column (head) split: chip column c holds heads 32c .. 32c + 31 (contiguous output columns of q_b / gate,
         # dim 1 of the per-head kv_b tensors, contiguous K rows of o_proj^T), replicated over the SP rows.
         self.q_b = put(q_b.float().t().reshape(1, 1, q_lora, hq * (dn + r)), ttnn.bfloat16, (None, 3))
@@ -316,7 +391,14 @@ class TtHy4Attention:
     def _q_stem(self, qr, start: int):
         """Absorbed q [1, 32, S/2, 576] bf16: q_b_proj -> heads -> q_nope @ W_uk | RoPE(q_rope)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
-        q = ttnn.linear(qr, self.q_b, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=dram)
+        q = ttnn.linear(
+            qr,
+            self.q_b,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.ckc,
+            memory_config=dram,
+            **self.geom.mm.get("q_b", {}),
+        )
         q_nope, q_rope = ttnn.experimental.nlp_create_q_heads_split(
             q, num_heads=self.heads_local, split_head_dim=self.nope_dim, memory_config=dram
         )
@@ -376,7 +458,14 @@ class TtHy4Attention:
 
         # Output gate, elementwise per (head, v-dim): the row's full attn_norm, head-split linear_gate columns.
         xf = ttnn.all_gather(x, dim=3, cluster_axis=self.tp_axis, memory_config=dram)  # [1, 1, S/2, hidden]
-        gl = ttnn.linear(xf, self.gate, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=dram)
+        gl = ttnn.linear(
+            xf,
+            self.gate,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.ckc,
+            memory_config=dram,
+            **g.mm.get("gate", {}),
+        )
         ttnn.deallocate(xf)
         gs = ttnn.sigmoid(gl, memory_config=dram)
         ttnn.deallocate(gl)
@@ -385,7 +474,14 @@ class TtHy4Attention:
         ttnn.deallocate(gs)
 
         # o_proj row-parallel (K = this chip's 32 heads x 256), fp32 partials, reduce-scatter to the column split.
-        part = ttnn.linear(vg, self.o_proj, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=dram)
+        part = ttnn.linear(
+            vg,
+            self.o_proj,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.ckc,
+            memory_config=dram,
+            **g.mm.get("o_proj", {}),
+        )
         ttnn.deallocate(vg)
         out = ttnn.reduce_scatter(part, dim=3, cluster_axis=self.tp_axis, memory_config=dram)
         ttnn.deallocate(part)
