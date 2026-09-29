@@ -1748,3 +1748,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
+
+## C.moe_full.ffn_norm test (attempt 1)
+
+What
+- Replaced the rendered 22-line component test (moe_full layer 1, ffn_norm) with the reviewed dense_full ffn_norm
+  test at LAYER = 1, with the same limits. It keeps the gated pcc_ffn_norm_L01 (0.99) and asserts that the module is
+  not a CPU bridge. Against the golden it checks: finite output, element count, rel L2 <= 0.008, row norm ratio in
+  [0.993, 1.007], worst row <= 0.015. It also runs the module on the golden input x 30 (bf16) vs the CPU step:
+  rel <= 0.006, ratio in [0.993, 1.007], worst row <= 0.015.
+- Added the layer-1 attn_norm eps probe: the module on golden x 0.1 (bf16) vs the CPU step, rel <= 0.01, worst row
+  <= 0.02. The layer-1 mutation tables are in the docstring.
+- CPU mutation study in /tmp/hy4_ffnnorm1/study{,2}.py (outside the repo; log study.log). These are the layer-0
+  scripts with the layer index changed.
+
+Decisions
+- Layer-1 ffn_x is not like layer 0. Row rms is in [0.0040, 0.072] (layer 0: from 0.00083, 76% of rows eps-dominated),
+  and the smallest mean(x^2) is 1.6x eps. So both eps (1.2e-5 gives rel 0.013) and the RMS reduction (half columns:
+  rel 0.011, row 0.040) already show on the golden. I kept both scaled probes anyway, so the module is checked in the
+  eps-dominated and the pure-RMS regimes independently of this chunk's row-rms range.
+- 10 of the mutations pass the 0.99 PCC gate, including 1 + w (0.9966), no weight and TP-permuted w halves (0.992).
+  Each one fails a golden check. The pessimistic bf16 estimate (0.0037 / [0.9958, 1.0036] / 0.0054) leaves about 2x margin.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00234, ratio [0.99987, 1.00016], row 0.0025; both probes 0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): already PASS, because `hooks._GATHERED_NORM_STEPS` (tt/norm.py:TtGatheredRmsNorm) does not depend
+  on the block type. pcc 0.999996, rel 0.00283, ratio [0.99938, 1.00084], row 0.00307. x0.1: rel 0.00168, row 0.00192.
+  x30: rel 0.00169, ratio [0.99942, 1.00084], row 0.00189.
+
+Gotchas
+- The first "FAIL pcc_ffn_norm_L01: pcc=0.0" line comes from the precompile collect pass.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
