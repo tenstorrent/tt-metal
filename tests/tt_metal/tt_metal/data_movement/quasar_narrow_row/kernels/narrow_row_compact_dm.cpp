@@ -191,10 +191,12 @@ void kernel_main() {
         UnicastEndpoint ep;
         // <NOC_MAX_BURST_SIZE> selects the ONE-PACKET path. The default max_page_size is
         // NOC_MAX_BURST_SIZE + 1, which falls through to noc_async_read_with_state -- the
-        // any-len path that rewrites the length register and runs a burst-splitting loop on
-        // every call. Rows here are at most 512 B against a 65536 B burst limit, so one-packet
-        // is legal, and it is what makes this baseline the cheapest NOC read rather than
-        // merely a cheap one.
+        // any-len path, which additionally writes the length register and computes a packet
+        // count for the barrier. Neither path chunks in software (the overlay packetizes via
+        // MAX_BYTES_IN_PACKET), so the gap is small: switching paths moved the measured
+        // per-block engine delta by ~4 cyc out of ~470, which is inside the noise. Rows here
+        // are at most 512 B against a 65536 B burst limit, so one-packet is legal, and it
+        // makes this baseline the cheapest NOC read rather than merely a cheap one.
         Noc noc;  // defaults to noc_index
         noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             ep, out_row_bytes, {.noc_x = dest_coords >> 16, .noc_y = dest_coords & 0xFFFF, .addr = src_base});
