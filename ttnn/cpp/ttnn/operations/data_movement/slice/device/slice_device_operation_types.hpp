@@ -19,6 +19,12 @@ struct SliceParams {
     std::optional<uint32_t> slice_dim = std::nullopt;
     std::optional<uint32_t> num_devices = std::nullopt;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    // True when output_mem_config was defaulted from the input (no caller-supplied memory_config /
+    // preallocated output), so compute_output_specs may rescale an inherited ND shard shape to the
+    // sliced output. Explicit configs must be honored verbatim.
+    // Only the tensor-args overload sets this. The span overload has already rescaled in slice.cpp and
+    // leaves it false: rescaling again against the input's padded shape is not idempotent.
+    bool output_mem_config_inherited = false;
 };
 
 struct SliceInputs {

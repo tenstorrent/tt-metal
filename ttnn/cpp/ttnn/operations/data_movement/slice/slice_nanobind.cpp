@@ -141,7 +141,8 @@ void bind_slice_descriptor(nb::module_& mod) {
         .def_rw("slice_end", &ttnn::prim::SliceParams::slice_end)
         .def_rw("step", &ttnn::prim::SliceParams::step)
         .def_rw("output_mem_config", &ttnn::prim::SliceParams::output_mem_config)
-        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids);
+        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids)
+        .def_rw("output_mem_config_inherited", &ttnn::prim::SliceParams::output_mem_config_inherited);
 
     nb::class_<ttnn::prim::SliceInputs>(mod, "SliceInputs")
         .def(
