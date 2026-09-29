@@ -766,6 +766,40 @@ inline void fill_custom_diagonal_tile_bfp4(
     }
 }
 
+// bf16 twin of fill_custom_diagonal_tile_bfp4, same masking rule. Used where the mask DFB is Float16_b
+// (Quasar has no block-float formats).
+template <uint32_t tile_bytes>
+inline void fill_custom_diagonal_tile_bf16(
+    Noc noc, uint32_t dfb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
+    ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
+
+    fill_tile_zeros<tile_bytes>(noc, dfb_id, tile_id);
+
+    constexpr uint16_t neginf_bf16 = 0xFF80;
+    DataflowBuffer dfb(dfb_id);
+    volatile tt_l1_ptr uint16_t* tile_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr() + tile_id * tile_bytes);
+
+    for (uint32_t face_idx = 0; face_idx < 4; face_idx++) {
+        const uint32_t row_start = (face_idx / 2) * tt::constants::FACE_HEIGHT;
+        const uint32_t col_start = (face_idx % 2) * tt::constants::FACE_WIDTH;
+        volatile tt_l1_ptr uint16_t* face_ptr = tile_ptr + face_idx * tt::constants::FACE_HW;
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            const int32_t global_row = row_start + row;
+            for (uint32_t col = 0; col < tt::constants::FACE_WIDTH; col++) {
+                const int32_t global_col = col_start + col;
+                const bool masked_upper =
+                    (leading_diagonal_offset < 32) && (global_col > global_row + leading_diagonal_offset);
+                const bool masked_lower =
+                    (trailing_diagonal_offset < 32) && (global_col < global_row - trailing_diagonal_offset);
+                if (masked_upper || masked_lower) {
+                    face_ptr[row * tt::constants::FACE_WIDTH + col] = neginf_bf16;
+                }
+            }
+        }
+    }
+}
+
 template <uint32_t tile_bytes>
 void fill_vertical_tile_bfp4(Noc noc, uint32_t dfb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
     /*
@@ -990,8 +1024,13 @@ void generate_causal_sliding_window_mask(
                     }
                     break;
                 case MaskType::PARTIAL_MASK:
-                    fill_custom_diagonal_tile_bfp4<tile_bytes>(
-                        noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    if constexpr (tile_bytes == tt::constants::TILE_HW * sizeof(uint16_t)) {
+                        fill_custom_diagonal_tile_bf16<tile_bytes>(
+                            noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    } else {
+                        fill_custom_diagonal_tile_bfp4<tile_bytes>(
+                            noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    }
             }
         }
     }

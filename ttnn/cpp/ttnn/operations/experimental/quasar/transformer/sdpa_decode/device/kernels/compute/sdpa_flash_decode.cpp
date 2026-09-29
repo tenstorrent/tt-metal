@@ -742,17 +742,24 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_dfb_for_sink = dfb_prev_max;
 
+                // max_block, sub_exp_block and mul_block_inplace pack via a bare pack_tile, so each is
+                // preceded by a pack_reconfig_out naming its output (Quasar packer re-point).
+
                 // m_new: max_block writes cur (m_new) into dfb_cur_max (max_1, its own DFB); split max
                 // means the two exp reads below take cur at its own front (no offset).
+                pack_reconfig_out(dfb_cur_max);
                 max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
+                pack_reconfig_out(dfb_exp_max_diff);
                 sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
+                pack_reconfig_out(dfb_prev_sum);
                 mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
+                pack_reconfig_out(dfb_exp_max_diff_2);
                 sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
                 // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
                 DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
