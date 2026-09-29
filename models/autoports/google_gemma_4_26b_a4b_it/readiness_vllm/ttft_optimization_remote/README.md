@@ -1,12 +1,20 @@
 # Remote benchmark and evaluation evidence
 
+## Handoff status
+
+Remote qualification produced a complete benchmark sweep, a complete standard
+eval, and valid Terminal-Bench and timeout-limited SWE-Bench results. Per user
+direction, no further eval repair is planned. Remaining work is
+performance-only: close the 4K/C1 decode gap from 43.04 tokens/s/user remotely
+to the 50.6 tokens/s/user direct local baseline.
+
 ## Published source revisions
 
 - TT-Metal: `mvasiljevic/gemma4-ttft-opt` at
   `f3bfd3c03af2a64cf86fb853dc93c7fa6cfbb073` (the reusable image and
   performance runs remain pinned to `919c110d3d4331b7753c1db78618e879905ae46d`)
 - tt-inference-server: `mvasiljevic/gemma4-ttft-monorepo-compat` at
-  `1dadb353ce1d53e94ccc7c47622b0d66e642bd12` (individual runs below remain
+  `bfc2ee9bd5bda291f7b58f2f8d978e151b70b3a4` (individual runs below remain
   pinned to their recorded revisions)
 - vLLM plugin transport base: `tenstorrent/vllm-tt-plugin` at
   `c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42`
@@ -353,8 +361,9 @@ retry `36515755285` reached the parser but exposed its constructor mismatch;
 SWE-only retry `36518073007` completed successfully with the no-rebuild
 compatibility bridge and the same serving image.
 
-The final SWE-Bench Verified result is 1/5 resolved (20%) with a mean wall time
-of 1452.04 seconds per task. This establishes that the full agent, tool-call
+The final SWE-Bench Verified result is 1/5 resolved (20%). The reported
+1452.04-second value was the concurrent suite wall duration divided by five,
+not an actual per-trial mean. This establishes that the full agent, tool-call
 parser, vLLM serving, and scorer path is functional: the preceding constructor
 failure returned HTTP 400 and zero model tokens, whereas this run generated a
 scorable patch that earned reward. It is nevertheless timeout-limited rather
@@ -370,3 +379,16 @@ on SWE-Bench Verified. The former has 6,836,813 input and 90,518 output tokens;
 the latter's CI report preserves the scored-trial counts but does not upload
 Harbor's per-trial token counters. Neither score is substituted for the Qwen
 reference: these are Gemma4 measurements on the same five-task subsets.
+
+A final retry serializes the five SWE trials, writes compact per-trial JSON
+summaries into the uploaded workflow logs, and computes mean trial duration
+from child start/finish timestamps when available:
+
+- https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36530661132
+- Pinned inference-server revision:
+  `7babaac11b8a7c9bf17dabf287dac2f4a9264be5`
+
+All image-build jobs were skipped and the immutable image was reused. The run
+was left in progress by explicit user direction; its eventual result does not
+trigger further eval fixes. Branch head
+`bfc2ee9bd5bda291f7b58f2f8d978e151b70b3a4` restores normal eval routing.
