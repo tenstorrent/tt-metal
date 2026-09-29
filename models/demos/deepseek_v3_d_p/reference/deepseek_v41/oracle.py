@@ -714,3 +714,176 @@ def chunk_expectations(result: dict, chunk_len: int, pad_multiple: int) -> list[
             c["logits"], c["state"] = result["logits"], result["state"]
         chunks.append(c)
     return chunks
+
+
+# ----------------------------------------------------------------------------------- vision (ViT + aligner)
+#
+# ``vision_oracle`` runs the reference image encoder (``Transformer.encode_image``: ``vision.ViT`` then
+# ``vision.Aligner``) on one image's patches. Weights are synthetic (per-tensor seeded) or the checkpoint's
+# ``vision.*`` / ``aligner.*`` tensors (shard 1, stored bf16, used as stored). Results are cached as
+# ``vision-*.pt``, keyed by the vision args, weights source, a sha256 of the patches, the grid, a digest of
+# ``vision.py``, the torch version and ``PACKAGE_VERSION``.
+
+_VISION_SOURCES = ("vision.py",)
+
+
+def vision_args() -> v41.ModelArgs:
+    """The released V4.1-Flash args (vendored ``config.json``) with the vision tower enabled."""
+    cfg = {
+        k: tuple(v) if isinstance(v, list) else v for k, v in json.loads((_HERE / "config.json").read_text()).items()
+    }
+    return v41.ModelArgs(**cfg)
+
+
+def _vision_modules(args: v41.ModelArgs):
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import vision
+
+    with v41.set_dtype(torch.bfloat16):  # as upstream builds the model (norm weights stay fp32)
+        return vision.ViT(args), vision.Aligner(args)
+
+
+def vision_weight_shapes(args: v41.ModelArgs) -> dict[str, torch.Size]:
+    """Checkpoint name -> shape of every ViT / aligner tensor, from the reference modules."""
+    vit, aligner = _vision_modules(args)
+    return {f"{p}{k}": v.shape for p, m in (("vision.", vit), ("aligner.", aligner)) for k, v in m.state_dict().items()}
+
+
+def synthetic_vision_weights(args: v41.ModelArgs, seed: int = 0) -> dict[str, torch.Tensor]:
+    """bf16 ViT / aligner weights by checkpoint name: norms 1 + 0.1 N(0,1), biases 0.02 N(0,1), matrices
+    N(0,1) / sqrt(fan_in). Each tensor is drawn from its own seed (seed, name), so it does not depend on
+    the other tensors or on ``vision_n_layers``."""
+    out = {}
+    for name, shape in vision_weight_shapes(args).items():
+        t = torch.randn(shape, generator=torch.Generator().manual_seed(_unit_seed(seed, name)), dtype=torch.float32)
+        if name.endswith("norm1.weight") or name.endswith("norm2.weight") or name.endswith("norm.weight"):
+            t = 1 + 0.1 * t
+        elif name.endswith(".bias"):
+            t = 0.02 * t
+        else:
+            t = t * shape[-1] ** -0.5
+        out[name] = t.to(torch.bfloat16)
+    return out
+
+
+def checkpoint_vision_weights(checkpoint: Path = HF_SNAPSHOT) -> dict[str, torch.Tensor]:
+    """The checkpoint's ViT / aligner tensors by name, as stored."""
+    from safetensors import safe_open
+
+    names = vision_weight_shapes(vision_args())
+    weight_map = json.loads((Path(checkpoint) / "model.safetensors.index.json").read_text())["weight_map"]
+    if missing := sorted(n for n in names if n not in weight_map):
+        raise KeyError(f"{checkpoint} has no tensors {missing[:3]}...")
+    by_file: dict[str, list[str]] = {}
+    for name in names:
+        by_file.setdefault(weight_map[name], []).append(name)
+    if absent := sorted(f for f in by_file if not (Path(checkpoint) / f).is_file()):
+        raise FileNotFoundError(f"vision weights need shards {absent}, which are not in {checkpoint}")
+    out = {}
+    for file, file_names in by_file.items():
+        with safe_open(Path(checkpoint) / file, framework="pt") as f:
+            out |= {n: f.get_tensor(n) for n in file_names}
+    return out
+
+
+def build_vision_reference(args: v41.ModelArgs, weights: dict[str, torch.Tensor]):
+    """Reference ``(ViT, Aligner)`` holding ``weights`` (by checkpoint name), converted to the modules'
+    dtypes as upstream ``load_state_dict`` does."""
+    vit, aligner = _vision_modules(args)
+    for prefix, module in (("vision.", vit), ("aligner.", aligner)):
+        module.load_state_dict({k: weights[prefix + k].to(v.dtype) for k, v in module.state_dict().items()})
+    return vit.eval(), aligner.eval()
+
+
+def synthetic_image(width: int, height: int, seed: int = 0) -> bytes:
+    """A deterministic PNG with structure (colour gradients, a disc) plus mild noise."""
+    import io
+
+    from PIL import Image
+
+    y, x = np.mgrid[0:height, 0:width].astype(np.float32)
+    disc = np.hypot(x - width * 0.4, y - height * 0.6) < min(width, height) * 0.25
+    img = np.stack([255 * x / width, 255 * y / height, 128 + 100 * disc], axis=-1)
+    img += torch.randn(img.shape, generator=torch.Generator().manual_seed(seed)).numpy() * 8
+    buf = io.BytesIO()
+    Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def image_patches(image: bytes, args: v41.ModelArgs | None = None) -> tuple[torch.Tensor, int, int]:
+    """``(patches [n_h*n_w, 3, p, p] bf16, n_h, n_w)`` of an encoded image, via ``image_processor.load_image``."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import image_processor
+
+    patches, n_h, n_w, _, _ = image_processor.load_image({"data": image}, args or vision_args())
+    return patches, n_h, n_w
+
+
+def random_patches(n_h: int, n_w: int, args: v41.ModelArgs | None = None, seed: int = 0) -> torch.Tensor:
+    """``[n_h*n_w, 3, p, p]`` bf16 N(0, 1) patches of a direct ``n_h x n_w`` grid."""
+    p = (args or vision_args()).vision_patch_size
+    return torch.randn(n_h * n_w, 3, p, p, generator=torch.Generator().manual_seed(seed)).to(torch.bfloat16)
+
+
+def _vision_digest() -> str:
+    h = hashlib.sha256()
+    for name in _VISION_SOURCES:
+        h.update((_HERE / name).read_bytes())
+    return h.hexdigest()[:16]
+
+
+def vision_cache_path(
+    args: v41.ModelArgs, patches: torch.Tensor, n_h: int, n_w: int, seed: int, checkpoint: Path | None
+) -> Path:
+    fields = {k: v for k, v in asdict(args).items() if k.startswith("vision_") or k == "dim"}
+    key = _digest(
+        "vision",
+        fields,
+        "synthetic" if checkpoint is None else f"hf:{Path(checkpoint).name}",
+        seed if checkpoint is None else None,
+        hashlib.sha256(patches.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest(),
+        [str(patches.dtype), *patches.shape],
+        n_h,
+        n_w,
+        _vision_digest(),
+        torch.__version__,
+        PACKAGE_VERSION,
+    )
+    return CACHE_DIR / f"vision-{key}.pt"
+
+
+@torch.no_grad()
+def vision_oracle(
+    patches: torch.Tensor,
+    n_h: int,
+    n_w: int,
+    *,
+    args: v41.ModelArgs | None = None,
+    seed: int = 0,
+    checkpoint: Path | None = None,
+) -> dict:
+    """Expected image encoder outputs for ``patches`` [n_h*n_w, 3, p, p] of an ``n_h x n_w`` grid, from the
+    disk cache or computed and stored: ``hidden`` [n_h*n_w, vision_dim] bf16 (ViT output, row-major patch
+    order), ``aligned`` [ceil(n_h/r)*ceil(n_w/r), dim] bf16 (aligner output, reading order; the grid is
+    zero-padded to multiples of r), ``meta``. Weights are the synthetic ones of ``seed`` or, with
+    ``checkpoint``, the stored ones."""
+    args = args or vision_args()
+    if patches.dim() != 4 or patches.size(0) != n_h * n_w or n_h <= 0 or n_w <= 0:
+        raise ValueError(f"patches must be [n_h*n_w = {n_h * n_w}, 3, p, p], got {list(patches.shape)}")
+    path = vision_cache_path(args, patches, n_h, n_w, seed, checkpoint)
+    if path.is_file():
+        return torch.load(path)
+    weights = synthetic_vision_weights(args, seed) if checkpoint is None else checkpoint_vision_weights(checkpoint)
+    vit, aligner = build_vision_reference(args, weights)
+    with v41.set_dtype(torch.bfloat16):
+        hidden = vit(patches, n_h, n_w)
+        aligned = aligner(hidden, n_h, n_w)
+    r = args.vision_downsample_ratio
+    result = {
+        "hidden": hidden.clone(),
+        "aligned": aligned.clone(),
+        "meta": {"n_h": n_h, "n_w": n_w, "n_llm_h": -(-n_h // r), "n_llm_w": -(-n_w // r)},
+    }
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    torch.save(result, tmp)
+    tmp.replace(path)
+    return result

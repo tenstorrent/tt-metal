@@ -22,7 +22,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import fp4_gemm, fp8_gemm
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41.prototype_oracle import _dequant as reference_dequant
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant as reference_dequant
 from models.demos.deepseek_v3_d_p.tt.v41 import weights as W
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
 
@@ -305,7 +305,7 @@ _REAL_NAMES = {
 
 
 def _reference_value(ckpt, name: str) -> torch.Tensor:
-    """The vendored reference's dequantization of a stored tensor (the prototype oracle's ``_dequant``)."""
+    """The vendored reference's dequantization of a stored tensor (``reference_weights.dequant``)."""
     full = f"layers.{REAL_LAYER}.{name}"
     if f"{full}.scale" in ckpt:
         raw = ckpt.read([f"{full}.weight", f"{full}.scale"])

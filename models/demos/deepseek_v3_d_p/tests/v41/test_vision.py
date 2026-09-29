@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 ViT x32 + aligner (bead 10.1) vs the reference ``vision.ViT`` / ``vision.Aligner``.
+"""DeepSeek-V4.1 ViT x32 + aligner (bead 10.1) vs the oracle package's ``vision_oracle`` (reference ``vision.ViT`` /
+``vision.Aligner``, cached on disk).
 
 Grids: a direct 4x5 patch grid, and grids ``image_processor.load_image`` plans for 640x480 (35x46 patches), 1000x1000
 (72x72) and 1920x1080 (69x122, 968 of the 1024 LLM tokens). 4x5, 35x46 and 69x122 are not multiples of 3, so the
@@ -11,88 +12,41 @@ device ViT (end to end), aligner output from the reference ViT output (isolates 
 PCC >= 0.99 (G1); bit-identical repeat.
 """
 
-import io
+import time
 
-import numpy as np
 import pytest
 import torch
-from PIL import Image
+from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import image_processor
-from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
-from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import vision
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tt.v41.vision import TtV41Vision, load_vision_weights, vision_weight_names
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC = 0.99
-ARGS = v41.ModelArgs(
-    dim=C.EMB_SIZE,
-    vision_n_layers=C.VISION_N_LAYERS,
-    vision_dim=C.VISION_DIM,
-    vision_n_heads=C.VISION_N_HEADS,
-    vision_inter_dim=C.VISION_INTER_DIM,
-    vision_patch_size=C.VISION_PATCH_SIZE,
-    vision_rope_theta=C.VISION_ROPE_THETA,
-    vision_downsample_ratio=C.VISION_DOWNSAMPLE_RATIO,
-    vision_max_n_token=C.VISION_MAX_N_TOKEN,
-)
+SEED = 101  # synthetic weights, patches and test images
+ARGS = orc.vision_args()
 
 
-def _synthetic_weights(gen) -> dict:
-    ref_shapes = {f"vision.{k}": v.shape for k, v in vision.ViT(ARGS).state_dict().items()}
-    ref_shapes |= {f"aligner.{k}": v.shape for k, v in vision.Aligner(ARGS).state_dict().items()}
-    assert sorted(ref_shapes) == sorted(vision_weight_names()), "reference and loader names differ"
-    out = {}
-    for name, shape in ref_shapes.items():
-        if name.endswith("norm1.weight") or name.endswith("norm2.weight") or name.endswith("norm.weight"):
-            t = 1 + 0.1 * torch.randn(shape, generator=gen)
-        elif name.endswith(".bias"):
-            t = 0.02 * torch.randn(shape, generator=gen)
-        else:
-            t = torch.randn(shape, generator=gen) * shape[-1] ** -0.5
-        out[name] = t.to(torch.bfloat16)
-    return out
-
-
-def _weights(source: str, gen) -> dict:
+def _weights(source: str) -> tuple[dict, object]:
+    """Device weights and the oracle's checkpoint (None = synthetic weights of SEED)."""
     if source == "synthetic":
-        return _synthetic_weights(gen)
+        weights = orc.synthetic_vision_weights(ARGS, SEED)
+        assert sorted(weights) == sorted(vision_weight_names()), "reference and loader names differ"
+        return weights, None
     ckpt = resolve_checkpoint()
     if ckpt is None or not all((ckpt.root / ckpt.weight_map[n]).is_file() for n in vision_weight_names()[:1]):
         pytest.skip("V4.1 checkpoint shard with vision.*/aligner.* (model-00001-of-00048) not downloaded")
-    return load_vision_weights(ckpt)
+    return load_vision_weights(ckpt), ckpt.root
 
 
-def _reference_modules(weights):
-    with v41.set_dtype(torch.bfloat16):
-        vit, aligner = vision.ViT(ARGS), vision.Aligner(ARGS)
-    for prefix, module in (("vision.", vit), ("aligner.", aligner)):
-        state = {k: weights[prefix + k].to(v.dtype) for k, v in module.state_dict().items()}
-        module.load_state_dict(state)
-    return vit.eval(), aligner.eval()
-
-
-def _test_image(width: int, height: int, gen) -> bytes:
-    """Deterministic smooth image with structure (gradients, a disc) plus mild noise, PNG-encoded."""
-    y, x = np.mgrid[0:height, 0:width].astype(np.float32)
-    r = np.hypot(x - width * 0.4, y - height * 0.6) < min(width, height) * 0.25
-    img = np.stack([255 * x / width, 255 * y / height, 128 + 100 * r], axis=-1)
-    img += torch.randn(img.shape, generator=gen).numpy() * 8
-    buf = io.BytesIO()
-    Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _patches(case: str, gen):
+def _patches(case: str):
     if case == "grid4x5":
-        return torch.randn(20, 3, C.VISION_PATCH_SIZE, C.VISION_PATCH_SIZE, generator=gen).to(torch.bfloat16), 4, 5
+        return orc.random_patches(4, 5, ARGS, seed=SEED), 4, 5
     width, height = (int(v) for v in case.removeprefix("img").split("x"))
-    patches, n_h, n_w, n_llm_h, n_llm_w = image_processor.load_image({"data": _test_image(width, height, gen)}, ARGS)
-    assert (n_llm_h, n_llm_w) == (-(-n_h // 3), -(-n_w // 3))
-    return patches, n_h, n_w
+    return orc.image_patches(orc.synthetic_image(width, height, SEED), ARGS)
 
 
 def _replica(t, mesh_device):
@@ -119,26 +73,32 @@ def _replica(t, mesh_device):
     indirect=True,
 )
 def test_v41_vision(mesh_device, weights_source, case):
-    gen = torch.Generator().manual_seed(10_1)
-    weights = _weights(weights_source, gen)
-    patches, n_h, n_w = _patches(case, gen)
+    t0 = time.time()
+    weights, checkpoint = _weights(weights_source)
+    patches, n_h, n_w = _patches(case)
     n, tokens = n_h * n_w, -(-n_h // 3) * -(-n_w // 3)
+    logger.info(f"weights ({weights_source}) + patches {n_h}x{n_w}: {time.time() - t0:.1f}s")
 
-    ref_vit, ref_aligner = _reference_modules(weights)
-    with torch.no_grad():
-        ref_hidden = ref_vit(patches, n_h, n_w)
-        ref_out = ref_aligner(ref_hidden, n_h, n_w)
+    t0 = time.time()
+    hit = orc.vision_cache_path(ARGS, patches, n_h, n_w, SEED, checkpoint).is_file()
+    expected = orc.vision_oracle(patches, n_h, n_w, args=ARGS, seed=SEED, checkpoint=checkpoint)
+    ref_hidden, ref_out = expected["hidden"], expected["aligned"]
+    logger.info(f"vision oracle ({'cached' if hit else 'computed'}): {time.time() - t0:.1f}s")
     assert ref_out.shape == (tokens, C.EMB_SIZE)
 
+    t0 = time.time()
     tt = TtV41Vision(mesh_device, weights)
+    logger.info(f"device weights: {time.time() - t0:.1f}s")
 
     def run():
         hidden = tt.vit(patches, n_h, n_w)
         out = tt.aligner(hidden, n_h, n_w)
         return _replica(hidden, mesh_device)[0, 0, :n], _replica(out, mesh_device)[0, 0]
 
+    t0 = time.time()
     hidden, out = run()
     hidden2, out2 = run()
+    logger.info(f"device forward x2: {time.time() - t0:.1f}s")
     assert out.shape == (tokens, C.EMB_SIZE)
     assert torch.equal(hidden, hidden2) and torch.equal(out, out2), "vision encoder is not bit-identical across repeats"
 
@@ -160,6 +120,6 @@ def test_v41_vision(mesh_device, weights_source, case):
         "aligner_e2e": comp_pcc(ref_out.float(), out.float(), 0.0)[1],
         "aligner_only": comp_pcc(ref_out.float(), aligner_only.float(), 0.0)[1],
     }
-    print(f"vision {weights_source} {case} ({n_h}x{n_w} patches -> {tokens} tokens): {results}")
+    logger.info(f"vision {weights_source} {case} ({n_h}x{n_w} patches -> {tokens} tokens): {results}")
     for key, value in results.items():
         assert value >= PCC, (key, results)

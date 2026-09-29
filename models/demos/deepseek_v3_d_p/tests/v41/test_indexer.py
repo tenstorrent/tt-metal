@@ -4,8 +4,8 @@
 
 """DeepSeek-V4.1 index keys, indexer, candidates, top-k (bead F4) vs the reference at real dims.
 
-Uses the prototype oracle model (layers 0: ratio-2 KV+index source, 2: ratio-1 candidate source,
-4: candidate-constrained index source). Bars (G1): index scores >= 0.999; selection exact given identical
+Uses the oracle's V4.1 layers 2 -> 3 -> 20 -> 21 -> 24 reference (synthetic weights, 96 candidate blocks) and tests
+layers 2 (ratio-2 KV+index source), 20 (ratio-1 candidate source), 24 (candidate-constrained index source). Bars (G1): index scores >= 0.999; selection exact given identical
 scores (checked on tie-free scores fed to both sides); determinism. Recall of the device selection against
 the reference under device scores is reported as a diagnostic only.
 """
@@ -15,13 +15,17 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import fp4_act_quant
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41 import prototype_oracle as po
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, TtV41Indexer, TtV41IndexKeys
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCORE_PCC = 0.999
+LAYERS = (2, 3, 20, 21, 24)
+SEQ = 2048
 
 
 def _reference_scores(attn, x, qr):
@@ -54,11 +58,12 @@ def _reference_scores(attn, x, qr):
     indirect=True,
 )
 def test_v41_indexer(mesh_device, device_params):
-    cfg, args = po.PrototypeScheduleConfig, po.model_args()
-    reference = po.build_reference(args)
-    rec = po.oracle(reference, args)
+    cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": 96})  # match the oracle's candidate count
+    spec = orc.real_spec(LAYERS, SEQ, candidate_topk_blocks=96)
+    reference = orc.build_reference(spec)
+    result = orc.oracle(spec, orc.random_tokens(spec), model=reference)
     shape, (sp, tp) = tuple(mesh_device.shape), tuple(mesh_device.shape)
-    seq = po.SEQ
+    seq = SEQ
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
 
     def per_query(t):
@@ -75,15 +80,15 @@ def test_v41_indexer(mesh_device, device_params):
         )
 
     results, ref_candidates, real_candidates, synthetic_candidates = {}, None, None, None
-    for layer in (0, 2, 4):
-        attn = reference.layers[layer].attn
-        x = rec[f"block{layer}.attn_in"][None]
+    for layer in (2, 20, 24):
+        attn = reference.layers[LAYERS.index(layer)].attn
+        x = result["blocks"][layer]["attn_in"][None]
         with v41.set_dtype(torch.bfloat16):
             qr = attn.q_norm(attn.wq_a(x))
             _, ref_idx = attn._compress_kv(x, qr, 0, seq)  # runs the reference compressor / keys / indexer
         ref_idx = ref_idx[0].long() - seq  # [S, k] rows, -1 - seq for none
         ratio = cfg.compress_ratio(layer)
-        ind_w = {"wq_b": po._dequant(attn.indexer.wq_b), "weights_proj": attn.indexer.weights_proj.weight.detach()}
+        ind_w = {"wq_b": dequant(attn.indexer.wq_b), "weights_proj": attn.indexer.weights_proj.weight.detach()}
         indexer = TtV41Indexer(mesh_device, cfg, layer, ind_w)
 
         # index keys (KV sources) from the reference latent -> compare with the reference's index-K rows
