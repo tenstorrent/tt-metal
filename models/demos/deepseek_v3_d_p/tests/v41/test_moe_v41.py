@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.moe_reference import LAYER, SEQ, device_weights, reference
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer, get_tp_mesh_composer
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -120,7 +119,6 @@ def test_v41_moe(mesh_device, device_params, weights_source, expert_dtype):
         LAYER,
         weights,
         SEQ,
-        topology=per_axis_topology(device_params["fabric_config"])[1],
         routed_expert_weights_dtype=EXPERT_DTYPES[expert_dtype],
     )
     del weights

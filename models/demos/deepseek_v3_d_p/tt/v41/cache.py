@@ -35,7 +35,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheFormat,
@@ -142,6 +142,7 @@ class V41PrefillState:
         self.dspark_rings = None
         self._ccl = get_tt_ccl(mesh_device) if layout.sp > 1 else None
         self._num_links = 2 if is_blackhole() else 1
+        self._sp_topology = per_axis_topology()[SP_AXIS]  # Ring only if the opened fabric wraps SP
 
     def kv_format(self, ratio: int) -> MlaKvCacheFormat:
         """Storage format of the KV tensors (and window carries) of layers with compress ``ratio``."""
@@ -190,7 +191,7 @@ class V41PrefillState:
             barrier_semaphore=self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
             num_links=self._num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self._sp_topology,
             cluster_axis=SP_AXIS,
         )
 

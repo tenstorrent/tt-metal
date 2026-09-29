@@ -36,7 +36,6 @@ from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import EXPERT_DTYPES, _weights
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import TRACE_REGION, HostTableStager
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
@@ -150,7 +149,6 @@ def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monk
     rec = result["blocks"][layers[0]]
     shape = tuple(mesh_device.shape)
     tp = shape[1]
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     blocks = {}
     for layer in layers:
         start = time.perf_counter()
@@ -161,7 +159,6 @@ def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monk
             layer,
             w,
             CHUNK,
-            topology=topology,
             routed_expert_weights_dtype=EXPERT_DTYPES[expert_dtype],
             weight_cache_path=root,
         )

@@ -112,9 +112,7 @@ class TtV41IndexKeys(LightweightModule):
 class TtV41Indexer(LightweightModule):
     """B9-B12 for one index source; returns the per-query selection in head->sequence query layout."""
 
-    def __init__(
-        self, mesh_device, config, layer: int, weights: dict, qdq=fp4_ue8m0_qdq, topology=ttnn.Topology.Linear
-    ):
+    def __init__(self, mesh_device, config, layer: int, weights: dict, qdq=fp4_ue8m0_qdq):
         """``weights``: ``wq_b`` [heads*d, q_lora] bf16, ``weights_proj`` [heads, hidden] bf16. ``qdq`` as in keys."""
         self.mesh_device, self.config, self.layer = mesh_device, config, layer
         self.ratio = config.compress_ratio(layer)
@@ -123,7 +121,7 @@ class TtV41Indexer(LightweightModule):
         self.uses_candidates = 0 <= config.CANDIDATE_SOURCE_LAYER < layer
         self.qdq = qdq
         self.rope = _Rope(mesh_device, config)
-        self.ccl = V41Collectives(mesh_device, topology)
+        self.ccl = V41Collectives(mesh_device)
         self.sp, self.tp = mesh_device.shape
         shape = tuple(mesh_device.shape)
         rep = ttnn.ReplicateTensorToMesh(mesh_device)

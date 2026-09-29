@@ -19,7 +19,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import TtV41HyperConnections, initial_pre_mix
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -104,7 +103,6 @@ def test_v41_mhc_chain(mesh_device, device_params, weights):
             pytest.skip("V4.1 checkpoint shards not downloaded")
         hcs = [_real_hc(2), _real_hc(3)]
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), C.HC_MULT
-    topology = per_axis_topology(device_params["fabric_config"])[1]
 
     # Sublayers: elementwise scales (distinct per site), identical on both sides.
     scales = [torch.randn(C.EMB_SIZE, generator=gen).to(torch.bfloat16) for _ in range(4)]
@@ -138,7 +136,7 @@ def test_v41_mhc_chain(mesh_device, device_params, weights):
         )
 
     tt_scales = [tp_row(s) for s in scales]
-    blocks = [TtV41HyperConnections(mesh_device, C, hc["attn"], hc["ffn"], topology) for hc in hcs]
+    blocks = [TtV41HyperConnections(mesh_device, C, hc["attn"], hc["ffn"]) for hc in hcs]
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
 
     def run():

@@ -289,7 +289,6 @@ class TtV41Engram(LightweightModule):
         layer: int,
         weights: dict,
         table: "V41EngramTable | TtV41EngramTable",
-        topology=ttnn.Topology.Linear,
         weights_dtype=ttnn.bfloat8_b,
     ):
         """``weights``: ``wkv`` [(hc_mult + 1) * hidden, n_hash_cols * head_dim] (FP8 dequantized, checkpoint
@@ -305,7 +304,7 @@ class TtV41Engram(LightweightModule):
         self.n_hash_cols = (config.ENGRAM_MAX_NGRAM_SIZE - 1) * config.ENGRAM_N_HEADS
         self.in_features = self.n_hash_cols * self.head_dim
         self.chips = self.sp * self.tp
-        self.ccl = V41Collectives(mesh_device, topology)
+        self.ccl = V41Collectives(mesh_device)
         shape = tuple(mesh_device.shape)
         tp_cols = ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(None, 3))
 
@@ -409,8 +408,8 @@ class TtV41Engram(LightweightModule):
             # for bytes (0..255, exact in bf16; 16-bit containers are not preserved by the reduction), scattered
             # so each chip decodes 1/chips of the lookups
             summed = ttnn.concat([ttnn.typecast(low, ttnn.bfloat16), ttnn.typecast(high, ttnn.bfloat16)], dim=-1)
-            summed = self._reduce_scatter(summed, 0, ttnn.Topology.Linear) if self.sp > 1 else summed
-            summed = self._reduce_scatter(summed, 1, self.ccl.topology) if self.tp > 1 else summed
+            summed = self._reduce_scatter(summed, 0, self.ccl.sp_topology) if self.sp > 1 else summed
+            summed = self._reduce_scatter(summed, 1, self.ccl.tp_topology) if self.tp > 1 else summed
             summed = ttnn.typecast(summed, ttnn.int32)
             rows = summed.shape[2]
             low = ttnn.slice(summed, [0, 0, 0, 0], [1, 1, rows, PACKED_WIDTH])

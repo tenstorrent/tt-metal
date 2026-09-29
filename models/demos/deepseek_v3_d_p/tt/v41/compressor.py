@@ -22,12 +22,12 @@ from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 
 
 class TtV41Compressor(LightweightModule):
-    def __init__(self, mesh_device, config, layer: int, weights: dict, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device, config, layer: int, weights: dict):
         """``weights``: ``wkv`` [head_dim, hidden], ``norm`` [head_dim], and ``wgate`` [head_dim, hidden] for ratio 2."""
         self.ratio = config.compress_ratio(layer)
         assert self.ratio in (1, 2), f"layer {layer} does not compress (ratio {self.ratio})"
         self.head_dim, self.eps = config.HEAD_DIM, config.RMS_NORM_EPS
-        self.ccl = V41Collectives(mesh_device, topology)
+        self.ccl = V41Collectives(mesh_device)
         shape = tuple(mesh_device.shape)
         # the ratio-2 pooling runs in fp32 in the reference; ratio 1 is a bf16 projection
         wdtype = ttnn.float32 if self.ratio > 1 else ttnn.bfloat16

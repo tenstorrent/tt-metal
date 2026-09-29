@@ -25,7 +25,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as o
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import TtV41DSpark
 from models.demos.deepseek_v3_d_p.tt.v41.weights import dequant_fp8_block
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -119,7 +118,7 @@ def test_v41_dspark_seeding(mesh_device, device_params, dims):
     shape, (sp, tp) = tuple(mesh_device.shape), tuple(mesh_device.shape)
     pad = 2 * 32 * sp
     dim, window, n_taps = args.dim, args.window_size, len(tap_ids)
-    dspark = TtV41DSpark(mesh_device, cfg, _weights(model), per_axis_topology(device_params["fabric_config"])[1])
+    dspark = TtV41DSpark(mesh_device, cfg, _weights(model))
     gen = torch.Generator().manual_seed(3)
 
     def first_device(t) -> torch.Tensor:

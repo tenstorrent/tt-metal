@@ -13,6 +13,7 @@ the block returns the ``pre`` split before the FFN for the next block (``inferen
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS, V41MeshLayout
@@ -29,7 +30,6 @@ class TtV41Block(LightweightModule):
         weights: dict,
         seq_len: int,
         num_links: int = 1,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path=None,
     ):
@@ -38,6 +38,7 @@ class TtV41Block(LightweightModule):
         ``shared_expert_weights``."""
         V41MeshLayout.of(mesh_device).check_model(config)
         self.layer = layer
+        topology = per_axis_topology()[TP_AXIS]  # the norms reduce over TP
         norm = lambda w: TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=config.EMB_SIZE,
@@ -49,13 +50,12 @@ class TtV41Block(LightweightModule):
         )
         self.attn_norm = norm(weights["attn_norm"])
         self.ffn_norm = norm(weights["ffn_norm"])
-        self.residual = TtV41HyperConnections(mesh_device, config, weights["hc_attn"], weights["hc_ffn"], topology)
+        self.residual = TtV41HyperConnections(mesh_device, config, weights["hc_attn"], weights["hc_ffn"])
         self.attn = TtV41Attention(
             mesh_device,
             config,
             layer,
             weights["attn"] | {k: weights[k] for k in ("compressor", "indexer") if k in weights},
-            topology=topology,
         )
         self.ffn = TtV41Moe(
             mesh_device,
@@ -64,7 +64,6 @@ class TtV41Block(LightweightModule):
             weights,
             seq_len,
             num_links=num_links,
-            topology=topology,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
         )

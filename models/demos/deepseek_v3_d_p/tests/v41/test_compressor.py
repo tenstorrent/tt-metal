@@ -15,7 +15,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -88,7 +87,7 @@ def test_v41_compressor(mesh_device, device_params, layer, weights_source):
     gen = torch.Generator().manual_seed(layer)
     weights = _weights(weights_source, layer, ratio, gen)
     shape, tp = tuple(mesh_device.shape), mesh_device.shape[1]
-    comp = TtV41Compressor(mesh_device, C, layer, weights, per_axis_topology(device_params["fabric_config"])[1])
+    comp = TtV41Compressor(mesh_device, C, layer, weights)
     x = torch.randn(1, SEQ, C.EMB_SIZE, generator=gen).to(torch.bfloat16)
 
     def run(tokens):

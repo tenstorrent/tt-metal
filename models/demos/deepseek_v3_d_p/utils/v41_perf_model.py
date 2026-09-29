@@ -98,7 +98,8 @@ LOUDBOX_2X4 = Layout(sp=2, tp=4, links=1)
 LOUDBOX_4X2 = Layout(sp=4, tp=2, links=1)
 # The 32-chip Galaxy as a FABRIC_2D_TORUS_XY mesh (ring on both axes, ``tests/conftest.py`` torus-xy-8x4) viewed
 # as SP8 x TP4 or SP4 x TP8 (both accepted by ``layout.V41MeshLayout``); 2 links = ``ccl.V41Collectives`` on
-# Blackhole. The V4.1 modules default to ``Topology.Linear``: evaluate that with ``sp_ring=tp_ring=False``.
+# Blackhole. The V4.1 collectives take each axis's topology from the opened fabric (``tt_ccl.per_axis_topology``),
+# so both axes ring on the torus; ``sp_ring=tp_ring=False`` models an unwrapped (Linear) fabric.
 GALAXY_8X4 = Layout(sp=8, tp=4, links=2, sp_ring=True, tp_ring=True)
 GALAXY_4X8 = Layout(sp=4, tp=8, links=2, sp_ring=True, tp_ring=True)
 

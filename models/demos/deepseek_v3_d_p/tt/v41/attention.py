@@ -41,7 +41,6 @@ class TtV41Attention(LightweightModule):
         config,
         layer: int,
         weights: dict,
-        topology=ttnn.Topology.Linear,
         weights_dtype=ttnn.bfloat8_b,
         compute_kernel_config=None,
     ):
@@ -56,7 +55,7 @@ class TtV41Attention(LightweightModule):
         self.scale = self.head_dim**-0.5
         self.sp, self.tp = mesh_device.shape
         self.compute_kernel_config = compute_kernel_config
-        self.ccl = V41Collectives(mesh_device, topology)
+        self.ccl = V41Collectives(mesh_device)
         shape = tuple(mesh_device.shape)
         tp_mapper = lambda dim: ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(None, dim))
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -106,14 +105,10 @@ class TtV41Attention(LightweightModule):
         self.is_kv_source = layer in config.KV_SOURCE_LAYERS
         self.is_index_source = layer in config.INDEX_SOURCE_LAYERS
         self.compressor = (
-            TtV41Compressor(mesh_device, config, layer, weights["compressor"], topology) if self.is_kv_source else None
+            TtV41Compressor(mesh_device, config, layer, weights["compressor"]) if self.is_kv_source else None
         )
         self.index_keys = TtV41IndexKeys(mesh_device, config, layer, weights["indexer"]) if self.is_kv_source else None
-        self.indexer = (
-            TtV41Indexer(mesh_device, config, layer, weights["indexer"], topology=topology)
-            if self.is_index_source
-            else None
-        )
+        self.indexer = TtV41Indexer(mesh_device, config, layer, weights["indexer"]) if self.is_index_source else None
 
     # --- host-built per-chunk tables -----------------------------------------------------------------
     def _sp_rows(self, host: torch.Tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -246,6 +241,7 @@ class TtV41Attention(LightweightModule):
                 out_dim=2,
                 num_links=self.ccl.num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl.tp_topology,
                 cluster_axis=TP_AXIS,
             )
         attn = ttnn.transformer.sparse_sdpa(
@@ -266,6 +262,7 @@ class TtV41Attention(LightweightModule):
                 out_dim=1,
                 num_links=self.ccl.num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl.tp_topology,
                 cluster_axis=TP_AXIS,
             )
         state.update_window_carry(self.layer, length)

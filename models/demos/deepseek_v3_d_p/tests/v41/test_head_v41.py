@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as O
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.head import TtV41Embedding, TtV41Head
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -58,7 +57,6 @@ def _reference(source: str):
 def test_v41_embedding_head(mesh_device, device_params, weights_source):
     model, result = _reference(weights_source)
     shape = tuple(mesh_device.shape)
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     concat = ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3))
 
     # --- embedding: exact lookup
@@ -87,9 +85,7 @@ def test_v41_embedding_head(mesh_device, device_params, weights_source):
         expected = torch.stack([model.head(model.norm(hidden[:, r : r + 1]))[0] for r in rows])  # fp32
     assert torch.equal(expected[0], result["logits"]), "reference head differs from the oracle's last-position logits"
 
-    head = TtV41Head(
-        mesh_device, C, model.norm.weight.data, model.head.weight.data.to(torch.bfloat16), topology=topology
-    )
+    head = TtV41Head(mesh_device, C, model.norm.weight.data, model.head.weight.data.to(torch.bfloat16))
     tt_hidden = ttnn.from_torch(
         hidden[None],
         device=mesh_device,

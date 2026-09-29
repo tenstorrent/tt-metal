@@ -40,7 +40,6 @@ from models.demos.deepseek_v3_d_p.tests.v41.test_transformer_v41 import (
     _check,
     _stage,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -111,7 +110,6 @@ def _check_merge(merged: _MergedPrompt, tokens: torch.Tensor, result: dict, laye
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
 def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
     layers = SCHEDULES[schedule]
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     seq = vl_prompts.SMALL_SEQ
     chunk = {"one_chunk": seq, "two_chunks": seq // 2}[case]
     base = small_spec(layers, seq)
@@ -133,7 +131,7 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
                 "k_weight": e.k_weight.detach(),
             }
             table = V41EngramTable(e.embed.weight.detach(), e.embed.scale.detach(), e.embed.oracle_rows)
-            engram[layer] = TtV41Engram(mesh_device, SmallV41Config, layer, weights, table, topology)
+            engram[layer] = TtV41Engram(mesh_device, SmallV41Config, layer, weights, table)
 
     def layer_weights(layer, include_moe):
         pos = layers.index(layer)
@@ -157,7 +155,6 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
             engram_hash=engram_hash,
             image_embeds={k: getattr(reference, k).detach() for k in DELIMITERS},
             weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-            topology=topology,
         )
     merged = _MergedPrompt(model, prompt)
     with _stage(f"vl {schedule} {case} merge exactness"):
@@ -174,7 +171,6 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     seq = vl_prompts.PRODUCTION_SEQ
     base = orc.real_spec(
         layers, seq, candidate_topk_blocks=PRODUCTION_CANDIDATE_BLOCKS, checkpoint=ckpt.root if ckpt else None
@@ -219,7 +215,6 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
             chunk=seq,
             image_embeds=image_embeds,
             weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-            topology=topology,
         )
     merged = _MergedPrompt(model, prompt)
     with _stage(f"vl production {weights} merge exactness"):

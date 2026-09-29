@@ -34,7 +34,6 @@ from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weig
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import BLOCK_CONFIG, _weights
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
@@ -143,7 +142,6 @@ def _block_small(mesh_device, device_params, layer: int):
         layer,
         device_weights(reference, 0),
         SMALL_SEQ,
-        topology=per_axis_topology(device_params["fabric_config"])[1],
     )
     return block, SmallV41Config, SMALL_SEQ, result["blocks"][layer]
 
@@ -161,7 +159,6 @@ def _block_real(mesh_device, device_params, layer: int):
         layer,
         w,
         R.ORACLE_SEQ,
-        topology=per_axis_topology(device_params["fabric_config"])[1],
         weight_cache_path=root,
     )
     marker.touch()

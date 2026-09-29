@@ -19,6 +19,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 SUBLAYER_DTYPE = ttnn.bfloat16
 
@@ -49,9 +50,10 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
 class TtV41HyperConnections(LightweightModule):
     """The two hyper-connection sites of one block, applied around caller-provided sublayers."""
 
-    def __init__(self, mesh_device, config, hc_attn, hc_ffn, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device, config, hc_attn, hc_ffn):
         """``hc_attn`` / ``hc_ffn``: the checkpoint's ``(fn [24, 4*dim], base [24], scale [3])`` per site."""
         cfg = mhc_config(config)
+        topology = per_axis_topology()[1]  # the TP axis (tp_axis=1) of the opened fabric
         self.attn_site = TtMHCWrap(mesh_device, cfg, *hc_attn, tp_axis=1, topology=topology)
         self.ffn_site = TtMHCWrap(mesh_device, cfg, *hc_ffn, tp_axis=1, topology=topology)
 

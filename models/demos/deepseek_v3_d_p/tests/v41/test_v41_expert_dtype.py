@@ -32,7 +32,6 @@ from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import WEIGHT_CACHE, _pack, _pcc, _unpack
 from models.demos.deepseek_v3_d_p.tests.v41.test_moe_v41 import BARS as MOE_BARS
 from models.demos.deepseek_v3_d_p.tests.v41.test_moe_v41 import _metrics, _run
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
@@ -106,7 +105,6 @@ def test_v41_moe_expert_dtype(mesh_device, device_params, layer, expert_dtype):
         layer,
         w,
         R.CHUNK,
-        topology=per_axis_topology(device_params["fabric_config"])[1],
         routed_expert_weights_dtype=EXPERT_DTYPES[expert_dtype],
         weight_cache_path=root,
     )
@@ -171,7 +169,6 @@ def test_v41_block_expert_dtype(mesh_device, device_params, layer, expert_dtype)
         layer,
         w,
         seq,
-        topology=per_axis_topology(device_params["fabric_config"])[1],
         routed_expert_weights_dtype=EXPERT_DTYPES[expert_dtype],
         weight_cache_path=root,
     )

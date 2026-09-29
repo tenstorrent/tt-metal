@@ -38,6 +38,7 @@ from types import SimpleNamespace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp8_qdq
 
@@ -51,7 +52,6 @@ class TtV41Moe(LightweightModule):
         weights: dict,
         seq_len: int,
         num_links: int = 1,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path=None,
     ):
@@ -72,7 +72,7 @@ class TtV41Moe(LightweightModule):
             sp_axis=0,
             emb_dim=config.EMB_SIZE,
             num_links=num_links,
-            topology=topology,
+            topology=per_axis_topology(),  # (SP, TP), one per mesh axis
             gate_fallback_mode=GateComputeMode.DEVICE_FP32,
             routed_expert_activations_dtype=ttnn.bfloat8_b,
             routed_expert_weights_dtype=routed_expert_weights_dtype,

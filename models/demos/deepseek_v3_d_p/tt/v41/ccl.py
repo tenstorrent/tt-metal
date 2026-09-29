@@ -6,15 +6,17 @@
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, TP_AXIS
 
 
 class V41Collectives:
-    def __init__(self, mesh_device, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device):
         self.mesh_device = mesh_device
         self.tp = mesh_device.shape[TP_AXIS]
-        self.topology = topology
+        # per mesh axis from the opened fabric: Ring only where it wraps the axis (Galaxy torus), else Linear
+        topologies = per_axis_topology()
+        self.sp_topology, self.tp_topology = topologies[SP_AXIS], topologies[TP_AXIS]
         self.num_links = 2 if is_blackhole() else 1
         self.tt_ccl = get_tt_ccl(mesh_device) if max(mesh_device.shape) > 1 else None
 
@@ -30,7 +32,7 @@ class V41Collectives:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=TP_AXIS),
             num_links=self.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
+            topology=self.tp_topology,
             cluster_axis=TP_AXIS,
         )
 
@@ -44,7 +46,7 @@ class V41Collectives:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=TP_AXIS),
             num_links=self.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
+            topology=self.tp_topology,
             cluster_axis=TP_AXIS,
         )
 

@@ -36,7 +36,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _unpack
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -82,7 +81,6 @@ MESH = [
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
 def test_v41_transformer_small(mesh_device, device_params, case, schedule):
     layers = SCHEDULES[schedule]
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     chunk, total = {"one_chunk": (SEQ, SEQ), "two_chunks": (SEQ // 2, SEQ), "padded": (SEQ // 2, SEQ - 12)}[case]
     spec = small_spec(layers, SEQ, dspark=schedule == "dspark")
     tokens = orc.text_tokens(total)
@@ -101,7 +99,7 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
                 "k_weight": e.k_weight.detach(),
             }
             table = V41EngramTable(e.embed.weight.detach(), e.embed.scale.detach(), e.embed.oracle_rows)
-            engram[layer] = TtV41Engram(mesh_device, SmallV41Config, layer, weights, table, topology)
+            engram[layer] = TtV41Engram(mesh_device, SmallV41Config, layer, weights, table)
     dspark = None
     if reference.mtp:
         fp8 = lambda linear: dequant_fp8_block(linear.weight.detach(), linear.scale.detach())
@@ -127,7 +125,6 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             engram=engram,
             engram_hash=engram_hash,
             weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-            topology=topology,
         )
     state = _check(model, spec, tokens, reference, f"{schedule} {case}")
     if dspark is not None:
@@ -216,7 +213,6 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     spec = orc.real_spec(
         layers,
         PRODUCTION_SEQ,
@@ -253,6 +249,5 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
             max_seq_len=PRODUCTION_SEQ,
             chunk=PRODUCTION_SEQ // chunks,
             weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-            topology=topology,
         )
     _check(model, spec, tokens, reference, f"production {weights} chunks={chunks}")

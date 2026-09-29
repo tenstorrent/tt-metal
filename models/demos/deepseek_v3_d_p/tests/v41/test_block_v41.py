@@ -34,7 +34,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
@@ -134,7 +133,6 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
             fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
             assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
 
     # MoE device tensors are cached on disk: the first build converts 1152 expert matrices per layer on the
@@ -154,9 +152,7 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
             w = load_layer_dense(ckpt, layer) if marker.exists() else load_layer(ckpt, layer)
         else:
             w = device_weights(reference, i, include_moe=not marker.exists())
-        blocks[layer] = TtV41Block(
-            mesh_device, cfg, layer, w, seq // chunks, topology=topology, weight_cache_path=cache_root
-        )
+        blocks[layer] = TtV41Block(mesh_device, cfg, layer, w, seq // chunks, weight_cache_path=cache_root)
         marker.touch()
         del w
 

@@ -42,10 +42,10 @@ TILE = 32
 
 
 class TtV41DSpark(LightweightModule):
-    def __init__(self, mesh_device, config, weights: dict, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device, config, weights: dict):
         """``weights`` (torch, checkpoint ``[out, in]`` orientation, FP8 tensors dequantized): ``main_proj``
         ``[hidden, n_taps * hidden]``, ``main_norm`` ``[hidden]``, and ``layers``: one dict per DSpark layer with
-        ``wkv`` ``[head_dim, hidden]`` and ``kv_norm`` ``[head_dim]``. ``topology``: the TP axis topology."""
+        ``wkv`` ``[head_dim, hidden]`` and ``kv_norm`` ``[head_dim]``."""
         self.mesh_device, self.config = mesh_device, config
         self.sp, self.tp = mesh_device.shape[SP_AXIS], mesh_device.shape[1]
         self.hidden, self.hc = config.EMB_SIZE, config.HC_MULT
@@ -54,7 +54,7 @@ class TtV41DSpark(LightweightModule):
         self.window, self.eps = config.SLIDING_WINDOW, config.RMS_NORM_EPS
         assert len(weights["layers"]) == config.NUM_DSPARK_LAYERS
         assert self.hidden % (self.tp * TILE) == 0, "each chip's hidden slice of a tap must be whole tiles"
-        self.ccl = V41Collectives(mesh_device, topology)
+        self.ccl = V41Collectives(mesh_device)
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
         )
@@ -197,6 +197,6 @@ class TtV41DSpark(LightweightModule):
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
             num_links=self.ccl.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl.sp_topology,
             cluster_axis=SP_AXIS,
         )

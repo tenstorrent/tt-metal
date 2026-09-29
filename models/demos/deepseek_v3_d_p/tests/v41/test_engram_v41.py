@@ -33,7 +33,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41 import engram_reference as er
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.engram import (
     DEAD,
     TtV41Engram,
@@ -163,8 +162,7 @@ def test_engram_rows_device(mesh_device, device_params, case, placement):
         "q_weight": torch.ones(hc, hidden),
         "k_weight": torch.ones(hc, hidden),
     }
-    topology = per_axis_topology(device_params["fabric_config"])[1]
-    module = TtV41Engram(mesh_device, cfg, LAYER, weights, _table(placement, mesh_device, table), topology)
+    module = TtV41Engram(mesh_device, cfg, LAYER, weights, _table(placement, mesh_device, table))
     shape = tuple(mesh_device.shape)
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
     got = down(module.rows(module.prepare(ids, chunk)))[0, 0]
@@ -237,9 +235,8 @@ def test_engram_device(mesh_device, device_params, case, chunks, placement):
     hasher = V41EngramHash(cfg, reference.engram_hash.token_map)
     column = hasher.layer_index(LAYER)
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
-    topology = per_axis_topology(device_params["fabric_config"])[1]
     table = _table(placement, mesh_device, V41EngramTable(**expected["table"]))
-    module = TtV41Engram(mesh_device, cfg, LAYER, weights, table, topology)
+    module = TtV41Engram(mesh_device, cfg, LAYER, weights, table)
     del reference, weights
 
     total = tokens.numel()

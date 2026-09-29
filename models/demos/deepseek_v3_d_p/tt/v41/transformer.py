@@ -82,7 +82,6 @@ class TtV41Transformer(LightweightModule):
         engram_hash=None,
         image_embeds: dict | None = None,
         weight_cache_path=None,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
     ):
         """``layer_weights(layer, include_moe)`` returns that block's ``TtV41Block`` weights (``weights.load_layer``
@@ -128,19 +127,18 @@ class TtV41Transformer(LightweightModule):
                     layer,
                     layer_weights(layer, not cached),
                     chunk,
-                    topology=topology,
                     routed_expert_weights_dtype=routed_expert_weights_dtype,
                     weight_cache_path=weight_cache_path,
                 )
             )
             if marker is not None:
                 marker.touch()
-        self.head = TtV41Head(mesh_device, config, norm_weight, head_weight, topology=topology)
+        self.head = TtV41Head(mesh_device, config, norm_weight, head_weight)
         self.dspark = None
         if dspark_weights is not None:
             missing = set(config.DSPARK_TARGET_LAYER_IDS) - set(self.layers)
             assert not missing, f"DSpark needs the taps of layers {sorted(missing)}"
-            self.dspark = TtV41DSpark(mesh_device, config, dspark_weights, topology)
+            self.dspark = TtV41DSpark(mesh_device, config, dspark_weights)
 
     def _token_ids(self, tokens: torch.Tensor):
         """[chunk] int -> [1, 1, chunk/sp] uint32 SP-sharded, replicated over TP."""

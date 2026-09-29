@@ -25,6 +25,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -66,12 +67,12 @@ class TtV41Head(LightweightModule):
         norm_weight: torch.Tensor,
         head_weight: torch.Tensor,
         num_links: int = 1,
-        topology=ttnn.Topology.Linear,
     ):
         """``norm_weight``: ``norm.weight`` ``[hidden]``; ``head_weight``: bf16 ``head.weight`` ``[vocab, hidden]``."""
         self.mesh_device = mesh_device
         self.sp = mesh_device.shape[SP_AXIS]
         self.tp = mesh_device.shape[TP_AXIS]
+        topology = per_axis_topology()[TP_AXIS]  # both collectives run on the TP axis
         self.norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=config.EMB_SIZE,
