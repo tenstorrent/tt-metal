@@ -33,9 +33,17 @@ Batch-1 vLLM performance on QB2/P300x2:
 Largest tested input sequence length on QB2: 261,892 tokens with 252 output
 tokens.
 
-No equivalent T3K numbers are published yet: the multichip and full-model
-performance measurements for that mesh have not been taken. See the gaps in
-`doc/multichip_evidence.md`.
+Batch-1 performance on T3K, warmed, same shape:
+
+| Input / output tokens | Tokens/s/user | TTFT |
+| --- | ---: | ---: |
+| 128 / 128 | 13.8 | 247 ms |
+
+T3K reaches roughly a third of the QB2 decode throughput. It has 64 worker cores
+against about 110, one usable ethernet link per chip pair against two, and one
+DRAM reader per bank because multiple readers per bank are Blackhole-only.
+`doc/multichip_evidence.md` carries the layer-stack breakdown and the remaining
+gaps.
 
 ## Evaluation
 

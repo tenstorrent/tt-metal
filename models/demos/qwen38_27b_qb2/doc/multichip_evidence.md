@@ -131,9 +131,7 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
   explicit cases.
 - 262144 tokens is a capacity result, not a latency or quality result; no run at that length
   has been executed on this mesh.
-- No performance measurement for this mesh: no warmed TTFT, no decode tokens/s/user, no
-  single-chip-versus-multichip speedup, and no host-work counter dump from the traced decode
-  loop. The one timing figure quoted above is a stability observation, not a benchmark.
+- No single-chip-versus-multichip speedup, which needs the baseline in the item above.
 - The qualitative suite is in `readiness_qualitative/`, covering prompt format and answer
   quality on the shared six prompts at 256 tokens against a native-bfloat16 control. It is not
   an accuracy gate: no top-1/top-5/top-100 and no AIME24 reference exist yet.
@@ -141,6 +139,54 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
   `rs_core_offset` hold Blackhole values that no 8x8 worker grid can satisfy, so `mmrs`,
   `agmm` and the sharded-residual path cannot run without T3K-legal values first. A shape
   error is not a rejection, so this family remains open.
+
+## Batch-1 performance
+
+Warmed, prompt 128 and generate 128, the shape the serving profile uses, at the shipping
+`ccl_dtype` of bfloat16:
+
+| metric | value |
+| --- | ---: |
+| TTFT | 247.0 ms |
+| decode, token out | 72.321 ms, 13.83 t/s/u |
+| decode, no readback | 71.522 ms, 13.98 t/s/u |
+
+Both decode boundaries are reported because they answer different questions: the no-readback
+figure is the logits-side comparison, and token out adds the final norm, LM head, sampling and
+the caller-visible readback. The boundary between them costs 0.799 ms, 1.10% of the step, so
+sampler work is not the dominant token-out cost.
+
+Steady-state host work is one refresh each of token, position and RoPE per 148 trace replays,
+not one per generated token, so decode state advances on device rather than from the host.
+
+### Layer-stack lower bound
+
+Decode latency is linear in layer count. Least squares over four depths, each measured the same
+way, gives 0.9676 ms per layer with a 9.600 ms intercept and residuals within 0.010 ms:
+
+| layers | no readback | token out |
+| ---: | ---: | ---: |
+| 4 | 13.468 ms | 14.383 ms |
+| 16 | 25.078 ms | 25.966 ms |
+| 32 | 40.573 ms | 41.350 ms |
+| 64 | 71.522 ms | 72.321 ms |
+
+The 64-layer stack is therefore 61.93 ms and the full-model-only cost is 10.40 ms, 14.4% of the
+step. Only 0.799 ms of that is the token-out boundary, so the remainder is the embedding
+all-gather, the final norm, the LM head and logits movement, all of which sit inside both decode
+measurements. The LM head is the largest single candidate there.
+
+This is a marginal per-layer cost measured inside the real traced loop, not a standalone
+optimized per-layer latency, because no such per-layer measurement exists for this mesh.
+
+### Against the Blackhole reference
+
+QB2 publishes 39.4 t/s/u and 67.9 ms TTFT at the same shape, so this mesh reaches 35% of its
+decode throughput and 3.6 times its TTFT. With the bfloat8_b collective measured below it would
+be near 16.8 t/s/u, still 43%. That is consistent with the platform deltas recorded above:
+64 worker cores against roughly 110, one usable ethernet link against two, and one DRAM reader
+per bank because multiple readers are Blackhole-only. It is a hardware gap rather than a defect,
+but it is larger than the phrase "slower on Wormhole" would suggest.
 
 ## Collective dtype
 
