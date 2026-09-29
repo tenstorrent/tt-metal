@@ -1591,6 +1591,13 @@ tasks:
     - shared_expert
     - moe_add
     layer: 3
+  frozen:
+    at: '2026-09-29T12:43:00'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_14_moe_add.py: 07d71be89043bde4d0e447bab7d0e6162114568e6d8bdbce51762653a48511e8
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.ffn_residual
   title: dsa_moe ffn_residual (residual) on device, layer 3
   step: implement
