@@ -95,3 +95,27 @@ def col_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tenso
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, 3)),
     )
+
+
+TOPK_SENTINEL = 0xFFFFFFFF  # topk_large_indices' pad, the sparse_sdpa sentinel
+
+
+def topk_to_device(mesh, topk: torch.Tensor) -> ttnn.Tensor:
+    """Host top-k positions [S, k] int64 (-1 pads) -> device [1, 1, S/2, k] uint32 ROW_MAJOR per chip, split by rows
+    over axis 0, replicated over axis 1 (the TtHy4Indexer output layout; -1 -> 0xFFFFFFFF)."""
+    s, k = topk.shape
+    tk = torch.where(topk < 0, torch.full_like(topk, -1), topk).to(torch.int32).reshape(1, 1, s, k)
+    return ttnn.from_torch(
+        tk,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None)),
+    )
+
+
+def topk_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
+    """Device top-k [1, 1, S/2, k] uint32 per chip (replicated over axis 1) -> host [S, k] int64, pads as -1."""
+    out = row_split_to_host(mesh, t).to(torch.int64) & TOPK_SENTINEL
+    return torch.where(out == TOPK_SENTINEL, torch.full_like(out, -1), out)

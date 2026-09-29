@@ -78,7 +78,7 @@ DEVICE_STEPS = {
         "ffn_residual",
     },
     "moe_full": {"router", "experts", "shared_expert", "moe_combine"},
-    "moe_shared": set(),
+    "moe_shared": {"topk_shared"},
 }
 
 # iHC gate steps -> checkpoint prefix under model.layers.<i>. (tt/ihc.py:TtHcGates).
@@ -96,6 +96,8 @@ _GATHERED_NORM_STEPS = {"ffn_norm": "post_attention_layernorm"}
 _QA_STEPS = {"q_a"}
 # DSA indexer (tt/indexer.py:TtHy4Indexer), stateful: owns the layer's device index-key cache.
 _INDEXER_STEPS = {"indexer"}
+# Shared top-k (tt/topk_shared.py:TtTopkShared), shared-index layers: identity on the latest full layer's device top-k.
+_TOPK_SHARED_STEPS = {"topk_shared"}
 # Gated sparse MLA (tt/attention.py:TtHy4Attention), stateful: owns the layer's device MLA latent cache.
 _ATTENTION_STEPS = {"attention"}
 # Dense SwiGLU MLP (tt/mlp.py:TtDenseMLP), layer 0: TP=2 over axis 1, fp32 intermediates, reduce_scatter over axis 1.
@@ -346,6 +348,47 @@ class _IndexerHostFn:
         ttnn.deallocate(xd)
         ttnn.deallocate(qd)
         return torch.where(out == 0xFFFFFFFF, torch.full_like(out, -1), out)
+
+
+class _TopkSharedHostFn:
+    """fn(ctx, attn_norm_host [S, H]) -> topk host [S, 2048] int64 (-1 pads, a contiguous tail).
+
+    Harness boundary around TtTopkShared (identity on the device tensor; attn_norm is not used). The source top-k is
+    ctx.extra["shared_topk"] (component / swap tests: the golden L{topk_source}.topk) or, in the hybrid model,
+    ``source(ctx)`` (the reference's record of the full layer's device indexer output for this chunk). It is moved to
+    the device in the TtHy4Indexer output layout, handed through the module and read back."""
+
+    def __init__(self, mesh, module, source=None):
+        self.mesh, self.mod, self.source = mesh, module, source
+
+    def __call__(self, ctx, x):
+        import ttnn
+        from models.demos.hy4_preview_d_p.tt.layout import topk_to_device, topk_to_host
+
+        if "shared_topk" in ctx.extra:
+            tk = ctx.extra["shared_topk"]
+        elif self.source is not None:
+            tk = self.source(ctx)
+        else:
+            raise KeyError(
+                f"topk_shared (source layer {self.mod.source_layer}): set ctx.extra['shared_topk'] or a source"
+            )
+        td = topk_to_device(self.mesh, tk.to(torch.int64))
+        od = self.mod(td)
+        out = topk_to_host(self.mesh, od)
+        ttnn.deallocate(td)  # od is td (identity)
+        return out
+
+
+def _topk_shared_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtTopkShared for a shared-index layer (source: cfg.topk_source(layer), the latest full layer)."""
+    from models.demos.hy4_preview_d_p.tt.topk_shared import TtTopkShared
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    src = cfg.topk_source(layer)
+    assert src != layer, f"layer {layer} has its own indexer; topk_shared is for shared-index layers"
+    return TtTopkShared(mesh, src)
 
 
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
@@ -612,6 +655,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _qa_host_fn(mesh, _qa_module(mesh, spec, layer, loader, cfg))
     if step in _INDEXER_STEPS:
         return _IndexerHostFn(mesh, _indexer_module(mesh, spec, layer, loader, cfg))
+    if step in _TOPK_SHARED_STEPS:
+        return _TopkSharedHostFn(mesh, _topk_shared_module(mesh, spec, layer, loader, cfg))
     if step in _ATTENTION_STEPS:
         return _AttentionHostFn(mesh, _attention_module(mesh, spec, layer, loader, cfg))
     if step in _MLP_STEPS:
@@ -648,6 +693,7 @@ def device_component(mesh, spec, layer, step):
             _GATHERED_NORM_STEPS,
             _QA_STEPS,
             _INDEXER_STEPS,
+            _TOPK_SHARED_STEPS,
             _ATTENTION_STEPS,
             _MLP_STEPS,
             _SHARED_STEPS,
@@ -704,6 +750,9 @@ class HybridDeviceModel:
             assert not missing, f"layer {i}: no device module for {missing}"
             if "indexer" in self.overrides[i]:
                 self.overrides[i]["indexer"] = self._record_topk(i, self.overrides[i]["indexer"])
+            if "topk_shared" in self.overrides[i]:
+                # the reference's record of the source full layer's top-k for this chunk (device indexer output)
+                self.overrides[i]["topk_shared"].source = lambda ctx, i=i: self.ref._shared_topk(i, ctx)
         self.load_seconds = time.time() - t0
 
     def _record_topk(self, i, fn):
