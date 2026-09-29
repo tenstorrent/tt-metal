@@ -78,6 +78,8 @@ def test_full_stack_prefill_and_traced_teacher_forcing(mesh_device, device_param
         max_batch_size=1,
     )
     results = {"checkpoint_revision": MODEL_REVISION, "reference_sha256": REFERENCE_SHA256}
+    output = Path(os.environ.get("GPT_OSS_120B_RESULTS", "generated/test_reports/gpt_oss_120b_qb2"))
+    output.mkdir(parents=True, exist_ok=True)
     try:
         # A causal prefill of the same teacher-forced sequence predicts all 100
         # reference steps; the final prompt row predicts generated token zero.
@@ -88,6 +90,7 @@ def test_full_stack_prefill_and_traced_teacher_forcing(mesh_device, device_param
         del logits
 
         rows = []
+        results["teacher_forcing"] = rows
         for repetition in range(4):
             started = time.perf_counter()
             predicted = generator.generate(
@@ -99,15 +102,20 @@ def test_full_stack_prefill_and_traced_teacher_forcing(mesh_device, device_param
             )
             elapsed = time.perf_counter() - started
             metrics = agreement(predicted, candidates)
+            rows.append(
+                {
+                    "repetition": repetition,
+                    "warmup": repetition == 0,
+                    "elapsed_s": elapsed,
+                    **metrics,
+                    "predicted": predicted,
+                }
+            )
             require_agreement(metrics)
             evidence = generator.trace_evidence.to_dict()
             assert evidence["model_execute_submissions"] == len(forced) - 1
             assert evidence["sampling_execute_submissions"] == len(forced) - 1
             assert evidence["full_logits_readbacks"] == 0
-            rows.append({"repetition": repetition, "warmup": repetition == 0, "elapsed_s": elapsed, **metrics})
-        results["teacher_forcing"] = rows
     finally:
+        (output / "reference_agreement.json").write_text(json.dumps(results, indent=2) + "\n")
         generator.teardown()
-    output = Path(os.environ.get("GPT_OSS_120B_RESULTS", "generated/test_reports/gpt_oss_120b_qb2"))
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "reference_agreement.json").write_text(json.dumps(results, indent=2) + "\n")
