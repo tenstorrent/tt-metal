@@ -1029,6 +1029,13 @@ tasks:
     - attn_hc_pre
     - attn_norm
     layer: 1
+  frozen:
+    at: '2026-09-29T10:37:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py: cfa08f9d6a8162f725768dc1caa107edca064a6c6649e4574ea71919a4aaac5d
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.q_a
   title: moe_full q_a (op) on device, layer 1
   step: implement
