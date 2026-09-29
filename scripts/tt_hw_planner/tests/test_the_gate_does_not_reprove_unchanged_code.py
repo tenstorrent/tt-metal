@@ -17,6 +17,8 @@ re-verifies once.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -249,3 +251,104 @@ def test_an_old_record_without_evidence_is_not_trusted(repo):
     k = _key(demo)
     (demo / E._GATE_CACHE_FILE).write_text(json.dumps({"key": k, "version": E._GATE_KEY_VERSION}))
     assert E._cached_correctness_pass(demo, k) is None
+
+
+# --- end to end: record on a real round, reuse on the next, waive nothing -----------------------
+
+
+@pytest.fixture
+def full_gate(monkeypatch, tmp_path):
+    """The WHOLE gate, twice, with only the device work replaced.
+
+    The two bugs were both about WHERE things sat relative to each other, so neither showed up in a
+    unit test of the cache: one needed the trace gate to fail while correctness passed, the other
+    needed a hit to happen at all. This drives the real `_run_deterministic_gates`."""
+    import subprocess
+
+    from models.experimental.perf_automation.agent import perf_adapter as PA
+    from models.experimental.perf_automation.agent import probes as _PR
+
+    monkeypatch.setenv(_RUN_ENV, "run-1")
+    monkeypatch.delenv(E._GATE_CACHE_OFF_ENV, raising=False)
+    monkeypatch.setenv("E2E_REQUIRE_ON_DEVICE", "0")
+
+    demo = tmp_path / "models" / "demos" / "m"
+    (demo / "tests" / "e2e").mkdir(parents=True)
+    (demo / "demo").mkdir()
+    (demo / "tt").mkdir()
+    (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("def test_e2e():\n    pass\n")
+    (demo / "demo" / "demo_m.py").write_text("if __name__ == '__main__':\n    pass\n")
+    (demo / "README.md").write_text("# m\n")
+    (demo / "tt" / "pipeline.py").write_text("X = 1\n")
+
+    # A PASSING run, carrying exactly what the checks after it read.
+    passing = "\n".join([PA.batch_report_line(32), "image PCC = 0.9987", "1 passed"])
+    runs = {"pytest": 0}
+
+    def _exec(cmd, cwd, env, timeout_s, log_path, **k):
+        runs["pytest"] += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(passing)
+        return 0
+
+    class _Proc:
+        """The G6 capture probe, producing no verdict: a deterministic non-device failure."""
+
+        returncode = 1
+
+        def __init__(self, *a, **k):
+            self.pid = os.getpid()
+
+        def communicate(self, timeout=None):
+            return "", "no probe"
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(_PR, "_execute", _exec)
+    monkeypatch.setattr(E.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", ""))
+    monkeypatch.setattr(E.subprocess, "Popen", _Proc)
+    return demo, runs
+
+
+def test_the_whole_gate_records_a_pass_even_though_the_trace_gate_fails(full_gate):
+    """BUG 1, end to end: correctness clean, trace gate failing -- the pass must still be kept."""
+    demo, runs = full_gate
+    ok, reasons = E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+
+    assert runs["pytest"] == 1, "the expensive run must actually have happened this round"
+    assert ok is False, "the gate must still fail: the trace gate has not passed"
+    assert not [r for r in reasons if r.startswith("G2/G3") or r.startswith("G3")], reasons
+    assert [r for r in reasons if "G6" in r], "the trace gate is the thing that failed"
+    assert (demo / E._GATE_CACHE_FILE).is_file(), "THE BUG: a clean correctness pass was discarded"
+    assert E._cached_correctness_pass(demo, E._correctness_key(demo, 0.99, 32)), "no evidence recorded"
+
+
+def test_the_next_round_skips_the_run_and_still_fails_the_trace_gate(full_gate):
+    """BUG 2, end to end: the hit must buy back the 3.5 h and waive NOTHING."""
+    demo, runs = full_gate
+    first_ok, first_reasons = E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+    second_ok, second_reasons = E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+
+    assert runs["pytest"] == 1, "the second round re-ran the device work it already had a verdict for"
+    assert second_ok is False, "THE BUG: a hit reported the pipeline done, waiving the failing gate"
+    assert [r for r in second_reasons if "G6" in r], "the trace gate must run again every round"
+    assert not [r for r in second_reasons if r.startswith("G2/G3") or r.startswith("G3")], second_reasons
+
+
+def test_a_hit_still_enforces_the_batch_and_the_pcc_it_replays(full_gate):
+    """A check with no input must never read as a pass: the replayed lines are still judged."""
+    demo, runs = full_gate
+    E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+    # asked for a batch the recorded run did not drive -> the key changes, so it re-runs and fails
+    ok, reasons = E._run_deterministic_gates(demo, 0.99, 60, batch=4)
+    assert runs["pytest"] == 2, "a different batch is a different question and must be re-asked"
+    assert [r for r in reasons if "drove 32" in r or "batch" in r.lower()], reasons
+
+
+def test_an_edit_after_the_pass_re_runs_the_whole_thing(full_gate):
+    demo, runs = full_gate
+    E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+    (demo / "tt" / "pipeline.py").write_text("X = 2\n")
+    E._run_deterministic_gates(demo, 0.99, 60, batch=32)
+    assert runs["pytest"] == 2, "an edited pipeline must be re-proved"
