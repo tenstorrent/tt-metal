@@ -1,0 +1,33 @@
+{
+ "metrics": {
+  "norm_ratio_max_attn_collapse_L00": {
+   "t": "2026-09-29T03:30:16",
+   "value": 1.0027250051498413
+  },
+  "norm_ratio_max_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:30:16",
+   "value": 1.0036077499389648
+  },
+  "norm_ratio_min_attn_collapse_L00": {
+   "t": "2026-09-29T03:30:16",
+   "value": 0.9963793754577637
+  },
+  "norm_ratio_min_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:30:16",
+   "value": 0.9959993362426758
+  },
+  "pcc_attn_collapse_L00": {
+   "t": "2026-09-29T03:30:16",
+   "value": 0.9999971606902534
+  },
+  "rel_l2_attn_collapse_L00": {
+   "t": "2026-09-29T03:30:16",
+   "value": 0.002383510349318385
+  },
+  "rel_l2_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:30:16",
+   "value": 0.002982753561809659
+  }
+ },
+ "task": "C.kda_dense.attn_collapse"
+}
