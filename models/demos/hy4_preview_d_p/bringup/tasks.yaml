@@ -2611,6 +2611,13 @@ tasks:
     kind: residual
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T21:41:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py: e02598954454ead3aa10ade68e2ec5cba5ea660b604e3141e61768382c7bc199
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.14
   title: 'moe_shared block with steps 1-14 on device (last: moe_combine)'
   step: implement
