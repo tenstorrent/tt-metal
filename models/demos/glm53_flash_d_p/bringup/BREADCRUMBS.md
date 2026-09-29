@@ -1947,3 +1947,31 @@ Next (implement): no module change is needed; add ffn_norm to `DEVICE_STEPS["kda
 the squares accumulated in fp32.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.08 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc..ffn_collapse and ffn_norm on the device. The rendered
+file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 07 test (every check and limit kept) and
+added dsa_moe swap 10's norm checks:
+- Norm-share block: the device outputs through ffn_in fixed, then the CPU ffn_norm and tail. Block out vs it is the
+  norm share. The collapse share is now that block vs the collapse-share block, and it reproduces swap 07 exactly
+  (29 / 0.00031 / [0.9996, 1.0005]).
+- ffn_norm vs the fp32 CPU norm of its own ffn_in, at the component limits (rel 0.01, ratio [0.99, 1.01], worst row
+  0.015, coefficient [0.996, 1.004]). It runs on chunk 1 and on chunk 0.
+- ffn_norm vs golden: rel 0.01, ratio [0.99, 1.01], worst row 0.03 (FC_GOLD's, not dsa_moe's 0.02; the norm keeps
+  ffn_in's direction error, and the CPU norm of the device ffn_in already scores 0.0162), coefficient [0.995, 1.005].
+- Norm share limits, re-measured at layer 4: flips <= 64, same-routing rel <= 0.0009 (dsa_moe 0.0015), ratio
+  [0.996, 1.004], flipped-row ratio [0.93, 1.07]. At layer 4 the MoE carries a norm scale error at about 0.38x
+  (layer 3: 1.8x), so the dsa_moe rel limit would pass x1.003, truncation and eps 1.05e-5. Known issues Proposed has
+  the entry.
+Limits come from a CPU sensitivity study (/tmp/kmoe08/sens.py, adapted from /tmp/dsas10/sens.py, device-free, about 2 s
+per block, not kept; the numbers are in the test docstring). Not caught at block out: x0.999, x1.0015, and one row
+copied from its neighbour (the same-input check catches that one, ratio 1.30).
+Results:
+- Device passes: PCC 0.999992, rel 0.0042. Vs the all-CPU block 61 flips / 0.00241 (limit 0.003) / [0.9804, 1.0033].
+  ffn_norm vs CPU same input 0.00168 / [0.9991, 1.0008] / row 0.00213 / coef 0.99989 (chunk 0 the same). Vs golden
+  0.00582 / row 0.01633. Norm share 19 / 0.00032 / [0.9986, 1.0016], flipped rows [0.9912, 1.0030]. Every swap 07
+  number is unchanged. About 100 s for the real pass, 186 s total.
+- Reference passes (PCC 0.999997, norm share exact). Stub fails (PCC 0 and every check).
+Watch: the all-CPU-block rel is 0.00241 of 0.003 (61 flips of 96). The router is next, and it adds routing flips.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_08_ffn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
