@@ -33,3 +33,10 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   oracle (marked) and the reference, with a finding (R2-hf-rope-interleaved). Accepted.
 - R.4 PASS 704c7d08b3e: checkpoint trimmed 1.5 TB -> 116 GB (1436 GB freed, 188 tensors kept incl. 27 MTP, 0 verify
   errors). R.3 PASS 6eb263e888b on the precheck (chunked == one-shot, graph replay exact). Dashboards republished.
+- 04:40 goldens s4096/s16384/s56320, B.1, PL.0 (104 tasks) PASS. PL.1 plan written (attempt 1): SP2 (rows) x TP2
+  (cols), 32 heads per chip for sparse_sdpa, block-cyclic MLA latent + index-key caches, EP=4 with the DeepSeek 2D
+  dispatch on axis 0 (MiMo 2x2 precedent), dense MLP / shared expert TP2, fp32 iHC streams, bf16 attention / indexer
+  weights and index keys, bfp8 experts, HiFi4 + fp32 accumulation everywhere; sink passed as sink x 16 with scale 1/16;
+  indexer dims permuted on the host so the op's RoPE half matches; no host RoPE permutation in the MLA (R.2 finding).
+  Gate numbers checked by the overseer: 20.60 of 27.20 GiB per chip, 0 unplaced tensors, 0 plan / component / ledger
+  errors, no CPU or OPGEN step, tasks.yaml unchanged. Approved by the overseer (owner delegated 03:40); resumed.

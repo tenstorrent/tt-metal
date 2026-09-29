@@ -4,3 +4,12 @@ intake:
   files:
     models/demos/hy4_preview_d_p/bringup/spec.yaml: 634cf13fb52273964cb24519698b8dd41413180673a557acad89203784a8d76f
   note: ''
+plan:
+  by: dnijemcevic
+  at: '2026-09-29T04:44:23'
+  files:
+    models/demos/hy4_preview_d_p/bringup/plan.yaml: b53d9843112fc4d23a22e519a4c939d7ed842d3c2cfa9ee9f77d44296de273ae
+    models/demos/hy4_preview_d_p/bringup/plan.md: 8759d0449e06e81759922dda08baff1d5c4d44b2adc42be2ba8f9cb8be053f7a
+    models/demos/hy4_preview_d_p/bringup/components.yaml: e95d5602049e5f4129a05f8f21f151ad1c86b93466ee0b7acd47eeeb5952f0ef
+  note: ''
+  ledger: 7941770af70174d9c1a33b5a3fac281d9ec90a348387af68f8d5d6f8128d2608
