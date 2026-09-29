@@ -43,4 +43,13 @@ enum class EngineMode : std::uint32_t {
 static_assert(static_cast<std::uint32_t>(EngineMode::IdmaPerRow) == 0u);
 static_assert(static_cast<std::uint32_t>(EngineMode::NocPerRow) == 1u);
 
+// The num_channels runtime arg's "use every backend VC the hardware has" value.
+//
+// The real count is overlay::CMDBUF_NUM_IDMA_VCS, and only the device side can see it:
+// cmdbuff_api.hpp brings RoCC intrinsics and ~313 macros with it, which is not something to
+// pull into the host test's unity-build translation unit just to read one integer. So the
+// host asks for all of them and the kernel resolves the sentinel against the real constant.
+// The VC count then lives in exactly one place instead of as a literal 8 on each side.
+constexpr std::uint32_t CHANNELS_ALL = 0;
+
 }  // namespace narrow_row

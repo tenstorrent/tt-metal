@@ -45,6 +45,7 @@
 
 using namespace overlay;
 
+using narrow_row::CHANNELS_ALL;
 using narrow_row::EngineMode;
 
 namespace {
@@ -130,10 +131,11 @@ void kernel_main() {
     // sub-splitting only multiplies issue cost. MAX_BYTES_IN_PACKET must be programmed
     // explicitly whatever the value -- CMDBUF_RESET zeroes it to its rdl default of 0, which
     // means "never split", and every channel knob then goes silently inert.
+    // CHANNELS_ALL resolves here rather than on the host, because CMDBUF_NUM_IDMA_VCS is
+    // visible only on this side. Anything above the VC count clamps down to it as well, so a
+    // stale caller cannot ask for channels that do not exist.
     std::uint32_t num_channels = get_arg(args::num_channels);
-    if (num_channels < 1) {
-        num_channels = 1;
-    } else if (num_channels > CMDBUF_NUM_IDMA_VCS) {
+    if (num_channels == CHANNELS_ALL || num_channels > CMDBUF_NUM_IDMA_VCS) {
         num_channels = CMDBUF_NUM_IDMA_VCS;
     }
     const bool use_idma = engine_mode == EngineMode::IdmaPerRow;

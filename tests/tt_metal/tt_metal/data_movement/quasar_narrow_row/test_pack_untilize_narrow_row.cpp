@@ -52,10 +52,11 @@ constexpr std::uint32_t OUT_ROWS = TILE_H;
 // runtime arg cannot drift apart.
 using narrow_row::EngineMode;
 
-// All 8 iDMA backend VCs. Fan out unconditionally: at 8 channels the gather is never more
-// than 0.4% behind one channel on short rows, and 3.6x ahead at 512 B/row, where a single
-// channel is data-bound at one VC's 16 B/cycle and loses to the workaround it replaces.
-constexpr std::uint32_t CHANNELS_ALL = 8;
+// Fan out unconditionally: at 8 channels the gather is never more than 0.4% behind one
+// channel on short rows, and 3.6x ahead at 512 B/row, where a single channel is data-bound at
+// one VC's 16 B/cycle and loses to the workaround it replaces. CHANNELS_ALL is a sentinel the
+// kernel resolves against the real VC count, so the 8 is not repeated here.
+using narrow_row::CHANNELS_ALL;
 
 // The reference workload: a 32 x 252 Float16_b matrix. 252 datums needs 8 tiles to cover
 // (7 x 32 = 224, + 28), so ct_dim 8 -- the half-sync 16-bit DEST limit for pack_untilize --
@@ -73,6 +74,10 @@ constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
 
 // Switched rather than ternary so that adding an engine is a -Wswitch warning here
 // instead of a run silently mislabelled as the NOC one in a failure message.
+// CHANNELS_ALL is a sentinel resolved on the device, so report it as a word: printing the
+// raw 0 would read as "zero channels" in a failure message.
+std::string channel_label(std::uint32_t n) { return n == CHANNELS_ALL ? "all" : std::to_string(n); }
+
 const char* engine_name(EngineMode e) {
     switch (e) {
         case EngineMode::IdmaPerRow: return "iDMA gather";
@@ -379,7 +384,7 @@ bool run_narrow_row(
             cfg.last_tile_w,
             matrix_w,
             engine_name(cfg.engine_mode),
-            cfg.num_channels,
+            channel_label(cfg.num_channels),
             bad,
             OUT_ROWS * matrix_w,
             detail,
@@ -464,7 +469,7 @@ TEST_F(QuasarNarrowRowUntilize, EngineParity) {
         const RunConfig base{.ct_dim = sh.ct_dim, .last_tile_w = sh.last_tile_w};
         const std::uint32_t row_bytes = ((sh.ct_dim - 1) * TILE_W + sh.last_tile_w) * DATUM_BYTES;
 
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, base)) << "iDMA 8ch, " << row_bytes << " B/row";
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, base)) << "iDMA all channels, " << row_bytes << " B/row";
 
         RunConfig one_channel = base;
         one_channel.num_channels = 1;
