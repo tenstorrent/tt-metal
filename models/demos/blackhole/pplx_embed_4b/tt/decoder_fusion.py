@@ -239,6 +239,17 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
         )
         w2 = getattr(getattr(layer, "feed_forward", None), "w2", None)
+        # QWEN_FUSED_ADD_NORM_PREALLOC_FF=1: the same for the post-attention add's normalised output (the FF1+FF3
+        # input), allocated right before the WO matmul. Allocated by the add, it lands below WO's output, which is
+        # freed right after, so the fused FF1+FF3 matmul's static CBs can only grow up to it (at bs32 4,40,8 blocks
+        # clash, 777 KB vs the 1149 KB with it at the top).
+        want_prealloc_ff = (
+            os.getenv("QWEN_FUSED_ADD_NORM_PREALLOC_FF", "0") == "1"
+            and out_mc is not None
+            and int(os.getenv("QWEN_FUSED_ADD_NORM_R", "0") or 0) >= 2
+            and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
+        )
+        wo = getattr(getattr(layer, "attention", None), "wo", None)
         # QWEN_QKV_CHUNKS=2 (with the preallocation): the output is two half-batch tensors, one per QKV chunk of the
         # next layer (tt/qkv_chunks.py); both are allocated before FF2, so both sit at the top of L1.
         n_chunks = qkv_chunks.chunks() if want_prealloc else 1
@@ -262,7 +273,14 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             calls[0] += 1
             mc, dt = a_kwargs.get("memory_config"), a_kwargs.get("dtype")
             if calls[0] == 1:  # post-attention residual -> feeds ff_norm
-                s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc)
+                out_t = prealloc.pop("n1", None)
+                if out_t is not None and out_t.dtype != (dt or a.dtype):
+                    ttnn.deallocate(out_t)
+                    out_t = None
+                if out_t is not None:
+                    s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc, out_t)
+                else:
+                    s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc)
                 if do_verify:
                     s_ref = orig_add(a, b, *a_args, **a_kwargs)
                     n_ref = orig_ff_norm(s_ref, mode)
@@ -331,7 +349,11 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
 
         orig_mm, orig_linear = ttnn.experimental.minimal_matmul, ttnn.linear
 
-        def _before_ff2(b):
+        def _before_mm(b):
+            if want_prealloc_ff and wo is not None and b is wo and "n1" not in prealloc:
+                prealloc["n1"] = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, x.device(), out_mc
+                )
             if want_prealloc and w2 is not None and b is w2 and "n" not in prealloc:
                 alloc = lambda shp: ttnn.allocate_tensor_on_device(
                     ttnn.Shape(shp), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, x.device(), out_mc
@@ -343,18 +365,18 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                     prealloc["n"] = alloc(shape)
 
         def mm_wrapper(a, b, *m_args, **m_kwargs):
-            _before_ff2(b)
+            _before_mm(b)
             return orig_mm(a, b, *m_args, **m_kwargs)
 
         def linear_wrapper(a, b, *l_args, **l_kwargs):
-            _before_ff2(b)
+            _before_mm(b)
             return orig_linear(a, b, *l_args, **l_kwargs)
 
         ttnn.add = add_wrapper
         ttnn.to_memory_config = tmc_wrapper
         layer.ff_norm = ff_norm_wrapper
         layer.attention_norm = attn_norm_wrapper
-        if want_prealloc:
+        if want_prealloc or want_prealloc_ff:
             ttnn.experimental.minimal_matmul, ttnn.linear = mm_wrapper, linear_wrapper
         try:
             return orig_forward(x, *args, **kwargs)

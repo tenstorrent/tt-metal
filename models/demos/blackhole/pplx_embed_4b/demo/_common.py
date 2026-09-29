@@ -606,14 +606,19 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # there by 16% with the old epilogue, NEGATIVE_RESULTS 13 / 58). bs32 takes bs16's blocks: fused 3831 us per
     # layer (4,20,8 1x4; 4129 at 8,8,8 1x8) vs FF1 + FF3 + silu_mul 4704. bs=1 never reaches it (legacy 2D path).
     os.environ.setdefault("QWEN_FUSE_SWIGLU", "1" if cfg.get("fuse_swiglu", batch_size > 1) else "0")
-    # Fused-SwiGLU blocks, re-swept for the pack-thread SwiGLU (perf_tools/bench_ff13_sweep.py, 255 configs per batch):
-    # K_block 20 and a 1x8 subblock win everywhere. bs8 8,20,8 1x8 996 us (8,8,8 1x8 1058), bs16 4,20,8 1x8 1927
-    # (1x4 1965), bs32 4,20,8 1x8 3764 (1x4 3849); sustained_run.sh, 3 alternating rounds, cold / sustained: bs8 85.0 /
-    # 104.1 -> 82.5 / 101.4 ms, bs16 158.3 / 210.7 -> 157.1 / 209.5, bs32 329.3 / 411.1 -> 326.4 / 408.6. Fused only:
-    # the FF13 block knobs also drive the unfused FF1 / FF3, which want 8,8,8 1x8 (4,20,8 1x4 there: +81 ms at bs32).
+    # Fused-SwiGLU blocks: K_block 40. The pack thread's SwiGLU (~1400 cycles per output tile) only overlaps the last K
+    # block's math (640 cycles per output tile at K_block 20), so half of it was exposed (15-17% of the op,
+    # perf_tools/bench_ff13_fused_ablate.py); K_block 40 doubles the window. Standalone (bench_ff13_sweep.py) bs8
+    # 8,20,8 1x8 999 -> 8,40,6 1x6 882 us, bs16 4,20,8 1x8 1937 -> 4,40,8 1x8 1703, bs32 4,20,8 1x8 3763 -> 4,40,8 1x8
+    # 3277. The larger CBs are L1-limited: bs8 8,40,8 (859) clashes with the L1 residual sum; bs32 4,40,8 needs the
+    # post-attention norm output allocated above WO's output (QWEN_FUSED_ADD_NORM_PREALLOC_FF, tt/decoder_fusion.py).
+    # Fused only: the FF13 block knobs also drive the unfused FF1 / FF3, which want 8,8,8 1x8 (4,20,8 1x4 there: +81
+    # ms at bs32).
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_FUSE_SWIGLU") == "1":
-        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "8,20,8" if batch_size == 8 else "4,20,8")
-        os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,8")
+        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "8,40,6" if batch_size == 8 else "4,40,8")
+        os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,6" if batch_size == 8 else "1,8")
+        if batch_size == 32:
+            os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC_FF", "1")
     if cfg["dram_grid"]:
         os.environ.setdefault("QWEN_MM_GRID", DRAM_MM_GRID)
 

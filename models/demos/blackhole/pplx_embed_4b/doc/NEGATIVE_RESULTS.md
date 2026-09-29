@@ -1244,3 +1244,47 @@ In the model FF2's 16,4,8 CBs (~716 KB) clash with L1 (the preallocated norm hal
 ~665 KB, lowest buffer 777,216 B); 16,8,4 1×4 fits (1459.8 µs standalone). With WO 16,8,8, sustained_run.sh, 3
 alternating rounds, bs32 chip 0: cold 323.0 → 320.9 ms, **sustained 399.6 → 402.6** (settled clock ~1035 → ~1017
 MHz). More work per watt-second is not faster under the power cap: kept the 8,8,8 blocks.
+
+## 60. Fused FF1+FF3: the pack-thread SwiGLU was half exposed; K_block 40 hides it (landed) (2026-09-29)
+
+With the SwiGLU on the pack thread (§58) the fused kernel ran at 413-434 TFLOP/s against ~550 for the same packed shape
+as a plain matmul. `perf_tools/bench_ff13_fused_ablate.py <batch>` patches `compute_metal2.cpp` (skip or double the
+pack-thread SwiGLU call, skip the last K block's dest-reuse add of the partial sums) and optionally the dataflow header
+(skip reads / writes, as `bench_mm_ablate.py`), at the model's blocks (bs8 8,20,8 1×8, bs16 / bs32 4,20,8 1×8), µs:
+
+| | full | no SFPU | SFPU ×2 | no partials add | no SFPU, no add | compute only | compute only, no SFPU | compute only, no SFPU, no add |
+|---|---|---|---|---|---|---|---|---|
+| bs8 | 987.3 | 840.9 | 1329.5 | 979.6 | 810.1 | 929.6 | 771.0 | 734.0 |
+| bs16 | 1931.2 | 1631.0 | 2611.7 | 1911.3 | 1560.7 | 1842.1 | 1515.8 | 1438.6 |
+| bs32 | 3758.4 | 3104.3 | 5149.2 | 3720.3 | 2951.1 | 3644.6 | 2999.0 | 2842.2 |
+
+One SwiGLU pass costs what a second one adds (342 / 680 / 1391 µs), and about half of it is exposed (skipping it saves
+15-17%); the partial-sum add (1%) and the reads / writes (3-6%) are not the gap. Per output tile the SFPU pass is ~1400
+cycles (680 µs over ~650 output tiles per core at bs16), but it only overlaps the last K block's math: K_block 20 × 2
+(gate, up) × 16 cycles = 640 per output tile. The §58 re-sweep never reached a larger K block (K in 5..20).
+
+K_block 40 doubles the window (`bench_ff13_sweep.py`, µs): bs8 8,40,8 1×8 858.6, 8,40,6 1×6 881.9 (was 999.3); bs16
+4,80,4 1×4 1687.6, 4,40,8 1×8 1703.1 (1937.2); bs32 6,40,8 1×8 3254.8, 4,40,8 1×8 3276.5 (3763.4). Subblocks other
+than 1×W lose (2×4, 2×2: the SwiGLU pairs gate / up along W). K_block 80 (one K block, no partials) fits only with
+small M / N blocks and is not better.
+
+In the model the larger CBs are L1-limited. bs16 4,40,8 fits (cold 156.9 → 148.9 ms). bs8 8,40,8 clashes (static CBs
+end at 1,377,408 B, lowest L1 buffer 1,240,704: the post-attention residual sum in L1); 8,40,6 fits. bs32 4,40,8
+clashed at 777,216 B: `l1_map_first_layer.py 32` showed the post-attention add's norm output (the FF13 input, 363 KB
+per core) allocated below WO's L1 output, which is live during the add and freed right after, so FF13 ran with the top
+363 KB of L1 empty and its CBs capped below the norm output. Two fixes, cold bs32 ms:
+
+| | ms |
+|---|---|
+| default (4,20,8 1×8) | 322.6 |
+| 4,40,4 1×4 (fits as is) | 316.7 |
+| WO output to DRAM (`TT_PREFILL_WO_L1=0`) | 327.5 |
+| WO output to DRAM + 4,40,8 | 308.4 |
+| norm output preallocated before WO (`QWEN_FUSED_ADD_NORM_PREALLOC_FF=1`) | 323.6 |
+| preallocated + 4,40,8 (landed) | 302.4 |
+
+Trading WO's L1 output for DRAM pays (+4.2 ms for −19), but the preallocation (the FF2 hook's trick, §56, for the
+post-attention norm) gets the room without the trade: the lowest L1 buffer during FF13 moves to 1,149,312 B. bs32
+6,40,8 still misses by 4 KB. STS-B 0.8119 / 0.8147 / 0.8152 (bs8 / 16 / 32). sustained_run.sh, 3 alternating rounds per
+batch, chip 0, cold / sustained ms: bs8 82.5 / 102.0 → 78.5 / 99.5, bs16 157.1 / 201.7 → 148.8 / 196.1, bs32 322.8 /
+400.1 → 303.1 / 388.7.
