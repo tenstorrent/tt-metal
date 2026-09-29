@@ -16,10 +16,14 @@ namespace sfpu {
 
 // Computes the reciprocal of a floating point value x.
 // max_iter specifies the number of Newton-Raphson iterations.
-// max_iter = 2: sufficient for float32 precision (≤1 ulps).
-// max_iter = 1: sufficient for bfloat16/float16 precision (≤0.5 ulps).
+// max_iter = 2: sufficient for faithful FP32 rounding in the normal input/output domain.
+// max_iter = 1: with round_to_bf16 and the BF16-tuned seed from sfpu_reciprocal_init,
+//               correctly rounds BF16 inputs with normal BF16 reciprocals (≤0.5 ULP).
 // max_iter = 0: this has the same effect as max_iter=1 at the moment;
 //               it may be replaced with a cheaper approximation in future.
+// round_to_bf16 rounds the normalized result to BF16, nearest with ties to even,
+// before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
+// reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 template <int max_iter = 2, bool round_to_bf16 = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
@@ -95,7 +99,7 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
         } else if constexpr (is_fp32_dest_acc_en) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
-            out = sfpu_reciprocal_iter<1, true>(in);
+            out = sfpu_reciprocal_iter<1 /*max_iter*/, true /*round_to_bf16*/>(in);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
