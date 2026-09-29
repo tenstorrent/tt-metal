@@ -16,6 +16,14 @@ Tiny shapes -- the emulator runs every RISC as a CPU fiber.
 Results (2026-09-29, tt-metal mstaletovic/mimo-v2-dp ab3dc8c5127): all 4 pass in 3m54s (hbw all-gather bit-exact on
 both axes; ring SDPA 8x4 C256 ctx 6144 split 1 / 2 / 3 PCC 0.99995 / 0.99997 / 0.99998 on every chip); the all-gather
 MoE block (tests/perf/test_moe_ag_mesh.py, MIMO_AG_MESH=8x4 MIMO_AG_SEQ=32) min PCC 0.999993.
+A full real-weights layer (tests/unit/test_decoder_layer.py -k L1-SWA, MIMO_MESH=8x4, the harvested descriptor
+below, MIMO_TTNN_CACHE=0) loads and runs attention, and found the Galaxy bugs fixed on this branch (flat_routed_expert
+laid out for the p150 11 x 10 grid only -- a Galaxy chip is 12 x 10 with DRAM readers in columns 0, 1, 7, 8 --;
+3 CCL links where a Galaxy has 2); it then stops in the flat expert's gate/up compute (se3_compute.cpp) with a
+SIGSEGV inside tt-emule's __emule_unpack_tile_to (same with bf8 weights): an emulator gap in that kernel's CB access,
+still open. tt-emule-blaze.patch has the emulator shims the flat expert kernels needed to compile
+(cb_pages_reservable_at_back, ncrisc_noc_nonposted_writes_sent / _flushed, SFPU_BINARY_INIT_FN, sfpu_binary_init,
+5-argument fast_tilize_block / tilize_block honoring the tile indices).
 
 Setup: tt-emule-blaze at 88787b9 (it provides tt-emule::runtime; tt-emule itself is header-only now) with
 tt-emule-blaze.patch (here) applied, and tt-metal (plus the emule marshaller commit 56dd501dd1f) built with
