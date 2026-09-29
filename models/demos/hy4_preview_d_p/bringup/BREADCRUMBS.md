@@ -2270,3 +2270,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
+
+## C.moe_shared.attn_hc test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test for attn_hc at layer 2 (moe_shared; iHC gates [S, 8], hc_attn_layer of layer 2,
+  s4096 chunk 1, bf16 golden) with the layer-1 reviewed test (test_c_moe_full_attn_hc.py), LAYER = 2, with the same
+  checks and limits: gated PCC 0.99; not a CPU bridge, element count, finite, rel L2 <= 0.01, per-column rel L2 (all
+  8) <= 0.01, post worst row <= 0.015, attn_x rel <= 0.005 / row 0.02, h_mid per stream <= 0.003 / row 0.02.
+- New docstring with the layer-2 CPU mutation table. Scripts are in /tmp/hy4hc2/{an,an2,mut,mut2,mut3,cols}.py
+  (outside the repo; layer-2 copies of /tmp/hy4hc1).
+
+Decisions
+- Layer 2's gates differ from layer 1's. Pre gate 0 sits at hc_eps (1.03e-6 .. 1.6e-5), post gate 7 is small (mean
+  0.0028), and stream 3 is 5x larger than the others. I first tried an abs-error limit on column 0 instead of rel L2.
+  The device reached rel 0.0045 there, so all 8 columns keep rel L2 <= 0.01 as at layer 1. This is the only check
+  that catches a dropped hc_eps (column 0 rel 0.47). Every mutation in the table fails at least one check.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999999, rel 0.00132, max col rel 0.0018, post row 0.0030, attn_x 0.00117 /
+  0.0027, h_mid stream <= 0.00176 / row 0.0045).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, the existing TtHcGates through device_component; attn_hc is routed for any layer): PASS. PCC
+  0.999999, rel 0.00136, col rel [0.0045, 0.0012, 0.0018, 0.0021, 0.0018, 0.0017, 0.0019, 0.0034], post row 0.0048,
+  attn_x 0.00120 / 0.0032, h_mid stream <= 0.00181 / row 0.0058.
+
+Gotchas
+- Tightest margin: column 0 (device 0.0045 vs 0.01, max abs 1.05e-7 on gates of ~2e-6). Next is h_mid stream 1
+  (0.00181 vs 0.003; the fp32 reference is already 0.00176, from bf16 golden rounding).
+- DEVICE_STEPS["moe_shared"] in hooks.py is still empty. The implement step must add attn_hc to it (not this step's
+  file).
+- The first pcc line (0.000000) comes from the precompile collect pass.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
