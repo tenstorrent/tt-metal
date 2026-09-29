@@ -938,3 +938,62 @@ Next (attention swap): the attention reads the topk; add the device attention to
 indexer share at attn_out through the device attention (CPU topk vs device topk into the same device attention).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_05_indexer.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attention test (attempt 1)
+
+Reviewed the rendered component test for dsa_moe attention (layer 3) and rewrote it on the indexer test's pattern. The
+gated metric is unchanged: `pcc_attention_L03` (PCC >= 0.99, chunk 1 of s4096).
+- Runs both dumped chunks: 0 (start 0, rows q < 2047 are mostly -1 ids) and then 1 (gated, golden latent prefix).
+  Chunk 0 PCC is also asserted: a -1 masking bug scores 0.99983 on chunk 1 and 0.52 on chunk 0.
+- Output checks on both chunks: finite, rel L2 <= 0.012, per-token ratio [0.994, 1.006], worst row rel <= 0.03, every
+  128-row block <= 0.02.
+- Latent cache: the device module must put `{"kv_latent": [n >= start + S, 512]}` (reference layout, torch, read
+  back at the harness boundary) in `dctx.extra["state_out"]`. Without it the test fails. The chunk's rows vs the golden
+  state: rel <= 0.005, ratio [0.997, 1.003], worst row <= 0.008. Prefix rows must equal the loaded golden prefix
+  (rel <= 1e-3). In reference mode it reads `ref.state_tensors`.
+- Limits are written `not x <= lim` so NaN fails.
+Sensitivity (CPU host script /tmp/dsaattn/sens.py, not kept; numbers in the test docstring). bf16 path rel 0.003 /
+ratio [0.999, 1.0013]. Every measured bug fails some check except output x1.005. Scale 512^-0.5 (sparse_sdpa's
+default), cache write offsets, no tail, and head or row order all fail PCC.
+Results: reference passes (c0 and c1 rel 0.0017, kv rel 0.0020, prefix exact). Stub fails (PCC 0). The gate (device)
+fails with `NotImplementedError: no device module for attention yet`, as expected before the implement step.
+Next (implement): take the golden int32 [2048, 2051] topk (-1 = none) at the harness boundary and convert it to the
+sparse_sdpa format (uint32 [1, 1, S/4, 2176], sentinel tail). Pass scale = 1/16 explicitly. Expose kv_latent in
+`state_out`, and reset the cache at start 0.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attention implement (attempt 1)
+
+Module `tt/mla_attention.py:TtMLA`, registered in `hooks.py` (`_device_step` "attention" on a DSA layer ->
+`_MlaHostFn`; "attention" added to `DEVICE_STEPS["dsa_moe"]`).
+- Latent (every chip, all S rows): kv_a linear (fp32 out) -> TtRMSNorm (ttnn.bringup.rms_norm, eps 1e-5) -> bf16 ->
+  ROW_MAJOR -> `ttnn.experimental.slice_write` into the replicated row-major cache [1, 1, max_seq, 512] at `start`
+  (`fill_cache` is TILE-only; sparse_sdpa wants row-major). The cache is not zeroed at start 0: rows past start + S
+  are never selected.
+- Queries (chip d = 2 r + c takes rows d S/4, two mesh_partition, as the indexer): q_b -> nlp_create_qkv_heads [1, 64,
+  S/4, 256] -> matmul w_uk [1, 64, 256, 512] -> ROW_MAJOR -> `ttnn.bringup.sparse_sdpa(high_precision=True)` (scale
+  1/16 passed explicitly, k_chunk 128, HiFi4 + fp32 dest) -> TILE -> matmul w_uv [1, 64, 512, 256] -> concat heads in 2
+  groups of 32 (nlp_concat_heads overflows L1 at 64 x 256) -> o_proj -> all_gather dim -2 axis 1 then axis 0.
+  Intermediates bf16 (`GLM_MLA_MID=fp32` measured worse, see known issues).
+- Harness boundary: `idx_to_device` compacts each reference topk row (valid ids first, -1 as a tail), pads to 2176,
+  uploads int32 split by chip, bitcasts to uint32: the indexer module's device format, so the device model can feed
+  the indexer output straight in. `load_state` / `state_torch` move `kv_latent` [max_seq, 512].
+- `_RefState` / `HybridDeviceModel.new_state` now keep a list of device-held stateful steps per layer (a DSA layer has
+  the indexer and the attention), and trim kv_latent to `length` like index_key.
+- sparse_sdpa precision: the source op (bf16 running output / sum, hard-coded approximate exp) failed the per-token
+  norm ratio (c0 0.9928 < 0.994; rel 0.0076). Stage probes and a CPU model of the kernel put 0.0070 on the bf16 state
+  and the rest on the exp. Extended the existing fork `ttnn/ttnn/bringup/sdpa` with `high_precision` (Float32 output /
+  row-sum / 1/sum CBs, row-sum from the packed probs, exact exp; define `SPARSE_SDPA_HIGH_PRECISION`, default off =
+  the source program, bit-identical outputs checked). Fork regression: 118 source tests 0 regressions, 92 new
+  sparse_sdpa source tests recorded (all pass on original and fork), unit suite 28 passed, MiMo model cases 4 passed.
+  `GLM_MLA_SDPA=source` selects ttnn.transformer.sparse_sdpa.
+- Remaining bias: the device output is about 0.13% low (coefficient 0.9987 vs the CPU of the same inputs), mostly
+  inside sparse_sdpa (0.9989), likely TF32 reads of the Float32 CBs in normalize. Not fixed; the ratio check has
+  0.0014 margin.
+Result (gate): c1 `pcc_attention_L03` 0.999991, rel 0.0044, ratio [0.9956, 1.0001], worst row 0.0084; c0 PCC
+0.999991, rel 0.0044, ratio [0.9954, 1.0007]; kv latent rel 0.0025, ratio [0.9987, 1.0006], prefix exact. About 15 s.
+Next: the O.1 fork-test case for this call (sparse_sdpa high_precision, GLM shape) goes in the fork's `tests/cases.py`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py`
+Fork tests: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py`;
+`python -m models.demos.common.bringup.testing.fork_source --fork sdpa`.
