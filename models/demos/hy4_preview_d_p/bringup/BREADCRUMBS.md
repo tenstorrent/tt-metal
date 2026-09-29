@@ -2077,3 +2077,38 @@ Re-run
   worst row 0.00096. The `pcc=0.000000` line in the log is the precompile collect pass (stubbed), not the real pass.
 - Perf note (assemble): the shared partial can be added to the routed experts' partial before one reduce_scatter.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py`
+
+## S.moe_full.13 test (attempt 1)
+
+What
+- Replaced the rendered 34-line swap-13 test (moe_full layer 1, steps 1-13 on device, last: shared_expert) with swap
+  12's reviewed test plus shared_expert checks. Every swap-12 check is kept at its limits; `shared_expert` added to
+  SWAPPED.
+- New checks on shared_out:
+  - vs the CPU shared_expert on the same device ffn_norm, at the component limits: rel 0.008, ratio [0.99, 1.01],
+    worst row 0.015, plus a float64 global coefficient within 0.003 of 1.
+  - The module again on the device ffn_norm x 2 (bf16) vs the CPU step: rel 0.006, ratio [0.99, 1.01], worst row
+    0.012, coef 0.003. This is the clamp probe, because the golden cannot see a clamp.
+  - vs golden (backstop): rel 0.01, ratio [0.985, 1.015], worst row 0.02, coef 0.004.
+- CPU mutation study in /tmp/hy4_sm13/study.py and coef.py (outside the repo; logs study.log, coef.log). It uses the
+  swap-12 device run's seen tensors in /tmp/hy4_sm12/seen.pt. The table is in the test docstring.
+
+Decisions
+- These shared_expert bugs pass the 0.98 out gate and every swap-12 check: x 1.005, x 1.01, the clamp at 10, and rows
+  1023 / 1024 swapped. x 1.01 moves the block out by only 0.0013. The vs-CPU and x 2 checks catch all of them.
+- Added the coef check (not in the component test) so that x 1.005 is caught. Noise coefs are within 1.2e-4 of 1.
+
+Results
+- BRINGUP_IMPL=reference: PASS (shared vs CPU 0, pcc_swap_out 0.999997). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999973. Shared vs CPU: rel 0.00072, ratio [0.99915, 0.99961], worst row
+  0.0010, coef 0.99945. x 2: rel 0.00072. vs golden: rel 0.0034, worst row 0.0112. Tail 0.0064, out rel 0.00753.
+
+Gotchas
+- The device shared expert has a steady -0.06 % scale (coef 0.99945, every row ratio below 1). That is 5x inside the
+  0.003 limit. It is worth knowing if later steps tighten.
+- Out rel vs golden is 0.00753 against 0.01, and the tail is 0.0064 against 0.01. moe_combine and ffn_residual remain.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
