@@ -1092,9 +1092,7 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 namespace tt::tt_fabric {
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_variants(
-    const GroupingInfo& flattened_mesh,
-    const std::vector<GroupingInfo>& flattened_declared_hosts,
-    const std::vector<GroupingInfo>& host_seam_tilings) const {
+    const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
     // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
     // so it is dropped: there is nothing there to attribute to a host.
     auto named_slots_of = [](const GroupingInfo& grouping) {
@@ -1159,93 +1157,143 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_varia
     std::vector<GroupingInfo> variants;
     variants.push_back(std::move(rounds_variant));
 
-    // Host-boundary variants: for a mesh that fits inside one declared host, add one copy per declared host whose
-    // tray tiling straddles the mesh, split at the host's grid-column edge. The slot-repetition rounds above
-    // cannot express a cross-host mesh whose two halves sit on different trays; splitting at the host's own tray
-    // edge does, so a cross-host mesh aligns its ranks one-per-host along the physical seam.
-    //
-    // Only the flattened hosts the machine actually holds are used. Each chip already carries its tray_id, and
-    // those hosts were flattened in row-major tile order, so ordering each tray by its first chip recovers the
-    // tile grid. Cutting that grid down its column midline is the two physical halves (rev-C galaxy
-    // [t2,t4,t1,t3] over [2,2] -> {t2,t1}={1,2} | {t4,t3}={3,4}).
-    struct HostEdge {
-        std::map<uint32_t, uint32_t> tray_to_side;  // tray id -> 0/1 host half (its column in the host tile grid)
+    // Host-edge variants: split a cross-host mesh along the galaxy seam. The seam is found from each chip's
+    // physical (row,col) in the host grid, so it depends on asic position, not just tray -- two meshes on the
+    // same trays but different asic families split differently. flattened_declared_hosts supplies the geometry.
+
+    // One tray's internal [rows, cols], from the cache (a leaf grouping of ASIC_LOCATIONs sized to one tray).
+    auto find_tray_dims = [&](uint32_t asics_per_tray) -> std::pair<int, int> {
+        for (const auto& [cache_name, type_map] : resolved_groupings_cache_) {
+            for (const auto& [cache_type, infos] : type_map) {
+                for (const GroupingInfo& gi : infos) {
+                    if (gi.instance_tile_layout_dims.size() != 2 || gi.asic_count != asics_per_tray ||
+                        gi.items.empty()) {
+                        continue;
+                    }
+                    bool all_asic = true;
+                    for (const GroupingItemInfo& it : gi.items) {
+                        if (it.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                            all_asic = false;
+                            break;
+                        }
+                    }
+                    if (all_asic && gi.instance_tile_layout_dims[0] * gi.instance_tile_layout_dims[1] ==
+                                        static_cast<int32_t>(asics_per_tray)) {
+                        return {gi.instance_tile_layout_dims[0], gi.instance_tile_layout_dims[1]};
+                    }
+                }
+            }
+        }
+        return {0, 0};
+    };
+
+    struct HostGrid {
+        std::map<tt::tt_metal::ASICPosition, std::pair<int, int>> pos;  // (tray,asic) -> physical (row, col)
+        int rows = 0;
+        int cols = 0;
         uint32_t host_asics = 0;
     };
-    std::vector<HostEdge> host_edges;
-    for (const GroupingInfo& declared_host : host_seam_tilings) {
-        if (declared_host.instance_tile_layout_dims.size() != 2) {
+    std::vector<HostGrid> host_grids;
+    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+        if (declared_host.instance_tile_layout_dims.size() != 2 || declared_host.flattened_node_grid_dims.size() != 2) {
             continue;
         }
         const int tile_rows = declared_host.instance_tile_layout_dims[0];
         const int tile_cols = declared_host.instance_tile_layout_dims[1];
-        if (tile_rows < 1 || tile_cols < 2) {
+        const int flat_cols = declared_host.flattened_node_grid_dims[1];  // asics per tray (one tray per row)
+        if (tile_rows < 1 || tile_cols < 1 || flat_cols < 1) {
             continue;
         }
-        const int tile_count = tile_rows * tile_cols;
-        std::map<uint32_t, GroupingChipId> first_node_of_tray;
-        for (GroupingChipId node_id : declared_host.adjacency_graph.get_nodes()) {
-            if (node_id >= declared_host.items.size()) {
-                continue;
-            }
-            const uint32_t tray = *declared_host.items[node_id].tray_id;
-            if (tray == 0) {
-                continue;
-            }
-            const auto [it, inserted] = first_node_of_tray.try_emplace(tray, node_id);
-            if (!inserted && node_id < it->second) {
-                it->second = node_id;
-            }
-        }
-        // One tray per tile. A host that does not flatten to that (unset trays, or one tray repeated) has no
-        // column edge to cut.
-        if (static_cast<int>(first_node_of_tray.size()) != tile_count) {
+        const auto [tray_rows, tray_cols] = find_tray_dims(static_cast<uint32_t>(flat_cols));
+        if (tray_rows <= 0 || tray_cols <= 0 || tray_rows * tray_cols != flat_cols) {
             continue;
         }
-        std::vector<std::pair<GroupingChipId, uint32_t>> trays_in_tile_order;
-        trays_in_tile_order.reserve(first_node_of_tray.size());
-        for (const auto& [tray, first_node] : first_node_of_tray) {
-            trays_in_tile_order.emplace_back(first_node, tray);
+        HostGrid grid;
+        grid.host_asics = declared_host.asic_count;
+        grid.rows = tile_rows * tray_rows;
+        grid.cols = tile_cols * tray_cols;
+        std::vector<GroupingChipId> nodes = declared_host.adjacency_graph.get_nodes();
+        std::sort(nodes.begin(), nodes.end());
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const GroupingChipId nd = nodes[i];
+            if (nd >= declared_host.items.size() || *declared_host.items[nd].tray_id == 0 ||
+                *declared_host.items[nd].asic_location == 0) {
+                continue;
+            }
+            const int fr = static_cast<int>(i) / flat_cols;  // tile linear index (one tray per flatten row)
+            const int fc = static_cast<int>(i) % flat_cols;  // position within that tray
+            const int prow = (fr / tile_cols) * tray_rows + (fc / tray_cols);
+            const int pcol = (fr % tile_cols) * tray_cols + (fc % tray_cols);
+            grid.pos[tt::tt_metal::ASICPosition{
+                declared_host.items[nd].tray_id, declared_host.items[nd].asic_location}] = {prow, pcol};
         }
-        std::sort(trays_in_tile_order.begin(), trays_in_tile_order.end());
-
-        HostEdge edge;
-        edge.host_asics = declared_host.asic_count;
-        for (int tile = 0; tile < tile_count; ++tile) {
-            const uint32_t side = (tile % tile_cols) < (tile_cols / 2) ? 0u : 1u;
-            edge.tray_to_side.emplace(trays_in_tile_order[tile].second, side);
-        }
-        const bool already_recorded = std::any_of(host_edges.begin(), host_edges.end(), [&](const HostEdge& existing) {
-            return existing.host_asics == edge.host_asics && existing.tray_to_side == edge.tray_to_side;
+        const bool already = std::any_of(host_grids.begin(), host_grids.end(), [&](const HostGrid& e) {
+            return e.host_asics == grid.host_asics && e.pos == grid.pos;
         });
-        if (!already_recorded) {
-            host_edges.push_back(std::move(edge));
+        if (!already) {
+            host_grids.push_back(std::move(grid));
         }
     }
 
-    for (const HostEdge& edge : host_edges) {
-        if (flattened_mesh.asic_count == 0 || flattened_mesh.asic_count >= edge.host_asics) {
+    // Wraps the galaxy boundary in a dimension iff it hits both extremes (0 and size-1) but isn't the full
+    // range -- an edge band that wraps, not a contiguous interior band.
+    auto crosses_seam = [](const std::set<int>& occupied, int size) {
+        return size > 1 && occupied.count(0) != 0 && occupied.count(size - 1) != 0 &&
+               static_cast<int>(occupied.size()) < size;
+    };
+
+    for (const HostGrid& grid : host_grids) {
+        if (flattened_mesh.asic_count == 0 || flattened_mesh.asic_count >= grid.host_asics) {
             continue;
         }
-        GroupingInfo hb = flattened_mesh;
-        hb.mesh_node_to_pgd_host_group.clear();
-        uint32_t n0 = 0;
-        uint32_t n1 = 0;
+        std::map<uint32_t, std::pair<int, int>> node_pos;
+        std::set<int> occ_rows;
+        std::set<int> occ_cols;
         bool all_mapped = true;
-        for (uint32_t n : hb.adjacency_graph.get_nodes()) {
-            if (n >= hb.items.size()) {
+        for (uint32_t n : flattened_mesh.adjacency_graph.get_nodes()) {
+            if (n >= flattened_mesh.items.size()) {
                 continue;
             }
-            const auto side_it = edge.tray_to_side.find(*hb.items[n].tray_id);
-            if (side_it == edge.tray_to_side.end()) {
+            const auto it = grid.pos.find(
+                tt::tt_metal::ASICPosition{flattened_mesh.items[n].tray_id, flattened_mesh.items[n].asic_location});
+            if (it == grid.pos.end()) {
                 all_mapped = false;
                 break;
             }
-            hb.mesh_node_to_pgd_host_group[n] = side_it->second;
-            (side_it->second == 0 ? n0 : n1)++;
+            node_pos[n] = it->second;
+            occ_rows.insert(it->second.first);
+            occ_cols.insert(it->second.second);
         }
-        // Only emit when every chip mapped and the mesh actually straddles this host's edge (both sides used).
-        if (all_mapped && n0 != 0 && n1 != 0) {
+        if (!all_mapped) {
+            continue;
+        }
+        // col-wrap -> vertical seam, row-wrap -> horizontal, both -> 2x2. The single-host rounds variant is
+        // always kept above, so a <= one-host mesh keeps its unsplit form too.
+        const bool cross_col = crosses_seam(occ_cols, grid.cols);
+        const bool cross_row = crosses_seam(occ_rows, grid.rows);
+        if (cross_col && cross_row) {
+            GroupingInfo hb = flattened_mesh;
+            hb.mesh_node_to_pgd_host_group.clear();
+            for (const auto& [n, pc] : node_pos) {
+                hb.mesh_node_to_pgd_host_group[n] =
+                    (pc.first >= grid.rows / 2 ? 2u : 0u) + (pc.second >= grid.cols / 2 ? 1u : 0u);
+            }
+            hb.name = flattened_mesh.name + "_hostedge";
+            variants.push_back(std::move(hb));
+        } else if (cross_col) {
+            GroupingInfo hb = flattened_mesh;
+            hb.mesh_node_to_pgd_host_group.clear();
+            for (const auto& [n, pc] : node_pos) {
+                hb.mesh_node_to_pgd_host_group[n] = pc.second >= grid.cols / 2 ? 0u : 1u;
+            }
+            hb.name = flattened_mesh.name + "_hostedge";
+            variants.push_back(std::move(hb));
+        } else if (cross_row) {
+            GroupingInfo hb = flattened_mesh;
+            hb.mesh_node_to_pgd_host_group.clear();
+            for (const auto& [n, pc] : node_pos) {
+                hb.mesh_node_to_pgd_host_group[n] = pc.first >= grid.rows / 2 ? 0u : 1u;
+            }
             hb.name = flattened_mesh.name + "_hostedge";
             variants.push_back(std::move(hb));
         }

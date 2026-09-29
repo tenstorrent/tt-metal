@@ -978,6 +978,41 @@ bool configure_pgd_psd_host_alignment_constraints(
         // target group must therefore be carvable inside one PSD host. Groups are free to share a host, so a
         // host_topology finer than the physical hosts stays legal; what is rejected is a single declared rank
         // whose chips would have to come from two different hosts.
+        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
+            std::set<uint32_t> fam;
+            for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
+                fam.insert(*pos.second);
+            }
+            std::string famstr;
+            for (uint32_t a : fam) {
+                famstr += std::to_string(a) + ",";
+            }
+            std::string tg;
+            for (std::size_t r = 0; r < target_groups.size(); ++r) {
+                std::set<std::string> slots;
+                for (LogicalChipId nd : target_groups[r]) {
+                    if (nd < grouping_info.items.size()) {
+                        slots.insert(fmt::format(
+                            "t{}/a{}", *grouping_info.items[nd].tray_id, *grouping_info.items[nd].asic_location));
+                    }
+                }
+                tg += fmt::format("rank{}=[{}] ", r, fmt::join(slots, ","));
+            }
+            const bool ok = constraints.set_same_rank_groups_constraint(target_groups, global_groups);
+            log_info(
+                tt::LogFabric,
+                "DBGRANK name='{}' asics=[{}] n_global_host_groups={} constraint_ok={} :: {}",
+                grouping_info.name,
+                famstr,
+                global_groups.size(),
+                ok,
+                tg);
+            if (!ok) {
+                return false;
+            }
+            constraints.set_max_same_rank_groups_used(target_groups.size());
+            return true;
+        }
         if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
             return false;
         }
@@ -1002,7 +1037,8 @@ bool add_pgd_to_psd_constraints(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<LogicalChipId, AsicID>& constraints,
-    std::string* error_out = nullptr) {
+    std::string* error_out = nullptr,
+    bool skip_host_alignment_DBG = false) {
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
     constraints.set_quiet_mode(true);
 
@@ -1068,8 +1104,8 @@ bool add_pgd_to_psd_constraints(
         }
     }
 
-    if (!configure_pgd_psd_host_alignment_constraints(
-            grouping_info, physical_graph, physical_system_descriptor, constraints)) {
+    if (!skip_host_alignment_DBG && !configure_pgd_psd_host_alignment_constraints(
+                                        grouping_info, physical_graph, physical_system_descriptor, constraints)) {
         if (error_out != nullptr) {
             *error_out =
                 fmt::format("Failed to configure host alignment constraints for grouping '{}'", grouping_info.name);
@@ -1138,6 +1174,31 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         // This is the "host match" phase.
         const bool encoded =
             add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
+        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
+            std::set<uint32_t> asics;
+            for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
+                asics.insert(*pos.second);
+            }
+            std::map<uint32_t, uint32_t> hg;
+            for (const auto& [n, g] : grouping_info.mesh_node_to_host_group) {
+                hg[g]++;
+            }
+            std::string fam;
+            for (uint32_t a : asics) {
+                fam += std::to_string(a) + ",";
+            }
+            std::string hgs;
+            for (const auto& [g, c] : hg) {
+                hgs += fmt::format("{}:{} ", g, c);
+            }
+            log_info(
+                tt::LogFabric,
+                "DBGENC name='{}' footprint_asics=[{}] host_group_split=[{}] encoded={}",
+                grouping_info.name,
+                fam,
+                hgs,
+                encoded);
+        }
         if (!encoded) {
             state.exhausted = true;
             return {};
@@ -1166,6 +1227,24 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         MappingResult<LogicalChipId, AsicID> mapping = state.session->next();
         ++state.solves;
         if (!mapping.success) {
+            if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
+                grouping_info.name.find("SplitHost") != std::string::npos) {
+                std::set<uint32_t> asics;
+                for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
+                    asics.insert(*pos.second);
+                }
+                std::string fam;
+                for (uint32_t a : asics) {
+                    fam += std::to_string(a) + ",";
+                }
+                log_info(
+                    tt::LogFabric,
+                    "DBGEMBED name='{}' footprint_asics=[{}] solves={} FAIL err='{}'",
+                    grouping_info.name,
+                    fam,
+                    state.solves,
+                    mapping.error_message);
+            }
             state.exhausted = true;
             break;
         }
@@ -1255,56 +1334,6 @@ std::string PlacementSolveStats::to_string() const {
 }
 
 namespace {
-
-// Whether the machine has this host: some host of it must hold every chip the flattened host names. The
-// chips are read through the flattening's own nodes, since one grouping flattens to a host per place it sits
-// and each holds only its share of the chips the grouping names, and a node that says no tray or ASIC
-// location names no chip so it claims nothing.
-//
-// Containment rather than equality, so a descriptor may divide the machine more finely than the machine
-// divides itself; what this turns away is a host whose chips are spread over two machine hosts, which no
-// process could ever own. The flattening cannot answer this on its own: the only test it applies is
-// can_map_to_psd, which asks whether the machine has enough chips at each slot, and on a machine built of
-// identical hosts the tray labels repeat host to host, so a host claiming chips from two of them passes
-// that and fails this.
-// The machine's own hosts, as the placement stages partition them, read back as the slots each one holds.
-// Collected once per call: the host level is checked against this for every way each of its hosts could sit,
-// and the machine does not change while that happens.
-std::vector<std::set<tt::tt_metal::ASICPosition>> collect_machine_host_slots(
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::vector<std::set<tt::tt_metal::ASICPosition>> machine_host_slots;
-    for (const std::set<AsicID>& machine_host : collect_psd_host_groups(physical_graph, physical_system_descriptor)) {
-        std::set<tt::tt_metal::ASICPosition> slots;
-        for (const AsicID& asic_id : machine_host) {
-            const auto& descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
-            slots.emplace(descriptor.tray_id, descriptor.asic_location);
-        }
-        machine_host_slots.push_back(std::move(slots));
-    }
-    return machine_host_slots;
-}
-
-bool machine_has_this_host(
-    const GroupingInfo& flattened_host, const std::vector<std::set<tt::tt_metal::ASICPosition>>& machine_host_slots) {
-    std::set<tt::tt_metal::ASICPosition> claimed_slots;
-    for (GroupingChipId node_id : flattened_host.adjacency_graph.get_nodes()) {
-        if (node_id >= flattened_host.items.size()) {
-            continue;
-        }
-        const GroupingItemInfo& item = flattened_host.items[node_id];
-        if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION && *item.tray_id != 0 && *item.asic_location != 0) {
-            claimed_slots.emplace(item.tray_id, item.asic_location);
-        }
-    }
-    if (claimed_slots.empty()) {
-        return false;  // names no chips, so it holds none of the machine and speaks for no mesh.
-    }
-    return std::any_of(machine_host_slots.begin(), machine_host_slots.end(), [&](const auto& one_machine_host) {
-        return std::includes(
-            one_machine_host.begin(), one_machine_host.end(), claimed_slots.begin(), claimed_slots.end());
-    });
-}
 
 // MGD mesh topology as a placement variant (host split stamped, embeddable on PSD under pin variants).
 std::optional<GroupingInfo> build_mgd_mesh_placement_fallback(
@@ -1415,47 +1444,23 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor));
     }
 
-    // 1-3. The descriptor's own host level: every way each HOSTS grouping can sit, flattened against the
-    // machine the same way the meshes are, keeping the ones the machine actually has. This has to come after
-    // the flattening, since a host is usually assembled from references to other groupings and names no chips
-    // of its own until those are resolved, and one grouping flattens to a host per place it sits -- so there
-    // is nothing to hold against the machine before the flattening, and one thing per place after it.
-    //
-    // A way of sitting that the machine does not have is skipped rather than fatal: the descriptor is
-    // offering possibilities, and the answer to one the machine cannot hold is that it is not among the hosts
-    // the meshes are held against. That leaves the hosts below exactly the ones some host of the machine
-    // holds whole, which is what step 4 attributes each mesh's chips to and step 5 holds the declared ranks
-    // against. Declaring hosts stays optional: a descriptor with no HOSTS grouping claims nothing, and when
-    // none survive everything below runs as it did.
-    const std::vector<std::set<tt::tt_metal::ASICPosition>> machine_host_slots =
-        physical_system_descriptor != nullptr
-            ? collect_machine_host_slots(*psd_physical_graph, *physical_system_descriptor)
-            : std::vector<std::set<tt::tt_metal::ASICPosition>>{};
-    // Two views of the declared hosts. flattened_declared_hosts keeps only those the machine contains as one host,
-    // for rounds attribution (which machine host holds each chip). host_seam_tilings keeps every flattened tiling,
-    // machine-contained or not: the host-edge seam is a declarative geometry of the descriptor, so a mesh that
-    // crosses a host seam must still get its _hostedge variant even when the machine subdivides that host more
-    // finely than the descriptor does -- e.g. an oversubscribed mock that splits one galaxy across several ranks,
-    // where no declared host is machine-contained yet the seam still exists. Any variant so emitted is validated
-    // downstream by SAT placement, so offering the seam is safe when the machine cannot hold the whole host.
+    // Each HOSTS grouping flattened every way it can sit, kept only if it actually places on the PSD. Validity
+    // by placement (its chips exist and embed) rather than slot-containment keeps a declared host valid even in
+    // Phase 2, where the machine subdivides it into finer ranks -- its chips still physically exist, so it still
+    // places, and its seam/rounds geometry stays available.
     std::vector<GroupingInfo> flattened_declared_hosts;
-    std::vector<GroupingInfo> host_seam_tilings;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         const auto hosts_it = type_map.find("HOSTS");
         if (hosts_it == type_map.end()) {
             continue;
         }
         for (const GroupingInfo& declared_host : hosts_it->second) {
-            // A host wired in a way no mesh layout describes cannot be flattened into one, so it is left
-            // alone rather than flattened and rejected.
             if (declared_host.items.size() > 1 && declared_host.instance_tile_layout_dims.empty()) {
                 continue;
             }
             for (auto& variant : build_flattened_adjacency_mesh(declared_host, physical_system_descriptor)) {
-                const bool machine_contained =
-                    machine_host_slots.empty() || machine_has_this_host(variant, machine_host_slots);
-                host_seam_tilings.push_back(variant);
-                if (!machine_contained) {
+                if (physical_system_descriptor != nullptr &&
+                    enumerate_distinct_placements_for_grouping(variant, *physical_system_descriptor).empty()) {
                     continue;
                 }
                 flattened_declared_hosts.push_back(std::move(variant));
@@ -1488,8 +1493,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     // hosts above. Done once per variant here rather than per MGD instance below, since it says
                     // something about the variant alone. Returns the rounds-attributed variant plus any host-edge
                     // copies (cross-host meshes split at the declared host's tray edge); all are committed.
-                    for (auto& variant :
-                         build_pgd_host_group_variants(meshe, flattened_declared_hosts, host_seam_tilings)) {
+                    for (auto& variant : build_pgd_host_group_variants(meshe, flattened_declared_hosts)) {
                         mesh_flat_groupings[mesh_group_info.name].push_back(std::move(variant));
                     }
                 }
@@ -1612,6 +1616,36 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 if (n >= required_nodes) {
                     candidates_by_diff[n - required_nodes].emplace_back(name, idx);
                 }
+                if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
+                    grouping_info.name.find("SplitHost") != std::string::npos &&
+                    grouping_info.name.find("hostedge") != std::string::npos) {
+                    std::set<uint32_t> fam;
+                    std::map<uint32_t, std::set<uint32_t>> pgdhg;
+                    for (uint32_t nd : grouping_info.adjacency_graph.get_nodes()) {
+                        if (nd < grouping_info.items.size() && *grouping_info.items[nd].asic_location != 0) {
+                            fam.insert(*grouping_info.items[nd].asic_location);
+                        }
+                    }
+                    for (const auto& [nd, hgi] : grouping_info.mesh_node_to_pgd_host_group) {
+                        if (nd < grouping_info.items.size()) {
+                            pgdhg[hgi].insert(*grouping_info.items[nd].tray_id);
+                        }
+                    }
+                    std::string famstr, hgs;
+                    for (uint32_t a : fam) {
+                        famstr += std::to_string(a) + ",";
+                    }
+                    for (const auto& [hgi, tys] : pgdhg) {
+                        hgs += fmt::format("hg{}={{{}}} ", hgi, fmt::join(tys, ","));
+                    }
+                    log_info(
+                        tt::LogFabric,
+                        "DBGCENSUS var='{}' nodes={} asics=[{}] pgd_hg=[{}]",
+                        grouping_info.name,
+                        n,
+                        famstr,
+                        hgs);
+                }
             }
         }
 
@@ -1678,6 +1712,36 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         constraints,
                         ConnectionValidationMode::STRICT,
                         true);
+                    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && name.find("SplitHost") != std::string::npos) {
+                        std::set<uint32_t> asics, trays;
+                        for (uint32_t nd : grouping_info.adjacency_graph.get_nodes()) {
+                            if (nd < grouping_info.items.size() && *grouping_info.items[nd].asic_location != 0) {
+                                asics.insert(*grouping_info.items[nd].asic_location);
+                                trays.insert(*grouping_info.items[nd].tray_id);
+                            }
+                        }
+                        std::string fam;
+                        for (uint32_t a : asics) {
+                            fam += std::to_string(a) + ",";
+                        }
+                        std::map<uint32_t, std::set<uint32_t>> pgdhg;
+                        for (const auto& [nn, hgi] : grouping_info.mesh_node_to_pgd_host_group) {
+                            if (nn < grouping_info.items.size()) {
+                                pgdhg[hgi].insert(*grouping_info.items[nn].tray_id);
+                            }
+                        }
+                        std::string hgs;
+                        for (const auto& [hgi, tys] : pgdhg) {
+                            hgs += fmt::format("hg{}={{{}}} ", hgi, fmt::join(tys, ","));
+                        }
+                        log_info(
+                            tt::LogFabric,
+                            "DBGPROF var='{}' asics=[{}] pgd_hg=[{}] solve={}",
+                            grouping_info.name,
+                            fam,
+                            hgs,
+                            mapping_result.success);
+                    }
                     if (mapping_result.success) {
                         best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                     } else {
@@ -1761,6 +1825,45 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         instance_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
                     for (const auto& match : best_matches_topology) {
                         const GroupingInfo committed_candidate = make_committed_grouping(match);
+                        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
+                            match.name.find("SplitHost") != std::string::npos) {
+                            std::set<uint32_t> asics;
+                            for (const auto& [c, pos] : committed_candidate.mesh_node_to_asic_position) {
+                                asics.insert(*pos.second);
+                            }
+                            std::string fam;
+                            for (uint32_t a : asics) {
+                                fam += std::to_string(a) + ",";
+                            }
+                            // Embed with trait constraints ON (slots forced to their {tray,asic}) but
+                            // host-alignment OFF: isolates whether a slot-correct physical embedding exists vs
+                            // whether host-alignment is excluding it.
+                            MappingConstraints<LogicalChipId, tt::tt_metal::AsicID> traits_only;
+                            const bool enc_ok = add_pgd_to_psd_constraints(
+                                committed_candidate,
+                                *psd_physical_graph,
+                                *physical_system_descriptor,
+                                traits_only,
+                                nullptr,
+                                /*skip_host_alignment_DBG=*/true);
+                            bool traits_embed = false;
+                            if (enc_ok) {
+                                auto tmap = solve_topology_mapping<LogicalChipId, tt::tt_metal::AsicID>(
+                                    committed_candidate.adjacency_graph,
+                                    *psd_physical_graph,
+                                    traits_only,
+                                    gate_validation_mode,
+                                    true);
+                                traits_embed = tmap.success;
+                            }
+                            log_info(
+                                tt::LogFabric,
+                                "DBGRAW name='{}' footprint_asics=[{}] traits_only_embed(no_host_align)={} enc_ok={}",
+                                match.name,
+                                fam,
+                                traits_embed,
+                                enc_ok);
+                        }
                         MappingConstraints<LogicalChipId, tt::tt_metal::AsicID> solve_constraints;
                         const auto placements = enumerate_flat_grouping_embeddings(
                             committed_candidate,
@@ -1769,6 +1872,35 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             /*max_solutions=*/1,
                             solve_constraints,
                             gate_validation_mode);
+                        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
+                            match.name.find("SplitHost") != std::string::npos) {
+                            std::set<uint32_t> asics;
+                            for (const auto& [c, pos] : committed_candidate.mesh_node_to_asic_position) {
+                                asics.insert(*pos.second);
+                            }
+                            std::string fam;
+                            for (uint32_t a : asics) {
+                                fam += std::to_string(a) + ",";
+                            }
+                            std::map<uint32_t, std::set<uint32_t>> pgdhg;
+                            for (const auto& [n, hgi] : committed_candidate.mesh_node_to_pgd_host_group) {
+                                if (n < committed_candidate.items.size()) {
+                                    pgdhg[hgi].insert(*committed_candidate.items[n].tray_id);
+                                }
+                            }
+                            std::string hgstr;
+                            for (const auto& [hgi, trays] : pgdhg) {
+                                hgstr += fmt::format("hg{}={{{}}} ", hgi, fmt::join(trays, ","));
+                            }
+                            log_info(
+                                tt::LogFabric,
+                                "DBGGATE var='{}' asics=[{}] pgd_hg=[{}] mode={} placed={}",
+                                committed_candidate.name,
+                                fam,
+                                hgstr,
+                                gate_validation_mode == ConnectionValidationMode::RELAXED ? "RELAXED" : "STRICT",
+                                !placements.empty());
+                        }
                         if (!placements.empty()) {
                             best_matches_psd_placed.push_back(match);
                         } else {
@@ -3146,6 +3278,43 @@ void SatPlacementEnumerationSession::finish_init(
         if (!global_mesh_groupings_.contains(mesh_id)) {
             log_warning(tt::LogFabric, "SAT joint placement: mesh {} has no grouping variants; falling back", *mesh_id);
             return;
+        }
+    }
+
+    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
+        for (const auto& [mesh_id, gs] : global_mesh_groupings_) {
+            if (*mesh_id > 1) {
+                continue;
+            }
+            for (std::size_t gi = 0; gi < gs.size(); ++gi) {
+                std::set<uint32_t> fam;
+                for (const auto& [c, pos] : gs[gi].mesh_node_to_asic_position) {
+                    fam.insert(*pos.second);
+                }
+                std::string famstr;
+                for (uint32_t a : fam) {
+                    famstr += std::to_string(a) + ",";
+                }
+                // pgd_host_group seam (drives MGD->PGD solve orientation) grouped by tray.
+                std::map<uint32_t, std::set<uint32_t>> trays_by_pgd_hg;
+                for (const auto& [n, hg] : gs[gi].mesh_node_to_pgd_host_group) {
+                    if (n < gs[gi].items.size()) {
+                        trays_by_pgd_hg[hg].insert(*gs[gi].items[n].tray_id);
+                    }
+                }
+                std::string pgdhg;
+                for (const auto& [hg, trays] : trays_by_pgd_hg) {
+                    pgdhg += fmt::format("hg{}=trays{{{}}} ", hg, fmt::join(trays, ","));
+                }
+                log_info(
+                    tt::LogFabric,
+                    "DBGFP mesh={} g[{}]='{}' asics=[{}] pgd_host_group_by_tray:: {}",
+                    *mesh_id,
+                    gi,
+                    gs[gi].name,
+                    famstr,
+                    pgdhg);
+            }
         }
     }
 

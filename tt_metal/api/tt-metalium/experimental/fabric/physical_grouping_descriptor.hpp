@@ -302,6 +302,12 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Host-group variants of one flattened mesh: the rounds-attributed variant plus an "_hostedge" split for each
+    // galaxy seam the mesh's physical footprint wraps. flattened_declared_hosts supplies both the rounds and seam
+    // geometry (the caller keeps only hosts that place on the PSD). Public for unit tests.
+    std::vector<GroupingInfo> build_pgd_host_group_variants(
+        const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
+
     // Greedy minimum coverage over disjoint global groups (e.g. one set per host). Returns whether some single group
     // has enough capacity for all targets, and the union of the largest groups until target count is covered.
     template <typename TargetNode, typename GlobalNode>
@@ -346,22 +352,6 @@ private:
 
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
-
-    // Builds the host-group variants of one flattened mesh: always the mesh with its host groups attributed by
-    // slot-repetition rounds (mesh_node_to_pgd_host_group), plus, for a mesh that fits inside one declared host,
-    // one "_hostedge" copy per declared host whose tray tiling straddles it, split at the host's tray edge so a
-    // cross-host mesh aligns its ranks one-per-host along the physical seam. The caller commits all returned.
-    //
-    // flattened_declared_hosts is the machine-contained host set used for rounds attribution (which machine host
-    // holds each chip). host_seam_tilings is the full set of declared-host tray tilings used only to derive the
-    // host-edge SEAM, which is a declarative geometry of the descriptor: it must be available even when the machine
-    // subdivides a declared host more finely than the descriptor does (e.g. an oversubscribed mock that splits one
-    // galaxy across several ranks), where no declared host is machine-contained yet the seam still exists and any
-    // emitted variant is validated downstream by SAT placement. Callers with no such subdivision pass the same list.
-    std::vector<GroupingInfo> build_pgd_host_group_variants(
-        const GroupingInfo& flattened_mesh,
-        const std::vector<GroupingInfo>& flattened_declared_hosts,
-        const std::vector<GroupingInfo>& host_seam_tilings) const;
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;
