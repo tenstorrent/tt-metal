@@ -53,7 +53,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
             q_width);
         const uint32_t tied_sections = num_q_heads + num_kv_heads_val;
         TT_FATAL(fused_width % tied_sections == 0, "Unsupported input shape");
-        const uint32_t untied_sections = num_q_heads + 2 * num_kv_heads_val;
+        // Only bounded above via q + kv, so the untied count can exceed uint32_t; keep it 64-bit.
+        const uint64_t untied_sections = uint64_t{num_q_heads} + 2 * uint64_t{num_kv_heads_val};
         TT_FATAL(
             fused_width % untied_sections != 0,
             "Ambiguous kv_tied fused input shape: width {} is divisible by both {} (tied) and {} (untied) sections",
