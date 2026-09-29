@@ -34,7 +34,8 @@ import ttnn
 
 from . import gdn_post_rows, gdn_pre_rows
 from . import program as fp
-from .gdn_rows_reference import A_COLUMN, HEAD_DIM, HEADS, PROJECTION_WIDTH, QK_SCALE, QKV_WIDTH, TILE, VALUE_WIDTH
+from .gdn_public_adapter import chunk_public
+from .gdn_rows_reference import A_COLUMN, HEAD_DIM, HEADS, PROJECTION_WIDTH, QKV_WIDTH, TILE, VALUE_WIDTH
 from .registry import BITWISE, FusedKernel, register
 
 NAME = "gdn_prefill_rows"
@@ -121,72 +122,14 @@ def constants(gdn) -> RowsConstants:
 
 
 def chunk_prims(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, *, rows_total: int):
-    """``ttnn.transformer.chunk_gated_delta_rule``'s own two device operations on the pre program's pages.
+    """Run the public recurrence from the fused producer's normalized, scaled chunk pages.
 
-    Argument for argument what ``chunk_gated_delta_rule.cpp`` (the composite ``_chunk_rows`` calls) hands the prims
-    for the rows path's shapes -- B = 1, T = ``rows_total``, HV = H = 12 value heads (the chain GQA-expands q/k
-    before the kernel, so ``H == HV`` and ``G == 1``), K = V = 128, C = 32, v in the flat token-major form:
-
-    ====================  ====================================================================================
-    prim argument         what the composite passes, and what this call passes
-    ====================  ====================================================================================
-    ``q`` / ``k``         ``to_chunks_tile(head_split_tile(...))`` = ``[BH, NC, C, K]``; here the pre program's
-                          ``q_c`` / ``k_c`` pages, written in that layout (the composite's ``q * scale`` is the
-                          second of the two scales the pre program already applied to q)
-    ``v``                 the flat token-major ``[B, T, HV * V]`` (``flat_v``); here the rank-3 view of ``v``
-    ``g`` / ``beta``      ``[BH, NC, C, 1]`` fp32 columns; here ``g_c`` / ``beta_c``
-    ``eye``/``tril``/     the caller-supplied constant tiles (the rows constants')
-    ``ones``/``masks``
-    ``chunk_size``        the caller's ``chunk_size`` = 32
-    ``scale``             ``scale_opt.value_or(K ** -0.5)`` = ``128 ** -0.5``.  The prep uses it ONLY under
-                          ``qk_norm`` (``compute/chunk_gdn_prep.cpp``: ``SCALE_BITS`` is read inside
-                          ``if constexpr (QK_NORM)``), so with ``qk_norm=False`` it multiplies nothing; it is
-                          passed anyway because it is a compile-time argument of the prep kernel and the
-                          composite's value keeps the program identical to the composite's
-    ``v_flat`` / ``HV``   True / 12 (the composite sets ``flat_v`` when v arrives rank-3)
-    ``qk_flat`` / ``Hk``  False / 12 (the composite passes ``H``; unused off the flat path)
-    ``qk_norm``           False: q/k are normalized and scaled already, as the chain does it
-    ``memory_config`` /   left unset, which is the composite's own DRAM output and its HiFi4 / no-approx /
-    ``compute_kernel_     fp32-accumulate / no-L1-accumulate kernel config
-    config``
-    ====================  ====================================================================================
-
-    ``initial_state`` ``[1, 12, 128, 128]`` fp32 is reshaped to the prims' ``[BH, K, V]`` exactly as the composite
-    reshapes it, and the scan's outputs are folded back the composite's way (both metadata-only: T is a multiple of
-    C, and the last two dims never move).  Returns ``(o [12, T, 128] fp32, final_state [1, 12, 128, 128] fp32)``;
-    the prep's seven hand-off tensors are freed here.
+    The adapter restores token-major rank-four q/k and rank-three gates, preserving
+    chunk order and all producer bytes. The query already includes both source scale
+    folds, so the public operation receives scale=1. Persistent constants and state
+    remain caller-owned; outputs keep the head-major FP32 recurrence contract.
     """
-
-    eye, tril, ones, masks = chunk_tiles
-    prep = ttnn.prim.chunk_gdn_prep(
-        q_c,
-        k_c,
-        ttnn.reshape(v, (1, rows_total, VALUE_WIDTH)),
-        g_c,
-        beta_c,
-        eye=eye,
-        tril=tril,
-        ones=ones,
-        masks=masks,
-        chunk_size=CHUNK,
-        scale=QK_SCALE,
-        v_flat=True,
-        HV=HEADS,
-        qk_flat=False,
-        Hk=HEADS,
-        qk_norm=False,
-    )
-    scan = ttnn.prim.chunk_gdn_scan(
-        *prep,
-        ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM)),
-        chunk_size=CHUNK,
-        output_final_state=True,
-    )
-    for tensor in prep:
-        ttnn.deallocate(tensor)
-    o = ttnn.reshape(scan[0], (HEADS, rows_total, HEAD_DIM))
-    final_state = ttnn.reshape(scan[1], (1, HEADS, HEAD_DIM, HEAD_DIM))
-    return o, final_state
+    return chunk_public(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, rows_total=rows_total)
 
 
 # -------------------------------------------------------------------------------------------- the slab body
