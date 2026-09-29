@@ -914,7 +914,8 @@ jobs:
                           "galaxy-fabric-multi-mesh-2x8-2x4s",
                           "bh-galaxy-fabric-torus-stability",
                           "bh-galaxy-socket-pipeline",
-                          "bh-galaxy-tensor-prefetcher"
+                          "bh-galaxy-tensor-prefetcher",
+                          "bh-galaxy-complete-host-tensor-dual-rank"
                         ],
                         "type": "string"
                       },
