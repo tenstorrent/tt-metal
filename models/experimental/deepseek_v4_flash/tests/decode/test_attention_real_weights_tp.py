@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_attention_real_weights import (
     DECODE_PCC_THRESHOLD,
     _DEFAULT_MODEL_DIR,
     _DECODE_STEPS,
@@ -27,7 +27,7 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
     _reference_path,
     _weight_cache,
 )
-from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
+from models.experimental.deepseek_v4_flash.tests.decode.decode_kv_utils import DecodeLayerKV
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     DeepSeekV4Attention,
     int32_pos_tensor,

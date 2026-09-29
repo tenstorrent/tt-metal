@@ -22,7 +22,7 @@ from loguru import logger
 import tracy
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tests.test_moe_pcc import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_moe_pcc import (
     WEIGHT_DTYPE_PCC,
     _generate_reference,
 )

@@ -27,7 +27,7 @@ consume the identical tables.
 
 Run (ttnn venv)::
 
-    pytest -s models/experimental/deepseek_v4_flash/tests/test_attention_batching.py
+    pytest -s models/experimental/deepseek_v4_flash/tests/decode/test_attention_batching.py
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
+from models.experimental.deepseek_v4_flash.tests.decode.decode_kv_utils import DecodeLayerKV
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     DeepSeekV4Attention,
     int32_pos_tensor,
@@ -51,7 +51,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
-from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_attention_real_weights import (
     _DEFAULT_MODEL_DIR,
     _WEIGHT_DTYPE,
     _build_attn_weights,
