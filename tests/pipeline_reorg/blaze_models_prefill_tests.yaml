@@ -1442,10 +1442,8 @@
 
 # ===== GPT-OSS-120B ==================================================================================
 
-# GPT-OSS-120B prefill suite: three former jobs folded into one so the ~8 min per-job fixed cost
-# (multihost setup, container init, checkout, post steps) is paid once instead of three times.
-# The sections run serially on one allocation; each is time-bounded and runs regardless of the
-# others, and the job fails if any section fails.
+# GPT-OSS-120B prefill suite: sections run serially on one allocation; each is time-bounded and
+# runs regardless of the others, and the job fails if any section fails.
 #
 # [1/3] chunked prefill KV accuracy longbook 5k@2.5k and [2/3] 5k@1k: full-model real-weights
 # chunked prefill + per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py,
@@ -1471,12 +1469,10 @@
 # needs the certified TorusXY wraparound links the impl workflow provides.
 #
 # Per-section bounds (timeout -k 2m, a timeout counts as FAIL and the next section still runs):
-#   [1/3] 35 min: ~12 min measured warm (cache load + JIT + prefill + PCC readback); headroom for
-#         cold kernel JIT and the ~180 GB tilized-cache read over NFS. Cold cache BUILD exceeds it.
+#   [1/3] 35 min: cache load + JIT + prefill + PCC readback, with headroom for cold kernel JIT and
+#         the ~180 GB tilized-cache read over NFS. A cold cache BUILD exceeds it.
 #   [2/3] 35 min: same profile as [1/3] (5 ring chunks instead of 2; compile/IO dominate).
 #   [3/3] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
-# The former test_type tokens are kept as test_tags so existing test-type selections still pick
-# this job.
 - name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
@@ -1560,7 +1556,7 @@
     if [ "$suite_rc" -eq 0 ]; then echo "suite: PASS"; else echo "suite: FAIL"; fi
     exit "$suite_rc"
   test_type: gpt_oss_prefill_suite
-  # Former per-job test_type tokens, so `-f test-type=<old token>` still selects this job.
+  # Per-section tokens: `-f test-type=<token>` selects this job.
   test_tags: [gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
   test_group: module
   skus:
