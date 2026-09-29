@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import csv
 import gc
 import logging
 import os
@@ -17,12 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Make ``utils.*`` importable when the file is run directly (needed before
-# any ``from utils.* import ...`` at module scope).
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
-if _EXAMPLE_ROOT not in sys.path:
-    sys.path.insert(0, _EXAMPLE_ROOT)
+# Make ``grpo_remote_rollout.*`` importable when the file is run directly (needed
+# before any ``from grpo_remote_rollout.* import ...`` at module scope).
+_EXAMPLES_ROOT = str(Path(__file__).resolve().parents[2])
+if _EXAMPLES_ROOT not in sys.path:
+    sys.path.insert(0, _EXAMPLES_ROOT)
 
 import ttml
 import ttnn
@@ -31,11 +29,11 @@ from loguru import logger
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
-from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
-from utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
-from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
-from utils.ttt_generation_worker import TttGenerationWorker
-from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
+from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
+from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 
@@ -47,14 +45,14 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
 
-def boolq_reward(completions, answer, **kwargs):
-    rewards = []
-    for text, ground_truth in zip(completions, answer):
-        clean = text.strip().lower()
-        accuracy = 2.0 if clean.startswith(ground_truth.lower()) else -1.0
-        brevity = -0.1 * (len(text) / 20) ** 2
-        rewards.append(accuracy + brevity)
-    return rewards
+def accuracy_reward(completions, answer, **kwargs):
+    """+2 if the completion begins with the correct Yes/No token, -1 otherwise."""
+    return [2.0 if text.strip().lower().startswith(gt.lower()) else -1.0 for text, gt in zip(completions, answer)]
+
+
+def brevity_reward(completions, **kwargs):
+    """Quadratic length penalty in characters, discouraging runaway completions."""
+    return [-0.1 * (len(text) / 20) ** 2 for text in completions]
 
 
 def get_output_dir() -> str:
@@ -90,49 +88,6 @@ class WeightSyncCallback:
 
     def on_train_end(self, trainer: Any) -> None:
         pass
-
-
-class GRPOMonitor:
-    """on_step_end CSV/stdout monitor."""
-
-    def __init__(self, output_dir: str) -> None:
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                ["step", "reward", "avg_length", "step_time_s", "step_time_with_weight_updates_s", "generation_time_s"]
-            )
-
-    def on_train_begin(self, trainer: Any) -> None:
-        pass
-
-    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        min_length = kwargs["min_completion_len"]
-        max_length = kwargs["max_completion_len"]
-        step_time_s = kwargs.get("step_time_s", float("nan"))
-        step_time_and_previous_callbacks_s = kwargs.get("step_time_and_previous_callbacks_s", float("nan"))
-        generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(
-            f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
-            f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
-            f"| Step: {step_time_s:.2f}s (with updates: {step_time_and_previous_callbacks_s:.2f}s) | Gen: {generation_time_s:.2f}s"
-        )
-        with open(self.file_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([step, reward, length, step_time_s, step_time_and_previous_callbacks_s, generation_time_s])
-
-    def on_before_optimizer_step(self, trainer: Any) -> None:
-        pass
-
-    def on_save(self, trainer: Any, step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: Any) -> None:
-        print("Training complete.")
 
 
 def _load_device_config():
@@ -211,11 +166,10 @@ def _ttml_main() -> None:
             completer=completer,
             dataset=dataset,
             config=grpo_config,
-            reward_func=boolq_reward,
+            reward_funcs=[accuracy_reward, brevity_reward],
             optimizer_dict=optimizer_dict,
             callbacks=[
                 WeightSyncCallback(completer, every=weight_sync_every),
-                GRPOMonitor(output_dir),
             ],
             model_source=model_id,
         )

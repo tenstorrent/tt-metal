@@ -9,33 +9,8 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
-
-// Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
-// The user will never directly interact with this type.
-//
-// The user's host code declares an accessor_name when binding a scratchpad to a kernel.
-// The user then uses that accessor_name to construct a Scratchpad in the kernel code.
-//
-// Usage example:
-//   // (Host code declares "my_scratchpad_name" as the scratchpad accessor name for this kernel.)
-//   // In the kernel code:
-//   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
-//
-// Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
-// kernel_bindings_generated.h.
-class ScratchpadBindingToken {
-public:
-    explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
-        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
-
-private:
-    template <typename T>
-    friend class Scratchpad;
-
-    uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
-    uint32_t size_in_bytes_;  // static per-node size
-};
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
@@ -130,13 +105,23 @@ public:
     [[nodiscard]] iterator end() const noexcept { return sentinel_addr_; }
 
     /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-     * (pointer arithmetic, scoped_lock, comparisons, ...).
+     * (pointer arithmetic, comparisons, ...).
      *
-     * For element access, prefer operator[] (bounds-checked); reach for this only when you need the
-     * raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
+     * For element access, prefer operator[] (bounds-checked) within a scoped_lock() scope. Reach
+     * for this only when you need the raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized (matches begin()/end()).
     [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
+
+    /** @brief Lock num_elements elements starting at element `offset`.
+     *
+     * @param offset       Index of the first element to lock.
+     * @param num_elements Number of T elements to lock.
+     */
+    [[nodiscard]] auto scoped_lock(uint32_t offset, uint32_t num_elements) const {
+        ASSERT(start_addr_ + offset + num_elements <= sentinel_addr_);
+        return (start_addr_ + offset).scoped_lock(num_elements);
+    }
 
 private:
     // Create a Scratchpad from an SRAM (L1) base address and size in bytes.
@@ -205,4 +190,9 @@ struct noc_traits_t<Scratchpad<T>> {
         static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
     }
 };
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<Scratchpad<T>> = true;
+template <typename T>
+inline constexpr bool is_scratchpad_v<Scratchpad<T>> = true;
 #endif  // !defined(COMPILE_FOR_TRISC)

@@ -218,7 +218,7 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
 def _prepare_int_stimuli(
@@ -251,6 +251,7 @@ _INT_OPS = [
     ("LT", MathOperation.SfpuLtInt, None),
     ("LE", MathOperation.SfpuLeInt, None),
     ("GE", MathOperation.SfpuGeInt, None),
+    ("COPY_DEST", MathOperation.SfpuCopyDest, None),
 ]
 
 
@@ -275,7 +276,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
     _run_sfpu_binary_llk_golden(
         formats,
@@ -295,7 +296,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div, atan2). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -337,7 +338,7 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwadd / SfpuElwsub / SfpuElwmul — symmetric ±250 range.
+    # SfpuElwadd / SfpuElwsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
@@ -380,6 +381,8 @@ _FLOAT_OPS = [
     ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
+    # COPY_DEST ignores APPROXIMATION_MODE (stateless copy); only one entry needed.
+    ("COPY_DEST", MathOperation.SfpuCopyDest, ApproximationMode.No),
 ]
 
 
@@ -407,7 +410,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div, atan2)."""
+    """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
     format_variant = formats_dest_acc
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc

@@ -27,6 +27,18 @@
 
 // clang-format on
 
+// The pack TRISC's firmware is the tightest of the four: it carries the dataflow-buffer init that the
+// other threads do not, and sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
+// is turned on. The watcher and DPRINT each cost it roughly 1.3-3 KB of .text, so either one alone
+// fits but the two together do not -- measured on main: watcher-only 4776 B, DPRINT-only 3180 B,
+// both 6140 B against the 5120 B limit. Enabling both produces a link-time region overflow at device
+// open ("segment[0] ... overflows region:0 limit of 0x1400 bytes"), which is far harder to read than
+// this message. Turn off one of the two: unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES.
+#if defined(UCK_CHLKC_PACK) && defined(WATCHER_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#error \
+    "Quasar pack TRISC (trisc2) firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
+#endif
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 thread_local std::uint32_t wIndex __attribute__((used));
@@ -55,6 +67,7 @@ std::uint8_t my_relative_y_ __attribute__((used));
 #if defined(UCK_CHLKC_PACK)
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
 #else
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif
@@ -63,6 +76,21 @@ thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((use
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
 // returns immediately for any DFB math TRISC is not a participant in (expected_signal == 0).
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
+
+#ifdef ENABLE_LLK_ASSERT
+namespace llk_tdma_guard {
+// TEN-4746 tile-counter guard mask (Quasar). thread_local so each TRISC gets its own mask in the
+// host-threaded emulation (tt-llk#1678); declared extern thread_local in llk_tdma_guard.h.
+thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
+}  // namespace llk_tdma_guard
+
+namespace llk_reinit_guard {
+// #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
+// llk_reinit_guard.h.
+thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
+    __attribute__((used)) = {};
+}  // namespace llk_reinit_guard
+#endif
 
 namespace ckernel {
 

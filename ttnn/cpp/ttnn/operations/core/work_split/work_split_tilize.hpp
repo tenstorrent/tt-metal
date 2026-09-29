@@ -8,8 +8,14 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
+#include <cmath>
+#include <optional>
+#include <set>
+
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 
@@ -104,10 +110,19 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
     return NcoresWH{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size};
 }
 
-inline NcoresWHsb compute_ncores_wh_sb(
-    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
-    // check single_block_size_limit is valid
-    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
+// Non-throwing: returns nullopt when no sub-block assignment satisfies the L1-derived
+// single_block_size_limit (or the limit is invalid). The throwing wrapper below is the
+// factory entry point; hash-time callers must use this so a tight-L1 miss does not
+// TT_FATAL / backtrace on every dispatch.
+inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
+    size_t grid_area,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    uint32_t single_block_size_limit) noexcept {
+    if (single_block_size_limit < 1) {
+        return std::nullopt;
+    }
     // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
     // Calculate ncores using single_block_size_limit.
@@ -129,7 +144,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
     // Conditions: (1) single_sub_block_size < single_block_size_limit
     //             (2) Maximize total_blocks_sb (computed by single_block_size)
     //             (3) Minimize n (prefer smaller n for tie-breaker)
-    //             (4) blocks_row_cliff < single_sub_block_size_limit
+    //             (4) cliff_nblocks_row < single_block_size_limit
     uint32_t single_block_size = 0;
     uint32_t opt_n = 0;
     uint32_t single_sub_block_size = 0;
@@ -155,9 +170,8 @@ inline NcoresWHsb compute_ncores_wh_sb(
         }
     }
 
-    // If no solution found, use single_block_size_limit
     if (opt_n == 0) {
-        TT_FATAL(false, "No solution found for single_block_size");
+        return std::nullopt;
     }
 
     total_blocks_width = tt::div_up(width_tiles, single_block_size);
@@ -166,6 +180,14 @@ inline NcoresWHsb compute_ncores_wh_sb(
     ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     return NcoresWHsb{
         ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size, single_sub_block_size};
+}
+
+inline NcoresWHsb compute_ncores_wh_sb(
+    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
+    auto result = try_compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit);
+    TT_FATAL(result.has_value(), "No solution found for single_block_size");
+    return *result;
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(

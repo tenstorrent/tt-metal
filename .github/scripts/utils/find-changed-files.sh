@@ -32,6 +32,7 @@ LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
 
 
@@ -47,6 +48,38 @@ while IFS= read -r FILE; do
             CMAKE_CHANGED=true
             LLK_SFPI_CHANGED=true
             ANY_CODE_CHANGED=true
+            ;;
+        tt_metal/ttsim-version)
+            # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
+            # incompatible simulator build breaks the ttsim pipelines and nothing else, so
+            # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            TTSIM_CI_CHANGED=true
+            ;;
+        tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
+            # ttsim test matrices and the skip list. These are maintained independently of
+            # the code they run, so a PR that only tunes them must still validate itself.
+            TTSIM_CI_CHANGED=true
+            ;;
+        # The ttsim actions and the ttsim-*-impl.yaml workflows that drive them, including
+        # ttsim-merge-gate-tests-impl.yaml, which owns the merge-gate matrix.
+        # WORKFLOWS_CHANGED is raised too because this pattern matches before the
+        # .github/workflows/*.yaml catch-all below: without it a ttsim-*.yaml-only PR
+        # would lose the standard full-gate fanout that catch-all exists to guarantee.
+        .github/actions/fetch-ttsim/**|.github/actions/setup-ttsim/**|.github/workflows/ttsim-*.yaml)
+            TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
+            ;;
+        # The gate that schedules the ttsim legs, and the budget they are checked
+        # against. A PR that rewires either must exercise the legs it just changed
+        # rather than skipping them and discovering a broken filter on main.
+        # WORKFLOWS_CHANGED is raised too so this keeps the standard full-gate fanout
+        # it gets from the .github/workflows/*.yaml catch-all below.
+        .github/workflows/merge-gate.yaml)
+            TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
+            ;;
+        .github/time_budget.yaml)
+            TTSIM_CI_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
@@ -321,6 +354,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )
 
 for var in "${!changes[@]}"; do

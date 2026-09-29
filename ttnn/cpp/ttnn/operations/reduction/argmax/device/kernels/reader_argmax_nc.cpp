@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr auto input_tensor_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(input_tensor_args, input_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb(dfb_in0);
     const uint32_t tile_bytes = dfb.get_tile_size();
 
