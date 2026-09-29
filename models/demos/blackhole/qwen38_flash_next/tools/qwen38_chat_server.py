@@ -2226,6 +2226,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--acceptance-prompts", type=Path, default=None, help="the CPU study's prompt-*-greedy.json")
     parser.add_argument("--require-json-96", action="store_true", help="refuse to serve unless json matches 96/96")
     parser.add_argument(
+        "--acceptance-only",
+        action="store_true",
+        help="replay the acceptance records, write evidence and close the mesh",
+    )
+    parser.add_argument(
         "--agreement-reference",
         type=Path,
         default=None,
@@ -2397,6 +2402,8 @@ def stall_budget_argument(text: str) -> float | None:
 
 def main() -> int:
     args = _parser().parse_args()
+    if args.acceptance_only and args.acceptance_prompts is None:
+        raise SystemExit("--acceptance-only needs --acceptance-prompts")
     if args.prefill_slab is not None and not is_slab_rows(args.prefill_slab):
         raise SystemExit(f"--prefill-slab takes a multiple of 128 in 256..4096, got {args.prefill_slab}")
     if args.prefill_slab is not None:
@@ -2659,7 +2666,7 @@ def main() -> int:
             queue_limit=args.queue_limit,
             stall_budget_seconds=args.lanes_stall_budget,
         )
-    if not (args.prepare_only or args.sampling_discriminator):
+    if not (args.prepare_only or args.sampling_discriminator or args.acceptance_only):
         # The port is claimed before the minutes of mesh open, captures and replay: a taken port fails here.
         try:
             server = Qwen38ChatHTTPServer(
@@ -2979,6 +2986,8 @@ def main() -> int:
                 "sampling_discriminator",
                 **{key: value for key, value in result.items() if key not in ("rows", "greedy", "sampled")},
             )
+            report["status"] = "stopped"
+        elif args.acceptance_only:
             report["status"] = "stopped"
         else:
             server.session = session

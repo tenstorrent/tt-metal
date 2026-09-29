@@ -26,6 +26,7 @@
 #   --acceptance            replay the shipped CPU greedy records (tools/acceptance/greedy-prompts) at startup
 #   --acceptance-prompts D  replay the records in D instead
 #   --require-json-96       refuse to serve unless the json record matches the CPU 96/96
+#   --acceptance-only       replay acceptance, write evidence and stop (requires --acceptance or --acceptance-prompts)
 #   --prepare-only          build the BF4 expert cache (convert the missing layers) and stop; --bf4-stage-limit N
 #                           converts at most N layers per run (resumable)
 #   --bf4-corpus DIR --bf4-corpus-verification FILE
@@ -57,7 +58,7 @@ usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
-acceptance= acceptance_prompts= require_json_96= prepare_only= bf4_stage_limit= bf4_corpus= bf4_corpus_verification=
+acceptance= acceptance_prompts= require_json_96= acceptance_only= prepare_only= bf4_stage_limit= bf4_corpus= bf4_corpus_verification=
 serve_seconds= python= validate_only= prefill_mode=chunked sampling=1 stall_seconds=300
 agreement_reference= agreement_parts= agreement_full_logits=
 while [[ $# -gt 0 ]]; do
@@ -78,6 +79,7 @@ while [[ $# -gt 0 ]]; do
         --acceptance) acceptance=1; shift ;;
         --acceptance-prompts) acceptance_prompts=${2-}; shift 2 ;;
         --require-json-96) require_json_96=1; shift ;;
+        --acceptance-only) acceptance_only=1; shift ;;
         --prepare-only) prepare_only=1; shift ;;
         --bf4-stage-limit) bf4_stage_limit=${2-}; shift 2 ;;
         --bf4-corpus) bf4_corpus=${2-}; shift 2 ;;
@@ -183,6 +185,7 @@ fi
 [[ "$stall_seconds" == 0 ]] || args+=(--stall-seconds "$stall_seconds")
 [[ -z "$acceptance" ]] || args+=(--acceptance-prompts "$HERE/acceptance/greedy-prompts")
 [[ -z "$acceptance_prompts" ]] || args+=(--acceptance-prompts "$acceptance_prompts")
+[[ -z "$acceptance_only" ]] || args+=(--acceptance-only)
 [[ -z "$require_json_96" ]] || args+=(--require-json-96)
 [[ -z "$prepare_only" ]] || args+=(--prepare-only)
 [[ -z "$bf4_stage_limit" ]] || args+=(--bf4-stage-limit "$bf4_stage_limit")
