@@ -96,7 +96,9 @@ constexpr uint32_t DISPATCH_HEADROOM_SIZE =
     PROFILER_L1_MARKER_UINT32_SIZE * (DISPATCH_PARENT_ZONE_MARKER_COUNT + QUICK_PUSH_MARKER_COUNT) +
     DISPATCH_META_DATA_UINT32_SIZE * DISPATCH_META_DATA_COUNT;
 
-constexpr int WALL_CLOCK_HIGH_INDEX = 1;
+// RISCV_DEBUG_REG_WALL_CLOCK_L (0x1F0) and RISCV_DEBUG_REG_WALL_CLOCK_H (0x1F8) are 8 bytes apart, so the uint32_t
+// stride is 2. Reading the low word latches the high half into WALL_CLOCK_H; always read low first, then high.
+constexpr int WALL_CLOCK_HIGH_INDEX = 2;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
 volatile tt_l1_ptr uint32_t* profiler_control_buffer =
@@ -242,10 +244,12 @@ inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t i
     profiler_data_buffer[myRiscID].data[index + 1] = time_low;
 #else
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t time_low = p_reg[WALL_CLOCK_LOW_INDEX];
+    uint32_t time_high = p_reg[WALL_CLOCK_HIGH_INDEX];
     profiler_data_buffer[myRiscID].data[index] =
         PROFILER_MARKER_VALID | ((timer_id & PROFILER_MARKER_TIMER_ID_MASK) << PROFILER_MARKER_TIMER_ID_SHIFT) |
-        (p_reg[WALL_CLOCK_HIGH_INDEX] & PROFILER_MARKER_TS_HIGH_MASK);
-    profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
+        (time_high & PROFILER_MARKER_TS_HIGH_MASK);
+    profiler_data_buffer[myRiscID].data[index + 1] = time_low;
 #endif
 }
 
@@ -405,8 +409,8 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
             // (slots 3/4) there.
             volatile tt_reg_ptr uint32_t* push_clk =
                 reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-            uint32_t push_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t push_start_l = push_clk[WALL_CLOCK_LOW_INDEX];
+            uint32_t push_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
 
             NocRegisterStateSave noc_state;
             for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
@@ -470,11 +474,11 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
                 profiler_control_buffer[deviceIndex] = 0;
             }
 
-            uint32_t flush_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t flush_start_l = push_clk[WALL_CLOCK_LOW_INDEX];
+            uint32_t flush_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             profiler_noc_async_flush_posted_write();
-            uint32_t flush_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t flush_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
+            uint32_t flush_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             // Host pairs guaranteed markers by timestamp, so inner NOC-FLUSH end must be strictly before outer
             // DRAM-PUSH end: emit flush first, sample push_end after.
             {
@@ -484,8 +488,8 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
                 mark_time_at_index_with_stamp(
                     GUARANTEED_MARKER_4_H, get_const_id(hash, ZONE_END), flush_end_h, flush_end_l);
             }
-            uint32_t push_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t push_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
+            uint32_t push_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             {
                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
                 mark_time_at_index_with_stamp(
@@ -884,7 +888,9 @@ struct profileScopeAccumulate {
 #else
         volatile tt_reg_ptr uint32_t* p_reg =
             reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-        return ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        uint32_t time_low = p_reg[WALL_CLOCK_LOW_INDEX];
+        uint32_t time_high = p_reg[WALL_CLOCK_HIGH_INDEX];
+        return ((uint64_t)time_high << 32) | time_low;
 #endif
     }
 
