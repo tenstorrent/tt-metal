@@ -51,6 +51,7 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 
 @dataclass(frozen=True)
 class _ProjectedInputs:
+    # The fused projection; its leading Q+K+V columns are the convolution channels.
     qkv: ttnn.Tensor
     decay_rank: ttnn.Tensor
     output_gate: ttnn.Tensor
@@ -281,16 +282,29 @@ class ttKDA:
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         config = self.config
         if not self._is_sequence_parallel:
-            batch, rows, width = qkv.shape
+            batch, rows, _ = qkv.shape
+            width = self._convolution_width
             new_state = (
-                selections.select_local_final_history(qkv)
+                selections.select_local_final_history(qkv, width=width)
                 if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+                else ttnn.to_layout(
+                    ttnn.slice(
+                        qkv,
+                        (0, rows - (config.conv_kernel_size - 1), 0),
+                        (batch, rows, width),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
-                qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
+                qkv,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+                selections=selections,
+                width=self._convolution_width,
             )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
@@ -331,7 +345,8 @@ class ttKDA:
             )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # The convolution reads its channels in place from the tiled projection.
+            qkv=projected,
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
             # The gated norm reads its gate columns straight from the fused projection, which therefore
             # stays allocated until the norm instead of only its gate slice.
@@ -497,11 +512,10 @@ class ttKDA:
         if selections is None:
             selections = self.selections(actual_start, actual_end)
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, convolution_state, selections, actual_start)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,

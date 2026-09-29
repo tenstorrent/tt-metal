@@ -16,23 +16,31 @@ namespace ttnn::experimental::prim {
 inline constexpr uint32_t qkv_causal_conv1d_silu_tap_count = 4;
 
 // Per-core DFB depths in channel blocks. Row-major activation, partial and output are double-buffered; partial
-// must hold the previous tap's block, still being read, while compute writes the next tap's block.
+// must hold the previous tap's block, still being read, while compute writes the next tap's block. A tiled input
+// has no row-major activation DFB: the reader produces the tiled tap views directly, double-buffered.
 inline constexpr uint32_t qkv_causal_conv1d_silu_act_rm_blocks = 2;
 inline constexpr uint32_t qkv_causal_conv1d_silu_act_tile_blocks = 1;
+inline constexpr uint32_t qkv_causal_conv1d_silu_tiled_act_tile_blocks = 2;
 inline constexpr uint32_t qkv_causal_conv1d_silu_partial_blocks = 2;
 inline constexpr uint32_t qkv_causal_conv1d_silu_output_blocks = 2;
 
-// The reader stages one channel block's tile rows plus the three history rows in a private window.
-inline uint64_t qkv_causal_conv1d_silu_window_bytes(uint64_t block_ct, uint64_t element_bytes) {
-    return (tt::constants::TILE_HEIGHT + qkv_causal_conv1d_silu_tap_count - 1) * block_ct * tt::constants::TILE_WIDTH *
-           element_bytes;
+// The reader stages each work item in a private window plus the three history rows. Row-major: one channel
+// block's tile rows. Tiled: the block's tile row and the tile row before it.
+inline uint64_t qkv_causal_conv1d_silu_window_bytes(uint64_t block_ct, uint64_t element_bytes, bool tiled_input) {
+    const uint64_t tile_rows = tiled_input ? 2 : 1;
+    return (tile_rows * tt::constants::TILE_HEIGHT + qkv_causal_conv1d_silu_tap_count - 1) * block_ct *
+           tt::constants::TILE_WIDTH * element_bytes;
 }
 
-inline uint64_t qkv_causal_conv1d_silu_l1_bytes(uint64_t block_ct, uint64_t tile_bytes, uint64_t element_bytes) {
-    constexpr uint64_t dfb_blocks = qkv_causal_conv1d_silu_act_rm_blocks + qkv_causal_conv1d_silu_act_tile_blocks +
-                                    qkv_causal_conv1d_silu_tap_count + qkv_causal_conv1d_silu_partial_blocks +
-                                    qkv_causal_conv1d_silu_output_blocks;
-    return (dfb_blocks * block_ct * tile_bytes) + qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes);
+inline uint64_t qkv_causal_conv1d_silu_l1_bytes(
+    uint64_t block_ct, uint64_t tile_bytes, uint64_t element_bytes, bool tiled_input) {
+    const uint64_t activation_blocks =
+        tiled_input ? qkv_causal_conv1d_silu_tiled_act_tile_blocks
+                    : qkv_causal_conv1d_silu_act_rm_blocks + qkv_causal_conv1d_silu_act_tile_blocks;
+    const uint64_t dfb_blocks = activation_blocks + qkv_causal_conv1d_silu_tap_count +
+                                qkv_causal_conv1d_silu_partial_blocks + qkv_causal_conv1d_silu_output_blocks;
+    return (dfb_blocks * block_ct * tile_bytes) +
+           qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes, tiled_input);
 }
 
 struct QkvCausalConv1dSiluProgramFactory {

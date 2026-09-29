@@ -31,7 +31,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
 
     check_allocated_device_tensor(in.input, operation_name, "input");
-    check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     check_allocated_device_tensor(in.history, operation_name, "history");
@@ -82,7 +81,8 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
         attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
-        in.input.element_size());
+        in.input.element_size(),
+        in.input.layout() == Layout::TILE);
     const uint64_t available_l1_bytes =
         mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     TT_FATAL(
@@ -94,10 +94,15 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
 
     const auto& input_shape = in.input.logical_shape();
     const auto& history_shape = in.history.logical_shape();
+    // A tiled input may be wider: its leading Q+K+V columns are the channels, as in the fused projection.
+    const bool tiled_input = in.input.layout() == Layout::TILE;
+    TT_FATAL(
+        tiled_input || in.input.layout() == Layout::ROW_MAJOR,
+        "qkv_causal_conv1d_silu: input must be row-major or tiled");
     TT_FATAL(
         input_shape.rank() == 3 && input_shape[0] == 1 && input_shape[1] == attrs.sequence &&
-            input_shape[2] == channels,
-        "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
+            (tiled_input ? input_shape[2] >= channels : input_shape[2] == channels),
+        "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V], or tiled [1,T,W] with W >= Q+K+V");
     TT_FATAL(
         history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == 3 && history_shape[2] == channels,
         "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V]");

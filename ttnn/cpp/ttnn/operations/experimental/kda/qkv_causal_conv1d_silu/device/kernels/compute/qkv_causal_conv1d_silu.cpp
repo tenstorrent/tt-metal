@@ -18,7 +18,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     // dst_tiles reservation never waits on the previous tap's block that this loop is still reading.
     constexpr uint32_t dst_tiles = block_ct % 4 == 0 ? 4 : (block_ct % 2 == 0 ? 2 : 1);
     static_assert(dst_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT, "dst_tiles must fit the destination registers");
+#ifdef KDA_CONV_TILED_INPUT
+    // The reader delivers each shifted tap view already tiled.
+    compute_kernel_hw_startup(dfb::act_tile, dfb::weights, dfb::output);
+#else
     compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::output);
+#endif
     DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer partial(dfb::partial);
@@ -34,7 +39,9 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             weights.wait_front(tap_count * block_ct);
         }
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
+#ifndef KDA_CONV_TILED_INPUT
             compute_kernel_lib::tilize<block_ct, dfb::act_rm, dfb::act_tile>(1);
+#endif
             activation.wait_front(block_ct);
 
             const bool is_final_tap = tap + 1 == tap_count;
