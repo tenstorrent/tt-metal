@@ -1910,3 +1910,83 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
+
+## C.moe_full.experts test (attempt 1)
+
+What
+- Replaced the rendered 23-line experts test (layer 1) with a reviewed test. It keeps the gated PCC >= 0.99 and adds a
+  no-CPU-bridge assert. Vs the golden: finite, element count, rel L2 <= 0.015, per-token norm ratio in [0.98, 1.02],
+  worst token rel L2 <= 0.03, and the float64 global coefficient <got, want> / <want, want> within 0.004 of 1.
+- A second module call on x * 2 (bf16-exact) with the golden routing, checked against the CPU experts on the same
+  input at the same limits. The clamp at 10 barely fires on the golden (gate max 10.49).
+- CPU mutation study in /tmp/hy4_exp1 (outside the repo): prep.py dumps the golden and the layer-1 expert weights,
+  study.py / study2.py run the mutations (logs study.log, study2.log). The table is in the test docstring. Note that
+  the PCC printed in study.log is fp32 and slightly > 1. study2.log uses float64.
+
+Decisions
+- Limits sit about 2x above the device estimate: bfp8 weights (blocks along the output dim) + bf16 h/out give 0.0072 /
+  [0.995, 1.005] / 0.0093 / coef 0.99988. Adding bfp8 x and h gives 0.0104 / [0.993, 1.008] / 0.0153, which also passes.
+- Worst row 0.03: dropping any single expert gives >= 0.046 (expert 98), so every single-expert drop is caught.
+- Coefficient check: x 1.01 passes rel, ratio and worst row, and fails the coefficient (1.0099). x 1.005 fails it too
+  (1.0049).
+- Known gaps (in the docstring): x 1.003, and one token's smallest pair (half of the tokens are < 0.03). min(silu(g), 10)
+  and a gate clamped on both sides are numerically harmless.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, golden rel 0.00231 / [0.9962, 1.0037] / 0.0043 / coef 0.99992; probe 0).
+- BRINGUP_IMPL=stub: FAIL (pcc 0).
+- Gate (device): FAIL with "no device module for experts yet". This is expected: the implement step comes next.
+
+For implement
+- Golden facts: tokens per expert 2..505 (hottest 187), so a capacity below 505 drops work (256 fails). Pairs per chip
+  for experts 128c + 64r: 3986 / 4298 / 4429 / 3671. There are no outlier channels in x.
+- The probe calls the module twice with the same routing, so keep no per-call state.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+
+## C.moe_full.experts implement (attempt 1)
+
+What
+- tt/experts.py:TtHy4Experts, adapted from mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts. It is the DeepSeek 2D EP
+  pipeline: masked_bincount -> ttnn.bringup.offset_cumsum (axis 0) -> ttnn.bringup.dispatch (group size 2, axis 0,
+  Topology.Linear on the FABRIC_2D mesh) -> ttnn.bringup.unified_routed_expert_moe (ClampedSiluGlu, limit 10 baked,
+  high_precision=True, HiFi4 + fp32 dest, bf16 x, bfp8 weights) -> ttnn.bringup.combine -> post_combine_reduce
+  (the dispatch table masks the other column's experts) -> typecast fp32 -> ttnn.reduce_scatter(dim 3, axis 1).
+  Output: [1, 1, S/2, 3072] fp32 per chip, the residual's column split (same as tt/mlp.py).
+- Input: x = ffn_norm [1, 1, S/2, H] (rows over axis 0, replicated over axis 1, the TtGatheredRmsNorm layout), plus the
+  router's (idx, wts) [1, 1, S/2, 8] in the same placement. No host work, no per-call constants. The dispatch / combine
+  modules are built once per chunk length.
+- LazyExpertWeights reads gate_up_proj / down_proj one expert at a time (reference/weights.py:ExpertSlab). It splits
+  gate = rows 0-2047 and up = rows 2048-4095. The bfp8 cache is in generated/hy4_preview_d_p/tt_cache/experts
+  (layer_<i>.experts.BFLOAT8_B.*). Per-expert cap = the longest ladder chunk (8192, hooks._max_chunk).
+- hooks.py: `_EXPERTS_STEPS`, `_max_chunk`, `_experts_module`, `_experts_host_fn`. The host fn is the harness boundary:
+  it turns the dense [S, 256] routing back into topk (idx uint16, wts fp32) on the host and reads back col_split. Added
+  "experts" to `DEVICE_STEPS["moe_full"]`.
+- `HY4_EXPERTS_MODE=loop` selects the fallback: per local expert extract -> ttnn.linear gate / up in fp32 ->
+  ttnn.clamp (gate max 10, up +-10) -> multiply with SILU -> linear down -> insert.
+- ttnn/ttnn/bringup/INDEX.md: added hy4_preview_d_p to "Used by" for unified_routed_expert_ffn, dispatch, combine and
+  offset_cumsum. No fork was changed.
+
+Decisions
+- ffn_norm per-channel max on the golden (s4096 chunk 1), layers 1-5: max |x| 0.85 / 0.77 / 0.41 / 0.54 / 0.68, so there
+  are no outlier channels. x stays bf16 anyway (high_precision keeps it bf16).
+- The axis-1 reduce_scatter runs in fp32: the partial is typecast before the CCL (`out_dtype`, default float32).
+- Routing weights go to post_combine_reduce as bf16, as in MiMo 2x2.
+
+Results (gate, default unified mode)
+- PASS: pcc_experts_L01 0.999968. Golden: rel L2 0.00802, row norm ratio [0.99503, 1.00532], worst row 0.0103, coef
+  1.00010. x*2 vs CPU: rel 0.00751, [0.99774, 1.00327], 0.00965, coef 1.00024. Call time 12.5 s, which includes both
+  module calls and the CPU probe.
+- Loop mode (HY4_EXPERTS_MODE=loop): PASS, pcc 0.999969, rel 0.00791, [0.99532, 1.00509], worst row 0.0099.
+- First run: the precompile collect pass built the bfp8 cache (about 70 s). Later runs load it in about 2 s.
+
+Gotchas
+- The first "FAIL pcc_experts_L01: pcc=0.000000" line is the precompile collect pass. Ignore it.
+- In routed_half, idx2 / ind / scores / w5 are reshape views of the caller's buffers, so they are not deallocated.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+    HY4_EXPERTS_MODE=loop PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py

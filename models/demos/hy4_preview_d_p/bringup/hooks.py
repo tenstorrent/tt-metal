@@ -77,7 +77,7 @@ DEVICE_STEPS = {
         "mlp",
         "ffn_residual",
     },
-    "moe_full": {"router"},
+    "moe_full": {"router", "experts"},
     "moe_shared": set(),
 }
 
@@ -102,6 +102,9 @@ _ATTENTION_STEPS = {"attention"}
 _MLP_STEPS = {"mlp"}
 # MoE router (tt/router.py:TtHy4Router), replicated fp32 gate + bias, on each row's S/2 tokens; no collective.
 _ROUTER_STEPS = {"router"}
+# Routed experts (tt/experts.py:TtHy4Experts): DeepSeek 2D EP (dispatch over axis 0 within each column, 64 experts per
+# chip, bfp8), fused ClampedSiluGlu experts at HiFi4, combine, reduce_scatter over axis 1.
+_EXPERTS_STEPS = {"experts"}
 
 
 def _loader(spec):
@@ -511,6 +514,68 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _max_chunk(spec):
+    """The longest chunk any ladder rung (or the target) runs: the experts' per-expert cap and dispatch sizing."""
+    return max([int(r["chunk"]) for r in spec.data["ladder"]] + [int(spec.data["target"]["chunk"])])
+
+
+def _experts_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtHy4Experts: gate_up_proj split on the host into gate (rows 0-2047) / up (rows 2048-4095), bfp8 on device,
+    read one expert at a time from the checkpoint (cache under generated/hy4_preview_d_p/tt_cache/experts).
+    ``HY4_EXPERTS_MODE=loop`` selects the per-expert ttnn.linear path (fp32 intermediates, ttnn.clamp) for comparison.
+    """
+    import os
+
+    from models.demos.hy4_preview_d_p.tt.experts import LazyExpertWeights, TtHy4Experts
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    weights = LazyExpertWeights(
+        loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts, cfg.moe_intermediate_size
+    )
+    return TtHy4Experts(
+        mesh,
+        layer,
+        weights,
+        emb_dim=cfg.hidden_size,
+        hidden_dim=cfg.moe_intermediate_size,
+        top_k=cfg.num_experts_per_tok,
+        max_seq_len=_max_chunk(spec),
+        swiglu_limit=cfg.swiglu_limit,
+        mode=os.environ.get("HY4_EXPERTS_MODE", "unified"),
+    )
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H] fp32 (harness boundary:
+    the dense routing is turned back into the router's (idx, wts) [S, 8] here, both row-split over axis 0 and
+    replicated over axis 1 like x; the column-split [S/2, H/2] output is read back)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_host, row_split_to_device
+
+    def fn(ctx, x, routing):
+        s = x.shape[0]
+        tw, ti = torch.topk(routing.float(), k=module.K, dim=-1, sorted=True)
+        rep = ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None))
+        xd = row_split_to_device(mesh, x, dtype=ttnn.bfloat16)
+        idd = ttnn.from_torch(
+            ti.to(torch.int32).reshape(1, 1, s, module.K),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
+        )
+        wd = row_split_to_device(mesh, tw, dtype=ttnn.float32)
+        yd = module(xd, idd, wd)
+        y = col_split_to_host(mesh, yd).float()
+        for t in (xd, idd, wd, yd):
+            ttnn.deallocate(t)
+        return y
+
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _NORM_STEPS:
         return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
@@ -528,6 +593,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _row_in_col_out_host_fn(mesh, _mlp_module(mesh, spec, layer, loader, cfg))
     if step in _ROUTER_STEPS:
         return _router_host_fn(mesh, _router_module(mesh, spec, layer, loader, cfg))
+    if step in _EXPERTS_STEPS:
+        return _experts_host_fn(mesh, _experts_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -553,6 +620,7 @@ def device_component(mesh, spec, layer, step):
             _ATTENTION_STEPS,
             _MLP_STEPS,
             _ROUTER_STEPS,
+            _EXPERTS_STEPS,
         )
     ):
         loader = _loader(spec)
