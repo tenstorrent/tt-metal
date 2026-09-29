@@ -28,10 +28,15 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
+
+
+def _round_up(x: int, m: int) -> int:
+    return -(-x // m) * m
 
 
 class TtV41Attention(LightweightModule):
@@ -101,6 +106,16 @@ class TtV41Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate,
         )
+        # column iota of the index-row compaction (``_compact_leading``): the widest row is window + top-k
+        self.compact_rows = _round_up(self.window - 1, 32)  # queries that can lack window rows
+        width = _round_up(self.window + (config.INDEX_TOPK if self.ratio else 0), TOPK_ALIGN)
+        self.column_iota = ttnn.from_torch(
+            torch.arange(width, dtype=torch.int32).expand(self.compact_rows, width).reshape(1, 1, -1, width),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate,
+        )
 
         self.is_kv_source = layer in config.KV_SOURCE_LAYERS
         self.is_index_source = layer in config.INDEX_SOURCE_LAYERS
@@ -119,9 +134,36 @@ class TtV41Attention(LightweightModule):
         )
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _index_rows(self, window, window_base: int, compressed):
+    def _rope_tail(self, t, cos, sin):
+        """RoPE on the trailing ``rope_dim`` channels of tiled ``t`` [b, h, s, d] -> row-major [b, h, s, d] (the
+        layout sparse_sdpa reads): the untilize copies the other channels, the rotated tail is written over its
+        columns; no slice / concat of the full head."""
+        b, h, s, d = t.shape
+        tail = ttnn.slice(t, [0, 0, 0, d - self.rope_dim], [b, h, s, d])
+        tail = ttnn.experimental.rotary_embedding_llama(tail, cos, sin, self.trans_mat, is_decode_mode=False)
+        out = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.experimental.slice_write(
+            ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), out, [0, 0, 0, d - self.rope_dim], [b, h, s, d], [1, 1, 1, 1]
+        )
+        return out
+
+    def _inverse_rope_tail(self, t, cos, sin):
+        """Inverse RoPE on the trailing ``rope_dim`` channels of row-major ``t`` [b, h, s, d] (in place) -> tiled."""
+        b, h, s, d = t.shape
+        tail = ttnn.to_layout(ttnn.slice(t, [0, 0, 0, d - self.rope_dim], [b, h, s, d]), ttnn.TILE_LAYOUT)
+        tail = ttnn.experimental.rotary_embedding_llama(tail, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
+        ttnn.experimental.slice_write(
+            ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), t, [0, 0, 0, d - self.rope_dim], [b, h, s, d], [1, 1, 1, 1]
+        )
+        return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+
+    def _index_rows(self, window, window_base: int, compressed, start: int):
         """``window``: the chunk's per-chip window rows (``V41ChunkTables.window_rows``) -> per-chip
-        [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail."""
+        [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail.
+
+        Both parts are valid-first except the window of a query with fewer than ``window`` earlier tokens: its
+        missing rows are a leading run of -1 (``_window_table``); the top-k has a sentinel tail. So [window | top-k]
+        is valid-first for every query at or after position window - 1; the earlier ones are compacted."""
         if compressed is None:
             rows = window
         else:
@@ -129,17 +171,30 @@ class TtV41Attention(LightweightModule):
             comp = ttnn.where(ttnn.eq(comp, -1), -1, ttnn.add(comp, window_base))
             rows = ttnn.concat([window, comp], dim=-1)
         width = rows.shape[-1]
-        k = -(-width // TOPK_ALIGN) * TOPK_ALIGN
+        k = _round_up(width, TOPK_ALIGN)
         if k != width:
             rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - width)], -1)
-        # compaction: rank valid slots first (value 1) and invalid last (-inf -> sentinel position)
-        score = ttnn.typecast(ttnn.where(ttnn.eq(rows, -1), float("-inf"), 1.0), ttnn.bfloat16)
-        pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(score, ttnn.ROW_MAJOR_LAYOUT), k=k)
-        pos = ttnn.typecast(ttnn.to_layout(pos, ttnn.TILE_LAYOUT), ttnn.int32)
-        valid = ttnn.ne(pos, -1)
-        gathered = ttnn.gather(rows, -1, ttnn.typecast(ttnn.where(valid, pos, 0), ttnn.uint32))
-        rows = ttnn.where(valid, gathered, -1)
+        if start < self.window - 1:
+            rows = self._compact_leading(rows, window)
         return ttnn.to_layout(ttnn.typecast(rows, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+
+    def _compact_leading(self, rows, window):
+        """Rotate each of the chip's first ``compact_rows`` query rows left by its count of missing window rows (the
+        leading -1 run): valid rows first, the -1 run after the top-k's sentinel tail. Later queries (all window rows
+        present) rotate by 0; a chip's rows are contiguous query positions, so no later chip needs more rows."""
+        q_rows, k = rows.shape[2], rows.shape[3]
+        n = min(self.compact_rows, q_rows)
+        head_window = ttnn.slice(window, [0, 0, 0, 0], [1, 1, n, window.shape[3]])
+        missing = ttnn.sum(ttnn.typecast(ttnn.eq(head_window, -1), ttnn.float32), dim=-1, keepdim=True)
+        shift = ttnn.add(ttnn.slice(self.column_iota, [0, 0, 0, 0], [1, 1, n, k]), ttnn.typecast(missing, ttnn.int32))
+        # sentinel columns past the end keep every shifted index in range
+        head = ttnn.pad(
+            ttnn.slice(rows, [0, 0, 0, 0], [1, 1, n, k]), [(0, 0), (0, 0), (0, 0), (0, window.shape[3])], -1
+        )
+        head = ttnn.gather(head, -1, ttnn.typecast(shift, ttnn.uint32))
+        if n == q_rows:
+            return head
+        return ttnn.concat([head, ttnn.slice(rows, [0, 0, n, 0], [1, 1, q_rows, k])], dim=2)
 
     # --- forward -------------------------------------------------------------------------------------
     def forward(self, x, state: V41PrefillState, length: int):
@@ -161,7 +216,6 @@ class TtV41Attention(LightweightModule):
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False
         )
-        q = self._rope(q, cos, sin)
 
         kv = ttnn.rms_norm(
             self.ccl.tp_all_reduce(ttnn.linear(xq, self.wkv, compute_kernel_config=self.compute_kernel_config)),
@@ -193,14 +247,16 @@ class TtV41Attention(LightweightModule):
                     state.selection["candidates"] = candidates
             else:
                 compressed = state.selection["topk"]
-        rows = self._index_rows(tables.window_rows(start), state.geometry.window_rows, compressed)
+        rows = self._index_rows(tables.window_rows(start), state.geometry.window_rows, compressed, start)
 
-        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence)
+        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence); RoPE and
+        # its inverse run on that shard (the chip's rows of cos / sin), next to the row-major sparse_sdpa operands
         head_to_seq = self.tp > 1
         if head_to_seq:
             q = self.ccl.tp_all_to_all(q, in_dim=1, out_dim=2)
+            cos, sin = (ttnn.mesh_partition(t, dim=2, cluster_axis=TP_AXIS) for t in (cos, sin))
         attn = ttnn.transformer.sparse_sdpa(
-            ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
+            self._rope_tail(q, cos, sin),
             kv_tensor,
             rows,
             self.head_dim,
@@ -209,11 +265,10 @@ class TtV41Attention(LightweightModule):
             k_chunk_size=next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0),
             attention_sink=self.sink,
         )
-        attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
+        attn = self._inverse_rope_tail(attn, cos, sin)
         if head_to_seq:
             attn = self.ccl.tp_all_to_all(attn, in_dim=2, out_dim=1)
         state.update_window_carry(self.layer, length)
-        attn = self._rope(attn, cos, sin, inverse=True)
         return self._o_proj(attn, seq_local)
 
     def _o_proj(self, attn, seq_local):
@@ -223,10 +278,8 @@ class TtV41Attention(LightweightModule):
         x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_local, self.head_dim])
         x = ttnn.experimental.nlp_concat_heads(x)
         x = ttnn.reshape(x, [1, groups_local, seq_local, in_per_group])
-        grouped = ttnn.linear(x, self.wo_a, compute_kernel_config=self.compute_kernel_config)
-        rank = grouped.shape[-1]
-        grouped = ttnn.concat(
-            [ttnn.slice(grouped, [0, g, 0, 0], [1, g + 1, seq_local, rank]) for g in range(groups_local)], dim=-1
-        )
+        grouped = ttnn.experimental.nlp_concat_heads(
+            ttnn.linear(x, self.wo_a, compute_kernel_config=self.compute_kernel_config)
+        )  # [1, groups, S, rank] -> [1, 1, S, groups * rank]
         out = ttnn.linear(fp8_qdq(grouped), self.wo_b, compute_kernel_config=self.compute_kernel_config)
         return self.ccl.tp_reduce_scatter(out)
