@@ -47,6 +47,29 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def _weights_source_digest():
+    """A short digest of the gemma4 model source (every .py under tt/), part of the cache identity.
+
+    The weight dtypes, layouts and cache file names are chosen by this code, so a cache seeded by
+    one version of it does not describe the files another version needs. None when the source
+    cannot be read; the caller then marks the variant "unverifiable", which forces a cold load
+    (see models/common/weight_cache.py).
+    """
+    import hashlib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha1()
+    try:
+        for path in sorted(root.rglob("*.py")):
+            digest.update(str(path.relative_to(root)).encode())
+            digest.update(path.read_bytes())
+    except OSError as exc:
+        logger.warning(f"gemma4 source unreadable for the weight-cache identity: {exc}")
+        return None
+    return digest.hexdigest()[:12]
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size=1,
@@ -145,8 +168,17 @@ def create_tt_model(
         build_variant={
             "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
             "cache_layout": _cache_layout,
+            # The model source too: a dtype, layout or cache_file_name chosen in code (not in
+            # precision_overrides.json) also changes which tensorbins a build needs, and a warm
+            # marker from the old source would then certify files that do not exist -- as_tensor
+            # persists the dataless placeholder for each (garbage weights). Any edit to the files
+            # that build weights forces one cold load instead.
+            "source": _weights_source_digest(),
         },
     )
+    if cache_identity["build_variant"]["source"] is None:
+        # weight_cache.py reads a top-level "unverifiable" as "force a cold load".
+        cache_identity["build_variant"].update(unverifiable=True, error="gemma4 source unreadable")
     loaded_real_weights = False
     if state_dict is None:
         if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):

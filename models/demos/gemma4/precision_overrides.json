@@ -1,6 +1,6 @@
 {
   "_schema": {
-    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, lookup tries the exact mesh-shape key first, then 'default'. Module keys: shared_mlp, attention, experts, router, lm_head, embedding. Allowed dtype values: bf16, bfp8, fp32.",
+    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, the exact mesh-shape entry overrides 'default' module by module. Module keys: shared_mlp, attention, experts, router, lm_head, embedding (unknown keys are ignored with a warning). Allowed dtype values: bf16, bfp8, bfp4, fp32.",
     "example": {
       "gemma-4-31B-it": {
         "default": {

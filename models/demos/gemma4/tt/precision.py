@@ -33,6 +33,8 @@ _DTYPE_BY_NAME = {
     "bfloat16": ttnn.bfloat16,
     "bfp8": ttnn.bfloat8_b,
     "bfloat8_b": ttnn.bfloat8_b,
+    "bfp4": ttnn.bfloat4_b,
+    "bfloat4_b": ttnn.bfloat4_b,
     "fp32": ttnn.float32,
     "float32": ttnn.float32,
 }
@@ -49,6 +51,8 @@ def dtype_to_str(dtype):
         return "bf16"
     if dtype == ttnn.bfloat8_b:
         return "bfp8"
+    if dtype == ttnn.bfloat4_b:
+        return "bfp4"
     if dtype == ttnn.float32:
         return "fp32"
     raise ValueError(f"No cache-suffix mapping for dtype {dtype}")
@@ -97,12 +101,19 @@ class Gemma4Precision:
         if not model_entry:
             return cls({})
 
-        # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
+        # The mesh-specific entry overrides "default" key by key. It used to replace it whole, so a
+        # "1x4" entry naming one module silently dropped every module "default" set.
+        raw = {**(model_entry.get("default") or {}), **(model_entry.get(mesh_key) or {})}
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:
-                continue  # ignore unknown / future keys silently
+                # Said, not silently skipped: a misspelled module name used to leave the model at
+                # the default dtype while the file claimed an override.
+                logger.warning(
+                    f"precision_overrides.json[{model_key}][{mesh_key}]: unknown module {k!r} ignored; "
+                    f"known modules are {', '.join(KNOWN_MODULES)}"
+                )
+                continue
             if v not in _DTYPE_BY_NAME:
                 raise ValueError(
                     f"precision_overrides.json[{model_key}][{mesh_key}][{k}]={v!r} — "
