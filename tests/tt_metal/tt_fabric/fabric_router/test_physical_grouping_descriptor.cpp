@@ -14,7 +14,6 @@
 #include <fstream>
 #include <chrono>
 #include <cstdlib>
-#include <cstdio>
 #include <optional>
 #include <map>
 
@@ -1476,99 +1475,22 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
     }
 }
 
-// Dump the host-edge classification build_pgd_host_group_variants produces for a given host + mesh grouping.
-// Prints, per returned variant, the mesh_node_to_pgd_host_group grouped as host-group -> sorted trays, so we
-// can see which meshes get a "_hostedge" (multi-host) variant and how their ranks split across trays.
+// Host-edge splits build_pgd_host_group_variants emits for one MESH against galaxy_hosts.
+// When want_asics is set, only variants on trays {1,2,3,4} with that ASIC set are counted.
 namespace {
-void dump_host_group_variants(
-    const PhysicalGroupingDescriptor& desc, const char* host_type, const char* host_name, const char* mesh_name) {
-    std::vector<GroupingInfo> declared_hosts;
-    for (const auto& h : desc.get_groupings_by_type(host_type)) {
-        if (std::string(h.name) == host_name) {
-            for (auto& flat : desc.build_flattened_adjacency_mesh(h)) {
-                declared_hosts.push_back(std::move(flat));
-            }
-        }
-    }
-    GroupingInfo mesh;
-    bool found = false;
-    for (const auto& m : desc.get_groupings_by_type("MESH")) {
-        if (std::string(m.name) == mesh_name) {
-            mesh = m;
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        printf("HGV mesh '%s' not found\n", mesh_name);
-        return;
-    }
-    printf(
-        "HGV ==== mesh='%s' host='%s' declared_host_variants=%zu ====\n", mesh_name, host_name, declared_hosts.size());
-    auto flattened = desc.build_flattened_adjacency_mesh(mesh);
-    std::set<std::string> seen;  // dedupe by (variant name + tray-split signature)
-    for (const auto& flat : flattened) {
-        for (const auto& v : desc.build_pgd_host_group_variants(flat, declared_hosts)) {
-            std::map<uint32_t, std::set<uint32_t>> trays_by_hg;
-            std::set<uint32_t> mesh_trays;
-            for (uint32_t nd : v.adjacency_graph.get_nodes()) {
-                if (nd < v.items.size() && *v.items[nd].tray_id != 0) {
-                    mesh_trays.insert(*v.items[nd].tray_id);
-                }
-            }
-            for (const auto& [nd, hg] : v.mesh_node_to_pgd_host_group) {
-                if (nd < v.items.size()) {
-                    trays_by_hg[hg].insert(*v.items[nd].tray_id);
-                }
-            }
-            std::set<uint32_t> asics;
-            for (uint32_t nd : v.adjacency_graph.get_nodes()) {
-                if (nd < v.items.size() && *v.items[nd].asic_location != 0) {
-                    asics.insert(*v.items[nd].asic_location);
-                }
-            }
-            std::string sig = v.name + " asics{";
-            for (uint32_t a : asics) {
-                sig += std::to_string(a) + ",";
-            }
-            sig += "} trays{";
-            for (uint32_t t : mesh_trays) {
-                sig += std::to_string(t) + ",";
-            }
-            sig += "} split=";
-            for (const auto& [hg, trays] : trays_by_hg) {
-                sig += "hg" + std::to_string(hg) + "{";
-                for (uint32_t t : trays) {
-                    sig += std::to_string(t) + ",";
-                }
-                sig += "} ";
-            }
-            const bool is_hostedge = v.name.find("hostedge") != std::string::npos;
-            sig += is_hostedge ? "[HOSTEDGE/multi]" : (trays_by_hg.size() > 1 ? "[multi]" : "[single]");
-            if (seen.insert(sig).second) {
-                printf("HGV   %s\n", sig.c_str());
-            }
-        }
-    }
-}
-
-// For variants matching EXACTLY want_trays/want_asics: whether a single-host variant exists, and the set of
-// multi-host seams (rendered "t,t..|t,t.." with tray-groups sorted).
-struct SplitSeams {
+struct HostEdgeSplits {
     bool has_single = false;
-    std::set<std::string> multi_seams;  // canonical "trays|trays"
+    std::set<std::string> seams;        // multi-host tray partitions, "1,3,|2,4,"
+    std::set<std::vector<int>> shapes;  // multi-host sorted node counts per host group
 };
-SplitSeams collect_split_seams(
-    const PhysicalGroupingDescriptor& desc,
-    const char* host_name,
-    const char* mesh_name,
-    const std::set<uint32_t>& want_trays,
-    const std::set<uint32_t>& want_asics) {
-    std::vector<GroupingInfo> declared_hosts;
+
+HostEdgeSplits host_edge_splits(
+    const PhysicalGroupingDescriptor& desc, const char* mesh_name, const std::set<uint32_t>* want_asics = nullptr) {
+    std::vector<GroupingInfo> hosts;
     for (const auto& h : desc.get_groupings_by_type("HOSTS")) {
-        if (std::string(h.name) == host_name) {
+        if (std::string(h.name) == "galaxy_hosts") {
             for (auto& flat : desc.build_flattened_adjacency_mesh(h)) {
-                declared_hosts.push_back(std::move(flat));
+                hosts.push_back(std::move(flat));
             }
         }
     }
@@ -1582,224 +1504,107 @@ SplitSeams collect_split_seams(
         }
     }
     EXPECT_TRUE(found) << "mesh '" << mesh_name << "' not found";
-    SplitSeams out;
+    HostEdgeSplits out;
+    if (!found) {
+        return out;
+    }
+    const std::set<uint32_t> all_trays{1, 2, 3, 4};
     for (const auto& flat : desc.build_flattened_adjacency_mesh(mesh)) {
-        for (const auto& v : desc.build_pgd_host_group_variants(flat, declared_hosts)) {
-            std::set<uint32_t> trays, asics;
-            for (uint32_t nd : v.adjacency_graph.get_nodes()) {
-                if (nd < v.items.size() && *v.items[nd].tray_id != 0) {
-                    trays.insert(*v.items[nd].tray_id);
-                    asics.insert(*v.items[nd].asic_location);
+        for (const auto& v : desc.build_pgd_host_group_variants(flat, hosts)) {
+            if (want_asics != nullptr) {
+                std::set<uint32_t> trays, asics;
+                for (uint32_t nd : v.adjacency_graph.get_nodes()) {
+                    if (nd < v.items.size() && *v.items[nd].tray_id != 0) {
+                        trays.insert(*v.items[nd].tray_id);
+                        asics.insert(*v.items[nd].asic_location);
+                    }
+                }
+                if (trays != all_trays || asics != *want_asics) {
+                    continue;
                 }
             }
-            if (trays != want_trays || asics != want_asics) {
-                continue;
-            }
             std::map<uint32_t, std::set<uint32_t>> trays_by_hg;
+            std::map<uint32_t, int> count_by_hg;
             for (const auto& [nd, hg] : v.mesh_node_to_pgd_host_group) {
+                count_by_hg[hg]++;
                 if (nd < v.items.size()) {
                     trays_by_hg[hg].insert(*v.items[nd].tray_id);
                 }
             }
-            if (trays_by_hg.size() <= 1) {
-                out.has_single = true;
-            } else {
-                std::vector<std::string> groups;
-                for (const auto& [hg, tset] : trays_by_hg) {
-                    std::string g;
-                    for (uint32_t t : tset) {
-                        g += std::to_string(t) + ",";
-                    }
-                    groups.push_back(g);
-                }
-                std::sort(groups.begin(), groups.end());
-                std::string seam;
-                for (size_t i = 0; i < groups.size(); ++i) {
-                    seam += (i ? "|" : "") + groups[i];
-                }
-                out.multi_seams.insert(seam);
-            }
-        }
-    }
-    return out;
-}
-
-// Across all flattened variants: whether a single-host variant exists and the distinct multi-host group-size
-// shapes (sorted node counts per host-group) -- for asserting 2x2 (four groups) and uneven splits.
-struct GroupShapes {
-    bool has_single = false;
-    std::set<std::vector<int>> multi_shapes;  // sorted group sizes, one entry per distinct multi-host variant
-};
-GroupShapes collect_group_shapes(const PhysicalGroupingDescriptor& desc, const char* host_name, const char* mesh_name) {
-    std::vector<GroupingInfo> declared_hosts;
-    for (const auto& h : desc.get_groupings_by_type("HOSTS")) {
-        if (std::string(h.name) == host_name) {
-            for (auto& flat : desc.build_flattened_adjacency_mesh(h)) {
-                declared_hosts.push_back(std::move(flat));
-            }
-        }
-    }
-    GroupingInfo mesh;
-    for (const auto& m : desc.get_groupings_by_type("MESH")) {
-        if (std::string(m.name) == mesh_name) {
-            mesh = m;
-            break;
-        }
-    }
-    GroupShapes out;
-    for (const auto& flat : desc.build_flattened_adjacency_mesh(mesh)) {
-        for (const auto& v : desc.build_pgd_host_group_variants(flat, declared_hosts)) {
-            std::map<uint32_t, int> count_by_hg;
-            for (const auto& [nd, hg] : v.mesh_node_to_pgd_host_group) {
-                count_by_hg[hg]++;
-            }
             if (count_by_hg.size() <= 1) {
                 out.has_single = true;
-            } else {
-                std::vector<int> sizes;
-                for (const auto& [hg, c] : count_by_hg) {
-                    sizes.push_back(c);
-                }
-                std::sort(sizes.begin(), sizes.end());
-                out.multi_shapes.insert(sizes);
+                continue;
             }
+            std::vector<int> sizes;
+            std::vector<std::string> groups;
+            for (const auto& [hg, count] : count_by_hg) {
+                sizes.push_back(count);
+                std::string g;
+                for (uint32_t t : trays_by_hg[hg]) {
+                    g += std::to_string(t) + ",";
+                }
+                groups.push_back(std::move(g));
+            }
+            std::sort(sizes.begin(), sizes.end());
+            std::sort(groups.begin(), groups.end());
+            out.shapes.insert(std::move(sizes));
+            std::string seam;
+            for (size_t i = 0; i < groups.size(); ++i) {
+                if (i != 0) {
+                    seam += '|';
+                }
+                seam += groups[i];
+            }
+            out.seams.insert(std::move(seam));
         }
     }
     return out;
 }
 }  // namespace
 
-// Synthetic [4,4] galaxy: asic 1 -> four corners (wraps both dims -> 2x2 split); asic 4 -> centers (single).
-TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_Synthetic2x2AndInterior) {
+// Edge asics {1,2,5,6} cross the galaxy seam and split; interior asics {3,4,7,8} stay one host.
+// rev-AB seam is {1,3}|{2,4}; rev-C seam is {1,2}|{3,4}. Both keep the regular single-host variant.
+TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_GalaxyAsicFamily) {
+    const std::set<uint32_t> edge_asics{1, 2, 5, 6};
+    const std::set<uint32_t> interior_asics{3, 4, 7, 8};
+    const struct {
+        const char* pgd;
+        const char* edge_seam;
+    } cases[] = {
+        {"tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto",
+         "1,3,|2,4,"},
+        {"tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto",
+         "1,2,|3,4,"},
+    };
+    for (const auto& c : cases) {
+        PhysicalGroupingDescriptor desc{std::filesystem::path(c.pgd)};
+        const auto edge = host_edge_splits(desc, "4x4_SplitHost", &edge_asics);
+        EXPECT_TRUE(edge.has_single) << c.pgd;
+        EXPECT_EQ(edge.seams.size(), 1u) << c.pgd;
+        EXPECT_EQ(edge.seams.count(c.edge_seam), 1u) << c.pgd;
+
+        const auto interior = host_edge_splits(desc, "4x4_SplitHost", &interior_asics);
+        EXPECT_TRUE(interior.has_single) << c.pgd;
+        EXPECT_TRUE(interior.seams.empty()) << c.pgd;
+    }
+}
+
+// Synthetic [4,4]: corners wrap both dims (four groups of 1), centers stay interior, top row splits 2 vs 1.
+TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_SyntheticShapes) {
     PhysicalGroupingDescriptor desc(std::filesystem::path(
         "tests/tt_metal/tt_fabric/physical_groupings/test_hostedge_shapes_physical_grouping_descriptor.textproto"));
 
-    // Corners -> must offer a 4-group (2x2) split, plus the regular single.
-    auto corners = collect_group_shapes(desc, "galaxy_hosts", "corners_2x2");
-    EXPECT_TRUE(corners.has_single) << "corners mesh must keep its regular single-host variant";
-    const bool has_2x2 = corners.multi_shapes.count(std::vector<int>{1, 1, 1, 1}) == 1;
-    EXPECT_TRUE(has_2x2) << "corners mesh must offer a 2x2 (four host-group) split";
+    const auto corners = host_edge_splits(desc, "corners_2x2");
+    EXPECT_TRUE(corners.has_single);
+    EXPECT_EQ(corners.shapes.count(std::vector<int>{1, 1, 1, 1}), 1u);
 
-    // Centers -> interior, single only, never split.
-    auto centers = collect_group_shapes(desc, "galaxy_hosts", "centers_2x2");
-    EXPECT_TRUE(centers.has_single) << "centers mesh must keep its regular single-host variant";
-    EXPECT_TRUE(centers.multi_shapes.empty()) << "centers (interior) mesh must NOT be split";
-}
+    const auto centers = host_edge_splits(desc, "centers_2x2");
+    EXPECT_TRUE(centers.has_single);
+    EXPECT_TRUE(centers.shapes.empty());
 
-// Synthetic uneven split: a col-wrap whose two host-groups have unequal sizes (2 vs 1).
-TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_SyntheticUneven) {
-    PhysicalGroupingDescriptor desc(std::filesystem::path(
-        "tests/tt_metal/tt_fabric/physical_groupings/test_hostedge_shapes_physical_grouping_descriptor.textproto"));
-    auto uneven = collect_group_shapes(desc, "galaxy_hosts", "uneven_3");
-    EXPECT_TRUE(uneven.has_single) << "uneven mesh must keep its regular single-host variant";
-    bool has_uneven = false;
-    for (const auto& shape : uneven.multi_shapes) {
-        if (shape.size() >= 2 && shape.front() != shape.back()) {
-            has_uneven = true;
-        }
-    }
-    EXPECT_TRUE(has_uneven) << "3-corner mesh must produce an uneven (unequal group-size) split";
-}
-
-TEST(PhysicalGroupingDescriptorTests, DBG_DeclaredHostGrid) {
-    for (const char* pgd_path :
-         {"tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto",
-          "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto"}) {
-        PhysicalGroupingDescriptor desc{std::filesystem::path(pgd_path)};
-        printf("\n=== declared-host grid for %s ===\n", pgd_path);
-        for (const auto& h : desc.get_groupings_by_type("HOSTS")) {
-            if (std::string(h.name) != "galaxy_hosts") {
-                continue;
-            }
-            auto flat = desc.build_flattened_adjacency_mesh(h);
-            if (flat.empty()) {
-                continue;
-            }
-            const auto& g = flat.front();
-            printf("host variant '%s' grid_dims=[", g.name.c_str());
-            for (int d : g.flattened_node_grid_dims) {
-                printf("%d,", d);
-            }
-            printf("] nodes=%zu\n", g.adjacency_graph.get_nodes().size());
-            // Print node -> (tray,asic) in sorted node order (assume row-major over grid_dims).
-            std::vector<uint32_t> nodes = g.adjacency_graph.get_nodes();
-            std::sort(nodes.begin(), nodes.end());
-            int cols = g.flattened_node_grid_dims.size() == 2 ? g.flattened_node_grid_dims[1] : 0;
-            for (size_t i = 0; i < nodes.size(); ++i) {
-                uint32_t nd = nodes[i];
-                if (nd >= g.items.size()) {
-                    continue;
-                }
-                if (cols > 0 && i % cols == 0) {
-                    printf("\n  row%zu: ", i / cols);
-                }
-                printf("t%u/a%u ", *g.items[nd].tray_id, *g.items[nd].asic_location);
-            }
-            printf("\n");
-            break;  // first (plain _flat) variant only
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, DBG_HostEdgeClassification) {
-    printf("\n===== REV-AB (galaxy_hosts = [2,2] of trays 3,4,1,2; seam should be {1,3}|{2,4}) =====\n");
-    {
-        PhysicalGroupingDescriptor ab(std::filesystem::path(
-            "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto"));
-        for (const char* m : {"4x2_Mesh_horizontal", "4x2_Mesh_vertical", "4x4_SplitHost", "4x4_Mesh"}) {
-            dump_host_group_variants(ab, "HOSTS", "galaxy_hosts", m);
-        }
-    }
-    printf("\n===== REV-C (galaxy_hosts = [2,2] of trays 2,4,1,3; seam should be {1,2}|{3,4}) =====\n");
-    {
-        PhysicalGroupingDescriptor c(std::filesystem::path(
-            "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto"));
-        for (const char* m : {"4x4_SplitHost", "4x4_Mesh"}) {
-            dump_host_group_variants(c, "HOSTS", "galaxy_hosts", m);
-        }
-    }
-}
-
-// rev-AB: same four trays, different asic family splits differently. {1,2,5,6} (edge band) -> split
-// {1,3}|{2,4}; {3,4,7,8} (interior) -> single host, no split. Both keep the regular single-host variant.
-TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_RevAB_AsicFamilyDeterminesSplit) {
-    PhysicalGroupingDescriptor ab(std::filesystem::path(
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto"));
-
-    const std::set<uint32_t> all_trays{1, 2, 3, 4};
-
-    // {1,2,5,6}: edge band -> keep regular AND add exactly one split {1,3}|{2,4}.
-    auto edge = collect_split_seams(ab, "galaxy_hosts", "4x4_SplitHost", all_trays, {1, 2, 5, 6});
-    EXPECT_TRUE(edge.has_single) << "1256 must keep its regular single-host variant";
-    EXPECT_EQ(edge.multi_seams.size(), 1u) << "1256 must have exactly one split seam (no phantom); got: " << [&] {
-        std::string s;
-        for (const auto& x : edge.multi_seams) {
-            s += "[" + x + "]";
-        }
-        return s;
-    }();
-    EXPECT_TRUE(edge.multi_seams.count("1,3,|2,4,") == 1) << "1256 split seam must be {1,3}|{2,4}";
-
-    // {3,4,7,8}: interior band -> keep regular, and NO split at all.
-    auto interior = collect_split_seams(ab, "galaxy_hosts", "4x4_SplitHost", all_trays, {3, 4, 7, 8});
-    EXPECT_TRUE(interior.has_single) << "3478 must keep its regular single-host variant";
-    EXPECT_TRUE(interior.multi_seams.empty()) << "3478 must NOT be split (single host only); got a hostedge seam";
-}
-
-// rev-C galaxy_hosts (trays 2,4,1,3) -> physical seam {1,2}|{3,4}: same asic-family rule, different seam.
-TEST(PhysicalGroupingDescriptorTests, HostEdgeSplit_RevC_AsicFamilyDeterminesSplit) {
-    PhysicalGroupingDescriptor c(std::filesystem::path(
-        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto"));
-    const std::set<uint32_t> all_trays{1, 2, 3, 4};
-
-    auto edge = collect_split_seams(c, "galaxy_hosts", "4x4_SplitHost", all_trays, {1, 2, 5, 6});
-    EXPECT_TRUE(edge.has_single) << "rev-C 1256 must keep its regular single-host variant";
-    EXPECT_EQ(edge.multi_seams.size(), 1u) << "rev-C 1256 must have exactly one split seam";
-    EXPECT_TRUE(edge.multi_seams.count("1,2,|3,4,") == 1) << "rev-C 1256 split seam must be {1,2}|{3,4}";
-
-    auto interior = collect_split_seams(c, "galaxy_hosts", "4x4_SplitHost", all_trays, {3, 4, 7, 8});
-    EXPECT_TRUE(interior.has_single) << "rev-C 3478 must keep its regular single-host variant";
-    EXPECT_TRUE(interior.multi_seams.empty()) << "rev-C 3478 must NOT be split (single host only)";
+    const auto uneven = host_edge_splits(desc, "uneven_3");
+    EXPECT_TRUE(uneven.has_single);
+    EXPECT_EQ(uneven.shapes.count(std::vector<int>{1, 2}), 1u);
 }
 
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
