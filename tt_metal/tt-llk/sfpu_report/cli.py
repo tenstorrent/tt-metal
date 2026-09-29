@@ -110,6 +110,19 @@ def _sfpu_type_to_op(sfpu_types):
     return mapped, unmapped
 
 
+class _Incompatible(Exception):
+    """The side's C++ harness does not build with the tool's Python harness."""
+
+
+def _harness_compiles(side, arch, log, jobs):
+    """Compile one ordinary op on ``side``: a failure means harness skew, not the PR."""
+    try:
+        detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
+        return True
+    except RuntimeError:
+        return False
+
+
 def cmd_run(args):
     t0 = time.time()
     work = Path(args.work).resolve()
@@ -144,6 +157,15 @@ def cmd_run(args):
             )
             not_covered += ops[MAX_OPS:]
             ops = ops[:MAX_OPS]
+    sfpu_files = [p for p in plan.applied if "sfpu" in p.lower() and "/tests/" not in p]
+    if not ops and sfpu_files:
+        notes.append(
+            "This PR changes SFPU kernel files, but the machine code of no op this report covers "
+            "(elementwise unary SFPU and typecast) changed. The changed kernels may be binary or "
+            "ternary SFPU ops, which a later version will cover: "
+            + ", ".join(f"`{Path(p).name}`" for p in sfpu_files[:8])
+            + "."
+        )
     print(f"ops: {ops}  not covered: {not_covered}")
 
     perf_rows = {}
