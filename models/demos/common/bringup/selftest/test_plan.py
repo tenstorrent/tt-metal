@@ -250,3 +250,13 @@ def test_custom_loader_moves_the_sanity_into_r2(fx):
     assert r2["gate"]["cmd"].index("check_hf_sanity") < r2["gate"]["cmd"].index("check_hf ")
     m = r2["gate"]["metrics"]
     assert m["smoke_ok"] == "== 1" and m["revision_ok"] == "== 1" and "pcc_logits" in m and "text_top1_acc" in m
+
+
+def test_profile_gates_size_the_profiler_for_large_models():
+    """F52: the timeline dropped programs past the profiler's default 1000 per core (GLM: 1319 per chunk)."""
+    from models.demos.common.bringup.plan.ledger_gen import PROFILE_ENV
+
+    counts = [
+        int(w.split("=")[1]) for w in PROFILE_ENV.split() if w.startswith("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=")
+    ]
+    assert counts and counts[0] >= 4000
