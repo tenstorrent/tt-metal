@@ -2160,3 +2160,39 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+
+## S.moe_full.14 test (attempt 1)
+
+What
+- Replaced the rendered 34-line swap-14 test (moe_full layer 1, steps 1-14 on device, last: moe_combine) with swap
+  13's reviewed test plus moe_combine checks. Every swap-13 check is kept at its limits; `moe_combine` added to
+  SWAPPED.
+- New checks on mlp_out (all on the block's own device experts_out / shared_out, which are the module's inputs):
+  - vs the exact fp32 sum (CPU moe_combine): rel 0.003, ratio [0.997, 1.003], worst row 0.005.
+  - per addend (float64): |coef - 1| <= 0.002, add rel 0.008 (shared) / 0.005 (experts), add worst row 0.03.
+  - probes: the module on (experts, -shared) and (experts, 0) vs the exact sums, rel 0.004, row 0.005.
+  - vs golden (backstop): rel 0.02, coef within 0.004 of 1, on rows routed as in the golden ratio [0.98, 1.02],
+    worst row 0.03.
+- `_errors` now returns failing values when the row selection is empty (the stub routes no row as the golden). Before
+  this change the stub hit a torch `min()` RuntimeError there (a swap-13 check) and did not fail on an assertion.
+- CPU mutation study: /tmp/hy4_sm14/study.py, log study.log (outside the repo). It uses the swap-12 device tensors in
+  /tmp/hy4_sm12/seen.pt. The table is in the test docstring.
+
+Decisions
+- These bugs pass the 0.98 gate and every swap-13 check: 1.005 / 1.01 / 0.995 x shared, 1.003 / 1.005 x experts,
+  1.005 x both, shared rows 1023 / 1024 swapped, golden shared_out in place of the device one, and a cached golden
+  mlp_out (that one gives out rel 0.0036, better than the real run). The new checks catch every one of them.
+- The vs-CPU limits are tight because the inputs are exact. A bf16 output (0.0017) still passes them.
+
+Results
+- BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL (AssertionError).
+- Gate (device): PASS. pcc_swap_out 0.999973. mlp_out vs CPU: rel 0, coefs 1.000000, probes 0. mlp_out vs golden:
+  rel 0.0111, coef 1.00040, matched rows [0.99026, 1.00729], worst row 0.0176. Tail 0.0064, out rel 0.00753.
+
+Gotchas
+- Out rel vs golden is 0.00753 against 0.01, and the tail is 0.0064 against 0.01. Only ffn_residual remains.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
