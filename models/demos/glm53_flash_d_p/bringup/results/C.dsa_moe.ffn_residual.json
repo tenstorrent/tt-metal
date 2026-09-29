@@ -1,0 +1,65 @@
+{
+ "metrics": {
+  "comb_term_coef_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:24",
+   "value": 0.9999933242797852
+  },
+  "comb_term_rel_l2_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:24",
+   "value": 0.0038167843595147133
+  },
+  "norm_ratio_max_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 1.0030100345611572
+  },
+  "norm_ratio_max_ffn_residual_L03_vs_cpu": {
+   "t": "2026-09-29T12:54:23",
+   "value": 1.0003830194473267
+  },
+  "norm_ratio_min_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.9969860911369324
+  },
+  "norm_ratio_min_ffn_residual_L03_vs_cpu": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.9998111724853516
+  },
+  "pcc_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.9999957517347278
+  },
+  "post_term_coef_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:24",
+   "value": 0.9999943971633911
+  },
+  "post_term_rel_l2_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:24",
+   "value": 0.002373886527493596
+  },
+  "rel_l2_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.0029151947237551212
+  },
+  "rel_l2_ffn_residual_L03_vs_cpu": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.001659601810388267
+  },
+  "worst_row_rel_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.004421041812747717
+  },
+  "worst_row_rel_ffn_residual_L03_vs_cpu": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.0017609921051189303
+  },
+  "worst_stream_rel_ffn_residual_L03": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.0031173701863735914
+  },
+  "worst_stream_rel_ffn_residual_L03_vs_cpu": {
+   "t": "2026-09-29T12:54:23",
+   "value": 0.0016594764310866594
+  }
+ },
+ "task": "C.dsa_moe.ffn_residual"
+}
