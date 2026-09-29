@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -29,6 +30,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     if (mesh_cq.device()->get_view().get_devices().empty()) {
         return;
     }
+    mesh_workload.impl().enqueue_start_ = std::chrono::steady_clock::now();
 
     // Route service workloads to the SD path. Done here, not in add_program, because the physical
     // device needed to device-scope the service-core check is only known at enqueue. Common case -
