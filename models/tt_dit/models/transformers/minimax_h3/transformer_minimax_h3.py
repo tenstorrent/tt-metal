@@ -16,6 +16,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.tensor import pad_single
 from ....utils.tracing import StateTensor, traced_function
+from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
@@ -62,9 +63,11 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
+        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
+        self.precomputed_adaln = precomputed_adaln
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
@@ -77,14 +80,20 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
         )
-        self.linear = ColParallelLinear(
-            time_embed_dim,
-            NUM_OUT_MODULATION_PARAMS * hidden_size,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=self.tp_mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
+        # As in the blocks: with a precomputed table the projection never reaches the device and
+        # the caller hands `forward` the two gathered tables instead.
+        self.linear = (
+            None
+            if precomputed_adaln
+            else ColParallelLinear(
+                time_embed_dim,
+                NUM_OUT_MODULATION_PARAMS * hidden_size,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -97,6 +106,10 @@ class MiniMaxH3AdaLayerNormOut(Module):
             t = t.permute(1, 0, 2, *range(3, t.ndim))
             return t.reshape(-1, *trailing)
 
+        if self.precomputed_adaln:
+            state.pop("linear.weight", None)
+            state.pop("linear.bias", None)
+            return
         for key in ("weight", "bias"):
             value = state.get(f"linear.{key}")
             if value is None:
@@ -109,9 +122,22 @@ class MiniMaxH3AdaLayerNormOut(Module):
     def forward(
         self,
         hidden: ttnn.Tensor,
-        temb: ttnn.Tensor,
+        temb: ttnn.Tensor | None,
         timestep_indices: ttnn.Tensor,
+        modulation_tables: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
+        if modulation_tables is not None:
+            shift_table, scale_table = modulation_tables
+
+            def gather_precomputed(table: ttnn.Tensor) -> ttnn.Tensor:
+                return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
+
+            # The `1 +` is already folded into the cached scale table.
+            return ttnn.add(
+                ttnn.mul(self.norm(hidden), gather_precomputed(scale_table)), gather_precomputed(shift_table)
+            )
+        if self.precomputed_adaln:
+            raise ValueError("norm_out was built with precomputed_adaln but forward got no modulation_tables")
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
@@ -194,14 +220,23 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        # With `precomputed_adaln` the whole AdaLN branch -- `time_embedder`, every block's
+        # `adaln_proj` and `norm_out.linear`, ~26 GB -- is left off the device and the caller
+        # supplies a `MiniMaxH3AdalnCache` per forward instead. See `adaln_cache_minimax_h3`.
+        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
+        self.precomputed_adaln = precomputed_adaln
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
+        # Set by the pipeline before each denoise loop when `precomputed_adaln`; read inside
+        # `run_blocks` rather than passed, because that method is trace-captured and a trace
+        # signature may only carry tensors.
+        self.adaln_cache: MiniMaxH3AdalnCache | None = None
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
@@ -242,11 +277,17 @@ class MiniMaxH3Transformer3DModel(Module):
             dtype=ttnn.float32,
             mesh_device=mesh_device,
         )
-        self.time_embedder = MiniMaxH3TimestepEmbedding(
-            in_channels=freq_dim,
-            hidden_dim=time_embed_hidden_dim,
-            out_dim=time_embed_dim,
-            mesh_device=mesh_device,
+        # With precomputed AdaLN nothing on device consumes `temb`, so the embedder is neither
+        # built nor loaded; the host builder computes the same fp32 embedding itself.
+        self.time_embedder = (
+            None
+            if precomputed_adaln
+            else MiniMaxH3TimestepEmbedding(
+                in_channels=freq_dim,
+                hidden_dim=time_embed_hidden_dim,
+                out_dim=time_embed_dim,
+                mesh_device=mesh_device,
+            )
         )
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
@@ -282,6 +323,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    precomputed_adaln=precomputed_adaln,
                 )
                 for _ in range(num_layers)
             ]
@@ -297,6 +339,7 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            precomputed_adaln=precomputed_adaln,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
@@ -344,7 +387,7 @@ class MiniMaxH3Transformer3DModel(Module):
         assembly_indices: ttnn.Tensor,
         video_out_indices: ttnn.Tensor,
         audio_out_indices: ttnn.Tensor,
-        timestep: ttnn.Tensor,
+        timestep: ttnn.Tensor | None,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
@@ -362,7 +405,9 @@ class MiniMaxH3Transformer3DModel(Module):
         assembly_indices: [1, 1, 1, pad_to] integers, the source-table row of each packed row.
         video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers, the
             packed row of each target row.
-        timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
+        timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1]. `None` -- and
+            ignored -- when `precomputed_adaln`: the levels are baked into `self.adaln_cache`, and
+            the row indices below are offset by that step's `step_offset` instead.
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
@@ -407,8 +452,13 @@ class MiniMaxH3Transformer3DModel(Module):
         hidden = ttnn.unsqueeze(hidden, 0)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
-        temb = self._temb_state.value
+        if self.precomputed_adaln:
+            if self.adaln_cache is None:
+                raise RuntimeError("precomputed_adaln transformer needs `adaln_cache` set before forward")
+            temb = None
+        else:
+            self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+            temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
         ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
@@ -431,6 +481,7 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden,
             temb,
             timestep_idx,
+            modulation_tables=self.adaln_cache.final_tables() if self.precomputed_adaln else None,
         )
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
@@ -456,13 +507,17 @@ class MiniMaxH3Transformer3DModel(Module):
         self,
         hidden: ttnn.Tensor,
         logical_n: ttnn.Tensor,
-        temb: ttnn.Tensor,
+        temb: ttnn.Tensor | None,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         sequence_windows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        for block in self.transformer_blocks:
+        # `adaln_cache` is an object, not a tensor, so it is read off `self` rather than passed:
+        # the trace decorator's signature may only carry device tensors. The pipeline pins it for
+        # the whole denoise loop, and a cache change invalidates the trace (see `_prepare_denoise`).
+        cache = self.adaln_cache
+        for layer, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
                 logical_n,
@@ -471,6 +526,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 cu_window_seqlens=sequence_windows,
+                modulation_tables=cache.block_tables(layer) if cache is not None else None,
             )
         return hidden
 
