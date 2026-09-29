@@ -279,6 +279,9 @@ def test_moe_ag_validation(device, expect_error):
     y33 = _dev(device, torch.randn(1, 1, 33, 1024), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
     with expect_error(RuntimeError, "must be a multiple of 32"):  # untilize writes whole tiles
         ops.moe_ag_untilize_active(y33, counts, regions, d["lmap"], 64, tiles_per_block=32)
+    y2x16 = _dev(device, torch.randn(1, 2, 16, 1024), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)  # 32 rows over 2 padded slices
+    with expect_error(RuntimeError, "must be a multiple of 32"):
+        ops.moe_ag_untilize_active(y2x16, counts, regions, d["lmap"], 64, tiles_per_block=32)
     u32 = lambda n: _dev(device, torch.zeros(1, n, dtype=torch.int32), ttnn.uint32)
     y64 = _dev(device, torch.randn(1, 1, 64, 1024), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
     with expect_error(RuntimeError, "multiple of 16"):  # [NG] rows at NG x 4 B strides: 64 B NoC alignment

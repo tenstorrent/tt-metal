@@ -413,7 +413,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
-    const uint32_t ND = p.down.size();
+    uint32_t ND = p.down.size();
     p.nd_sg = ND / p.nsg;
     const uint32_t n_rd = p.readers.size();
     p.n_rd_sg = n_rd / p.nsg;
@@ -429,6 +429,17 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.n_rdn = p.rdown ? p.d_ch : 0;
     p.pcd_r = p.rdown ? 6 : 0;
     p.rem_cols = p.Ht - p.n_rdn * p.pcd_r;
+    if (p.nd_sg > p.rem_cols) {
+        // more down cores than output tile columns (small H on a wide grid, e.g. a Galaxy chip's 12 x 10): keep each
+        // subgrid's first rem_cols (its block is ordered nearest first); the rest stay idle
+        std::vector<Core> kept;
+        for (uint32_t k = 0; k < p.nsg; ++k) {
+            kept.insert(kept.end(), p.down.begin() + k * p.nd_sg, p.down.begin() + k * p.nd_sg + p.rem_cols);
+        }
+        p.down = kept;
+        p.nd_sg = p.rem_cols;
+        ND = p.down.size();
+    }
     const uint32_t base_p = p.rem_cols / p.nd_sg, extra = p.rem_cols % p.nd_sg;
     p.pcds.resize(ND);
     p.col0s.resize(ND);

@@ -4,19 +4,26 @@
 count shared by the ring SDPA and the MoE dispatch / combine / reduce is ``MiMoRuntimeOptions.num_links`` (None:
 resolved per system by :func:`resolve_num_links`)."""
 
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import _determine_device_name, get_num_links
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
 from models.demos.gpt_oss_d_p.tt.ccl import CCLManager as _CCLManager
 
 __all__ = ["CCLManager", "resolve_num_links"]
 
 
 def resolve_num_links(mesh_device, num_links=None):
-    """``num_links`` if given, else the system's: 3 on the Blackhole QuietBox (4 x p150; measured best: MoE dispatch
-    2.59 / 1.31 / 0.88 ms for 1 / 2 / 3 links at 640 tok/chip), else the deepseek_v3_d_p table (BH Galaxy: 2 ethernet
-    channels between neighbours; more fail with "Requested link index 2 is out of bounds")."""
+    """``num_links`` if given, else the system's (by the cluster type, so a submesh of a Galaxy is still a Galaxy):
+    3 on the Blackhole QuietBox (4 x p150; measured best: MoE dispatch 2.59 / 1.31 / 0.88 ms for 1 / 2 / 3 links at
+    640 tok/chip), 2 on a Blackhole Galaxy (2 ethernet channels between neighbours; more fail with "Requested link
+    index 2 is out of bounds"), else the deepseek_v3_d_p per-system table."""
     if num_links is not None:
         return num_links
-    return 3 if _determine_device_name(mesh_device) == "P150x4" else get_num_links(mesh_device)
+    cluster = ttnn.cluster.get_cluster_type()
+    if cluster == ttnn.cluster.ClusterType.P150_X4:
+        return 3
+    if cluster == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+        return 2
+    return get_num_links(mesh_device)
 
 
 class CCLManager(_CCLManager):
