@@ -1,0 +1,49 @@
+{
+ "metrics": {
+  "eps_rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 0.001679919078014791
+  },
+  "eps_worst_row_rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 0.0019168428843840957
+  },
+  "pcc_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:43",
+   "value": 0.9999960087118405
+  },
+  "rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:43",
+   "value": 0.0028290667105466127
+  },
+  "row_norm_ratio_max_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:43",
+   "value": 1.0008437633514404
+  },
+  "row_norm_ratio_min_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:43",
+   "value": 0.999377429485321
+  },
+  "syn_rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 0.0016904480289667845
+  },
+  "syn_row_norm_ratio_max_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 1.0008392333984375
+  },
+  "syn_row_norm_ratio_min_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 0.9994239211082458
+  },
+  "syn_worst_row_rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:44",
+   "value": 0.001886951387859881
+  },
+  "worst_row_rel_l2_ffn_norm_L01": {
+   "t": "2026-09-29T13:13:43",
+   "value": 0.003074960084632039
+  }
+ },
+ "task": "C.moe_full.ffn_norm"
+}
