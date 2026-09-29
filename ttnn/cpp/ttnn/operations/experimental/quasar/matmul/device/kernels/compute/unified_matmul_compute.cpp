@@ -9,11 +9,11 @@
 //
 // Compute threads (Quasar NEOs; one thread elsewhere): the C slice's subblocks, numbered across N
 // then down M, are dealt round-robin, thread t taking subblocks t, t + T, ... Every thread sees the
-// whole A and B slices (one resident copy). C_slice and C_partials are striped by thread, and the
-// pack / unpack tile indices are dense, so a lane is addressed one entry per credit. Every thread
-// runs the same number of rounds; a round past the last subblock only moves credits, so the lanes
-// carry equal traffic (the writer's round-robin over lanes and the packer's L1 accumulation both
-// need that).
+// whole A and B slices (one resident copy). In C_slice and C_partials each thread owns every N-th
+// entry, and the pack / unpack tile indices are dense, so a thread addresses them one entry per credit.
+// Every thread runs the same number of rounds; a round past the last subblock only moves credits, so
+// every thread pushes the same number of entries (the writer's round-robin over the threads' tile
+// counters and the packer's L1 accumulation both need that).
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <cstdint>
@@ -55,9 +55,9 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     DataflowBuffer C_partials(dfb::C_partials);
 
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
-    // The packer bakes the output ring's L1 base into its descriptor at init (compute_kernel_hw_startup
+    // The packer bakes the output DFB's L1 base into its descriptor at init (compute_kernel_hw_startup
     // programmed C_partials), so every switch between C_partials and C_slice re-inits the pack; a format
-    // reconfig alone would leave the data in the other ring.
+    // reconfig alone would leave the data in the other DFB.
     uint32_t pack_target_programmed = uint32_t(dfb::C_partials);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
@@ -96,7 +96,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 for (uint32_t round = 0; round < subblock_rounds; ++round) {
                     const uint32_t subblock = round * num_compute_threads + thread;
                     if (subblock >= num_subblocks) {
-                        // Credit-only round: move this lane's partials and output credits like a real
+                        // Credit-only round: move this thread's partials and output credits like a real
                         // subblock would (dummy_unpack / dummy_pack order the pop / push after the wait on
                         // Quasar; no-ops elsewhere).
                         if (reload_partials) {
@@ -116,7 +116,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     const uint32_t B_subblock_first_tile = n_tile;                  // B slice tile (0, n_tile)
                     tile_regs_acquire();
                     if (reload_partials) {
-                        // Reload this subblock's partials into DST, one lane entry per pop; the matmul MOP
+                        // Reload this subblock's partials into DST, one entry per pop; the matmul MOP
                         // must be re-initialised after any copy_init.
                         reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                         copy_init(dfb::C_partials);
@@ -155,7 +155,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     }
                     tile_regs_commit();
 
-                    // Pack the subblock one lane entry per push.
+                    // Pack the subblock one entry per push.
                     pack_target.reserve_back(subblock_tiles);
                     tile_regs_wait();
                     for (uint32_t tile = 0; tile < subblock_tiles; ++tile) {

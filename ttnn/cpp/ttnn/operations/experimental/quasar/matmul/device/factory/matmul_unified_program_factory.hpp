@@ -47,8 +47,8 @@ struct UnifiedMatmulPlan {
 
     // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are dealt
     // round-robin to the threads, which all see the whole A and B slices. Every thread runs
-    // subblock_rounds rounds; a round past the last subblock only moves credits, so the lanes of the
-    // thread-striped C_slice / C_partials rings carry equal traffic.
+    // subblock_rounds rounds; a round past the last subblock only moves credits, so every thread pushes
+    // and pops the same number of C_slice / C_partials entries.
     uint32_t num_compute_threads = 1;
     uint32_t num_subblocks = 0;    // per C slice: (C_slice_M_padded_tiles / subblock_M_tiles) * (N likewise)
     uint32_t subblock_rounds = 0;  // ceil(num_subblocks / num_compute_threads)
@@ -62,7 +62,7 @@ struct UnifiedMatmulPlan {
 
     // Borrowed operand: its L1 shard on each active core is bound as the DFB itself, no copy.
     // Needs batch 1, one C slice per core, and a shard grid in assignment order. C also needs one
-    // compute thread: several threads stripe the C_slice ring, which is not the shard's tile order.
+    // compute thread: with several, each thread owns every N-th C_slice entry, not the shard's tile order.
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;

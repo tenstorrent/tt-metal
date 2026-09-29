@@ -132,8 +132,9 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_entry_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
 
-    // The rings hold whole subblock rounds so every compute thread's lane is the same size, equal to what
-    // the lane packs per K chunk (the packer's L1 accumulation needs the same addresses every K chunk).
+    // C_slice and C_partials hold whole subblock rounds so every compute thread owns the same number of
+    // entries, equal to what it packs per K chunk (the packer's L1 accumulation needs the same addresses
+    // every K chunk).
     const uint32_t subblock_tiles = plan.subblock_M_tiles * plan.subblock_N_tiles;
     plan.num_subblocks =
         (plan.C_slice_M_padded_tiles / plan.subblock_M_tiles) * (plan.C_slice_N_padded_tiles / plan.subblock_N_tiles);
@@ -329,7 +330,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             shard_matches(B, plan.K_tiles, C_slice_N_tiles, plan.cores) &&
             (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
         // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order,
-        // which also needs a single compute thread (several threads stripe the ring by subblock).
+        // which also needs a single compute thread (with several, each thread owns every N-th entry).
         const bool C_shard_matches = output.has_value()
                                          ? shard_matches(output.value(), C_slice_M_tiles, C_slice_N_tiles, plan.cores)
                                          : (attributes.output_mem_config.is_sharded() &&
@@ -755,8 +756,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }
 
     // Every compute thread reads the whole A and B slices (ALL: one resident copy, each thread its own
-    // credits) and packs its own subblocks; a single thread takes the plain bindings. The rings the
-    // compute produces are always thread-striped (STRIDED), the only pattern for producers.
+    // credits) and packs its own subblocks; a single thread takes the plain bindings. The DFBs the
+    // compute produces are always STRIDED (each thread owns every N-th entry), the only pattern for producers.
     const bool threads_share_operands = plan.num_compute_threads > 1;
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
