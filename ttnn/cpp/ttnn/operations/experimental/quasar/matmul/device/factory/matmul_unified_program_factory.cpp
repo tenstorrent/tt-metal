@@ -132,16 +132,15 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_entry_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
 
-    // C_slice and C_partials hold whole subblock rounds so every compute thread owns the same number of
-    // entries, equal to what it packs per K chunk (the packer's L1 accumulation needs the same addresses
-    // every K chunk).
-    const uint32_t subblock_tiles = plan.subblock_M_tiles * plan.subblock_N_tiles;
-    plan.num_subblocks =
+    // C_slice and C_partials hold the subblocks padded to a multiple of the compute threads, so every thread
+    // owns the same number of entries, equal to what it packs per K chunk (the packer's L1 accumulation needs
+    // the same addresses every K chunk).
+    const uint32_t num_subblocks =
         (plan.C_slice_M_padded_tiles / plan.subblock_M_tiles) * (plan.C_slice_N_padded_tiles / plan.subblock_N_tiles);
-    plan.subblock_rounds = tt::div_up(plan.num_subblocks, plan.num_compute_threads);
-    const uint32_t C_ring_tiles = plan.subblock_rounds * plan.num_compute_threads * subblock_tiles;
-    plan.C_slice_entries = C_ring_tiles;
-    plan.C_partials_entries = C_ring_tiles;
+    const uint32_t C_slice_tiles =
+        tt::round_up(num_subblocks, plan.num_compute_threads) * plan.subblock_M_tiles * plan.subblock_N_tiles;
+    plan.C_slice_entries = C_slice_tiles;
+    plan.C_partials_entries = C_slice_tiles;
 
     // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
     // resident shard itself. A is borrowable only when one K chunk covers K.
@@ -589,7 +588,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     log_debug(
         tt::LogOp,
         "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (C slice {}x{}, subblock {}x{}, K chunk {} of {} tiles, "
-        "{} subblocks over {} compute threads in {} rounds)",
+        "{} compute threads)",
         plan.borrow_A,
         plan.borrow_B,
         plan.borrow_C,
@@ -599,9 +598,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         plan.subblock_N_tiles,
         plan.K_chunk_tiles,
         plan.K_tiles,
-        plan.num_subblocks,
-        plan.num_compute_threads,
-        plan.subblock_rounds);
+        plan.num_compute_threads);
     if (C.is_sharded() && !plan.borrow_C) {
         log_warning(
             tt::LogOp,
