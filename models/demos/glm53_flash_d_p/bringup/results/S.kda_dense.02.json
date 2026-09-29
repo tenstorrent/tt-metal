@@ -1,0 +1,121 @@
+{
+ "metrics": {
+  "comb_col_sum_err_swap_attn_hc": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0025892257690429688
+  },
+  "max_abs_swap_attn_hc_comb": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.00341796875
+  },
+  "max_abs_swap_attn_hc_post": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0048828125
+  },
+  "max_abs_swap_attn_hc_pre": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0024403929710388184
+  },
+  "norm_ratio_max_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:37:30",
+   "value": 1.0036077499389648
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:37:30",
+   "value": 1.0005639791488647
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:37:30",
+   "value": 1.0001907348632812
+  },
+  "norm_ratio_min_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9959993362426758
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9991434216499329
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9979953765869141
+  },
+  "pcc_swap_attn_hc": {
+   "t": "2026-09-29T03:37:29",
+   "value": 0.9999986168826368
+  },
+  "pcc_swap_attn_in": {
+   "t": "2026-09-29T03:37:29",
+   "value": 0.9999988646765312
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-29T03:37:29",
+   "value": 0.9999959004955072
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999972215049735
+  },
+  "pcc_swap_ffn_hc": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999973413541328
+  },
+  "pcc_swap_ffn_in": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999947295172472
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999967788451246
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999963792474821
+  },
+  "pcc_swap_mlp_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999933924409093
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9999971364871018
+  },
+  "rel_l2_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.002982753561809659
+  },
+  "rel_l2_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.001657875720411539
+  },
+  "rel_l2_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0015689185820519924
+  },
+  "rel_l2_swap_attn_hc_comb": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0015802496345713735
+  },
+  "rel_l2_swap_attn_hc_post": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.00134118867572397
+  },
+  "rel_l2_swap_attn_hc_pre": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0013967951526865363
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.0025981899816542864
+  },
+  "row_norm_ratio_max_swap_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 1.0043690204620361
+  },
+  "row_norm_ratio_min_swap_out": {
+   "t": "2026-09-29T03:37:30",
+   "value": 0.9950758814811707
+  }
+ },
+ "task": "S.kda_dense.02"
+}
