@@ -34,7 +34,8 @@ void bind_topk_router_gpt(nb::module_& mod) {
 
         Parallelizes the router linear layer ([B, hidden] x [hidden, num_experts])
         across four expert groups using 12 DRAM-aligned cores on Wormhole or
-        eight on Blackhole. Each group combines its worker and sender partials.
+        eight on Blackhole P150. Devices with fewer than eight DRAM-aligned workers
+        are unsupported. Each group combines its worker and sender partials.
 
         Args:
             input_tensor: [B, hidden_dim] bf16 tiled input, 1 <= B <= 32 with 32 padded rows
