@@ -91,7 +91,8 @@ revision `eec1ae6c`.
 - **The suite:** 204 passed and 3 skipped (the opt-in tracker and the two reference-venv tests), from an empty
   kernel cache in 73 minutes.
   - Token accuracy is 95.94 % again.
-  - The chunked-HiFT seam gate reproduced "Chunked HiFT" below to the last printed digit.
+  - The chunked-HiFT seam gate, still on its first three mels then, reproduced their 09-28 figures to the last
+    printed digit.
 - **The perf test**, in its own process, passed: worst 0.634, aggregate 0.479. It compiled 5,214 binaries: its
   process allocates differently from the suite's, so this start-up was neither cold nor warm.
 
@@ -554,36 +555,68 @@ A mel of 512 frames or more now runs through HiFT in 512-frame calls with upstre
 So HiFT has two geometries instead of twelve, and no length limit: the segment cap is back to upstream's own 1,600
 tokens (the flow's buckets and the LLM context grow to cover it: 17 flow buckets up to 2,560 tokens, context 2,560).
 
-**The seam gate** (`tests/pcc/test_hift_chunked.py`). In the reference venv, upstream's own `HiFTGenerator`
-(`scripts/hift_streaming_reference.py`) ran three real test-clean mels on the same schedule, through its own
-`inference(cache_source=...)` and `fade_in_out`, with one fixed sine-noise draw. TT runs the same mels with the same
-noise. Seam windows are the 160 ms crossfade ± 40 ms.
+**The seam gate** (`tests/pcc/test_hift_chunked.py`), strengthened on 2026-09-29.
 
-| mel | calls | seam | mechanism (upstream's F0 injected): PCC / max \|diff\| | no crossfade (control): PCC / max \|diff\| |
-|---|---|---|---|---|
-| 260-123288-0025, 600 frames | 2, the last anchored (424-frame overlap) | 1 | 0.99908 / 0.0135 | 0.99761 / 0.0199 |
-| 4992-23283-0012, 1,016 frames | 2, lined up | 1 | 0.99862 / 0.0077 | **0.91408 / 0.1028** |
-| 7021-79730-0003, 1,500 frames | 3, the last anchored (28-frame overlap) | 1 | 0.99855 / 0.0017 | 0.99795 / 0.0017 |
-| | | 2 | 0.99948 / 0.0337 | 0.99810 / **0.0701** |
+The reference: in the reference venv, upstream's own `HiFTGenerator` (`scripts/hift_streaming_reference.py`) runs the
+same schedule through its own `inference(cache_source=...)` and `fade_in_out`, with one fixed sine-noise draw. TT runs
+the same mels with the same noise.
 
-- **The gate:** at every seam, PCC ≥ 0.995 and max |diff| ≤ 0.05; over the whole signal, PCC ≥ 0.998 (measured
-  0.99927–0.99940). The mechanism passes everywhere.
-- **The control fails at two of the four seams.** At the other two, the two calls already agree over the overlap to
-  within the gate (the 1,500-frame mel's first seam is near-silent: max |diff| 0.0017 either way), so a missing
-  crossfade has nothing to show there.
+The mels:
+- six real test-clean mels, one per speaker, three female and three male;
+- each cut so that every crossfade lands in voiced speech: upstream's own F0 above 10 Hz over the crossfade ±4 frames;
+- nine seams in all;
+- the lengths cover an anchored last call with a long overlap (600, 1,100 frames) and with a short one (800,
+  1,300), and calls that line up (1,016, 1,520).
+
+The metric at each seam: the error relative to the signal over the 160 ms crossfade, ‖TT − upstream‖ / ‖upstream‖.
+
+| mel (speaker) | frames, calls | seam | mechanism (upstream's F0 injected): rel. error / PCC ±40 ms | no crossfade (control): rel. error | upstream's own two calls over the crossfade |
+|---|---|---|---|---|---|
+| 121-123852-0000 (F) | 600, 2 (the last anchored, 424-frame overlap) | 1 | 0.075 / 0.99763 | 0.147 | 0.128 |
+| 260-123288-0015 (M) | 800, 2 (the last anchored, 224) | 1 | 0.078 / 0.99919 | 0.145 | 0.597 |
+| 1221-135766-0011 (F) | 1,016, 2 (lined up) | 1 | 0.044 / 0.99930 | 0.200 | 0.414 |
+| 672-122797-0008 (M) | 1,100, 3 (the last anchored, 428) | 1 | 0.053 / 0.99884 | 0.180 | 0.318 |
+| | | 2 | 0.041 / 0.99954 | 0.108 | 0.284 |
+| 1995-1836-0004 (F) | 1,300, 3 (the last anchored, 228) | 1 | 0.051 / 0.99979 | 0.303 | 0.421 |
+| | | 2 | 0.050 / 0.99958 | 0.116 | 0.275 |
+| 908-157963-0007 (M) | 1,520, 3 (lined up) | 1 | 0.069 / 0.99820 | 0.473 | 0.625 |
+| | | 2 | 0.066 / 0.99952 | 0.387 | 0.489 |
+
+- **The gate:**
+  - at every seam, relative error ≤ 0.10 and PCC ≥ 0.995;
+  - over the whole signal, PCC ≥ 0.995 (measured 0.99641–0.99959);
+  - the control must fail at every seam.
+- **The mechanism passes with a modest margin:** 0.078 at worst, against 0.10.
+- **The control fails at all nine seams** (0.108–0.473), narrowly at one of them (0.108).
+- **max |diff| is printed, no longer gated.**
+  - It follows loudness: at the loudest seam it is 0.11 in both arms, so it sits outside the crossfade itself.
+  - The 09-28 gate (≤ 0.05) was set on mels whose seams were partly near-silent.
+- **The crossfade's gain.** Upstream's two Hamming halves sum to 1.0798–1.0800, so where the two calls agree, the
+  overlap is about 8 % louder than either. TT keeps that gain deliberately, for parity. Here, though, upstream's own
+  two calls differ by 0.13–0.63 over every crossfade (the last column). So a missing crossfade shows as a real
+  discontinuity at every seam, not only as missing gain.
+- **The lowest whole-signal PCC** (0.99641, the high-F0 female voice 1221-135766-0011) is the port's own HiFT error
+  with F0 injected, not the chunking: its seam measures 0.044.
 - chunking.py's stitch reproduces upstream's `fade_in_out` stitch exactly (max |diff| 0).
+- **The first gate** (2026-09-28): three mels, four seams, PCC and max |diff|.
+  - Two of those seams were near-silent, and the control failed at only two of the four.
+  - Measured by the relative error, the near-silent seam reads 0.154 for the mechanism, from a tiny signal. That is
+    why every seam is voiced now.
 
-**Own F0, spectral** (log-mel L1, TT chunked vs upstream chunked; seams ± 100 ms):
+**Own F0, spectral** (log-mel L1, TT chunked vs upstream chunked; seams ±100 ms):
 
 | mel | whole | around each seam | for scale: upstream chunked vs upstream single pass |
 |---|---|---|---|
-| 600 frames | 0.090 | 0.115 | 0.011 |
-| 1,016 frames | 0.101 | 0.110 | 0.036 |
-| 1,500 frames | 0.109 | 0.109, 0.107 | 0.039 |
+| 121-123852-0000 | 0.097 | 0.120 | 0.013 |
+| 260-123288-0015 | 0.091 | 0.110 | 0.019 |
+| 1221-135766-0011 | 0.076 | 0.085 | 0.031 |
+| 672-122797-0008 | 0.085 | 0.087, 0.090 | 0.035 |
+| 1995-1836-0004 | 0.089 | 0.073, 0.084 | 0.038 |
+| 908-157963-0007 | 0.090 | 0.088, 0.082 | 0.047 |
 
-The gate: whole ≤ 0.13, and no seam above 1.5x its utterance's whole-signal figure.
+The gate: whole ≤ 0.13, and no seam above 1.5x its utterance's whole-signal figure (measured at most 1.24).
 
-**Chunking adds nothing to the port's own spectral error.** The same mels through single-pass HiFT (log-mel L1):
+**Chunking adds nothing to the port's own spectral error** (2026-09-28, the first gate's three mels, through single-pass HiFT; log-mel L1):
 
 | mel | TT vs upstream, single pass, own F0 | the same, torch F0 injected | TT vs upstream, chunked, own F0 | TT chunked vs TT single | upstream chunked vs upstream single |
 |---|---|---|---|---|---|
