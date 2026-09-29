@@ -442,7 +442,7 @@ def test_scheduler_and_session_modules_split_the_device_from_the_rules() -> None
         "mtp_lanes.capture_verify_lanes(",
         "mtp_lanes.capture_commit_lanes(model, self.verify, guard=guard)",
         "mtp_lanes.capture_draft_lanes(model, self.verify, self.draft, output, guard=guard)",
-        "tracker.verify_before_replay(trace_id)",
+        "TraceAllocationTracker.verify_before_replay(mesh, trace_id)",
         "mtp_lanes.write_lane_accepted(self.model, self.verify, list(counts))",
         "self.lane_chain.set_active([0] * self.lanes)",
         # the admission's segments and the scheduler's yield point between them

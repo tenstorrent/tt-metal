@@ -72,8 +72,8 @@ void kernel_main() {
     add_init(c_var, c_eps);
     ACQ();
     add_tiles(c_var, c_eps, 0, 0, 0);
-    rsqrt_tile_init<false>();
-    rsqrt_tile<false>(0);
+    rsqrt_tile_init();
+    rsqrt_tile(0);
     pack_tile(0, c_recip);
     REL();
     recip.push_back(1);

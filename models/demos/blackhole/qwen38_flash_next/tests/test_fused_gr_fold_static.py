@@ -180,10 +180,9 @@ def test_runtime_arg_layout_matches_the_python_side():
     assert "size_t arg_idx = PHASE_RT + PHASE_RT_ARGS + 2 * get_arg_val<uint32_t>(PHASE_RT + 4);" in KERNEL
     assert "const uint32_t b_rt = A_RT + PHASE_RT_ARGS + 2 * get_arg_val<uint32_t>(A_RT + 4);" in KERNEL2
     assert "size_t arg_idx = b_rt + PHASE_RT_ARGS + 2 * get_arg_val<uint32_t>(b_rt + 4);" in KERNEL2
-    assert (
+    assert flat(
         "ready.up(noc, get_arg_val<uint32_t>(rt + PHASE_RT_ARGS + 2 * c), get_arg_val<uint32_t>(rt + PHASE_RT_ARGS + 1 + 2 * c), 1);"
-        in PHASE
-    )
+    ) in flat(PHASE)
     assert "base=[rank,before,after]" in BUILDER
     assert (
         "base+=[t.out.buffer_address(),t.local.buffer_address(),barrier,data,len(t.consumers),t.consumer_sem]"
@@ -325,9 +324,9 @@ def test_fact_3_data_wait_is_every_peers_every_tile_and_every_counter_is_reset_b
     assert "MulticastRoutingCommandHeader" not in PHASE  # the linear API sets the route from (start 1, range)
     # the consumer signal follows the data wait and its reset
     assert (
-        PHASE.index("noc_semaphore_wait_min(data, (RING - 1) * MY_TILES);")
-        < PHASE.index("noc_semaphore_set(data, 0);")
-        < PHASE.index("ready.up(noc, get_arg_val<uint32_t>(rt + PHASE_RT_ARGS + 2 * c)")
+        flat(PHASE).index(flat("noc_semaphore_wait_min(data, (RING - 1) * MY_TILES);"))
+        < flat(PHASE).index(flat("noc_semaphore_set(data, 0);"))
+        < flat(PHASE).index(flat("ready.up(noc, get_arg_val<uint32_t>(rt + PHASE_RT_ARGS + 2 * c)"))
     )
 
 

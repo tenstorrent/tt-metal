@@ -32,8 +32,8 @@ static __attribute__((noinline, noclone)) void normalize_rows(uint32_t cur_sum_c
             CircularBuffer(scratch_cb).reserve_back(1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
             tile_regs_commit();
             tile_regs_wait();
             configure_single_tile_pack(scratch_cb);

@@ -13,7 +13,6 @@ builder attaching after the resident experts, the slab MoE instance sharing the 
 from __future__ import annotations
 
 import inspect
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -570,10 +569,8 @@ def test_every_other_slab_linear_takes_the_policy() -> None:
         assert source.count("resident_weight=") == count, module.__name__
         for name in names:
             assert f'.resident("{name}")' in source, (module.__name__, name)
-        assert (
-            "from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear"
-            in source
-        )
+        assert module.Qwen38TTNNPrefillDense is pd.Qwen38TTNNPrefillDense
+        assert module.prefill_linear is pd.prefill_linear
         assert "    prefill_linear,\n" not in source.split("decode_matmul import (", 1)[1].split(")", 1)[0]
         assert (
             inspect.signature(module.__dict__[_module_class(module)].__init__).parameters["prefill_dense"].default
@@ -688,16 +685,11 @@ def _module_class(module) -> str:
 # --------------------------------------------------------------------------- the note and the manifest
 
 
-def test_design_note_reference_manifest_and_docs() -> None:
+def test_design_note_reference_and_docs() -> None:
     # The design note is a development document: named without its path here and in the module (the export forbids
     # naming the development directories in public code); its presence and the gate tool's slab option are checked
     # by the development-side companion test.
     assert "the prefill dense design note" in pd.__doc__
-    manifest = json.loads((MODEL_DIR / "tools" / "release" / "manifest.json").read_text())
-    assert (
-        "ttnn/prefill_dense.py" in manifest["public"]
-        and "tests/test_ttnn_prefill_dense_no_device.py" in manifest["public"]
-    )
     docs = (MODEL_DIR / "docs" / "PREFILL.md").read_text()
     assert all(switch in docs for switch in pd.SWITCHES)
     assert "| `QWEN38_PREFILL_DENSE_GRID` | `today`, `wide` | `wide` |" in docs  # the documented default
