@@ -13,8 +13,12 @@ prompt in one pass, and compares the device block against it:
   :class:`PrefillAttentionState`, each chunk's output compared with the reference's rows for those
   positions (so the sliding tail, the compressed-entry append and CSA's overlap carry are all
   exercised), plus the final state,
-* ``test_prefill_attention_rejects_*``   -- inputs v1 refuses, which must fail loudly before any
-  device work.
+* ``test_prefill_attention_tp4_single_shot`` / ``test_prefill_attention_tp4_chunked`` -- the same two
+  checks with the block tensor-parallel over a 1x4 submesh, like the decode block: ``q_b`` and the
+  sinks head-sharded, ``o_a`` group-sharded, ``o_b`` row-parallel plus an all-reduce, everything else
+  (``q_a``, ``kv``, the compressor and so the whole KV state) replicated. Needs an 8x4 system mesh and
+  fabric, like the prefill MoE TP test. The output and every state tensor are replicated, so one
+  rank's copy is compared against the same reference.
 
 Randomised weights are used on purpose. A CSA layer cannot be referenced with the real checkpoint
 (the HF module carries lightning-indexer weights the checkpoint does not ship), and random weights
@@ -169,16 +173,29 @@ def _reference(layer_idx: int, seq_len: int) -> Reference:
     return Reference(module, cfg, hidden, rope, output, kv_tail, entries)
 
 
-def _build(device, ref: Reference, layer_idx: int, weight_dtype) -> DeepSeekV4PrefillAttention:
-    return DeepSeekV4PrefillAttention(ref.config, layer_idx, ref.weights, device, ref.rope, weight_dtype=weight_dtype)
+def _build(device, ref: Reference, layer_idx: int, weight_dtype, tp_size: int = 1) -> DeepSeekV4PrefillAttention:
+    return DeepSeekV4PrefillAttention(
+        ref.config, layer_idx, ref.weights, device, ref.rope, weight_dtype=weight_dtype, tp_size=tp_size
+    )
 
 
-def _to_device(hidden: torch.Tensor, device) -> ttnn.Tensor:
-    """``[1, T, D]`` -> ``[1, 1, T, D]`` bf16 TILE on the device."""
-    return ttnn.from_torch(hidden.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+def _to_device(hidden: torch.Tensor, device, tp_size: int = 1) -> ttnn.Tensor:
+    """``[1, T, D]`` -> ``[1, 1, T, D]`` bf16 TILE on the device (replicated on every TP rank)."""
+    return ttnn.from_torch(
+        hidden.unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None,
+    )
 
 
-def _to_host(t: ttnn.Tensor) -> torch.Tensor:
+def _to_host(t: ttnn.Tensor, device=None, tp_size: int = 1) -> torch.Tensor:
+    """A tensor back on the host. Under TP the block's output and state are replicated, so the ranks
+    are stacked on dim 0 and rank 0's copy is returned."""
+    if tp_size > 1:
+        t = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[:1]
+        return t.to(torch.float32)
     return ttnn.to_torch(t).to(torch.float32)
 
 
@@ -189,17 +206,40 @@ def _assert_pcc(expected: torch.Tensor, actual: torch.Tensor, floor: float, what
     assert passing, f"{what}: PCC below {floor}: {message}"
 
 
-def _check_state(ref: Reference, state: PrefillAttentionState, seq_len: int, floor: float, layer_type: str) -> None:
+def _check_state(
+    ref: Reference,
+    state: PrefillAttentionState,
+    seq_len: int,
+    floor: float,
+    layer_type: str,
+    device=None,
+    tp_size: int = 1,
+) -> None:
     """The state a prompt leaves behind must be what the reference computes for the same prompt."""
     assert state.seq_len == seq_len
-    _assert_pcc(ref.kv_tail, _to_host(state.kv_tail), floor, f"{layer_type} K=V tail")
+    _assert_pcc(ref.kv_tail, _to_host(state.kv_tail, device, tp_size), floor, f"{layer_type} K=V tail")
     if ref.entries is None:
         assert state.compressed_kv is None
         return
     assert state.num_entries == ref.entries.shape[2], (
         f"{layer_type}: {state.num_entries} compressed entries on device, reference has " f"{ref.entries.shape[2]}"
     )
-    _assert_pcc(ref.entries, _to_host(state.compressed_kv), floor, f"{layer_type} compressed entries")
+    _assert_pcc(ref.entries, _to_host(state.compressed_kv, device, tp_size), floor, f"{layer_type} compressed entries")
+
+
+def _run_single_shot(device, tp_size, layer_idx, seq_len, weight_dtype, output_pcc, state_pcc) -> None:
+    """A whole prompt as one chunk: output and resulting state against the reference."""
+    ref = _reference(layer_idx, seq_len)
+    layer_type = ref.config.layer_types[layer_idx]
+    attn = _build(device, ref, layer_idx, weight_dtype, tp_size)
+
+    state = attn.new_state()
+    out = attn(_to_device(ref.hidden, device, tp_size), state)
+
+    assert tuple(out.shape) == (1, 1, seq_len, _HIDDEN)
+    tag = f"{layer_type} output, T={seq_len}" + (f", TP{tp_size}" if tp_size > 1 else "")
+    _assert_pcc(ref.output, _to_host(out, device, tp_size), output_pcc, tag)
+    _check_state(ref, state, seq_len, state_pcc, layer_type, device, tp_size)
 
 
 @pytest.mark.parametrize("weight_dtype, output_pcc, state_pcc", _WEIGHT_DTYPES)
@@ -207,16 +247,7 @@ def _check_state(ref: Reference, state: PrefillAttentionState, seq_len: int, flo
 @pytest.mark.parametrize("seq_len", (128, 1024))
 def test_prefill_attention_single_shot(device, reset_seeds, layer_idx, seq_len, weight_dtype, output_pcc, state_pcc):
     """A whole prompt as one chunk: output and resulting state against the reference."""
-    ref = _reference(layer_idx, seq_len)
-    layer_type = ref.config.layer_types[layer_idx]
-    attn = _build(device, ref, layer_idx, weight_dtype)
-
-    state = attn.new_state()
-    out = attn(_to_device(ref.hidden, device), state)
-
-    assert tuple(out.shape) == (1, 1, seq_len, _HIDDEN)
-    _assert_pcc(ref.output, _to_host(out), output_pcc, f"{layer_type} output, T={seq_len}")
-    _check_state(ref, state, seq_len, state_pcc, layer_type)
+    _run_single_shot(device, 1, layer_idx, seq_len, weight_dtype, output_pcc, state_pcc)
 
 
 # Chunk splits of the same 1024-token prompt. A first chunk of exactly one window, a chunk that
@@ -228,26 +259,76 @@ _CHUNKINGS = [
 ]
 
 
-@pytest.mark.parametrize("chunks", _CHUNKINGS)
-@pytest.mark.parametrize("layer_idx", _LAYERS)
-def test_prefill_attention_chunked(device, reset_seeds, layer_idx, chunks):
+def _run_chunked(device, tp_size, layer_idx, chunks) -> None:
     """The prompt as several chunks through one state matches the single-pass reference row for row."""
     seq_len = sum(chunks)
     ref = _reference(layer_idx, seq_len)
     layer_type = ref.config.layer_types[layer_idx]
-    attn = _build(device, ref, layer_idx, ttnn.bfloat8_b)
+    attn = _build(device, ref, layer_idx, ttnn.bfloat8_b, tp_size)
 
     state = attn.new_state()
     start = 0
     for i, chunk in enumerate(chunks):
-        out = attn(_to_device(ref.hidden[:, start : start + chunk], device), state)
+        out = attn(_to_device(ref.hidden[:, start : start + chunk], device, tp_size), state)
         assert tuple(out.shape) == (1, 1, chunk, _HIDDEN)
         _assert_pcc(
             ref.output[:, start : start + chunk],
-            _to_host(out),
+            _to_host(out, device, tp_size),
             _CHUNKED_PCC,
-            f"{layer_type} chunk {i} rows [{start}, {start + chunk})",
+            f"{layer_type} chunk {i} rows [{start}, {start + chunk})" + (f", TP{tp_size}" if tp_size > 1 else ""),
         )
         start += chunk
         assert state.seq_len == start
-    _check_state(ref, state, seq_len, _CHUNKED_STATE_PCC, layer_type)
+    _check_state(ref, state, seq_len, _CHUNKED_STATE_PCC, layer_type, device, tp_size)
+
+
+@pytest.mark.parametrize("chunks", _CHUNKINGS)
+@pytest.mark.parametrize("layer_idx", _LAYERS)
+def test_prefill_attention_chunked(device, reset_seeds, layer_idx, chunks):
+    """The prompt as several chunks through one state matches the single-pass reference row for row."""
+    _run_chunked(device, 1, layer_idx, chunks)
+
+
+# --------------------------------------------------------------------------- #
+# Tensor parallel: the block split over a 1x4 submesh, as in decode.
+# --------------------------------------------------------------------------- #
+_TP_SIZE = 4
+_PARENT_MESH = (8, 4)
+# Sequence length of the TP single-shot runs: long enough for several 128-row SDPA chunks and, for HCA,
+# eight closed compressed windows.
+_TP_SEQ_LEN = 1024
+# A subset of the chunkings: an uneven split that spans several compressed windows, and the all-minimum one.
+_TP_CHUNKINGS = [
+    pytest.param((256, 256, 512), id="256-256-512"),
+    pytest.param((128,) * 8, id="128x8"),
+]
+_TP_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}]
+
+
+def _tp_submesh(mesh_device):
+    """The 1x4 TP group carved out of the 8x4 system mesh."""
+    if tuple(mesh_device.shape) != _PARENT_MESH:
+        pytest.skip(f"need an {_PARENT_MESH[0]}x{_PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(0, 0))
+    assert submesh.get_num_devices() == _TP_SIZE
+    return submesh
+
+
+@pytest.mark.parametrize("device_params", _TP_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [_PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("weight_dtype, output_pcc, state_pcc", _WEIGHT_DTYPES)
+@pytest.mark.parametrize("layer_idx", _LAYERS)
+def test_prefill_attention_tp4_single_shot(mesh_device, reset_seeds, layer_idx, weight_dtype, output_pcc, state_pcc):
+    """TP4: a whole prompt as one chunk; the all-reduced output and the replicated state match the reference."""
+    submesh = _tp_submesh(mesh_device)
+    _run_single_shot(submesh, _TP_SIZE, layer_idx, _TP_SEQ_LEN, weight_dtype, output_pcc, state_pcc)
+
+
+@pytest.mark.parametrize("device_params", _TP_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [_PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("chunks", _TP_CHUNKINGS)
+@pytest.mark.parametrize("layer_idx", _LAYERS)
+def test_prefill_attention_tp4_chunked(mesh_device, reset_seeds, layer_idx, chunks):
+    """TP4: the prompt as several chunks through one (replicated) state, row for row against the reference."""
+    submesh = _tp_submesh(mesh_device)
+    _run_chunked(submesh, _TP_SIZE, layer_idx, chunks)
