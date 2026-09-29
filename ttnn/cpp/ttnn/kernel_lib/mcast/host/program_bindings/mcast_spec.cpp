@@ -183,14 +183,11 @@ void McastImpl::attach(
     m2::ProgramSpec& spec,
     m2::ProgramRunArgs& run_args,
     std::string_view prefix,
-    std::span<const m2::KernelSpecName> targets,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
+    std::span<const m2::KernelSpecName> targets) const {
     prepare_arguments_();
     require_unbound_();
-    TT_FATAL(!cfg_.base_sem_id && !cfg_.sem_ids, "ProgramSpec multicast attachment uses named semaphore resources");
     const auto indices = validate_targets(spec, prefix, targets);
     const auto count = required_semaphores_();
-    TT_FATAL(adopted.empty() || adopted.size() == count, "Adopt exactly the required multicast semaphore roles");
     // Native value objects provide the transaction boundary; no retained invocation state.
     auto staged = spec;
     auto staged_args = run_args;
@@ -200,24 +197,9 @@ void McastImpl::attach(
     }
     std::array<m2::SemaphoreSpecName, 3> names;
     for (uint32_t role = 0; role < count; ++role) {
-        names[role] = adopted.empty() ? m2::SemaphoreSpecName(spec_name(prefix, resource_roles[role])) : adopted[role];
-        for (uint32_t previous = 0; previous < role; ++previous) {
-            TT_FATAL(names[role] != names[previous], "Multicast semaphore roles must use distinct resources");
-        }
-        if (adopted.empty()) {
-            TT_FATAL(semaphore_names.insert(names[role]).second, "Multicast semaphore name is already in use");
-            staged.semaphores.push_back({.unique_id = names[role], .target_nodes = participating_});
-        } else {
-            auto it =
-                std::find_if(staged.semaphores.begin(), staged.semaphores.end(), [&](const m2::SemaphoreSpec& sem) {
-                    return sem.unique_id == names[role];
-                });
-            TT_FATAL(it != staged.semaphores.end(), "Unknown adopted multicast semaphore");
-            TT_FATAL(it->advanced_options.initial_value == 0, "Adopted multicast semaphores must start at zero");
-            TT_FATAL(
-                participating_.subtract(node_ranges(it->target_nodes)).empty(),
-                "Adopted multicast semaphore does not cover participating nodes");
-        }
+        names[role] = m2::SemaphoreSpecName(spec_name(prefix, resource_roles[role]));
+        TT_FATAL(semaphore_names.insert(names[role]).second, "Multicast semaphore name is already in use");
+        staged.semaphores.push_back({.unique_id = names[role], .target_nodes = participating_});
     }
     std::set<m2::KernelSpecName> runtime_kernels;
     for (const auto& args : staged_args.kernel_run_args) {

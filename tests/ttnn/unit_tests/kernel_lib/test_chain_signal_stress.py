@@ -56,11 +56,11 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
         for i, size in enumerate([65536, 65536, 2048])
     ]
     program = ttnn.ProgramDescriptor(cbs=cbs)
-    mcast.attach(program, "chain_mcast", [kernel])
+    mcast.attach(program, "chain_mcast", [kernel], 0)
     offset = dict(kernel.named_compile_time_args)["chain_mcast_ct_offset"]
     assert len(kernel.compile_time_args[offset:]) == 4 and kernel.compile_time_args[offset + 3] == 2
     if reverse:
-        reverse.attach(program, "reverse_mcast", [kernel])
+        reverse.attach(program, "reverse_mcast", [kernel], mcast.next_semaphore_id())
     else:
         ttnn.attach_absent(kernel, "reverse_mcast")
     program.kernels = [kernel]

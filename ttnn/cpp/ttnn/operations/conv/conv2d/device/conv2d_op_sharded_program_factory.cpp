@@ -1428,7 +1428,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         ttnn::kernel_lib::host::attach_absent(writer_mcast_sender_desc, "weights_mcast");
     } else {
         const std::array weights_kernels{std::ref(writer_mcast_sender_desc), std::ref(writer_mcast_receiver_desc)};
-        weights_mcast->attach(desc, "weights_mcast", weights_kernels);
+        weights_mcast->attach(desc, "weights_mcast", weights_kernels, static_cast<uint32_t>(desc.semaphores.size()));
     }
     desc.kernels.push_back(std::move(writer_mcast_sender_desc));
     if (create_writer_mcast_receiver) {

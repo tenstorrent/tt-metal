@@ -151,18 +151,6 @@ def test_mcast_three_rectangles(device, noc):
     run_mcast_groups_case(device, [([(0, 0), (2, 0), (4, 0)], [(1, 0)])], noc=noc)
 
 
-@pytest.mark.parametrize("counter", [False, True])
-def test_mcast_zero_ack(device, counter):
-    run_mcast_groups_case(device, [([(2, 0), (4, 0)], [(0, 0)])], zero_ack=True, counter=counter, rounds=1)
-
-
-@pytest.mark.parametrize("counter", [False, True])
-def test_mcast_adopted_semaphores(device, counter):
-    run_mcast_groups_case(
-        device, [([(0, 0), (2, 0), (3, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])], adopted=True, counter=counter
-    )
-
-
 def _mapped_gap_geometry(device):
     width = _worker_width_with_barrier(device, preferred=9, minimum=3, height=3)
     return [([(x, 0) for x in range(width)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]
@@ -242,11 +230,6 @@ def test_chain_smoke(device):
     run_mcast_groups_case(device, CHAIN_GEOMETRIES[0].resolve(device), chain_link=True)
 
 
-@pytest.mark.parametrize("counter", [False, True])
-def test_chain_adopted_semaphores(device, counter):
-    run_mcast_groups_case(device, CHAIN_GEOMETRIES[2].resolve(device), chain_link=True, counter=counter, adopted=True)
-
-
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 @pytest.mark.parametrize("mixed_events", [False, True])
@@ -293,7 +276,6 @@ def test_policy_backpressure(device, noc, counter):
         large=True,
         delayed=True,
         mixed_events=True,
-        adopted=True,
         rounds=12,
     )
 
