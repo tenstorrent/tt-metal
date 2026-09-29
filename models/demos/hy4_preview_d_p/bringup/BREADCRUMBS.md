@@ -3044,3 +3044,35 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
+
+## S.moe_shared.12 test (attempt 1)
+
+What
+- Replaced the rendered swap-12 test (moe_shared, layer 2, experts last) with swap 11's reviewed test plus the experts
+  block of test_swap_moe_full_12_experts.py (built by script: SWAPPED + "experts", the EX_* constants, the ex_check
+  block before "Block out"). Every swap-11 check is kept at its limits.
+- Experts checks: vs the CPU experts on the device ffn_norm + device routing (rel <= 0.015, ratio [0.98, 1.02], worst
+  row <= 0.018, coef 1 +- 0.004); the module on ffn_norm x 2 vs the CPU experts (same limits, the only clamp check at
+  layer 2); vs golden rel <= 0.03, coef 1 +- 0.004, and on rows routed as in the golden ratio [0.97, 1.03], row <= 0.04.
+
+Decisions
+- Worst-row limit 0.018 (layer 1: 0.03), taken from test_c_moe_shared_experts.py: at layer 2 dropping the 1-token
+  expert 180 scores 0.0197. The golden limits stay at layer 1's values; they are backstops.
+- No new mutation study. The step is the same as at layer 1, and the component test already has the layer-2 table.
+- Made ex_check robust: no rows routed as golden now fails cleanly (it used to raise in `min()` on an empty tensor
+  under the stub), and a nan coefficient fails the coef check (`not abs(c - 1) <= tol`).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999995; experts vs CPU 0; vs golden 0.0106, 2003 matched rows, row 0.0031).
+- BRINGUP_IMPL=stub: FAIL (assertion, every check).
+- Gate (device): PASS. pcc_swap_out 0.999974; experts vs CPU 0.00822 [0.99399, 1.00533] row 0.01091 coef 1.00018;
+  x2 0.00814 row 0.01146; vs golden 0.0209, 1939 matched rows [0.98971, 1.00695] row 0.0164; out rel 0.00718.
+
+Gotchas
+- test_swap_moe_full_12_experts.py (frozen) has the same empty-rows `min()` crash under a broken router. It still
+  fails, but with a RuntimeError instead of an assertion.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
