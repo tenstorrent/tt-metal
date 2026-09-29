@@ -59,6 +59,33 @@ _TP_POLICY = {
 }
 
 
+# A ring collective needs the closing hop from the last device back to the first, which a
+# linear fabric does not route: every device enters the collective and none of them completes,
+# so the failure is a silent device timeout rather than an error.
+_RING_FABRICS = frozenset(
+    getattr(ttnn.FabricConfig, name)
+    for name in ("FABRIC_1D_RING", "FABRIC_2D_TORUS_X", "FABRIC_2D_TORUS_Y", "FABRIC_2D_TORUS_XY")
+)
+
+
+def validate_fabric_topology(topology):
+    """Reject a ring topology on a fabric that cannot route the wrap-around link.
+
+    DISABLED means the caller has not opened a fabric yet, which this cannot judge; a
+    deployment that sets the fabric at mesh-open time is the case worth catching.
+    """
+    if topology != ttnn.Topology.Ring:
+        return
+    fabric = ttnn.get_fabric_config()
+    if fabric == ttnn.FabricConfig.DISABLED or fabric in _RING_FABRICS:
+        return
+    raise ValueError(
+        f"Ring collectives need a ring fabric; {fabric} does not route the wrap-around link and "
+        "every collective would hang. Open the mesh with FabricConfig.FABRIC_1D_RING, or set the "
+        "decoder policy's 'ring' to False."
+    )
+
+
 def supported_device_counts():
     """Device counts a qualified mesh can have, for callers that validate before opening one."""
     return frozenset(key[2] for key in _SUPPORTED_MESHES)
@@ -194,6 +221,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             # Qwen38Decoder's packed residual branch has a full-hidden contract.
             self.policy["carry_residual"] = False
         self.topology = ttnn.Topology.Ring if self.policy.get("ring", False) else ttnn.Topology.Linear
+        validate_fabric_topology(self.topology)
         self.ccl = ccl if ccl is not None else TT_CCL(mesh_device)
         self.config = copy.deepcopy(hf_config)
         # Every attention head count below is the PER-DEVICE count downstream: the KV cache shape,
