@@ -567,3 +567,28 @@ Added `tt/mlp.py:TtDenseMLP` + `build_mlp` (from `mimo_v2_6_d_p_2x2/tt/mlp.py`),
 - Gate: PCC 0.999994; golden rel L2 0.0036, ratio [0.9977, 1.0004], worst row 0.0043, coef 0.99917; clamp probe rel
   0.0031, ratio [0.9980, 1.0004], worst row 0.0039.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_mlp.py`
+
+## S.kda_dense.09 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc through ffn_norm plus mlp on device, layer 0). I rewrote it from swap 08's test.
+It keeps every swap-08 check and the gated pcc_swap_out. Added:
+- mlp vs the CPU mlp of the device ffn_norm, and the module on layer 1's golden ffn_norm, at the component test's
+  limits (rel <= 0.015, ratio [0.99, 1.01], worst row <= 0.02, coef [0.995, 1.005]). The clamp probe (48 * device
+  ffn_norm vs CPU) uses the component limits (0.01 / [0.99, 1.01] / 0.03).
+- mlp vs golden mlp_out, looser because it carries the upstream error: rel <= 0.02, ratio [0.98, 1.02], worst row
+  <= 0.03, coef [0.99, 1.01]. Device: 0.0138 / [0.9938, 1.0041] / 0.0243 / 0.99779.
+- mlp's share of block out: block out vs ffn_residual(h_mid, device ffn_hc, CPU mlp of device ffn_norm). Limits: rel
+  <= 0.0035, ratio [0.995, 1.005]. Device: 0.0020 / [0.9986, 1.0004].
+- swap 08's collapse- and norm-share tails now run the device mlp (`muts["mlp"]`) instead of the CPU mlp, so each still
+  isolates one step. Limits unchanged. Device: 8e-5 and 0.0016 / [0.9971, 1.0025]. The all-CPU ffn tail (cpu_tail)
+  is unchanged; device 0.0035 / [0.9874, 1.0130] (limit 0.005 / [0.975, 1.025]).
+Sensitivity (CPU host script /tmp/s09/sens.py, not kept): an mlp error reaches block out at about 0.8x. Results as tail
+rel / ratio: x1.005 0.0040 / 1.0079; 7-bit weight truncation (HiFi2-like) 0.0052 / 0.9905; 0.2% per-row noise
+[0.9913, 1.0068]; row zeroed [1.0, 1.39]. All of these fail. bf16 everything 0.0018 / [0.9995, 1.0002] passes.
+Results: device passes (out PCC 0.999978, rel 0.0075, ratio [0.9797, 1.0083]). Reference passes (out rel 0.0017).
+Stub fails (PCC 0 and every golden check). The same-input mlp checks score 0 on the stub, because the CPU mlp of a zero
+input is zero.
+Watch: cpu_tail margin is shrinking (0.0025 -> 0.0029 -> 0.0035 of 0.005), and mlp vs golden worst row is 0.0243 of
+0.03. ffn_residual is next.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_09_mlp.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
