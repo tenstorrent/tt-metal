@@ -1373,6 +1373,13 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
     if "LLAMA_PCC_LOG" not in os.environ:
         monkeypatch.setenv("LLAMA_PCC_LOG", "1")
     if quasar:
+        # Disable the program cache on Quasar. The cache-hit partial-fast-path (UpdateProgramRunArgs)
+        # mis-applies some ops' per-dispatch state on reuse -- e.g. paged_fill_cache's DRAM write overrun --
+        # whose proper fix is a codeowner-side program-factory change. With the cache off, every dispatch
+        # takes the full SetProgramRunArgs path, which is correct. Slower, but the bring-up e2e is minimal
+        # (1 layer, 1 decode step). Nothing re-enables it, so this one call covers the whole run.
+        mesh_device.disable_and_clear_program_cache()
+
         # minimal_matmul pins an 8x8 grid unavailable on the Quasar emulator -> force ttnn.linear.
         monkeypatch.setenv("DISABLE_MINIMAL_MATMUL", "1")
         # Default to a 1-layer stack for bring-up unless the caller asked for more.
