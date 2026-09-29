@@ -76,6 +76,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
         // Part 1: Exact summation of first NUM_TERMS terms
         // Σ_{k=0}^{NUM_TERMS-1} scale/(x+k)^(n+1)
+#pragma GCC unroll NUM_TERMS
         for (int k = 0; k < NUM_TERMS; k++) {
             sfpi::vFloat xi = x + static_cast<float>(k);
 

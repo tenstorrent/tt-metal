@@ -1096,7 +1096,7 @@ def test_eltwise_unary_sfpu_polygamma_order(
         # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
         # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
         # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
-        # and 1.1% for bfloat16, against 23.4 float32 ULP and 0.56 bfloat16 ULP above 2^-100.
+        # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
         custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
         polygamma_order=polygamma_order,
     )
