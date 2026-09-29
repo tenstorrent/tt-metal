@@ -33,6 +33,9 @@ def _device_params(c):
     return p
 
 
+_TORCH_DTYPE = {"BFLOAT16": torch.bfloat16, "FLOAT32": torch.float32}
+
+
 def _pcc(a, b):
     a, b = a.double().flatten(), b.double().flatten()
     a, b = a - a.mean(), b - b.mean()
@@ -53,7 +56,8 @@ def test_rms_norm_ttnn(mesh_device, device_params, case):
     g = torch.Generator().manual_seed(c["seed"])
     xs, ws = c["input"], c["weight"]
 
-    x = torch.randn([n_dev, *xs["shape"][1:]], generator=g).to(torch.bfloat16)  # device d gets x[d:d+1]
+    # device d gets x[d:d+1]; kept at the captured input dtype (a FLOAT32 input is not rounded to bf16)
+    x = torch.randn([n_dev, *xs["shape"][1:]], generator=g).to(_TORCH_DTYPE[xs["dtype"]])
     w = (1.0 + 0.5 * torch.randn(ws["shape"], generator=g)).to(torch.bfloat16)
     rs = c.get("residual")  # optional residual_input_tensor, drawn after w so residual-free cases keep their inputs
     r = torch.randn([n_dev, *rs["shape"][1:]], generator=g).to(torch.bfloat16) if rs else None
