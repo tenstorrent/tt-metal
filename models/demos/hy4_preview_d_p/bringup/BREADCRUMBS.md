@@ -162,3 +162,27 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
+
+## S.dense_full.01 test (attempt 1)
+
+What was done
+- Reviewed the rendered swap test (dense_full layer 0, attn_hc on device, rest CPU). Kept the gated pcc_swap_out
+  (0.98) and added asserted checks (informational metrics): the gates vs golden (8 columns, finite, rel L2 <= 0.01,
+  per-column max abs <= 0.015, as the component test), attn_x rel L2 <= 0.01, h_mid rel L2 <= 0.01 and worst row
+  <= 0.05, block out finite and rel L2 <= 0.01. Also asserts the device module is not a CPU bridge.
+- Measured gate mutations through the block on the CPU (table in the test docstring). fn / base post-row swaps,
+  post x 1.02 and a zeroed gate row pass the 0.98 out gate; pre-gate bugs change nothing downstream at layer 0
+  (identical streams + RMSNorm), so only the gates and attn_x checks see them.
+
+Gotchas
+- The reference re-running the indexer on the golden input matches the golden topk at 0.79 (exact-position match),
+  yet attn_out PCC is 0.999999: near-tie key choices at layer 0. Not gated here; relevant for the indexer test.
+- Stream-order bugs (fn stream blocks permuted, RMS over one stream) stay invisible at layer 0.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999999, rel 0.00167). BRINGUP_IMPL=stub: FAIL (out PCC 0.524, every check).
+- Gate (device): PASS. pcc_swap_out 0.999998; gates rel 0.000539, col max 0.0023; attn_x 0.00103; h_mid 0.00174 /
+  worst row 0.0034; out rel 0.00177.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py
