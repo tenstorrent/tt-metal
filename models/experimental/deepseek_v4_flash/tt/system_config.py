@@ -150,6 +150,9 @@ class PrefetcherSettings:
 
     num_prefetch_pages: int = 16
     num_prefetch_slabs: int = 2
+    # ``None`` = on wherever the device has Blackhole DRAM programmable cores (firmware bundle
+    # >= 19.12.0.0); ``False`` runs every projection as its DRAM -> L1 copy per call instead.
+    enabled: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -467,6 +470,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("pipeline", "d2h_fifo_bytes", "DEEPSEEK_V4_D2H_FIFO_BYTES", int),
     ("prefetcher", "num_prefetch_pages", "DEEPSEEK_V4_PREFETCH_PAGES", int),
     ("prefetcher", "num_prefetch_slabs", "DEEPSEEK_V4_PREFETCH_SLABS", int),
+    ("prefetcher", "enabled", "DEEPSEEK_V4_PREFETCHER", _env_bool),
     ("moe", "experts_block_size", "DEEPSEEK_V4_EXPERTS_BLOCK_SIZE", int),
     ("attention", "sdpa_causal", "DEEPSEEK_V4_SDPA_CAUSAL", _env_bool),
     ("attention", "sdpa_q_chunk_size", "DEEPSEEK_V4_SDPA_Q_CHUNK", int),

@@ -279,9 +279,25 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.weight_dtype = weight_dtype if weight_dtype is not None else system_config.decode.ttnn_weight_dtype
         weight_dtype = self.weight_dtype
-        # The DRISC weight prefetcher is always on: every decode projection streams its
-        # weights through a shared GCB rather than copying DRAM -> L1 per call.
-        self.use_prefetcher = True
+        # The DRISC weight prefetcher streams every decode projection's weights through a shared
+        # GCB rather than copying DRAM -> L1 per call. Its DRAM-sender GCBs need Blackhole DRAM
+        # programmable cores (firmware bundle >= 19.12.0.0); without them every projection takes
+        # its DRAM -> L1 path. ``prefetcher.enabled`` (DEEPSEEK_V4_PREFETCHER) pins either way.
+        prefetcher_supported = ttnn.experimental.is_tensor_prefetcher_supported(full_device)
+        prefetcher_enabled = system_config.prefetcher.enabled
+        if prefetcher_enabled and not prefetcher_supported:
+            raise RuntimeError(
+                "DEEPSEEK_V4_PREFETCHER is on, but this device has no DRAM programmable cores "
+                "(Blackhole firmware bundle >= 19.12.0.0)"
+            )
+        self.use_prefetcher = prefetcher_supported if prefetcher_enabled is None else bool(prefetcher_enabled)
+        if not self.use_prefetcher:
+            logger.warning(
+                "DRISC weight prefetcher OFF (supported={}, prefetcher.enabled={}): decode projections copy "
+                "DRAM -> L1 per call",
+                prefetcher_supported,
+                prefetcher_enabled,
+            )
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
@@ -713,6 +729,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         by the layer count and exhaust L1 -- and long before that, the DRISC senders' state
         zone, which holds only about six GCBs per device however small they are.
         """
+        if not self.use_prefetcher:
+            return None
         key = id(device)
         if key not in self._prefetch_buffers_by_device:
             self._prefetch_buffers_by_device[key] = (
