@@ -1444,3 +1444,32 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53
 - In the run log, the first `FAIL pcc=0` line comes from the precompile collect pass (placeholder outputs), not from
   the real pass.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py`
+
+## S.dsa_moe.13 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through shared_expert on the device. I rewrote it
+from swap 12's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new shared-share block (every device output up to experts fixed, CPU shared_expert and tail) is
+  the base of the shared expert's share. The experts share is now that block vs the experts-share block, and it
+  reproduces swap 12 exactly (0.00441 / [0.9982, 1.0034]).
+- New checks:
+  - Shared share at block out: rel <= 0.0015, ratio [0.998, 1.002].
+  - shared_expert vs the fp32 CPU shared expert of the same ffn_norm: the component test's limits. Also run on chunk 0.
+  - shared_expert vs golden: rel <= 0.012, ratio [0.985, 1.015], worst row <= 0.03, coefficient [0.997, 1.003],
+    blocks [0.995, 1.005].
+- `_experts_checks` takes a `step=` argument, so the shared expert reuses it.
+- Sensitivity: a host-only script, /tmp/glm_s13/sens.py (not kept). It uses the golden tail tensors and needs no
+  weights, because the tail is linear. The shared expert reaches block out at about 0.26x (||shared|| / ||mlp|| is
+  0.37). x1.005 shows as max ratio 1.0030 and a zeroed last row as min 0.962. Both fail the share ratio limit.
+- The swiglu clamps are not probed here, because the component test's clamp probe covers them.
+Results:
+- Device passes: PCC 0.999981 (c0 0.999975), the same over 2 runs.
+  - Shared share: 0.00056 / [0.9998, 1.0001].
+  - Shared vs CPU same input: 0.00216 / [0.9993, 1.0004] / 0.00264 / coefficient 0.99985.
+  - Shared vs golden: 0.00351.
+  - About 116 s.
+- Reference passes (exact). Stub fails (AssertionError).
+- In the log, the first `FAIL pcc_swap_out_c0 pcc=0` line comes from the precompile collect pass, not from the real
+  pass.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_13_shared_expert.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
