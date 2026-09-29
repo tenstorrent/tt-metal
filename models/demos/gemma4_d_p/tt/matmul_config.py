@@ -58,9 +58,14 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
     n_tiles = weight.padded_shape[-1] // tile
     if m_tiles > 8 or n_tiles % _PER_CORE_N_1D or n_tiles // _PER_CORE_N_1D > grid.x * grid.y:
         return None
+    in0_block_w = (
+        hidden_states.memory_config().shard_spec.shape[1] // tile
+        if hidden_states.memory_config().is_sharded()
+        else _in0_block_w(k_tiles)
+    )
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
-        in0_block_w=_in0_block_w(k_tiles),
+        in0_block_w=in0_block_w,
         out_subblock_h=2 if m_tiles % 2 == 0 else 1,
         out_subblock_w=_PER_CORE_N_1D,
         per_core_M=m_tiles,
@@ -73,3 +78,28 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
 
 def _in0_block_w(k_tiles):
     return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
+
+
+# K tiles per core when the activation of a 1D projection is width-sharded.
+_IN0_SHARD_TILES = 8
+
+
+def in0_width_shard(x):
+    """x width-sharded over K / 8 tiles cores when it takes the 1D projection config, else x unchanged.
+
+    With an interleaved activation the 1D in0-multicast matmul reads and multicasts all of it through one core,
+    which paces the short-M projections; a width-sharded activation is multicast by the cores that hold it.
+    """
+    tile = ttnn.TILE_SIZE
+    m_tiles = x.padded_shape[-2] // tile
+    k_tiles = x.padded_shape[-1] // tile
+    if x.memory_config().is_sharded() or m_tiles > 8 or k_tiles % _IN0_SHARD_TILES:
+        return x
+    grid = x.device().compute_with_storage_grid_size()
+    cores = ttnn.num_cores_to_corerangeset(k_tiles // _IN0_SHARD_TILES, grid, row_wise=True)
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, (m_tiles * tile, _IN0_SHARD_TILES * tile), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.to_memory_config(x, memory_config)

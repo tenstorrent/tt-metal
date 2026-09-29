@@ -14,6 +14,7 @@ from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_
 from .operations import (
     apply_per_head_norm,
     apply_qkv_projection,
+    in0_width_shard,
     projection_matmul_configs,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
@@ -297,6 +298,10 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sharded_out = in0_width_shard(tt_out)
+        if sharded_out is not tt_out:
+            tt_out.deallocate(True)
+            tt_out = sharded_out
         program_config, compute_kernel_config = projection_matmul_configs(tt_out, self.weights.o_proj)
         projected = ttnn.linear(
             tt_out, self.weights.o_proj, program_config=program_config, compute_kernel_config=compute_kernel_config

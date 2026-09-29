@@ -6,7 +6,11 @@
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import (
+    in0_width_shard,
+    prefill_1d_matmul_program_config,
+    prefill_matmul_program_config,
+)
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
@@ -128,13 +132,19 @@ class MLP:
         # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
 
-        gate = self._project(hidden_states, self.gate_proj, act_mc, gelu=True)
-        up = self._project(hidden_states, self.up_proj, act_mc)
+        x = in0_width_shard(hidden_states)
+        gate = self._project(x, self.gate_proj, act_mc, gelu=True)
+        up = self._project(x, self.up_proj, act_mc)
+        if x is not hidden_states:
+            x.deallocate(True)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
         # Pack output to DRAM ahead of the reduce-scatter.
-        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
+        x = in0_width_shard(hidden)
+        output = self._project(x, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
         hidden.deallocate(True)
+        if x is not hidden:
+            x.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
         return output

@@ -345,6 +345,8 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
+        if hidden_states.memory_config().is_sharded():
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
         return hidden_states
 

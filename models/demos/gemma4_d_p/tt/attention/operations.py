@@ -18,7 +18,11 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import (
+    in0_width_shard,
+    prefill_1d_matmul_program_config,
+    prefill_matmul_program_config,
+)
 
 from .weights import AttentionWeights
 
@@ -68,14 +72,18 @@ def projection_matmul_configs(hidden_states, weight):
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
-    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
-    return ttnn.linear(
-        hidden_states,
+    x = in0_width_shard(hidden_states)
+    program_config, compute_kernel_config = projection_matmul_configs(x, w_tensor)
+    out = ttnn.linear(
+        x,
         w_tensor,
         memory_config=memory_config,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
+    if x is not hidden_states:
+        x.deallocate(True)
+    return out
 
 
 def split_qkv_heads_prefill(

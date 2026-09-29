@@ -221,10 +221,11 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
     Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
     the halo granularity. Global layers use k 256. Slabs up to 512 tokens take q = slab / 4 (one tile when that
     is not whole tiles), giving 8 local heads x 4 Q chunks = 32 units, too few to fill the grid, so the K split
-    spreads them over three bands. Larger slabs fill the grid unsplit at q 96.
+    spreads them over three bands. Larger slabs fill the grid unsplit at q 96. Sliding slabs up to 512 tokens
+    leave most of the grid idle too (16 or 32 units) and also split K three ways.
     """
     if sliding:
-        return 128, 128, 1
+        return 128, 128, 3 if q_slab_tokens <= 512 else 1
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         return (q_chunk if q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT), 256, 3
