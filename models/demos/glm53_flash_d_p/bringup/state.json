@@ -817,6 +817,90 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.kda_dense.ffn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "8eceadd5-323d-4725-a6c2-d624f965d731"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_dense.ffn_residual.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_dense.ffn_residual.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 156.1,
+    "session_id": "8eceadd5-323d-4725-a6c2-d624f965d731",
+    "t": "2026-09-29T05:55:41"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 9.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T05:56:07"
+   }
+  ],
+  "last_run": "2026-09-29T05:56:07",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.kda_dense.ffn_residual.log",
+  "metrics": {
+   "comb_term_coef_ffn_residual_L00": 0.9999982118606567,
+   "comb_term_coef_ffn_residual_L01": 0.9999973177909851,
+   "comb_term_rel_l2_ffn_residual_L00": 0.0013961967779323459,
+   "comb_term_rel_l2_ffn_residual_L01": 0.001587451552040875,
+   "norm_ratio_max_ffn_residual_L00": 1.005216121673584,
+   "norm_ratio_max_ffn_residual_L01": 1.0029398202896118,
+   "norm_ratio_min_ffn_residual_L00": 0.9948546290397644,
+   "norm_ratio_min_ffn_residual_L01": 0.9971794486045837,
+   "pcc_ffn_residual_L00": 0.9999930724298195,
+   "post_term_coef_ffn_residual_L00": 0.999998927116394,
+   "post_term_coef_ffn_residual_L01": 0.9999989867210388,
+   "post_term_rel_l2_ffn_residual_L00": 0.002078693127259612,
+   "post_term_rel_l2_ffn_residual_L01": 0.0055167339742183685,
+   "rel_l2_ffn_residual_L00": 0.0037230700254440308,
+   "rel_l2_ffn_residual_L01": 0.0032117879018187523,
+   "worst_row_rel_ffn_residual_L00": 0.009568327106535435,
+   "worst_row_rel_ffn_residual_L01": 0.006672428920865059,
+   "worst_stream_rel_ffn_residual_L00": 0.004716556053608656,
+   "worst_stream_rel_ffn_residual_L01": 0.0034260277170687914
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T05:55:58",
+  "status": "PASS"
+ },
  "C.kda_dense.mlp": {
   "agent": {
    "defs": {
