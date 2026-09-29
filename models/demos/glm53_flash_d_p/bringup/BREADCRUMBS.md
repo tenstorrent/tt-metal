@@ -1872,3 +1872,29 @@ Watch: the all-CPU-block rel is 0.00235 of 0.003 (1.3x margin), with 51 flips of
 still 0.048 of 0.05. ffn_residual's comb term will see the same comb bias.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_06_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.ffn_collapse test (attempt 1)
+Reviewed the rendered component test for ffn_collapse at layer 4. It is the same weightless mHC collapse of h_mid with
+ffn_hc's pre as at dsa_moe layer 3. The rendered file was the bare `run_component_test`, so I rewrote it from the
+frozen dsa_moe ffn_collapse test and re-measured every limit on the layer-4 golden. The gated metric is unchanged:
+pcc_ffn_collapse_L04 (PCC >= 0.99).
+- New at layer 4: only pre columns 0 and 1 carry weight (means 0.008 / 0.98). Columns 2 and 3 are ~1e-6 (hc_eps).
+  So a dropped last stream, streams 2 / 3 swapped, and pre col 2 / 3 x1.01 all give the correct output here. The test
+  therefore also runs the same layer-4 module on layer 3's golden (metrics tagged `L04_on_L03`), where pre col 3 is
+  live: streams 2 / 3 swapped scores PCC 0.077, and pre col 3 x1.01 coefficient 1.0083. Pre col 2 carries no weight in
+  either layer. Known issues Proposed has the entry.
+- The checks and limits are the dsa_moe ones: rel L2 <= 0.008, worst row <= 0.008, ratio [0.99, 1.01], coefficient
+  [0.996, 1.004]. They run on layer 4 chunks 1 and 0 and on layer 3 chunk 1, and each is written `not x <= lim`, so
+  NaN fails. On layer 4 they catch x1.005 / x0.995 (coefficient 1.0051 / 0.9951), pre col 0 x1.01 (worst row 0.0079
+  on chunk 1, 0.0098 on chunk 0), pre col 1 x1.01, zeroed rows or columns, one row's pre reversed, and a duplicated
+  row. Noise: bf16 products and sums 0.0034 / worst row 0.0049.
+- Sensitivity: CPU host scripts /tmp/kmffnc/sens.py and l3.py (not kept). The numbers are in the test docstring.
+Results:
+- Device (the gate's default mode) passes already, because `_device_step` builds tt/collapse.py for any layer. It
+  scores PCC 0.999995, rel 0.00301, worst row 0.00398, ratio [0.9973, 1.0025], and coefficient 1.00010. Chunk 0 scores
+  0.00301 / 0.00383, and layer 3 0.00293 / 0.00398. The device output equals the fp32 collapse rounded to bf16.
+  About 15 s.
+- Reference passes (0.00257 / 0.00349; layer 3 0.00252). Stub fails (PCC 0).
+Next step: implement only needs to add ffn_collapse to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
