@@ -55,7 +55,7 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   | Kernel: cq_dispatch_subordinate.cpp                                 |   |
 |   |                                                                     |   |
 |   |   L1 carve-out realtime_profiler_msg_t:                              |   |
-|   |     records[16] (SPSC ring), record_wr_idx, record_rd_idx,          |   |
+|   |     records[4] (SPSC ring), record_wr_idx, record_rd_idx,           |   |
 |   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
 |   |     realtime_profiler_remote_wr_idx_addr                            |   |
 |   |                                                                     |   |
@@ -133,7 +133,7 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
-| **Dispatch_s L1** | Record ring (`records[16]`, `record_wr_idx` = open slot, `record_rd_idx` = reader's ack), program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_wr_idx_addr**, realtime_profiler_state (stops the compute helper). Host writes the profiler tensix L1 address of `record_wr_idx`, then NOC XY (which enables publishing), after the reader kernels launch. |
+| **Dispatch_s L1** | Record ring (`records[4]`, `record_wr_idx` = open slot, `record_rd_idx` = reader's ack), program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_wr_idx_addr**, realtime_profiler_state (stops the compute helper). Host writes the profiler tensix L1 address of `record_wr_idx`, then NOC XY (which enables publishing), after the reader kernels launch. |
 | **Profiler tensix L1** | **config_buffer_addr**, **record_wr_idx** (published count; written only by dispatch_s, terminate flag in bit 31), sync_request, sync_host_timestamp. |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
