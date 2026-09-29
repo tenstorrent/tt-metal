@@ -1637,3 +1637,25 @@ Watch: the CPU flip count (35 of 64) and the CPU ratio low side (0.9930 of 0.985
 kda_moe swaps add device steps in front of the router (known issue: a fixed router-flip limit fills up).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_01_attn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.attn_collapse test (attempt 1)
+Reviewed the rendered component test for attn_collapse at layer 4 (the same weightless op as dsa_moe attn_collapse).
+The rendered file was the bare `run_component_test`. I rewrote it from the dsa_moe layer-3 test and kept its limits,
+because layer 4's golden behaves the same: streams differ (rel 0.99..1.00 from stream 0), pre spans 8.4e-5..0.98, so
+PCC alone catches stream and pre order bugs (pre reversed, pre 0/1 swapped, stream-major rows, last stream dropped, post
+instead of pre, unweighted mean, pre sum-normalized, one row's pre reversed: PCC <= 0.971). No second layer needed.
+Checks: the gated PCC; finite; rel L2 <= 0.01; per-token norm ratio [0.99, 1.01]; worst per-token rel L2 <= 0.008.
+Limits are written `not x <= lim`, so a NaN metric fails.
+Sensitivity (CPU host script /tmp/kmcol/sens.py, not kept; the numbers are in the test docstring). These pass PCC and
+fail the extra checks: output x1.005 (worst row 0.0087), x1.01, x1.02, pre column 0 / 1 / 3 x1.01 (worst row 0.013 /
+0.0091 / 0.0098), last row or last 32 rows zeroed, last 32 columns zeroed. Not caught: pre column 2 x1.01 (no effect
+on this golden). Noise: fp32 reference 0.0027 / worst row 0.0042; all-bf16 accumulation 0.0040 / 0.0051; 0.3% element
+noise 0.0040 / 0.0052.
+Results:
+- Device (the gate's default mode) passes already, because `_device_step` builds tt/collapse.py for any layer. It
+  scores PCC 0.999995, rel 0.0031, ratio [0.9966, 1.0034], worst row 0.0046.
+- Reference passes (0.0027 / [0.9966, 1.0033] / 0.0042). Stub fails (PCC 0).
+Watch: the worst-row margin is about 1.7x (0.0046 of 0.008). Next step: implement only needs to add attn_collapse to
+`DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
