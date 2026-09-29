@@ -77,6 +77,7 @@ const exp::NodeCoord mNode{2, 0};  // 3rd distinct core for the middle op of 3-p
 const char* kWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_writer.cpp";
 const char* kReaderKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_reader.cpp";
 const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_writer_raw.cpp";
+const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -201,6 +202,54 @@ Program build_raw_writer(
         .kernel = exp::KernelSpecName{"raw_writer"},
         .runtime_arg_values =
             exp::MakeRuntimeArgsForSingleNode(node, {{"dst_addr", dst_addr}, {"pattern", pattern}, {"stall", stall}})}};
+    exp::SetProgramRunArgs(program, params);
+    return program;
+}
+
+// Multi-tensor kernel: binds in0/in1/in2/out, READS in0 + in2, WRITES out, leaves in1 untouched. Used to
+// verify resolve_buf_rw tracks the RIGHT bound objects (not just the right counts). No runtime args.
+Program build_multi(
+    distributed::MeshDevice& md,
+    exp::NodeCoord node,
+    const MeshTensor& in0,
+    const MeshTensor& in1,
+    const MeshTensor& in2,
+    const MeshTensor& out) {
+    exp::KernelSpec k{
+        .unique_id = exp::KernelSpecName{"multi"},
+        .source = kMultiKernel,
+        .num_threads = 1,
+        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+    };
+    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(k, "in0", "in0");
+    BindTensorParameterToKernel(k, "in1", "in1");
+    BindTensorParameterToKernel(k, "in2", "in2");
+    BindTensorParameterToKernel(k, "out", "out");
+
+    exp::ProgramSpec spec{
+        .name = "hazard_multi",
+        .kernels = {k},
+        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+            .name = "wu", .kernels = {exp::KernelSpecName{"multi"}}, .target_nodes = node}},
+    };
+    spec.tensor_parameters = {
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"in0"}, .spec = in0.tensor_spec()},
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"in1"}, .spec = in1.tensor_spec()},
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"in2"}, .spec = in2.tensor_spec()},
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"out"}, .spec = out.tensor_spec()},
+    };
+
+    Program program = exp::MakeProgramFromSpec(md, spec);
+    exp::ProgramRunArgs params;
+    params.tensor_args = {
+        {exp::TensorParamName{"in0"}, exp::TensorArgument{in0}},
+        {exp::TensorParamName{"in1"}, exp::TensorArgument{in1}},
+        {exp::TensorParamName{"in2"}, exp::TensorArgument{in2}},
+        {exp::TensorParamName{"out"}, exp::TensorArgument{out}},
+    };
     exp::SetProgramRunArgs(program, params);
     return program;
 }
@@ -479,6 +528,62 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     expect_buf_rw(wwl, range, *md, "raw_writer");
     expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
+}
+
+// Resolve (op-to-op R/W inference): a kernel that binds four tensors but touches a subset must resolve to
+// exactly the RIGHT bound objects -- by buffer address (the cross-op RAW key) and by param name -- with
+// the bound-but-unaccessed tensor absent. This is what a single-tensor test cannot catch.
+TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
+    auto md = devices_.at(0);
+    IDevice* dev = md->get_devices()[0];
+    if (skip_if_not_gen1(dev)) {
+        GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
+    }
+    auto& cq = md->mesh_command_queue();
+    distributed::MeshCoordinateRange range(md->shape());
+    auto in0 = alloc(*md, BufferType::DRAM);
+    auto in1 = alloc(*md, BufferType::DRAM);  // bound but never accessed by the kernel
+    auto in2 = alloc(*md, BufferType::DRAM);
+    auto out = alloc(*md, BufferType::DRAM);
+    distributed::MeshWorkload wl;
+    wl.add_program(range, build_multi(*md, wNode, in0, in1, in2, out));
+    // One blocking enqueue compiles the binary (for the ELF note) and populates the CRTA (bound addresses).
+    distributed::EnqueueMeshWorkload(cq, wl, /*blocking=*/true);
+    distributed::Finish(cq);
+
+    auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name("multi");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev);
+
+    // Address is what the CRTA stores (MeshTensor::address()), so expectations match exactly.
+    auto addr = [](const MeshTensor& t) { return static_cast<uint32_t>(t.address()); };
+    auto addr_set = [](const auto& v) {
+        std::set<uint32_t> s;
+        for (const auto& a : v) {
+            s.insert(a.address);
+        }
+        return s;
+    };
+    auto name_set = [](const auto& v) {
+        std::set<std::string_view> s;
+        for (const auto& a : v) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+
+    EXPECT_FALSE(rw.opaque);
+    EXPECT_EQ(rw.reads.size(), 2u);
+    EXPECT_EQ(rw.writes.size(), 1u);
+    // The RIGHT objects, by buffer address: reads {in0, in2}, writes {out}.
+    EXPECT_EQ(addr_set(rw.reads), (std::set<uint32_t>{addr(in0), addr(in2)}));
+    EXPECT_EQ(addr_set(rw.writes), (std::set<uint32_t>{addr(out)}));
+    // in1 is bound but never accessed -> must appear in neither set.
+    EXPECT_EQ(addr_set(rw.reads).count(addr(in1)), 0u) << "in1 must not be read";
+    EXPECT_EQ(addr_set(rw.writes).count(addr(in1)), 0u) << "in1 must not be written";
+    // And the slot->binding name map resolves correctly too.
+    EXPECT_EQ(name_set(rw.reads), (std::set<std::string_view>{"in0", "in2"}));
+    EXPECT_EQ(name_set(rw.writes), (std::set<std::string_view>{"out"}));
 }
 
 }  // namespace tt::tt_metal
