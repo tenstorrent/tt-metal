@@ -82,6 +82,9 @@ Everything outside git lives under `/localdev/$USER/bringup/<model>/`: `hf/`, `g
 - A gate passes only if deps passed, frozen files are unchanged, a device gate uses `scripts/run_safe_pytest.sh` or
   `scripts/tt-probe.sh`, the command exits 0, every metric meets its threshold and every artifact exists.
 - A task with tests fails until its tests are frozen; freezing requires PASS with the CPU reference and FAIL with a zero stub.
+- A swap test gates every swapped step vs the CPU step on the same inputs (`checks="steps"`, F49), so swap tests are
+  frozen without a test-role review unless `agents.swap_review` names the block type. `BRINGUP_IMPL=mutate:<kind>`
+  (testing/mutate.py) proves on the CPU that a test catches a wrong module.
 - An agent step fails if the tree changed outside the brief's paths, if any command reached the device without a safe
   runner, or if the known-issues file lost its format.
 - Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.
