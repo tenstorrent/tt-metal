@@ -17,6 +17,7 @@ This directory holds a vendored copy of the DeepSeek-V4.1-Flash reference infere
 | `config.json` | upstream `inference/config.json`, unchanged (the released model config) |
 | `kernel_cpu.py` | new (Tenstorrent, Apache-2.0): torch ports of upstream `inference/kernel.py` |
 | `testing.py` | new (Tenstorrent, Apache-2.0): small config, stub tokenizer, seeded weight init, prefill helper |
+| `oracle.py` | new (Tenstorrent, Apache-2.0): cached expected results (block captures, shared and final state, chunk contract) for real-dims layer subsets, synthetic or checkpoint weights |
 | `__init__.py` | new, empty |
 
 Upstream files that are not vendored: `kernel.py` (tilelang, replaced by `kernel_cpu.py`), `generate.py`, `convert.py`, `run.sh`, `requirements.txt`, and `examples/`.
