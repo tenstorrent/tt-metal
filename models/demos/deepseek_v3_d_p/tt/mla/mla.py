@@ -1377,7 +1377,9 @@ class ttMLA:
         cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
         update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
         already folded its single-shot onto the block-cyclic update_padded write)."""
+        declared_topology = kvpe_cache.storage.tensor_topology()
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
+        kvpe_cache.storage.update_tensor_topology(declared_topology)
 
     def _update_kv_cache(
         self,
