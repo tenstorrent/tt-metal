@@ -682,7 +682,7 @@ def test_ragged_batched_spill_all_at_once(device):
 THREAD_DEALS = [
     # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. With four threads the
     # subblock count decides the rounds: fewer subblocks than threads, a last round with idle threads,
-    # full rounds, and subblock padding; the K-spill cases send the partials through the striped ring.
+    # full rounds, and subblock padding; the K-spill cases send the partials through C_partials.
     ("one_subblock", (2, 2), (2, 2), 2, 0),
     ("two_subblocks", (2, 4), (2, 2), 2, 0),
     ("three_subblocks", (3, 2), (1, 2), 2, 0),
