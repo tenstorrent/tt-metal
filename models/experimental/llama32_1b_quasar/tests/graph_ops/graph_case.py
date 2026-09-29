@@ -482,6 +482,10 @@ def _host_tensor_bytes(spec):
 
 # Float dtypes we materialize into TILE layout via quasar.tilize on Quasar (see _quasar_tilize_build).
 _QUASAR_TILE_REROUTE_DTYPES = {"BFLOAT16", "FLOAT32"}
+# Only reroute SHORT tensors (height in rows). The mainline-tilize fault is a 1-tile-tall (32-row)
+# multicore row-split artifact; taller tensors split cleanly and don't need the reroute, and rerouting a
+# large tensor just adds a slow device tilize on the sim. 64 = 2 tile-rows, comfortably covers the fault.
+_QUASAR_TILE_REROUTE_MAX_HEIGHT = 64
 
 
 def _quasar_tilize_build(data, tt_dtype, memory_config, mesh_device):
@@ -524,20 +528,23 @@ def build_tensor(spec, mesh_device, case, op_name, key):
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
 
-    # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-short
-    # tensors (MEM_READ_NO_RESPONSE) and leaks state into later ops. Build TILE floats via quasar.tilize
-    # instead (the model's path). Only for already tile-aligned shapes: from_torch(TILE) auto-pads a
-    # non-tile-aligned height/width, but quasar.tilize requires it divisible by TILE (dim%32==0) and FATALs
-    # otherwise -- so non-aligned tensors keep the from_torch path (which pads). Partial shards also keep
-    # from_torch (their logical->shard padding is a from_torch behavior); non-float dtypes / ROW_MAJOR are
-    # unaffected.
+    # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-SHORT
+    # tensors (1-tile-tall: the multicore row-split sub-tiles -> MEM_READ_NO_RESPONSE) and leaks state into
+    # later ops. Build those via quasar.tilize instead (the model's path). Gated to:
+    #   * SHORT height (<= _QUASAR_TILE_REROUTE_MAX_HEIGHT): tall tensors split cleanly and never hit the
+    #     fault, so they keep from_torch -- rerouting them just adds a slow device tilize of many tiles on
+    #     the ~50KHz sim (a 1024x8192 = 8192-tile input blew the 300s test timeout).
+    #   * tile-aligned (dim%32==0): from_torch(TILE) auto-pads a non-aligned dim, quasar.tilize FATALs on it.
+    #   * float dtype, non-partial-shard: partial shards / non-float / ROW_MAJOR keep from_torch.
     shp = spec["shape"]
     tile_aligned = len(shp) >= 2 and shp[-2] % 32 == 0 and shp[-1] % 32 == 0
+    short = len(shp) >= 2 and shp[-2] <= _QUASAR_TILE_REROUTE_MAX_HEIGHT
     if (
         _is_quasar(mesh_device)
         and spec["layout"] == "TILE"
         and spec["dtype"] in _QUASAR_TILE_REROUTE_DTYPES
         and tile_aligned
+        and short
         and not partial
     ):
         tt = _quasar_tilize_build(data, DTYPE[spec["dtype"]], memory_config, mesh_device)
