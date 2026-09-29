@@ -50,7 +50,7 @@
 # case for a block float rather than a representative one. Their `{out: Bfp8_b,
 # max_ulp: 0}` wildcards below record the sampled measurement; every driver names an
 # input, and every input has a more specific tolerance row, so no test gates a Bfp8_b
-# output by steps (test_no_driver_variant_is_step_gated_on_a_bfp8_b_output).
+# output by steps (test_a_block_float_output_is_never_enrolled_only_incidentally_covered).
 #   wh: Abs/Neg max 15616 ULP, Square max 17664, Floor/Ceil/Trunc max 0, 2026-09-16
 
 Floor:
