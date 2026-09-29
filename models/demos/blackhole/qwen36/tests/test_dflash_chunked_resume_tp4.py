@@ -16,7 +16,9 @@ RIDER cases (review F2): a short prompt prefilled WHILE a partial is held (a rid
 the plugin's oversized-rider step; or a rider sharing a call with the partial's intermediate chunk, the served chunk
 step) must leave exactly the state the same prompt leaves when no partial is held (slots RREF / RCAND, same
 snapshot and host-copy comparison). A preempted request's replay reaches the model as exactly such a prompt (prompt +
-outputs as prompt ids, admitted whole). A second NEGATIVE CONTROL (the rider's GDN reset skipped, so it starts from the
+outputs as prompt ids, admitted whole), and so does a "medium" prompt (more than one chunk, below the plugin's
+chunked_prefill_min_tokens = 8192) that arrives while a partial is in flight (its own prefill step, never split). A
+second NEGATIVE CONTROL (the rider's GDN reset skipped, so it starts from the
 partial's state) must be DETECTED.
 
 The REFERENCE (unchunked, today's path) and the CANDIDATE (chunked) run in DIFFERENT physical slots (1 and 6) with
@@ -62,7 +64,7 @@ MAX_NEW = 48
 L_LONG = int(os.environ.get("D1_LONG", "32768"))
 BPU_BIG = ((-(-(L_LONG + 2 * MAX_NEW + 64) // BLOCK_SIZE)) + 31) // 32 * 32
 BPU_SMALL = 16
-BPU_MID = 48  # rider-state slots: prompts up to 3072 tokens
+BPU_MID = 144  # rider-state slots: prompts up to 9216 tokens (the 8191-token medium case)
 
 
 def _tables():
@@ -490,6 +492,10 @@ def test_dflash_chunked_prefill_equals_unchunked(mesh_device, monkeypatch):
         run_rider_case("RIDER_600_only_call", 600, 4200, "only")
         run_rider_case("RIDER_2048_with_chunk", 2048, 6200, "with_chunk")
         run_rider_case("RIDER_2600_only_call", 2600, 4200, "only")
+        # (h) the plugin's chunked_prefill_min_tokens (8192): a "medium" prompt (more than one chunk, below 8192) is
+        #     never split; with a partial in flight it takes a prefill step of its own. The largest one, whole, while a
+        #     long prompt's first chunk is held.
+        run_rider_case("RIDER_8191_medium_only_call", 8191, 12300, "only")
         # negative controls: the rider's reset is not undone (no unpark) -> must be detected; a rider that skips its own
         # GDN reset (starts from the partial's state) -> must be detected
         if os.environ.get("D1_SKIP_NEGATIVE", "0") != "1":
