@@ -67,10 +67,8 @@ def _moe(x, w):
     return routed + _ffn(x, *w["shared"])
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("seq_len", [128], ids=["s128"])
-def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
-    """tt/mlp.py MLP (router + shared + 128-expert EP routed) on (8,4) EP=32 vs per-row torch ref."""
+def _build(mesh_device, seq_len):
+    """Random-weight MLP on the (8,4) mesh, its per-row input and the per-row torch reference."""
     rows, cols = mesh_device.shape
     assert (rows, cols) == (8, 4), "this test targets the (8,4) galaxy layout (EP=32, DP=8 rows)"
     torch.manual_seed(0)
@@ -121,7 +119,13 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         use_ep_moe=True,
         ep_seq_len_per_chip=seq_len,
     )
+    return mlp, x, ref
 
+
+def _run(mlp, mesh_device, x):
+    """Per-row [S, H] torch outputs of one MLP forward."""
+    rows, cols = mesh_device.shape
+    seq_len = x.shape[1]
     # Shard: one prompt per row (dim 0), full emb replicated across TP cols (matches the decoder layer).
     tt_x = ttnn.from_torch(
         x.reshape(rows, 1, seq_len, HIDDEN),
@@ -132,11 +136,42 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     )
     out = mlp(tt_x)  # per device [1, 1, S, H] (replicated residual) or [1, 1, S, H/tp] (sharded)
     ttnn.synchronize_device(mesh_device)
-
     dts = ttnn.get_device_tensors(out)
-    for r in range(rows):
-        row = compose_tp_hidden(dts, r, cols).reshape(-1, HIDDEN)[:seq_len]
+    return [compose_tp_hidden(dts, r, cols).reshape(-1, HIDDEN)[:seq_len] for r in range(rows)]
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("seq_len", [128], ids=["s128"])
+def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
+    """tt/mlp.py MLP (router + shared + 128-expert EP routed) on (8,4) EP=32 vs per-row torch ref."""
+    mlp, x, ref = _build(mesh_device, seq_len)
+    for r, row in enumerate(_run(mlp, mesh_device, x)):
         passing, pcc = comp_pcc(ref[r], row, 0.95)
         logger.info(f"prompt{r}: pcc={pcc}")
         assert passing, f"prompt {r} EP MoE PCC fail: {pcc}"
-    logger.info(f"EP MoE MLP (128 experts, shared): all {rows} prompts pass")
+    logger.info(f"EP MoE MLP (128 experts, shared): all {len(ref)} prompts pass")
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("seq_len", [128], ids=["s128"])
+@pytest.mark.parametrize(
+    "overlap, fuse", [(True, False), (False, True), (True, True)], ids=["overlap", "fuse_rs", "overlap_fuse_rs"]
+)
+def test_ep_moe_shared_schedule(mesh_device, device_params, seq_len, overlap, fuse, reset_seeds, monkeypatch):
+    """M3_MOE_OVERLAP_SHARED / M3_MOE_FUSE_SHARED_RS vs the torch ref and vs the default schedule of the same
+    MLP (the knobs only move the shared expert, so the two outputs must agree closely)."""
+    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "1" if overlap else "0")
+    monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "1" if fuse else "0")
+    mlp, x, ref = _build(mesh_device, seq_len)
+    assert (mlp.overlap_shared, mlp.fuse_shared_rs) == (overlap, fuse)
+    scheduled = _run(mlp, mesh_device, x)
+    mlp.overlap_shared = mlp.fuse_shared_rs = False
+    default = _run(mlp, mesh_device, x)
+    mlp.overlap_shared, mlp.fuse_shared_rs = overlap, fuse
+    again = _run(mlp, mesh_device, x)  # the default forward in between must not disturb the scheduled one
+    for r in range(len(ref)):
+        ok_ref, pcc_ref = comp_pcc(ref[r], scheduled[r], 0.95)
+        ok_def, pcc_def = comp_pcc(default[r], scheduled[r], 0.999)
+        ok_rep, pcc_rep = comp_pcc(scheduled[r], again[r], 0.9999)
+        logger.info(f"prompt{r}: pcc vs ref={pcc_ref} vs default={pcc_def} repeat={pcc_rep}")
+        assert ok_ref and ok_def and ok_rep, f"prompt {r}: vs ref {pcc_ref}, vs default {pcc_def}, repeat {pcc_rep}"

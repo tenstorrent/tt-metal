@@ -8,7 +8,9 @@ Composes the (generic, already-validated) DeepSeek EP sub-modules:
     gate -> routing_setup -> dispatch -> routed_expert -> combine -> reduce
 but owns the orchestration so it fits MiniMax-M3:
   - NO shared expert here — M3's always-on shared expert is added by the caller
-    (tt/mlp.py); DeepSeek's TtMoe builds a mandatory one, which we drop.
+    (tt/mlp.py); DeepSeek's TtMoe builds a mandatory one, which we drop. The caller may hand
+    forward a shared_fn to run it right after dispatch, optionally on its own sub-device
+    concurrently with dispatch (M3_MOE_OVERLAP_SHARED, shared_overlap.py).
   - NO expert groups (host gate; n_group=1 -> plain top-4)
   - emb=6144, hidden=3072, 128 experts / top-4 -> 4 experts/chip on 32 chips
 
@@ -71,6 +73,8 @@ class TtMiniMaxMoE(LightweightModule):
         global_layer_idx=None,
         routed_expert_weights_dram_nd_sharded: bool = False,
         routed_expert_hybrid_token_threshold=None,
+        overlap_shared_expert: bool = False,
+        overlap_dispatch_rows=None,
     ):
         """topology: v1 dispatch and v1 combine on cluster_axis=0 (the TP collectives on axis 1 stay Linear).
         combine_version: "v1" = deepseek_prefill.combine, "v2" = combine_fabric2d (Ring on a torus fabric).
@@ -82,6 +86,9 @@ class TtMiniMaxMoE(LightweightModule):
            Always passed to TtRoutedExpert explicitly; its None default would pick ND-sharded on Blackhole.
         routed_expert_hybrid_token_threshold: None = unified_routed_expert_moe for every expert; T = experts
            with <= T tokens run moe_fused_swiglu instead (SwiGluOai is supported by both ops).
+        overlap_shared_expert: build the dispatch / shared-expert sub-device split (shared_overlap.py); a
+           forward given a shared_fn then runs the shared expert concurrently with dispatch.
+        overlap_dispatch_rows: Tensix rows for dispatch in that split; None = 1 for v1, 2 for v2.
         """
         super().__init__()
         assert combine_version in ("v1", "v2"), f"combine_version must be 'v1' or 'v2', got {combine_version!r}"
@@ -101,6 +108,16 @@ class TtMiniMaxMoE(LightweightModule):
         self.metadata_len = metadata_len
         self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
         self.num_links = num_links
+        self.overlap = None
+        if overlap_shared_expert:
+            from models.demos.minimax_m3.tt.moe.shared_overlap import SharedExpertOverlap, default_dispatch_rows
+
+            rows = overlap_dispatch_rows or default_dispatch_rows(dispatch_version)
+            self.overlap = SharedExpertOverlap(mesh_device, rows)
+            logger.info(
+                f"TtMiniMaxMoE: shared expert overlapped with dispatch {dispatch_version}: dispatch rows [0,{rows}), "
+                f"shared expert on {self.overlap.shared_cores.num_cores()} cores"
+            )
 
         # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1. route_scale must
         # match the model's routed_scaling_factor (2.0 for M3): the internal gate applies it to the
@@ -315,7 +332,7 @@ class TtMiniMaxMoE(LightweightModule):
                 )
         self._load_stats_calls += 1
 
-    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
+    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None, shared_fn=None, fuse_shared=False):
         """Routed (expert-parallel) MoE output.
 
         x: (dispatch_group_size, seq_len_per_chip, emb_dim) — emb may be TP-sharded
@@ -330,6 +347,12 @@ class TtMiniMaxMoE(LightweightModule):
            this is the production path (the layer feeds replicated full emb, which the
            DeepSeek host gate's TP-compose would mishandle). When None, the internal
            gate runs (standalone test path; expects TP-sharded emb).
+        shared_fn: None -> returns the routed output only (the caller runs the shared expert). Otherwise
+           ``shared_fn(sub_device, keep_alive)`` returns the shared expert's un-reduced partial and runs right
+           after dispatch is enqueued: on its own sub-device, concurrently with dispatch, when the overlap split
+           was built (sub_device = (id, cores)), else on the full grid (sub_device None). Returns
+           ``(routed_output, shared_partial)``; with fuse_shared the partial is added before the routed
+           reduce-scatter instead and shared_partial is None.
         """
         if topk_indices is None:
             with zone("gate", FINE):
@@ -369,7 +392,10 @@ class TtMiniMaxMoE(LightweightModule):
                     x, dim=-1, cluster_axis=1, num_links=self.reduce_module.num_links, topology=ttnn.Topology.Linear
                 )
 
-        # Dispatch -> per-expert buffers (NO shared expert)
+        # Dispatch -> per-expert buffers. With a shared_fn, the frees below wait until the shared expert has
+        # been enqueued (it reads x) and, when overlapped, until the sub-device manager is cleared.
+        deferred = [] if shared_fn is not None else None
+        overlap = self.overlap if shared_fn is not None else None
         with zone("dispatch"):
             if self.dispatch_version == "v2":
                 # dispatch_fabric2d takes bf16 x and uint16 ROW_MAJOR indices, every input interleaved in
@@ -381,6 +407,8 @@ class TtMiniMaxMoE(LightweightModule):
                     else:
                         x = _to_dram_interleaved(x)
                     indices = _to_dram_interleaved(indices)
+                if overlap is not None:
+                    overlap.load()
                 dispatched_buffer, metadata = ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
                     x,
                     indices,
@@ -399,12 +427,16 @@ class TtMiniMaxMoE(LightweightModule):
                     num_links=self.num_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    subdevice_id=overlap.dispatch_sd_id if overlap is not None else None,
                 )
                 if x is not x_in:
-                    ttnn.deallocate(x_in)
+                    _free(x_in, deferred)
                 if self.combine_version != "v2":
-                    ttnn.deallocate(all_expert_offsets)
+                    _free(all_expert_offsets, deferred)
             else:
+                if overlap is not None:
+                    overlap.load()
+                self.dispatch_module.subdevice_id = overlap.dispatch_sd_id if overlap is not None else None
                 dispatched_buffer, metadata = self.dispatch_module(
                     x,
                     scores,
@@ -413,7 +445,20 @@ class TtMiniMaxMoE(LightweightModule):
                     self.tt_expert_dispatch_table,
                     padding_config=padding_config,
                 )
-            ttnn.deallocate(x)
+            _free(x, deferred)
+            if shared_fn is None:
+                scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
+                indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
+
+        shared_partial = None
+        if shared_fn is not None:
+            with zone("shared_expert"):
+                shared_partial = shared_fn(overlap.shared_sub_device if overlap is not None else None, deferred)
+            if overlap is not None:
+                overlap.clear()
+            for t in deferred:
+                ttnn.deallocate(t)
+            deferred = None
             scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -450,10 +495,27 @@ class TtMiniMaxMoE(LightweightModule):
         # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):
             routed_output = self.reduce_module(
-                combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
+                combined_output,
+                weights=scores,
+                indices=indices,
+                expert_dispatch_table=self.tt_expert_dispatch_table,
+                addend=shared_partial if fuse_shared else None,
             )
             routed_output = ttnn.squeeze(routed_output, dim=0)
-        return routed_output
+        if shared_fn is None:
+            return routed_output
+        if fuse_shared:
+            ttnn.deallocate(shared_partial)
+            shared_partial = None
+        return routed_output, shared_partial
+
+
+def _free(t, deferred):
+    """Free t now, or queue it on deferred when a later op in flight may still read it."""
+    if deferred is None:
+        ttnn.deallocate(t)
+    else:
+        deferred.append(t)
 
 
 def _to_dram_interleaved(t):

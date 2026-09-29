@@ -13,9 +13,12 @@ import ttnn
 from models.demos.minimax_m3.utils.fabric_env import (
     moe_combine_from_env,
     moe_dispatch_from_env,
+    moe_fuse_shared_rs_from_env,
     moe_hybrid_threshold_from_env,
     moe_load_stats_file_from_env,
     moe_load_stats_from_env,
+    moe_overlap_dispatch_rows_from_env,
+    moe_overlap_shared_from_env,
     moe_topology_from_env,
     moe_weights_nd_sharded_from_env,
 )
@@ -187,6 +190,11 @@ class MLP:
                 t, ccl_manager, dim=len(t.shape) - 1, axis=mesh_config.tp_axis
             )
 
+        # M3_MOE_OVERLAP_SHARED=1: the shared expert runs on its own sub-device while dispatch runs.
+        # M3_MOE_FUSE_SHARED_RS=1: its TP collective is folded into the routed reduce-scatter. Both default off.
+        self.overlap_shared = moe_overlap_shared_from_env() and self.shared_expert is not None
+        self.fuse_shared_rs = moe_fuse_shared_rs_from_env() and self.shared_expert is not None
+
         # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
         # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
         self.experts = TtMiniMaxMoE(
@@ -223,6 +231,8 @@ class MLP:
             # M3_MOE_W_NDSHARD (default 0: interleaved) / M3_MOE_HYBRID_THRESHOLD (default 0: off).
             routed_expert_weights_dram_nd_sharded=moe_weights_nd_sharded_from_env(),
             routed_expert_hybrid_token_threshold=moe_hybrid_threshold_from_env(),
+            overlap_shared_expert=self.overlap_shared,
+            overlap_dispatch_rows=moe_overlap_dispatch_rows_from_env(),
         )
         self.ep_num_links = ccl_manager.num_links
 
@@ -245,6 +255,8 @@ class MLP:
         or full emb under the replicated one (the routed output is all-gathered back and the shared
         expert all-reduced), matching the layer residual either way.
         """
+        if self.overlap_shared or self.fuse_shared_rs:
+            return self._call_scheduled_shared(hidden_states, actual_isl, actual_start)
         with zone("shared_expert"):
             shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
 
@@ -265,6 +277,46 @@ class MLP:
             # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of
             # the raw ttnn.all_gather: the raw op left a stale tile-face on a non-device-0 TP column's
             # slice under the full-model footprint -> ~1e38 garbage -> token-0 (token-0 hunt 2026-06-29).
+            with zone("tp_allgather"):
+                if self.mesh_config is not None and self.ccl is not None:
+                    out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
+                else:
+                    out = ttnn.all_gather(
+                        out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                    )
+        if shared_out is not None:
+            with zone("add_shared", FINE):
+                out = ttnn.add(out, shared_out)
+            shared_out.deallocate(True)
+        return out
+
+    def _call_scheduled_shared(self, hidden_states, actual_isl, actual_start):
+        """__call__ with the shared expert run inside the MoE, right after dispatch is enqueued (concurrently
+        with it under M3_MOE_OVERLAP_SHARED), its TP collective either after the MoE or fused into the
+        routed reduce-scatter (M3_MOE_FUSE_SHARED_RS). Same output contract as __call__."""
+        Hfull = hidden_states.shape[-1]
+        padding_config = self.router.build_padding_config(actual_isl, actual_start)
+        with zone("router_topk"):
+            idx, wts = self.router(hidden_states, padding_config=padding_config)
+        x3d = ttnn.squeeze(hidden_states, dim=0)
+
+        def shared_fn(sub_device, keep_alive):
+            return self.shared_expert.partial(hidden_states, sub_device=sub_device, keep_alive=keep_alive)
+
+        out, shared_partial = self.experts(
+            x3d,
+            topk_indices=idx,
+            topk_weights=wts,
+            padding_config=padding_config,
+            shared_fn=shared_fn,
+            fuse_shared=self.fuse_shared_rs,
+        )
+        out = ttnn.unsqueeze(out, dim=0)
+        shared_out = None
+        if shared_partial is not None:
+            with zone("shared_expert"):
+                shared_out = self.shared_expert.reduce(shared_partial)
+        if not self.sharded_residual and self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             with zone("tp_allgather"):
                 if self.mesh_config is not None and self.ccl is not None:
                     out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)

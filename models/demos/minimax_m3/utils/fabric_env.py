@@ -10,6 +10,8 @@ the same way as the production runner (``PREFILL_FABRIC_MODE`` in
 The ``M3_MOE_*`` knobs select the routed-expert MoE's EP transport (tt/mlp.py -> TtMiniMaxMoE); all
 default to today's path. ``M3_MOE_LOAD_STATS`` turns on a per-layer expert-load readback (host sync).
 ``M3_MOE_W_NDSHARD`` / ``M3_MOE_HYBRID_THRESHOLD`` pick the routed-expert weight placement and op split.
+``M3_MOE_OVERLAP_SHARED`` / ``M3_MOE_FUSE_SHARED_RS`` / ``M3_MOE_OVERLAP_DISPATCH_ROWS`` schedule the shared
+expert (default off).
 """
 
 import os
@@ -122,6 +124,42 @@ def moe_hybrid_threshold_from_env(var="M3_MOE_HYBRID_THRESHOLD"):
     T > 0: experts with <= T tokens run moe_fused_swiglu, the rest unified_routed_expert_moe (both with
     SwiGluOai). The measured crossover is ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED (128) in
     deepseek_v3_d_p/reference/minimax_m3_config.py. T >= max tokens per expert runs moe_fused_swiglu only.
+    """
+    raw = os.getenv(var, "").strip() or "0"
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{var} must be a non-negative int (got {os.getenv(var)!r})") from None
+    if value < 0:
+        raise ValueError(f"{var} must be a non-negative int (got {value})")
+    return value or None
+
+
+def _flag01(var):
+    value = os.getenv(var, "").strip().lower() or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{var} must be 0 or 1 (got {os.getenv(var)!r})")
+    return value == "1"
+
+
+def moe_overlap_shared_from_env(var="M3_MOE_OVERLAP_SHARED"):
+    """``M3_MOE_OVERLAP_SHARED=0|1`` -> run the shared expert concurrently with the routed-expert dispatch on
+    disjoint Tensix sub-devices (1) or before the MoE on the full grid (0, default). See tt/moe/shared_overlap.py.
+    """
+    return _flag01(var)
+
+
+def moe_fuse_shared_rs_from_env(var="M3_MOE_FUSE_SHARED_RS"):
+    """``M3_MOE_FUSE_SHARED_RS=0|1`` -> 1: the shared expert skips its own TP collective and its un-reduced
+    down-projection partial is added to the routed post_combine_reduce output before the MoE's reduce-scatter
+    (exact: the reduce-scatter is linear). 0 (default): the shared expert reduces on its own.
+    """
+    return _flag01(var)
+
+
+def moe_overlap_dispatch_rows_from_env(var="M3_MOE_OVERLAP_DISPATCH_ROWS"):
+    """``M3_MOE_OVERLAP_DISPATCH_ROWS=<int>`` -> Tensix rows given to dispatch under M3_MOE_OVERLAP_SHARED=1, or
+    None when unset / 0 (auto: 1 for dispatch v1, 2 for v2, whose TILE input needs an untilizer row).
     """
     raw = os.getenv(var, "").strip() or "0"
     try:
