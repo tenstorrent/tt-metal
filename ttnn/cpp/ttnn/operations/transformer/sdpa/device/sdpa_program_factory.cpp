@@ -209,6 +209,20 @@ uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_c
     return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
+// A third K/V slot lets the reader run one forwarded chunk further ahead of the writer. It is taken up to k256 and
+// only while the CBs still fit L1 with it (a d512 head does not fit a third k128 slot next to its accumulators).
+uint32_t kv_chain_slots(
+    uint32_t kv_chain_mode,
+    uint32_t Sk_chunk_t,
+    uint32_t kv_chunk_bytes,
+    uint32_t other_cb_bytes_bound,
+    uint32_t l1_budget_bytes) {
+    if (kv_chain_mode != 3 || Sk_chunk_t > 8) {
+        return 2;
+    }
+    return other_cb_bytes_bound + 3 * kv_chunk_bytes <= l1_budget_bytes ? 3 : 2;
+}
+
 // TensorAccessorArgs placeholder rule for optional tensors: nullptr when absent, so the accessor
 // chain stays intact and kernels compile against it but never read it.
 tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
@@ -781,16 +795,27 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool kv_chain_semaphores = !is_causal || kv_chains_possible;
     // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
     const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
-    // A third K/V slot lets the reader run one forwarded chunk further ahead of the writer; past k256 the
-    // extra chunk no longer fits L1 next to the score buffers, so the depth stays at two there.
-    const uint32_t kv_slots = (kv_chain_mode == 3 && Sk_chunk_t <= 8) ? 3 : 2;
+    uint32_t mask_tiles = lightweight_mask
+                              ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
+                              : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    // Upper bound of the other CBs: Q, the scores, both output accumulators and the row sums at their fp32 DEST
+    // format, the output, and the mask, the row maxes and the small CBs (identities, sink, recip) at fp32.
+    const uint32_t kv_chunk_bytes =
+        Sk_chunk_t * (DHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype())) +
+                      vDHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype())));
+    const uint32_t other_cb_bytes_bound =
+        Sq_chunk_t * DHt * q_buffer_factor *
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype())) +
+        (Sq_chunk_t * Sk_chunk_t + 2 * Sq_chunk_t * vDHt + 2 * Sq_chunk_t) *
+            tt::tile_size(fp32_dest_intermediate_dataformat(fp32_dest_acc_en)) +
+        Sq_chunk_t * vDHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype())) +
+        (mask_tiles + 3 * Sq_chunk_t + 8) * fp32_tile_bytes;
+    const uint32_t kv_slots =
+        kv_chain_slots(kv_chain_mode, Sk_chunk_t, kv_chunk_bytes, other_cb_bytes_bound, l1_budget_bytes);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * kv_slots;
     uint32_t v_tiles = Sk_chunk_t * vDHt * kv_slots;
-    uint32_t mask_tiles = lightweight_mask
-                              ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
-                              : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
