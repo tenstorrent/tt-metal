@@ -1685,3 +1685,36 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
+
+## C.moe_full.ffn_hc_pre test (attempt 1)
+
+What
+- Replaced the rendered 22-line component test (moe_full layer 1, ffn_hc_pre) with the moe_full attn_hc_pre test's
+  structure (same limits). It keeps the gated pcc_ffn_hc_pre_L01 (0.99) and the CPU-bridge assert, and adds: finite
+  output and element count; vs golden rel L2 <= 0.005, row norm ratio in [0.994, 1.006], worst row <= 0.01; vs the
+  CPU step on the same inputs rel <= 0.003, worst row <= 0.006; the module run again with each row's pre gates
+  rotated by row mod 4, vs the CPU step: rel <= 0.004, worst row <= 0.01.
+- CPU mutation study in /tmp/hy4_moe_ffnhcpre/study.py (outside the repo; /tmp/hcpre_l1.py on h_mid / ffn_hc /
+  ffn_x). The tables are in the test docstring.
+
+Decisions
+- The rotated-gates run is required here, not optional: pre gates 0 / 1 are ~1e-5 / 1.5e-6 (hc_eps), so a dropped
+  stream 0 or 1, or a 0 / 1 swap, is bit-identical to the reference on the golden. With rotated gates they score rel
+  0.33 / 0.30 / 0.12.
+- Golden limits sit above the golden's own rounding (fp32 CPU step rel 0.0026, ratio [0.9965, 1.0038], row 0.0054).
+  pre x 1.005 fails the ratio (1.0088) and the rel limit (0.00555).
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999997, rel 0.00260, ratio [0.99645, 1.00382], row 0.00542).
+- BRINGUP_IMPL=stub: FAIL (PCC 0.0).
+- Gate (device): PASS already, with the existing tt/ihc.py:TtHcPre (hooks._HC_PRE_STEPS is block-type independent):
+  PCC 0.999997, vs CPU rel 0.0 / row 0.0, rotated rel 0.0.
+
+Gotchas
+- Not caught: pre + 3e-4 on every gate (golden rel 0.0028). The gates are an input, so the module cannot make it.
+- The first `FAIL pcc ... 0.000000` line comes from the precompile collect pass.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
