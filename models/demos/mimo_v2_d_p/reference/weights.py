@@ -55,12 +55,17 @@ def dequant_qkv(w, s, n_q, n_kv, hd, vhd, block=128):
     return torch.cat([q, k, v])
 
 
-def dequant_mxfp4(w, s, block=32):
-    lo, hi = (w & 0x0F).long(), (w >> 4).long()
-    codes = torch.stack([lo, hi], -1).flatten(-2)  # [out, in]
-    vals = FP4[codes]
-    scale = torch.exp2(s.float() - 127.0).repeat_interleave(block, 1)
-    return vals * scale
+# byte -> (low-nibble value, high-nibble value)
+FP4_BYTE = torch.stack([FP4[torch.arange(256) & 0x0F], FP4[torch.arange(256) >> 4]], -1)  # [256, 2]
+
+
+def dequant_mxfp4(w, s, block=32, dtype=torch.float32):
+    """uint8 [out, in / 2] (low nibble first) x E8M0 [out, in / block] -> [out, in]. One lookup per byte (embedding
+    over a 256 x 2 table, multithreaded) and a broadcast scale: no int64 codes, no repeat_interleave. E2M1 values
+    times a power of two are exact in bf16 too, so ``dtype=torch.bfloat16`` gives the same values as fp32 -> bf16."""
+    out = w.shape[0]
+    vals = torch.nn.functional.embedding(w.to(torch.int32), FP4_BYTE.to(dtype)).view(out, -1, block)
+    return (vals * torch.exp2(s.float() - 127.0).to(dtype).unsqueeze(-1)).view(out, -1)
 
 
 def _layer_names(i, wm):
@@ -96,7 +101,7 @@ def layer_state(i: int, cfg: MiMoTextConfig | None = None, *, experts: bool = Tr
         elif v.dtype == torch.float8_e4m3fn:
             t = dequant_fp8_block(v, raw[k + "_scale_inv"])
         elif v.dtype == torch.uint8:
-            t = dequant_mxfp4(v, raw[k + "_scale"])
+            t = dequant_mxfp4(v, raw[k + "_scale"], dtype=torch.bfloat16)
         else:
             t = v
         out[k] = (t.float() if k.endswith("e_score_correction_bias") else t.bfloat16()).contiguous()
@@ -107,7 +112,10 @@ def global_state(names=("model.embed_tokens.weight", "model.norm.weight")) -> di
     path = CACHE / "global.safetensors"
     if path.exists():
         return load_file(str(path))
-    out = {k[len("model.") :] if k.startswith("model.") else k: v.bfloat16().contiguous() for k, v in fetch(list(names)).items()}
+    out = {
+        k[len("model.") :] if k.startswith("model.") else k: v.bfloat16().contiguous()
+        for k, v in fetch(list(names)).items()
+    }
     CACHE.mkdir(parents=True, exist_ok=True)
     save_file(out, str(path))
     return out
@@ -121,4 +129,6 @@ if __name__ == "__main__":
             global_state()
         else:
             sd = layer_state(int(a))
-            logger.info(f"layer {a}: {len(sd)} tensors, {sum(t.numel() * t.element_size() for t in sd.values()) / 1e9:.2f} GB")
+            logger.info(
+                f"layer {a}: {len(sd)} tensors, {sum(t.numel() * t.element_size() for t in sd.values()) / 1e9:.2f} GB"
+            )

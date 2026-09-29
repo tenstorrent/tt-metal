@@ -41,14 +41,24 @@ def hf_config():
     return cfg
 
 
-def decoder_layer(layer_idx: int, sd: dict, cfg=None, dtype=torch.float32):
-    """HF ``MiMoV2DecoderLayer`` with ``sd`` (layer_state names) loaded."""
+def decoder_layer(layer_idx: int, sd: dict, cfg=None, dtype=torch.float32, meta_init: bool = True):
+    """HF ``MiMoV2DecoderLayer`` with ``sd`` (layer_state names) loaded. ``meta_init``: build the module on the meta
+    device and assign the loaded tensors (skips randomly initialising ~25 GB of expert weights that are then
+    overwritten: ~34 s per MoE layer)."""
     _, mod = hf_modules()
     cfg = cfg or hf_config()
-    layer = mod.MiMoV2DecoderLayer(cfg, layer_idx, attention_projection_layout="fused_qkv")
-    missing, unexpected = layer.load_state_dict({k: v.to(dtype) for k, v in sd.items()}, strict=False)
+    if meta_init:
+        with torch.device("meta"):
+            layer = mod.MiMoV2DecoderLayer(cfg, layer_idx, attention_projection_layout="fused_qkv")
+    else:
+        layer = mod.MiMoV2DecoderLayer(cfg, layer_idx, attention_projection_layout="fused_qkv")
+    missing, unexpected = layer.load_state_dict(
+        {k: v.to(dtype).contiguous() for k, v in sd.items()}, strict=False, assign=meta_init
+    )
     assert not unexpected, unexpected
     assert not missing, missing
+    left = [n for n, t in list(layer.named_parameters()) + list(layer.named_buffers()) if t.is_meta]
+    assert not left, f"meta tensors not loaded: {left[:8]}"
     return layer.to(dtype).eval()
 
 
@@ -70,12 +80,13 @@ def mask(q_pos: torch.Tensor, k_len: int, window: int | None, dtype=torch.float3
 
 
 @torch.no_grad()
-def run_layer(layer, x: torch.Tensor, is_swa: bool, cfg=None, start: int = 0, window=None):
-    """Full-sequence forward of one decoder layer. x [1, S, H] (positions start..start+S)."""
+def run_layer(layer, x: torch.Tensor, is_swa: bool, cfg=None, start: int = 0, window=None, dense_mask: bool = True):
+    """Full-sequence forward of one decoder layer. x [1, S, H] (positions start..start+S). ``dense_mask=False``
+    skips the [S, S] mask (only with use_fast_attention, which masks per block from the positions)."""
     S = x.shape[1]
     pos = torch.arange(start, start + S)[None]
     cos, sin = rotary(is_swa, cfg)(x, pos)
-    m = mask(pos[0], S, window, x.dtype)
+    m = mask(pos[0], S, window, x.dtype) if dense_mask else None
     return layer(x, attention_mask=m, position_ids=pos, position_embeddings=(cos, sin))
 
 
@@ -83,7 +94,9 @@ def run_layer(layer, x: torch.Tensor, is_swa: bool, cfg=None, start: int = 0, wi
 KV_CAPTURE: dict = {}  # layer_idx -> (key [1,nkv,S,192] post-rope, value [1,nkv,S,128] scaled) when capturing
 
 
-def blocked_eager_attention(module, query, key, value, attention_mask, scaling, dropout=0.0, sinks=None, q_block=1024, **kwargs):
+def blocked_eager_attention(
+    module, query, key, value, attention_mask, scaling, dropout=0.0, sinks=None, q_block=1024, **kwargs
+):
     """Exactly ``eager_attention_forward`` (incl. sinks) computed over query blocks, so S=8k+ fits in RAM."""
     _, mod = hf_modules()
     KV_CAPTURE[module.layer_idx] = (key.detach().clone(), value.detach().clone())
@@ -109,6 +122,87 @@ def blocked_eager_attention(module, query, key, value, attention_mask, scaling, 
 def use_blocked_attention():
     _, mod = hf_modules()
     mod.eager_attention_forward = blocked_eager_attention
+
+
+def fast_eager_attention(
+    module,
+    query,
+    key,
+    value,
+    attention_mask,
+    scaling,
+    dropout=0.0,
+    sinks=None,
+    position_ids=None,
+    q_block=1024,
+    **kwargs,
+):
+    """``eager_attention_forward`` (incl. sinks) for a full-sequence causal forward, without the dense mask: each
+    query block only multiplies against the keys it can see (causal; plus ``k > q - window`` on sliding layers), and
+    GQA groups share their K / V instead of ``repeat_kv`` copies. Masked keys contribute exactly 0 in the eager
+    version too (score + finfo.min underflows in exp), so the result matches it up to summation order.
+    Assumes query and key are the same positions (``run_layer``'s full-sequence forward); ``attention_mask`` is
+    ignored."""
+    KV_CAPTURE[module.layer_idx] = (key.detach().clone(), value.detach().clone())
+    B, nq, S, d = query.shape
+    nkv = key.shape[1]
+    g = nq // nkv
+    window = getattr(module, "sliding_window", None)
+    if window is None and FLASH_GA:
+        return _flash_causal(module, query, key, value, scaling, sinks)
+    pos = position_ids[0] if position_ids is not None else torch.arange(S)
+    outs = []
+    for q0 in range(0, S, q_block):
+        q1 = min(S, q0 + q_block)
+        k0 = 0 if window is None else max(0, q0 - window + 1)
+        q = query[:, :, q0:q1].reshape(B, nkv, g, q1 - q0, d)
+        k = key[:, :, k0:q1].unsqueeze(2)
+        v = value[:, :, k0:q1].unsqueeze(2)
+        w = torch.matmul(q, k.transpose(-1, -2)) * scaling  # [B, nkv, g, bq, bk]
+        qp, kp = pos[q0:q1, None], pos[None, k0:q1]
+        ok = kp <= qp
+        if window is not None:
+            ok &= kp > qp - window
+        w = w.masked_fill(~ok, torch.finfo(w.dtype).min)
+        if sinks is not None:
+            s = module.attention_sink_bias.reshape(1, nkv, g, 1, 1).expand(B, nkv, g, q1 - q0, 1)
+            w = torch.cat([w, s], dim=-1)
+        w = w - w.max(dim=-1, keepdim=True).values
+        p = torch.nn.functional.softmax(w, dim=-1, dtype=torch.float32).to(q.dtype)
+        if sinks is not None:
+            p = p[..., :-1]
+        outs.append(torch.matmul(p, v).reshape(B, nq, q1 - q0, -1))
+    return torch.cat(outs, 2).transpose(1, 2).contiguous(), None
+
+
+FLASH_GA = True  # full-attention layers through the fused CPU flash kernel (fast_eager_attention)
+
+
+def _flash_causal(module, query, key, value, scaling, sinks):
+    """Causal full attention with torch's fused CPU flash kernel (fp32, online softmax), exact sink handling:
+    the kernel returns lse = log sum_j exp(s_j); with a sink logit b the eager softmax over [s, b] gives
+    o = o_flash * Z / (Z + e^b) = o_flash * sigmoid(lse - b). V is zero-padded to the QK head dim (the kernel needs
+    equal head sizes; the padded output columns are exactly 0 and dropped); K / V are repeated per GQA group."""
+    B, nq, S, d = query.shape
+    g = nq // key.shape[1]
+    dv = value.shape[-1]
+    k = key.repeat_interleave(g, dim=1) if g > 1 else key
+    v = value.repeat_interleave(g, dim=1) if g > 1 else value
+    if dv < d:
+        v = torch.nn.functional.pad(v, (0, d - dv))
+    o, lse = torch.ops.aten._scaled_dot_product_flash_attention_for_cpu(
+        query.contiguous(), k.contiguous(), v.contiguous(), 0.0, True, scale=scaling
+    )
+    o = o[..., :dv]
+    if sinks is not None:
+        o = o * torch.sigmoid(lse - module.attention_sink_bias.view(1, nq, 1).to(lse.dtype)).unsqueeze(-1)
+    return o.transpose(1, 2).contiguous(), None
+
+
+def use_fast_attention():
+    """Faster golden attention (see fast_eager_attention); pair with ``run_layer(..., dense_mask=False)``."""
+    _, mod = hf_modules()
+    mod.eager_attention_forward = fast_eager_attention
 
 
 def tokenize_prompt(n_tokens: int, path=None) -> torch.Tensor:
