@@ -1493,3 +1493,40 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
+
+## S.moe_full.06 test (attempt 1)
+
+What was done
+- Replaced the rendered 27-line swap test (moe_full layer 1, attn_hc .. indexer + attention on device, rest CPU). It
+  is swap 05 (moe_full) plus the attention checks from test_c_moe_full_attention.py at the layer-1 limits (rel 0.015,
+  row norm ratio [0.985, 1.015], worst row 0.04): attn_out (a) vs the golden, (b) vs the CPU attention on the device
+  attn_norm / q_resid / topk, then the module again vs the CPU step on (c) golden chunk 0, (d) a probe topk (64 random
+  causal positions per row, seed 0), (e) the device attn_norm x 1e-3 (kv_a_layernorm eps). These replace swap 05's
+  attn_out check (0.01 / 0.05). The gated pcc_swap_out (0.98), the trail, and every other swap 05 check (gates,
+  attn_x, attn_norm, q_resid, topk, router 0.99, out rel 0.01) are unchanged.
+- CPU swap mutation study at layer 1 (/tmp/hy4_sm6/study.py, reuses /tmp/hy4_c_attn1/mut.py's attention mutations,
+  outside the repo, ~11 s per variant). The table is in the test docstring.
+
+Decisions
+- h_mid loosened from 0.005 / 0.02 to 0.007 / 0.025. The device scores 0.0040 / 0.0112: the device attention's own
+  error (0.0067 vs the CPU step) now reaches h_mid. The attn_out checks carry the attention's detection, and the gates
+  are checked per column.
+- Router kept at 0.99 (device 0.99396, bf16 estimate 0.9963). Out rel kept at 0.01 (device 0.00576).
+
+Gotchas
+- 18 of 32 attention bugs pass the 0.98 out gate at layer 1, including scale 576^-0.5, sink raw, dense causal and
+  RoPE from 0; no sink scores 0.97994. The attn_out checks catch every bug except x 1.01, which is at the tolerance.
+- The trail's pcc_swap_topk is positional match (0.0003 on the device, unsorted indices). Ignore it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (attn_out vs golden 0.00177 / 0.0037, vs CPU / chunk 0 / probe / scaled exact, h_mid
+  0.0021, router 0.99866, out rel 0.00242).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device, attention = TtHy4Attention): PASS. pcc_swap_out 0.999984. attn_out vs golden 0.00713 /
+  [0.99376, 1.00483] / 0.0165, vs CPU 0.00673 / 0.0164, chunk 0 0.00650 / 0.0157, probe 0.00672 / 0.0139, scaled
+  0.00417 / 0.0062. h_mid 0.00405 / 0.0112. router 0.99396. out rel 0.00576.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
