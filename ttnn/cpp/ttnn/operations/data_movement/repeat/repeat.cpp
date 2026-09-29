@@ -16,6 +16,7 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -355,7 +356,9 @@ ttnn::Tensor repeat_via_codegen(
     }
 
     if (round_trip) {
-        working = ttnn::to_layout(working, ttnn::ROW_MAJOR_LAYOUT);
+        // Not to_layout: for a padded tensor it calls untilize_with_unpadding directly, while
+        // ttnn::untilize routes the same unpadding untilize to its codegen prim where it can.
+        working = ttnn::untilize(working);
     }
 
     // Unit outer axes of a TILE tensor only factor one tile-page plane, so every outer repeat

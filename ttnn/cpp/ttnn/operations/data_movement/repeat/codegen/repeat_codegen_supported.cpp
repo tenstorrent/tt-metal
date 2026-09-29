@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
 
 #include <algorithm>
-#include <array>
+#include <iterator>
 #include <optional>
 
 #include <tt-metalium/allocator.hpp>
@@ -17,6 +17,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 
 namespace ttnn::operations::data_movement::repeat_codegen {
 
@@ -91,86 +92,6 @@ bool tile_geometry_ok(const Tensor& input) {
     const auto& tile = input.tensor_spec().tile();
     return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
-}
-
-// Where the output of a perf-demoted case lands.
-enum class DemotedOutput { DramInterleaved, L1Interleaved, Sharded };
-
-// One measured regression against native, matched exactly. `input_sharding` empty means a
-// DRAM-interleaved input; otherwise the input is sharded ROW_MAJOR over `input_shard_cores` cores.
-struct DemotedCase {
-    std::array<uint32_t, 4> shape;
-    std::array<uint32_t, 4> repeats;
-    DataType dtype;
-    Layout layout;
-    std::optional<TensorMemoryLayout> input_sharding;
-    uint32_t input_shard_cores;
-    DemotedOutput output;
-};
-
-constexpr auto kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
-constexpr auto kWidth = TensorMemoryLayout::WIDTH_SHARDED;
-constexpr auto kBlock = TensorMemoryLayout::BLOCK_SHARDED;
-constexpr auto kBf16 = DataType::BFLOAT16;
-constexpr auto kFp32 = DataType::FLOAT32;
-constexpr auto kRm = Layout::ROW_MAJOR;
-constexpr auto kTile = Layout::TILE;
-constexpr auto kToDram = DemotedOutput::DramInterleaved;
-constexpr auto kToL1 = DemotedOutput::L1Interleaved;
-constexpr auto kToShard = DemotedOutput::Sharded;
-
-// Ungeneralized: no condition over the call's attributes separates these points from neighbours that
-// measured no regression. [1,1,1,1] x [1,3,14,28] is demoted while x [1,3,16,32] is not, and
-// x [1,3,4,8] is demoted in TILE but not in ROW_MAJOR, so each point is matched exactly rather than
-// widened into a rule that would move measured-fine calls to native.
-const std::array<DemotedCase, 27> kDemotedCases = {{
-    {{1, 1, 1, 1}, {1, 3, 10, 20}, kBf16, kRm, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 10, 20}, kBf16, kTile, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 12, 24}, kBf16, kRm, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 12, 24}, kBf16, kTile, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 14, 28}, kBf16, kRm, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 14, 28}, kBf16, kTile, std::nullopt, 0, kToDram},
-    {{1, 1, 1, 1}, {1, 3, 4, 8}, kBf16, kTile, std::nullopt, 0, kToDram},
-    {{1, 2, 128, 128}, {2, 2, 1, 1}, kBf16, kRm, kBlock, 4, kToShard},
-    {{1, 2, 128, 128}, {2, 2, 1, 1}, kFp32, kRm, kBlock, 4, kToShard},
-    {{1, 2, 128, 64}, {1, 1, 1, 2}, kFp32, kRm, kHeight, 4, kToShard},
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, kBf16, kTile, kHeight, 8, kToShard},
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, kFp32, kTile, kHeight, 8, kToShard},
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, kFp32, kRm, kHeight, 8, kToL1},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kRm, kWidth, 4, kToShard},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kTile, kWidth, 4, kToShard},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kFp32, kRm, kWidth, 4, kToShard},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kFp32, kTile, kWidth, 4, kToShard},
-    {{1, 2, 64, 128}, {2, 2, 1, 1}, kFp32, kRm, kWidth, 4, kToShard},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kRm, kWidth, 4, kToDram},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kTile, kWidth, 4, kToDram},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kFp32, kRm, kWidth, 4, kToDram},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kRm, kWidth, 4, kToL1},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kBf16, kTile, kWidth, 4, kToL1},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kFp32, kRm, kWidth, 4, kToL1},
-    {{1, 2, 64, 128}, {2, 1, 1, 1}, kFp32, kTile, kWidth, 4, kToL1},
-    {{1, 2, 64, 128}, {2, 2, 1, 1}, kBf16, kRm, kWidth, 4, kToL1},
-    {{1, 2, 64, 128}, {2, 2, 1, 1}, kFp32, kRm, kWidth, 4, kToL1},
-}};
-
-bool input_placement_matches(const MemoryConfig& mc, const DemotedCase& c) {
-    if (!c.input_sharding.has_value()) {
-        return !mc.is_sharded() && mc.buffer_type() == BufferType::DRAM;
-    }
-    if (mc.memory_layout() != *c.input_sharding || !mc.shard_spec().has_value()) {
-        return false;
-    }
-    const auto& spec = *mc.shard_spec();
-    return spec.orientation == ShardOrientation::ROW_MAJOR && spec.grid.num_cores() == c.input_shard_cores;
-}
-
-bool output_placement_matches(const MemoryConfig& mc, const DemotedCase& c) {
-    switch (c.output) {
-        case DemotedOutput::DramInterleaved: return !mc.is_sharded() && mc.buffer_type() == BufferType::DRAM;
-        case DemotedOutput::L1Interleaved: return !mc.is_sharded() && mc.buffer_type() == BufferType::L1;
-        case DemotedOutput::Sharded: return c.input_sharding.has_value() && mc.memory_layout() == *c.input_sharding;
-    }
-    return false;
 }
 
 }  // namespace
@@ -426,21 +347,27 @@ bool supported_by_codegen(
     return true;
 }
 
+// A ROW_MAJOR shard narrower than the row makes each page a partial stick, which the codegen page map
+// cannot address, so the codegen route unshards the whole input to DRAM before its legs and, for a
+// sharded output, reshards after them. When exactly one axis is repeated and native's sharded
+// predicate accepts the call, native instead repeats each shard where it lies in one program, so the
+// codegen route pays two or three extra full-tensor moves for the same work. With two or more
+// repeated axes native unshards up front too, and the two routes compete on equal terms.
 bool is_demoted(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
-    const auto& shape = input.logical_shape();
-    if (shape.rank() != 4 || repeat_dims.size() != 4) {
+    const auto& input_mc = input.memory_config();
+    if (input.layout() != Layout::ROW_MAJOR || !input_mc.is_sharded() ||
+        shard_spec_is_page_identical(input_mc, input.logical_shape(), Layout::ROW_MAJOR)) {
         return false;
     }
-    return std::any_of(kDemotedCases.cbegin(), kDemotedCases.cend(), [&](const DemotedCase& c) {
-        for (uint32_t i = 0; i < 4; ++i) {
-            if (shape[i] != c.shape[i] || repeat_dims[i] != c.repeats[i]) {
-                return false;
-            }
-        }
-        return input.dtype() == c.dtype && input.layout() == c.layout &&
-               input_placement_matches(input.memory_config(), c) && output_placement_matches(output_mem_config, c);
-    });
+    const auto repeated = std::count_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
+    if (repeated != 1) {
+        return false;
+    }
+    const auto it = std::find_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
+    const auto dim = static_cast<int32_t>(std::distance(repeat_dims.cbegin(), it));
+    return repeat::is_native_repeat_sharding(
+        input.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, dim, *it);
 }
 
 }  // namespace ttnn::operations::data_movement::repeat_codegen

@@ -331,33 +331,34 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     });
 
     // The last-dim leg widens each stick, so it has its own reader. A higher-dim leg copies whole
-    // sticks and is the TILE leg's page-map read over one-stick pages: the shared reader derives the
-    // source pitch from the accessor and the L1 stride from the CB, and clamps each read to the slot.
+    // sticks through SEQ_REPEAT's page map, but with the repeat geometry as compile-time constants:
+    // a stick transfer is short enough that the shared reader's per-page runtime divides dominate it.
+    // Each read moves the source's aligned page into a slot at least that large.
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.config = ReaderConfigDescriptor{};
+    std::vector<uint32_t> reader_ct_args;
     if (is_last_dim_rm) {
-        std::vector<uint32_t> reader_ct_args = {operation_attributes.stick_size, in_aligned, slot_size};
+        reader_ct_args = {operation_attributes.stick_size, in_aligned, slot_size};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
         reader_ct_args.push_back(0);  // cb_id
         reader_ct_args.push_back(operation_attributes.num_repeats);
         reader_ct_args.push_back(cb_plan->batch);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
-        reader_desc.compile_time_args = std::move(reader_ct_args);
     } else {
-        std::vector<uint32_t> reader_ct_args;
+        reader_ct_args = {in_aligned, slot_size};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_desc.kernel_source = kReaderSequenced;
-        reader_desc.compile_time_args = std::move(reader_ct_args);
-        reader_desc.named_compile_time_args = {
-            {"seq_id", kSeqRepeat},
-            {"cb_id", 0},
-            {"batch", cb_plan->batch},
-            {"src_page_pitch", 0},
-        };
+        reader_ct_args.push_back(0);  // cb_id
+        reader_ct_args.push_back(operation_attributes.num_repeats);
+        reader_ct_args.push_back(operation_attributes.lower_pages);
+        reader_ct_args.push_back(operation_attributes.rep_dim_pages);
+        reader_ct_args.push_back(cb_plan->batch);
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
     }
+    reader_desc.compile_time_args = std::move(reader_ct_args);
 
     // The writer takes its L1 stride from the CB and clamps each transfer to the destination page, so
     // it needs only the requested transfer size: the output's aligned page.
@@ -375,18 +376,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
         const uint32_t n = work_for_core(split, core);
-        if (is_last_dim_rm) {
-            reader_desc.emplace_runtime_args(core, {src_buffer, n, start});
-        } else {
-            reader_desc.emplace_runtime_args(
-                core,
-                {src_buffer,
-                 n,
-                 start,
-                 operation_attributes.num_repeats,
-                 operation_attributes.lower_pages,
-                 operation_attributes.rep_dim_pages});
-        }
+        reader_desc.emplace_runtime_args(core, {src_buffer, n, start});
         writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
         start += n;
     }
