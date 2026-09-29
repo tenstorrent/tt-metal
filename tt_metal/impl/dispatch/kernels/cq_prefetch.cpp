@@ -135,14 +135,6 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 constexpr uintptr_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
-// Entries are packed unless the host pads each one out to a 16B slot for snooped writes.
-#ifndef PREFETCH_Q_ENTRY_STRIDE
-#define PREFETCH_Q_ENTRY_STRIDE (PREFETCH_Q_ENTRY_BITS / 8)
-#endif
-constexpr uint32_t prefetch_q_entry_stride = PREFETCH_Q_ENTRY_STRIDE;
-static_assert(prefetch_q_entry_stride % sizeof(prefetch_q_entry_type) == 0);
-static_assert(prefetch_q_size % prefetch_q_entry_stride == 0);
-
 // The alias the prefetcher polls fetch queue entries through. Host writes on Quasar normally skip the DM
 // caches, so entries are read uncached. With PREFETCH_Q_SNOOP the host sets the NOC snoop bit, which keeps
 // the cached view current and lets polls hit in cache.
@@ -605,8 +597,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = consumed_entry_addr;
 
-    prefetch_q_rd_ptr = reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(
-        reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) + prefetch_q_entry_stride);
+    ++prefetch_q_rd_ptr;
     if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == prefetch_q_view_end) {
         prefetch_q_rd_ptr = reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_view_base);
 #if defined(PREFETCH_Q_SNOOP)

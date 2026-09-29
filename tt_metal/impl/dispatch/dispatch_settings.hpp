@@ -32,8 +32,7 @@ public:
         bool is_galaxy_cluster,
         bool are_cqs_dram_backed,
         uint32_t l1_alignment,
-        uint32_t prefetch_q_entry_size_bytes,
-        uint32_t prefetch_q_entry_stride_bytes = 0);
+        uint32_t prefetch_q_entry_size_bytes);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -106,9 +105,6 @@ public:
 
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 
-    // Fetch queue entry stride when host writes to it are snooped.
-    static constexpr uint32_t PREFETCH_Q_SNOOP_ENTRY_STRIDE_BYTES = 16;
-
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
 
     static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
@@ -146,9 +142,6 @@ public:
 
     // cq_prefetch
     uint32_t prefetch_q_entry_size_bytes_{};  // 2 for WH ETH, 4 otherwise
-    // Distance between consecutive entries. Equal to the entry size unless entries are padded out to
-    // 16B, which Quasar needs for snooped host writes.
-    uint32_t prefetch_q_entry_stride_bytes_{};
     uint32_t prefetch_q_entries_{0};
     uint32_t prefetch_q_size_{};
     uint32_t prefetch_max_cmd_size_{};

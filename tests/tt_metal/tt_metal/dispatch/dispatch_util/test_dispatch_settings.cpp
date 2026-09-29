@@ -71,25 +71,6 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBufferWith2ByteEn
     EXPECT_EQ(settings.prefetch_q_entry_size_bytes_, 2);
 }
 
-TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBufferWithPaddedStride) {
-    const uint32_t hw_cqs = 2;
-    const uint32_t expected_buffer_entries = 0x1000;
-    const uint32_t stride = DispatchSettings::PREFETCH_Q_SNOOP_ENTRY_STRIDE_BYTES;
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4, stride);
-    settings.prefetch_q_entries(expected_buffer_entries);
-    EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
-    EXPECT_EQ(settings.prefetch_q_size_, expected_buffer_entries * stride);
-    EXPECT_EQ(settings.prefetch_q_entry_size_bytes_, 4);
-    EXPECT_EQ(settings.prefetch_q_entry_stride_bytes_, stride);
-}
-
-TEST(DispatchSettingsTest, CPU_TestDispatchSettingsInvalidPrefetchQEntryStride) {
-    EXPECT_THROW(
-        DispatchSettings(1, 1, CoreType::WORKER, false, false, default_l1_alignment, 4, 6), std::runtime_error);
-    EXPECT_THROW(
-        DispatchSettings(1, 1, CoreType::WORKER, false, false, default_l1_alignment, 4, 2), std::runtime_error);
-}
-
 TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetDispatchBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;

@@ -40,23 +40,12 @@ DispatchSettings::DispatchSettings(
     bool is_galaxy_cluster,
     bool are_cqs_dram_backed,
     uint32_t l1_alignment,
-    uint32_t prefetch_q_entry_size_bytes,
-    uint32_t prefetch_q_entry_stride_bytes) {
+    uint32_t prefetch_q_entry_size_bytes) {
     TT_FATAL(
         prefetch_q_entry_size_bytes == 2 || prefetch_q_entry_size_bytes == 4,
         "prefetch_q_entry_size_bytes must be 2 or 4, got {}",
         prefetch_q_entry_size_bytes);
-    if (prefetch_q_entry_stride_bytes == 0) {
-        prefetch_q_entry_stride_bytes = prefetch_q_entry_size_bytes;
-    }
-    TT_FATAL(
-        prefetch_q_entry_stride_bytes >= prefetch_q_entry_size_bytes &&
-            prefetch_q_entry_stride_bytes % prefetch_q_entry_size_bytes == 0,
-        "prefetch_q_entry_stride_bytes ({}) must be a multiple of prefetch_q_entry_size_bytes ({})",
-        prefetch_q_entry_stride_bytes,
-        prefetch_q_entry_size_bytes);
     this->prefetch_q_entry_size_bytes_ = prefetch_q_entry_size_bytes;
-    this->prefetch_q_entry_stride_bytes_ = prefetch_q_entry_stride_bytes;
     switch (core_type) {
         case CoreType::WORKER:
             init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
@@ -190,7 +179,6 @@ bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
            dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
            prefetch_q_entry_size_bytes_ == other.prefetch_q_entry_size_bytes_ &&
-           prefetch_q_entry_stride_bytes_ == other.prefetch_q_entry_stride_bytes_ &&
            prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
            prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
            prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
@@ -241,7 +229,7 @@ DispatchSettings& DispatchSettings::prefetch_ringbuffer_size(uint32_t val) {
 // Setter for prefetch_q_entries and update prefetch_q_size
 DispatchSettings& DispatchSettings::prefetch_q_entries(uint32_t val) {
     this->prefetch_q_entries_ = val;
-    this->prefetch_q_size_ = val * this->prefetch_q_entry_stride_bytes_;
+    this->prefetch_q_size_ = val * this->prefetch_q_entry_size_bytes_;
     return *this;
 }
 

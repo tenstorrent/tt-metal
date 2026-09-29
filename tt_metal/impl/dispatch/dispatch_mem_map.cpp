@@ -56,11 +56,7 @@ DispatchMemMap::DispatchMemMap(
         // prefetch_max_cmd_size on every arch. We prefer 4 bytes because sub-32-bit reads/writes have been
         // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
         // stays at 2 bytes because of tighter memory constraints.
-        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u,
-
-        // A snooped write on Quasar must start on a 16B boundary (QUAS-4226), so each entry gets its own
-        // 16B slot.
-        use_prefetch_q_snoop(hal, core_type, rtoptions) ? DispatchSettings::PREFETCH_Q_SNOOP_ENTRY_STRIDE_BYTES : 0u)),
+        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
     prefetch_q_snoop_(use_prefetch_q_snoop(hal, core_type, rtoptions)),
     num_cqs_per_core_(cq_layout.num_cqs_per_core),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
@@ -156,12 +152,21 @@ DispatchMemMap::DispatchMemMap(
 
     uint32_t prefetch_dispatch_unreserved_base =
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
+    // Snooped fetch queue writes cover whole 16B beats (QUAS-4226), so the beats must line up with the queue.
+    // The last beat can run past the queue end, into the padding before cmddat_q.
     TT_FATAL(
-        prefetch_dispatch_unreserved_base % settings.prefetch_q_entry_stride_bytes_ == 0,
-        "Fetch queue base {:#x} is not aligned to its entry stride ({} B)",
+        !prefetch_q_snoop_ || prefetch_dispatch_unreserved_base % PREFETCH_Q_SNOOP_BEAT_BYTES == 0,
+        "Fetch queue base {:#x} is not aligned to a {} B snoop beat",
         prefetch_dispatch_unreserved_base,
-        settings.prefetch_q_entry_stride_bytes_);
+        PREFETCH_Q_SNOOP_BEAT_BYTES);
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
+    TT_FATAL(
+        !prefetch_q_snoop_ ||
+            align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, PREFETCH_Q_SNOOP_BEAT_BYTES) <=
+                cmddat_q_base_,
+        "The last {} B snoop beat of the fetch queue would overlap cmddat_q at {:#x}",
+        PREFETCH_Q_SNOOP_BEAT_BYTES,
+        cmddat_q_base_);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
     if (cq_layout.fd_kernels_on_same_core) {
         // All FD kernels share one core (Quasar), so dispatch_buffer must not alias
@@ -246,8 +251,6 @@ DispatchMemMap::DispatchMemMap(
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
 uint32_t DispatchMemMap::prefetch_q_entry_size_bytes() const { return settings.prefetch_q_entry_size_bytes_; }
-
-uint32_t DispatchMemMap::prefetch_q_entry_stride_bytes() const { return settings.prefetch_q_entry_stride_bytes_; }
 
 bool DispatchMemMap::prefetch_q_snoop() const { return prefetch_q_snoop_; }
 

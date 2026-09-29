@@ -137,6 +137,9 @@ private:
     std::vector<uint32_t> prefetch_q_dev_fences;
     // Phase bit value for the current lap of each fetch queue, used when entries are snooped.
     std::vector<uint32_t> prefetch_q_phases;
+    // Last value the host wrote to each fetch queue entry, padded to whole 16B beats. Snooped writes cover a
+    // whole beat, so the neighbouring entries are rewritten with these values.
+    std::vector<std::vector<uint32_t>> prefetch_q_shadows;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

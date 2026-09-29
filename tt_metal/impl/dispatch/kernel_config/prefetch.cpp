@@ -535,7 +535,6 @@ void PrefetchKernel::CreateKernel() {
 
     const auto& my_dispatch_constants = get_dispatch_mem_map();
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
-    defines["PREFETCH_Q_ENTRY_STRIDE"] = std::to_string(my_dispatch_constants.prefetch_q_entry_stride_bytes());
     if (my_dispatch_constants.prefetch_q_snoop()) {
         defines["PREFETCH_Q_SNOOP"] = "1";
     }

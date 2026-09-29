@@ -267,7 +267,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             prefetcher_core.chip,
             prefetcher_translated,
             /*addr=*/0,
-            {.size = prefetch_q_base + mem_map.prefetch_q_size()},
+            {.size =
+                 prefetch_q_base + tt::align(mem_map.prefetch_q_size(), DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES)},
             tt::umd::IoOrdering::Strict,
             /*core_end=*/std::nullopt,
             mem_map.prefetch_q_snoop() ? tt::umd::WindowFlags::Snoop : tt::umd::WindowFlags::None));
@@ -311,6 +312,12 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + mem_map.prefetch_q_size();
+        if (mem_map.prefetch_q_snoop()) {
+            // Starts zeroed, matching the zero-filled queue written when the prefetcher core is configured.
+            this->prefetch_q_shadows.emplace_back(
+                tt::align(mem_map.prefetch_q_size(), DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES) / sizeof(uint32_t),
+                0u);
+        }
     }
 }
 
@@ -900,15 +907,28 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
             (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < (1u << phase_bit),
             "FetchQ command too large to leave room for the phase bit");
         entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
-    }
 
-    if (entry_bytes == 2) {
+        // Rewrite the whole 16B beat holding this entry. Its other entries get back what was last written there,
+        // since the device may not have consumed them yet. On silicon this has to reach the chip as a single 16B
+        // write, or the snoop would be misaligned again.
+        constexpr uint32_t entries_per_beat = DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES / sizeof(uint32_t);
+        const uint32_t prefetch_q_base =
+            dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
+        const uint32_t index = (this->prefetch_q_dev_ptrs[cq_id] - prefetch_q_base) / entry_bytes;
+        const uint32_t beat_first = index - (index % entries_per_beat);
+        std::vector<uint32_t>& shadow = this->prefetch_q_shadows[cq_id];
+        shadow[index] = entry_val;
+        this->prefetch_q_windows[cq_id]->write_block(
+            prefetch_q_base + beat_first * entry_bytes,
+            &shadow[beat_first],
+            DispatchMemMap::PREFETCH_Q_SNOOP_BEAT_BYTES);
+    } else if (entry_bytes == 2) {
         this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], static_cast<uint16_t>(entry_val));
     } else {
         TT_ASSERT(entry_bytes == 4);
         this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
     }
-    this->prefetch_q_dev_ptrs[cq_id] += dispatch_mem_map.prefetch_q_entry_stride_bytes();
+    this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
 }
 
 bool SystemMemoryManager::is_dram_backed() const {

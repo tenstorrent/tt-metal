@@ -47,14 +47,14 @@ public:
 
     uint32_t prefetch_q_entry_size_bytes() const;
 
-    // Distance between consecutive fetch queue entries. Greater than the entry size when entries are
-    // padded to 16B for snooped host writes.
-    uint32_t prefetch_q_entry_stride_bytes() const;
-
     // True on Quasar when the host writes fetch queue entries with the NOC snoop bit set, which lets the
-    // prefetcher poll them through its cache. Entries then carry a per-lap phase bit and are never cleared.
-    // Only the RTL simulator's UMD window can carry the snoop bit today, so ttsim and silicon poll uncached.
+    // prefetcher poll them through its cache. Entries then carry a per-lap phase bit and are never cleared,
+    // and the host writes them a whole 16B beat at a time. Only the RTL simulator's UMD window can carry the
+    // snoop bit today, so ttsim and silicon poll uncached.
     bool prefetch_q_snoop() const;
+
+    // Size of each snooped fetch queue write. A snooped write must cover a whole aligned 16B beat (QUAS-4226).
+    static constexpr uint32_t PREFETCH_Q_SNOOP_BEAT_BYTES = 16;
 
     uint32_t prefetch_q_size() const;
 
