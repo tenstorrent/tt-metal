@@ -268,3 +268,55 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_02_attn_hc_pre.py
+
+## C.dense_full.attn_norm test (attempt 1)
+
+What was done
+- Reviewed the rendered component test (attn_norm = input_layernorm, w * x * rsqrt(mean(x^2) + 1e-5), plain w).
+  Kept the gated pcc_attn_norm_L00 (0.99) and added asserted checks vs the golden: output finite, element count,
+  rel L2 <= 0.008, row norm ratio in [0.993, 1.007], worst row rel L2 <= 0.015. Added a second run on the golden
+  input x 0.1 (bf16) vs the CPU step on the same input (rel <= 0.01, worst row <= 0.02) to catch a wrong eps.
+  Asserts the device module is not a CPU bridge. Mutation tables (CPU) in the test docstring.
+
+Gotchas
+- Golden: w in [0.020, 0.225]; row rms of attn_x >= 0.0267, so eps 1e-6 vs 1e-5 is invisible there (rel 0.0031,
+  like bf16 device noise 0.0032). The x 0.1 run makes it 0.158. q_a / kv_a norms use 1e-6, so a shared norm
+  builder with the wrong eps is a plausible bug.
+- Passing on PCC but caught by the extra checks: x 1.01, RMS over half / a quarter of the columns (missing
+  all-reduce on a column-split input), LayerNorm instead of RMS, sum instead of mean, a zeroed last row.
+- The pessimistic bf16 device estimate (bf16 input, rsqrt, product, output) is rel 0.0032 / ratio [0.996, 1.0035] /
+  worst row 0.005, so the golden limits have about 2.5x margin.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999999, rel 0.00171, ratio [0.99985, 1.00013], worst row 0.0030; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Device (gate command): fails with "no device module for attn_norm yet", as expected before the implement step.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py
+
+## C.dense_full.attn_norm implement (attempt 1)
+
+What was done
+- `tt/norm.py:TtDistributedRmsNorm`: input_layernorm on the column-split [1, 1, S/2, 3072] per-chip input (TtHcPre's
+  fp32 output). `rms_norm_pre_all_gather` (fp32 stats) -> multiply by a [1, 32] one-hot column-0 mask ->
+  `ttnn.all_gather(dim=3, cluster_axis=1, Linear)` -> `rms_norm_post_all_gather` (eps = cfg.rms_norm_eps 1e-5, w
+  fp32 row-major [1, 1, 192, 32] per chip, split by mesh column). HiFi4 + fp32 dest on both ops. Output bf16,
+  column-split [1, 1, S/2, 3072] (what q_a / kv_a / gate / indexer K-split matmuls take). No host work in __call__.
+- `tt/layout.py:col_split_to_device` (harness boundary). hooks.py: `_NORM_STEPS`, `_norm_module`,
+  `_col_split_host_fn`; `device_component` handles attn_norm; `attn_norm` added to DEVICE_STEPS["dense_full"].
+
+Decisions and why
+- Stats mask: with an fp32 input, rms_norm_pre_all_gather leaves junk (|v| up to 16.7) in stats columns 1-31
+  (column 0 is exact); the post op row-reduces the whole tile, so the output was 1.6% low (rel 0.016, ratio
+  [0.979, 0.989]). Masking fixes it with one tiny elementwise op on [S/2, 32]; no op edit or fork needed. (Typecasting
+  the input to bf16 also works, rel 0.0027, but loses precision.) Proposed in known_issues.md.
+- fp32 output of post_all_gather at width 3072 failed with a dataflow-buffer allocation error; bf16 output is kept.
+
+Results
+- Gate: PASS. pcc_attn_norm_L00 0.999999, rel L2 0.00170, row norm ratio [0.99905, 1.00117], worst row 0.0038;
+  scaled x0.1: rel 0.00176, worst row 0.0020.
+- The "FAIL pcc ... 0.000000" line at the top of the log is the precompile collect pass, not the real run.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py

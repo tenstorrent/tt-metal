@@ -63,7 +63,7 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre"},
+    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm"},
     "moe_full": set(),
     "moe_shared": set(),
 }
@@ -72,6 +72,8 @@ DEVICE_STEPS = {
 _HC_STEPS = {"attn_hc": "hc_attn_layer"}
 # iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights.
 _HC_PRE_STEPS = {"attn_hc_pre"}
+# Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
+_NORM_STEPS = {"attn_norm": "input_layernorm"}
 
 
 def _loader(spec):
@@ -143,7 +145,36 @@ def _hc_pre_host_fn(mesh, module, hidden):
     return fn
 
 
+def _norm_module(mesh, spec, layer, step, loader=None, cfg=None):
+    """TtDistributedRmsNorm (weight split by mesh column, [S/2, 32] fp32 stats all_gather over axis 1)."""
+    from models.demos.hy4_preview_d_p.tt.norm import TtDistributedRmsNorm
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    w = loader.get(f"model.layers.{layer}.{_NORM_STEPS[step]}.weight").float()
+    return TtDistributedRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1)
+
+
+def _col_split_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, H] fp32 for a module on column-split [1, 1, S/2, H/2] tensors (harness
+    boundary)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, col_split_to_host
+
+    def fn(ctx, x):
+        xd = col_split_to_device(mesh, x)
+        yd = module(xd)
+        y = col_split_to_host(mesh, yd).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
+    if step in _NORM_STEPS:
+        return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
     if step in _HC_STEPS:
         return _hc_host_fn(mesh, _hc_module(mesh, spec, layer, step, loader, cfg), cfg.hidden_size)
     if step in _HC_PRE_STEPS:
@@ -154,7 +185,7 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
 
 
 def device_component(mesh, spec, layer, step):
-    if step in _HC_STEPS or step in _HC_PRE_STEPS:
+    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS:
         loader = _loader(spec)
         return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
