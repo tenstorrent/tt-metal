@@ -869,6 +869,13 @@ tasks:
     kind: norm
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T06:45:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py: 44a1f45ecf707164f68e78cd2853cff450022a951bbf0add9dc6eee4dadff6c5
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.03
   title: 'dsa_moe block with steps 1-3 on device (last: attn_norm)'
   step: implement
