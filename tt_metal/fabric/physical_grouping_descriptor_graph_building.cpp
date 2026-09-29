@@ -1238,7 +1238,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_varia
     // Wraps the galaxy boundary in a dimension iff it hits both extremes (0 and size-1) but isn't the full
     // range -- an edge band that wraps, not a contiguous interior band.
     auto crosses_seam = [](const std::set<int>& occupied, int size) {
-        return size > 1 && occupied.count(0) != 0 && occupied.count(size - 1) != 0 &&
+        return size > 1 && occupied.contains(0) && occupied.contains(size - 1) &&
                static_cast<int>(occupied.size()) < size;
     };
 

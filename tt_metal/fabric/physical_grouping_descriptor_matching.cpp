@@ -1427,6 +1427,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         mesh_graph_descriptor, &physical_system_descriptor, pinnings, require_placement, fabric_node_id_to_mesh_rank);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- monolithic grouping/matching pipeline
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
@@ -2895,7 +2896,7 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
 // so we can tell whether a valid placement is a satisfiable SAT model (adjacency correct, just hard) or is
 // rejected by the encoding (adjacency/footprint bug). Returns empty map when env unset / file unreadable.
 // DEBUG-CLEANUP(remove; normal default = empty pin map): whole load_sat_pin_solution() debug helper
-static std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
+std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
     std::map<uint64_t, std::vector<uint64_t>> pin;
     // DEBUG-CLEANUP(remove; normal default when unset = empty pin map, no pinning): TT_METAL_SAT_PIN_SOLUTION
     const char* path = std::getenv("TT_METAL_SAT_PIN_SOLUTION");

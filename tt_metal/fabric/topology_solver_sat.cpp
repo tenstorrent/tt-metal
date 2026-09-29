@@ -1882,9 +1882,12 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                 // Diagnostic (TT_METAL_SAT_DIAG=1): distinguish SAT / UNSAT / budget-exhausted so we can tell
                 // solver hardness (never returns within budget) from an unrepresentable instance (UNSAT).
                 if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-                    const char* status_str = (status == TopologySatSolver::kSat)     ? "SAT"
-                                             : (status == TopologySatSolver::kUnsat) ? "UNSAT"
-                                                                                     : "UNKNOWN(budget-exhausted)";
+                    const char* status_str = "UNKNOWN(budget-exhausted)";
+                    if (status == TopologySatSolver::kSat) {
+                        status_str = "SAT";
+                    } else if (status == TopologySatSolver::kUnsat) {
+                        status_str = "UNSAT";
+                    }
                     log_info(
                         tt::LogFabric,
                         "DBGSOLVE stage={} symhint={} cap={} status={}({}) solve_call={}",

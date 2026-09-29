@@ -1343,14 +1343,13 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     snap_constraints_(constraints),
     engine_(solver_engine),
     mode_(connection_validation_mode) {
-    using namespace tt::tt_fabric::detail;
     snap_constraints_.set_quiet_mode(quiet_mode);
     graph_data_.emplace(target_graph, global_graph);
     constraint_data_.emplace(snap_constraints_, *graph_data_);
-    use_sat_ = topology_mapping_should_use_sat_engine(
+    use_sat_ = detail::topology_mapping_should_use_sat_engine(
         solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
     // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer) depends on use_sat_ computed above
-    search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
+    search_engine_ = detail::make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
     if (conflict_cap_ > 0) {
         search_engine_->set_conflict_cap(conflict_cap_);
     }
@@ -1497,7 +1496,6 @@ std::vector<int> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::to_i
 
 template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::next() {
-    using namespace tt::tt_fabric::detail;
     const auto next_start = std::chrono::steady_clock::now();
     auto stamp_elapsed = [&](MappingResult<TargetNode, GlobalNode> result) {
         result.stats.elapsed_time =
@@ -1532,10 +1530,10 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         return stamp_elapsed(std::move(failure));
     }
     sat_solve_calls_ = engine.get_state().sat_solve_calls;
-    TopologySearchState dummy_state = engine.get_state();
+    detail::TopologySearchState dummy_state = engine.get_state();
     dummy_state.sat_solve_calls = sat_solve_calls_;
     dummy_state.sat_hard_constraint_encode_calls = sat_hard_constraint_encode_calls_;
-    return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
+    return stamp_elapsed(detail::MappingValidator<TargetNode, GlobalNode>::build_result(
         raw, *graph_data_, *constraint_data_, dummy_state, mode_, quiet_));
 }
 
