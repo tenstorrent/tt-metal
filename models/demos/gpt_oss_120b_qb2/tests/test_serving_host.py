@@ -138,3 +138,20 @@ def test_missing_precision_manifest_fails_instead_of_changing_policy(monkeypatch
     monkeypatch.setattr(precision, "DEFAULT_PRECISION_CONFIG_PATH", tmp_path / "missing.json")
     with pytest.raises(FileNotFoundError):  # allow-pytest.raises: host-only, no device conftest
         precision.load_precision_config()
+
+
+@pytest.mark.parametrize("last_tile, expected_fill", [(192, 224), (-1, 1024)])
+def test_single_user_prefill_limits_cache_fill_to_valid_last_tile(last_tile, expected_fill):
+    from models.demos.gpt_oss_120b_qb2.tt.model import Model
+
+    model = object.__new__(Model)
+    model.norm = SimpleNamespace(decode_mode=True)
+    model._run_decoder_stack = Mock(return_value=object())
+    Model._forward_layers_and_head(
+        model,
+        hidden_states=SimpleNamespace(shape=(1, 1, 1024, 2880)),
+        is_decode=False,
+        batch_size=1,
+        get_last_token=last_tile,
+    )
+    assert model._run_decoder_stack.call_args.kwargs["fill_seq_lens"] == [expected_fill]

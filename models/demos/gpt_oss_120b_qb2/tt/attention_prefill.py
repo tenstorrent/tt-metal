@@ -181,6 +181,9 @@ def prefill_forward(
                 ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0, **ring_kwargs(fill_len))
         else:
             fill_len = min(page_len, tt_k.shape[2])
+            if fill_seq_lens is not None:
+                valid = int(fill_seq_lens[0])
+                fill_len = min(fill_len, ((valid + block_size - 1) // block_size) * block_size)
             fill_off = 0 if modulo is not None or not fill_start_idx else int(fill_start_idx)
             if fill_off % block_size:
                 raise ValueError(f"fill start {fill_off} is not a multiple of the block size {block_size}")

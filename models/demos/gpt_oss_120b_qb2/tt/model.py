@@ -816,7 +816,7 @@ class Model(_GPTOSSModel):
         self.norm.decode_mode = is_decode
         self._terminal_uses_single_tile = is_decode or int(kwargs.get("get_last_token", -1)) != -1
         batch_size = int(kwargs.get("batch_size", 1))
-        if not is_decode and batch_size == 1 and kwargs.get("chunk_start_idx"):
+        if not is_decode and batch_size == 1:
             seq_len = int(kwargs["hidden_states"].shape[-2])
             last = int(kwargs.get("get_last_token", -1))
             kwargs["fill_seq_lens"] = [seq_len if last < 0 else min(seq_len, last + ttnn.TILE_SIZE)]
