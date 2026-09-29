@@ -451,6 +451,7 @@ TEST_F(McastHostFixture, CompactCoordinatesMatchEveryMappedSenderAndFallbackPerP
         for (const bool column_major : {false, true}) {
             for (const uint32_t count : {8u, 61u, 64u}) {
                 std::vector<CoreCoord> senders;
+                senders.reserve(count);
                 for (uint32_t index = 0; index < count; ++index) {
                     senders.emplace_back(
                         1 + (column_major ? index / 8 : index % 8), 1 + (column_major ? index % 8 : index / 8));
@@ -506,6 +507,7 @@ TEST_F(McastHostFixture, CompactCoordinatesMatchEveryMappedSenderAndFallbackPerP
         check_group(device_, outside_custom, external_custom);
 
         std::vector<CoreCoord> eight_senders;
+        eight_senders.reserve(8);
         for (uint32_t x = 0; x < 8; ++x) {
             eight_senders.emplace_back(x, 0);
         }

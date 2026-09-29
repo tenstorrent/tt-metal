@@ -72,7 +72,7 @@ std::vector<size_t> validate_targets(
         TT_FATAL(std::isalnum(ch) || ch == '_', "Multicast prefix must be a C++ identifier");
     }
     std::vector<std::string> reserved;
-    for (auto field :
+    for (const auto* field :
          {"ct_base",
           "rt_base",
           "data_ready",

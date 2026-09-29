@@ -1032,15 +1032,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         active_work.size(),
         num_slots,
         num_cores);
-    if (!place_in_rectangles) {
-        core_work = std::move(active_work);
-    }
-    // Runtime args are emitted for every core. Compact placement appends idle entries;
-    // rectangular placement fills only the active slots in each row strip below.
-    core_work.resize(num_cores);
-
     // Compact row-major groups use their first member as sender by default.
     if (place_in_rectangles) {
+        // Runtime args are emitted for every core. Rectangular placement fills only the
+        // active slots in each row strip; the remaining entries stay idle.
+        core_work.resize(num_cores);
         // Row-strip placement: each (c_in_idx, c_out_idx) group occupies
         // ceil(members / grid.x) contiguous full-width rows; strips stack along Y in group order.
         // Members fill their strip row-major; unused tail slots receive writes but do not acknowledge.
@@ -1142,6 +1138,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 sender_within_idx);
         }
         weight_senders = std::move(strip_senders);
+    } else {
+        // Compact placement preserves active row-major assignments, then appends idle entries.
+        core_work = std::move(active_work);
+        core_work.resize(num_cores);
     }
 
     std::optional<mcast::Mcast> weights_mcast;

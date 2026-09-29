@@ -34,6 +34,7 @@ class McastFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastFixture> {};
 CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 CoreRangeSet core_set(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
     for (const auto& core : cores) {
         ranges.emplace_back(core, core);
     }

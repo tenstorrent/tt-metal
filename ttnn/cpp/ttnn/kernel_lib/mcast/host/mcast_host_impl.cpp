@@ -314,6 +314,11 @@ uint32_t McastImpl::Group::sender_phase_(const CoreCoord& core) const {
     const auto it = std::find(senders_.begin(), senders_.end(), core);
     return it == senders_.end() ? wire::NO_SENDER_ROUND : uint32_t(it - senders_.begin());
 }
+uint32_t McastImpl::Group::roles_for_core_(const CoreCoord& core) const {
+    const bool sends = sender_phase_(core) != wire::NO_SENDER_ROUND;
+    const bool receives = receivers_.contains(core) && (!sends || rotating());
+    return (sends ? wire::CAN_SEND : 0u) | (receives ? wire::CAN_RECEIVE : 0u);
+}
 uint32_t McastImpl::Group::num_senders() const { return senders_.size(); }
 bool McastImpl::Group::has_remote_receivers() const {
     return std::any_of(fanouts_.begin(), fanouts_.end(), [](uint32_t fanout) { return fanout > 0; });
@@ -326,8 +331,8 @@ std::vector<uint32_t> McastImpl::Group::runtime_args(
     const wire::RuntimeLayout runtime(metadata);
     std::vector<uint32_t> args(runtime.words, 0u);
     const auto phase = sender_phase_(core);
-    const bool sender = phase != wire::NO_SENDER_ROUND;
-    const bool receiver = receivers_.contains(core) && (!sender || rotating());
+    const auto roles = roles_for_core_(core);
+    const bool sender = (roles & wire::CAN_SEND) != 0;
     if (runtime.sender_coordinates != wire::OMITTED) {
         const auto& coordinates = metadata.coordinates.encoding == wire::SenderCoordinateEncoding::ExplicitPairs
                                       ? state.sender_coords
@@ -374,7 +379,7 @@ std::vector<uint32_t> McastImpl::Group::runtime_args(
         args[base + wire::INCLUDES_SENDER] = node.includes_sender;
     }
     if (runtime.roles != wire::OMITTED) {
-        args[runtime.roles] = (sender ? wire::CAN_SEND : 0u) | (receiver ? wire::CAN_RECEIVE : 0u);
+        args[runtime.roles] = roles;
     }
     if (runtime.sender_phase != wire::OMITTED) {
         args[runtime.sender_phase] = phase;
@@ -435,7 +440,7 @@ void McastImpl::prepare_arguments_() const {
     // Discard any partial preparation from a previous failed attempt. Input geometry survives.
     prepare_topology_();
     layout_ = {};
-    for (auto& group : groups_) {
+    for (const auto& group : groups_) {
         group.prepared_.reset();
     }
     const bool has_irregular_receiver_set = std::any_of(
@@ -460,7 +465,7 @@ void McastImpl::prepare_arguments_() const {
     std::optional<uint32_t> first_ack, first_remote;
     std::optional<SenderMcastMode> first_sender_mcast_mode;
     bool uniform_ack = true, uniform_remote = true, uniform_sender_mcast_mode = true;
-    for (auto& group : groups_) {
+    for (const auto& group : groups_) {
         group.prepare_(device_.get(), cfg_, transfer_mode, cfg_.handshake_cores ? &*cfg_.handshake_cores : nullptr);
         layout_.has_remote_receivers |= group.has_remote_receivers();
         const auto& state = group.prepared_state_();
@@ -539,9 +544,7 @@ wire::ArgumentMetadata McastImpl::argument_metadata_(const CoreRangeSet* placeme
     for (const auto& core : tt::tt_metal::corerange_to_cores(*placement)) {
         uint32_t roles = 0;
         if (const auto* group = group_for_core_(core)) {
-            const bool sends = group->sender_phase_(core) != wire::NO_SENDER_ROUND;
-            const bool receives = group->receivers_.contains(core) && (!sends || group->rotating());
-            roles = (sends ? wire::CAN_SEND : 0u) | (receives ? wire::CAN_RECEIVE : 0u);
+            roles = group->roles_for_core_(core);
             // Coordinate accessors are valid on every participating core when
             // this kernel carries coordinates, including its sender-only cores.
             if (compatible_coordinates) {

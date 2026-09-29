@@ -97,9 +97,14 @@ TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     ASSERT_EQ(kernel.runtime_args.size(), 3u);
     for (size_t i = 0; i < kernel.runtime_args.size(); ++i) {
         const auto& [core, args] = kernel.runtime_args[i];
-        auto expected = i == 0   ? std::vector<uint32_t>{21, 0, 0}
-                        : i == 1 ? std::vector<uint32_t>{31, 33, 35}
-                                 : std::vector<uint32_t>{0, 0, 0};
+        std::vector<uint32_t> expected;
+        if (i == 0) {
+            expected = {21, 0, 0};
+        } else if (i == 1) {
+            expected = {31, 33, 35};
+        } else {
+            expected = {0, 0, 0};
+        }
         const auto payload = runtime_args(mcast, core);
         expected.insert(expected.end(), payload.begin(), payload.end());
         EXPECT_EQ(args, expected);

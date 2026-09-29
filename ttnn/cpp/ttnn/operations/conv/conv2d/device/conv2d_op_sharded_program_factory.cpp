@@ -1321,7 +1321,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 // Pad-out path uses the regular operation layout followed by a role-none weights multicast block.
                 // Weight and bias addresses are unused on skipped cores.
                 KernelDescriptor::RTArgList args;
-                args.reserve(12);
+                args.reserve(6);
                 args.push_back(uint32_t{0});  // 0: weight addr (unused for skipped cores)
                 args.push_back(uint32_t{0});  // 1: bias addr (unused)
                 for (int i = 2; i < 4; ++i) {
