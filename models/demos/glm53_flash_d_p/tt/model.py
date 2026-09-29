@@ -120,7 +120,7 @@ class TtGlmBlock:
         chunks = sorted(set(chunks))
         self.graph = block_graph(cfg, layer)
         n = cfg.hc_mult
-        collapse, residual = build_collapse(cfg), build_residual(cfg)
+        collapse, residual = build_collapse(cfg), build_residual(cfg, mesh)
         hc = {w: build_hc(mesh, loader, cfg, layer, w) for w in ("attn", "ffn")}
         norm = {k: build_norm(mesh, loader, cfg, layer, w) for k, w in NORMS.items()}
         steps = {
