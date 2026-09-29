@@ -544,3 +544,75 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_05_indexer.py
+
+## C.dense_full.attention test (attempt 1)
+
+What was done
+- Reviewed the rendered component test for attention (layer 0). Kept the gated pcc_attention_L00 (PCC, 0.99) on golden
+  s4096 chunk 1. Added four asserted checks, each at rel L2 <= 0.01, row norm ratio in [0.99, 1.01], worst row <= 0.02:
+  (1) golden chunk 1; (2) golden chunk 0 (start 0, device ctx prefix_len 0, rows with -1 pads); (3) probe: chunk 1
+  inputs with a synthetic topk (per row 64 random causal positions, unsorted, then -1; seed 0) vs the CPU step on the
+  same inputs; (4) attn_norm x 1e-3 (bf16) vs the CPU step, where the kv_a_layernorm eps 1e-6 matters.
+- Mutation table (CPU, study script /tmp/hy4_c_attn/mut.py, outside the repo) in the test docstring.
+
+Decisions
+- Limits from a bf16 device estimate (bf16 W / q / kv / scores / P, fp32 acc): rel 0.0033, ratio [0.9988, 1.0010],
+  worst row 0.0042 on the golden; probe 0.0030 / 0.0051; scaled 0.0030 / 0.0034. The limits give a 3-5x margin.
+- The probe is what makes the module prove it attends to exactly the given positions in any order (the golden can
+  not tell dense causal attention from top-2048: rel 0.0064). Pads at the tail only (the indexer's contract).
+- eps 1e-5 (rms_norm_eps, ttMLA's default) fails the scaled check (rel 0.43): the reference follows HF's 1e-6.
+- kv_latent is not read back here (no state API in the component contract); chunk 0 attends only to the chunk's own
+  writes, and the ladder's state gate compares the cache.
+
+Results
+- BRINGUP_IMPL=reference: PASS (golden rel 0.00178, worst row 0.0019; chunk 0 0.00177; probe / scaled exact).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Device (gate): FAIL, NotImplementedError: no device module for attention yet (the implement step's job).
+
+Gotchas
+- The device module must reload the golden kv_latent prefix on every call with a device ctx (state_prefix,
+  prefix_len; 2048 for chunk 1, 0 for chunk 0), and accept any order of valid positions with -1 pads at the tail.
+- Four device calls per run (chunk 1, chunk 0, probe, scaled), plus two CPU reference calls (~10 s each).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py
+
+## C.dense_full.attention implement (attempt 1)
+
+What was done
+- `tt/attention.py:TtHy4Attention`, adapted from deepseek_v3_d_p ttMLA's sparse path (same ops, same BF16_RM latent
+  cache striped block-cyclic over the 4 chips, tp_axis 1):
+  kv stem: kv_a K-split (bf16, fp32 partials) -> all_reduce axis 1 -> slice 512 | 64 -> ttnn.bringup.rms_norm
+  (kv_a_layernorm, eps 1e-6, fp32 in) and rotary_embedding_indexed (interleaved, block-cyclic tables) -> concat ->
+  ROW_MAJOR -> update_padded_kv_cache. q stem: q_b_proj (32 heads per chip) -> nlp_create_q_heads_split (192 | 64)
+  -> linear W_uk [1, 32, 192, 512] | RoPE -> concat 576. high_bw_all_gather (cluster_axis None, prefix [0, end))
+  into a replicated [1, 1, max_seq, 576] scratch -> sparse_sdpa (scale 1/16, attention_sink = sink x 16 [1,1,1,32]
+  bf16, k_chunk 128, block-cyclic remap, HiFi4 + fp32 dest) -> linear W_uv [1, 32, 512, 256] -> nlp_concat_heads
+  -> gate: all_gather(attn_norm, axis 1) -> linear_gate (fp32 out) -> sigmoid -> multiply -> o_proj row-parallel
+  (fp32 partials) -> reduce_scatter axis 1. Output attn_out [1, 1, S/2, 3072] fp32 per chip (column split).
+  `setup(chunk, max_seq)` builds tables, cache and scratch once per geometry; `__call__` has no host work.
+- hooks.py: `_attention_module`, `_AttentionHostFn` (harness boundary: topk -1 -> 0xFFFFFFFF uint32 ROW_MAJOR,
+  row split; with a device ctx reloads the golden kv_latent prefix per call; in the hybrid the cache persists).
+  "attention" added to DEVICE_STEPS["dense_full"]. `_HybridState` now holds a list of stateful device fns per layer,
+  each owning one state tensor (`state_key`: index_key / kv_latent) for load_prefix / to_torch.
+
+Decisions
+- all_reduce / all_gather / reduce_scatter (sync, cluster_axis) instead of ttMLA's persistent-buffer CCLs sized for
+  one chunk length: the ladder uses three chunk lengths.
+- The gather's extent is ceil(end / chunk) * chunk, as ttMLA; sparse_sdpa remaps natural positions in-kernel.
+- bf16 intermediates between ops (q_abs, sparse_sdpa out, W_uv out, gated product); fp32 only for the partials
+  before a reduce and for the gate logits.
+
+Results (gate command)
+- PASS first run: pcc_attention_L00 0.999993; golden rel 0.00382, row ratio [0.99777, 1.00228], worst row 0.0052;
+  chunk0 0.00384 / 0.0063; probe 0.00375 / 0.0061; scaled 0.00408 / 0.0058 (all limits rel 0.01, worst row 0.02).
+- Probe (hybrid path, deleted): load_prefix + one chunk + read_state: prefix rows exact, chunk rows vs golden latent
+  rel 0.0018, rope rel 0.0029.
+
+Gotchas
+- sparse_sdpa at HiFi4 + fp32 dest, 32 heads x 576, k128 fits L1 (plan open item 3).
+- Device error (rel 0.0038) is a little above the test's bf16 estimate (0.0033); fp32 intermediates after
+  sparse_sdpa are the knob if a later swap limit is tight.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py
