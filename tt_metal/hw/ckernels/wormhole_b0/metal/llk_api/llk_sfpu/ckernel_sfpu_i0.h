@@ -24,11 +24,14 @@ namespace ckernel::sfpu {
 //              below.
 //   |x| >  6:  asymptotic expansion (Abramowitz & Stegun 9.7.1)
 //                i0(x) = exp(|x|) / sqrt(|x|) * Q(1/|x|)
-//              FP32: degree-5 fit (6 coeffs). BF16: degree-4 fit (5
-//              coeffs) — one term shorter, since BF16 output precision
-//              cannot see the extra term (0/498 exhaustive BF16 values
-//              in [6, 88.5] differ from the correctly-rounded result).
-//              1/sqrt(2*pi) folded into Q's leading term in both.
+//              Both the exp variant and Q's degree follow the DEST width
+//              (is_fp32_dest_acc_en) — the precision the output can hold —
+//              not the input dtype. 32-bit DEST: fp32-accurate exp,
+//              degree-5 fit (6 coeffs). 16-bit DEST: 21f exp, degree-4
+//              fit (5 coeffs) — one term shorter, since BF16 output
+//              precision cannot see the extra term (0/498 exhaustive
+//              BF16 values in [6, 88.5] differ from the correctly-rounded
+//              result). 1/sqrt(2*pi) folded into Q's leading term in both.
 //
 // Measured worst case over the full domain (200k-sample random sweep over
 // [-88.5, 88.5], both dtypes, same seed on both arches): 6.0 FP32 ULP (at
@@ -86,16 +89,25 @@ namespace ckernel::sfpu {
 // LRA budget. Returns exp(|x|) * 1/sqrt(|x|) * Q(1/|x|).
 // Note: this function must stay minimalist — SFPU LRA is limited.
 // Every operation here competes with the main loop.
+//
+// Keyed on the DEST width, not on INP_FLOAT32: the exp variant and Q's degree
+// set the precision of the result, so they follow the precision the output can
+// hold. INP_FLOAT32 only says what the input was, and a bf16-in/float32-out
+// call has a 32-bit DEST with INP_FLOAT32 undefined.
+template <bool is_fp32_dest_acc_en>
 inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
     // exp(|x|) — unsafe variants in both paths. For the |x| in [6, 88.5] that
     // reaches the store, overflow/underflow is impossible and the safe
     // wrappers' clamping/guards would be dead code. Above 88.5 these wrap and
     // return garbage; the caller overwrites those lanes unconditionally.
-#ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
-#else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true /* is_fp32_dest_acc_en */>(abs_x);
-#endif
+    sfpi::vFloat exp_abs;
+    if constexpr (is_fp32_dest_acc_en) {
+        exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
+    } else {
+        // The helper's own is_fp32_dest_acc_en stays true: false would round
+        // the exp to bf16 mid-computation, and i0 rounds once, at its store.
+        exp_abs = _sfpu_exp_21f_bf16_unsafe_<true /* is_fp32_dest_acc_en */>(abs_x);
+    }
 
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
     // Computed first so that 1/|x| can be derived as rsqrt_y^2 without a
@@ -119,26 +131,28 @@ inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
     // This outlined function does not stress the main loop's LRA, so full
     // precision is safe.
     //
-    // FP32: degree-5 (6 coeffs). BF16: degree-4 (5 coeffs) — one term
-    // shorter, verified against an exhaustive sweep of all BF16-representable
-    // values in [6, 88.5] (0/498 differ from the correctly-rounded result).
-    // Coefficients must stay FP32 in both cases: rounding the BF16 Q's
-    // leading term to BF16 (which would let sfpi use SFPADDI's 16-bit
-    // immediate instead of an SFPLOADI pair) costs 1.27e-03 relative on that
-    // term alone — four orders of magnitude above the accuracy budget.
-#ifdef INP_FLOAT32
-    const sfpi::vFloat correction = PolynomialEvaluator::eval(
-        inv_abs_x,
-        3.9894214272e-01f,
-        4.9887448549e-02f,
-        2.7172168717e-02f,
-        4.6332854778e-02f,
-        -1.0997270793e-01f,
-        6.5736579895e-01f);
-#else
-    const sfpi::vFloat correction = PolynomialEvaluator::eval(
-        inv_abs_x, 3.9894300699e-01f, 4.9790032208e-02f, 3.0512193218e-02f, -9.7926484887e-04f, 1.8299004436e-01f);
-#endif
+    // 32-bit DEST: degree-5 (6 coeffs). 16-bit DEST: degree-4 (5 coeffs) —
+    // one term shorter, verified against an exhaustive sweep of all
+    // BF16-representable values in [6, 88.5] (0/498 differ from the
+    // correctly-rounded result). Coefficients must stay FP32 in both cases:
+    // rounding the degree-4 Q's leading term to BF16 (which would let sfpi
+    // use SFPADDI's 16-bit immediate instead of an SFPLOADI pair) costs
+    // 1.27e-03 relative on that term alone — four orders of magnitude above
+    // the accuracy budget.
+    sfpi::vFloat correction;
+    if constexpr (is_fp32_dest_acc_en) {
+        correction = PolynomialEvaluator::eval(
+            inv_abs_x,
+            3.9894214272e-01f,
+            4.9887448549e-02f,
+            2.7172168717e-02f,
+            4.6332854778e-02f,
+            -1.0997270793e-01f,
+            6.5736579895e-01f);
+    } else {
+        correction = PolynomialEvaluator::eval(
+            inv_abs_x, 3.9894300699e-01f, 4.9790032208e-02f, 3.0512193218e-02f, -9.7926484887e-04f, 1.8299004436e-01f);
+    }
 
     // i0 is even — no sign restoration needed (cf. i1's copysgn).
     return exp_abs * rsqrt_y * correction;
@@ -190,7 +204,7 @@ inline void calculate_i0() {
         }
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 6) ────────────────
-        v_if(abs_x > I0_THRESHOLD) { val = calculate_i0_asymptotic_(abs_x); }
+        v_if(abs_x > I0_THRESHOLD) { val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x); }
         v_endif;
 
         // ─── Overflow, +/-inf and NaN → +inf (NaN stays NaN) ─────────────
@@ -200,12 +214,10 @@ inline void calculate_i0() {
         v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
         v_endif;
 
-        // Gated on the true DEST width, not INP_FLOAT32: a bf16-in/float32-out
-        // call (ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>), a
-        // supported mixed-dtype combination) runs DEST in 32-bit mode with
-        // INP_FLOAT32 undefined, so this convert must key off
-        // is_fp32_dest_acc_en to avoid rounding a genuine FP32 output down
-        // to BF16 precision.
+        // Same key as the asymptotic branch: a bf16-in/float32-out call
+        // (ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>), a supported
+        // mixed-dtype combination) runs DEST in 32-bit mode with INP_FLOAT32
+        // undefined, and its output must not be rounded down to BF16 here.
         if constexpr (!is_fp32_dest_acc_en) {
             val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
         }

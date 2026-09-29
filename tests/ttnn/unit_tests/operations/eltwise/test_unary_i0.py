@@ -267,8 +267,11 @@ def test_i0_mixed_dtype_output(device):
     ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>) is a supported mixed-dtype
     call (unary.cpp's is_supported_mixed_float_dtype). It runs DEST in 32-bit mode
     because the *output* is float32, independent of the bfloat16 input -- so the
-    kernel must store at float32 precision here rather than truncating to bfloat16
-    just because the input dtype happens to be bfloat16.
+    kernel must compute and store at float32 precision here: the asymptotic
+    branch's exp variant and Q degree, and the final store, all follow the DEST
+    width rather than the input dtype. The draw spans [-10, 10] so that both
+    regions are exercised, since only the asymptotic branch has a
+    dtype-dependent variant.
     """
     torch.manual_seed(0)
     shape = [1, 1, 32, 32]
