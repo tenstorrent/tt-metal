@@ -396,3 +396,25 @@ through the existing `TtHcWeights` (`build_hc(..., "ffn")`): PCC 0.999994, rel 0
 <= 0.0103, column sums [0.9965, 1.0009].
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_dense.06 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc through attn_residual plus ffn_hc on device, layer 0). Rewrote it from swap 05's
+test, keeping every swap-05 check and the gated pcc_swap_out. `_hc_checks` now takes a tag and limits, and the attn_hc
+metric names are unchanged. Added:
+- ffn_hc vs the CPU ffn_hc of the device h_mid, with the component test's limits (part rel <= 0.01, max abs <= 0.05,
+  column sums within 0.01, ranges).
+- ffn_hc vs golden, looser because it carries the h_mid error: part rel <= 0.015, max abs <= 0.06.
+- Block out vs the CPU tail (ffn_collapse, ffn_norm, mlp, ffn_residual) from the same device h_mid with the CPU ffn_hc.
+  This isolates ffn_hc's effect on block out: rel <= 0.005, per-row ratio [0.975, 1.025].
+Sensitivity (CPU host script /tmp/s06_sens.py on the layer-0 golden h_mid, not kept), tail rel / ratio: comb base
+transposed 0.0061 / [0.953, 1.029], post x1.01 0.0080, post x1.02 0.016, hc_eps 1e-5 0.017 / [0.878, ..], pre x1.02
+0.0023 (caught by the part check only). Noise: bf16 mix 0.0018 / [0.989, 1.010], 0.3% mix noise 0.0036 / [0.979, 1.020].
+My first ratio limit of [0.99, 1.01] failed the device (ratio [0.9873, 1.0129]), which is noise on small rows, not a bug.
+Results: device passes (out PCC 0.999982, rel 0.0069, ratio [0.9797, 1.0087]; ffn_hc vs CPU same input 0.0024 / 0.0013 /
+0.0027; vs golden 0.0031 / 0.0027 / 0.0045; tail rel 0.0020, ratio [0.9873, 1.0129]). Reference passes (out rel 0.0017,
+tail exact). Stub fails (PCC 0, every check).
+Watch: the block-out per-row ratio minimum vs golden drops with each swap (swap 05 0.9828, now 0.9797, limit 0.97). The
+ffn steps still to come (ffn_collapse, ffn_norm, mlp, ffn_residual) add noise to this same ratio.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_06_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
