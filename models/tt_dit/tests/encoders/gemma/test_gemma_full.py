@@ -95,7 +95,7 @@ def _ltx_ckpt() -> str | None:
 
 
 def _encode_prompts_reference(
-    checkpoint_path: str, gemma_root: str, prompts: list[str]
+    checkpoint_path: str, gemma_root: str, prompts: list[str], *, connector_observer=None
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Torch reference: HF Gemma-3 text encoder + diffusers ``LTX2TextConnectors``, mirroring
     the diffusers ``LTX2Pipeline`` text path (stacked per-layer hidden states → per-modality
@@ -136,6 +136,9 @@ def _encode_prompts_reference(
                 raw[k] = f.get_tensor(k)
     inc = connectors.load_state_dict(_raw_connectors_to_diffusers(raw), strict=False)
     logger.info(f"ref connectors load: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
+    if connector_observer is not None:
+        assert not inc.missing_keys and not inc.unexpected_keys, inc
+        connector_observer(connectors)
 
     tok = AutoTokenizer.from_pretrained(gemma_root)
     tok.padding_side = "left"  # Gemma-3 / LTX-2 use left padding

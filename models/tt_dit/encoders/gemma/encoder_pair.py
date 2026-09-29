@@ -8,8 +8,10 @@ tt_dit encoder_pair convention (cf. ``encoders/t5/encoder_pair.py``)."""
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import time
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -161,6 +163,79 @@ class GemmaTokenizerEncoderPair:
         # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
         # gate once they are done, which makes the encode the last capture taken.
         self._trace_gate_open = True
+
+    def embedding_cache_identity(self) -> dict:
+        """Bind prompt outputs to their source weights, tokenizer and compute policy.
+
+        This works before modules are loaded, so a dynamic-load cache hit need
+        not bring Gemma back onto the device or disturb captured DiT weights.
+        Legacy prompt-only entries have no such provenance and are not reused.
+        """
+        assert self.checkpoint_name and self.gemma_path, "embedding cache requires explicit model sources"
+        gemma_dir = Path(self.gemma_path)
+        shards = _gemma_shards(self.gemma_path)
+        assert shards, f"no Gemma checkpoint shards in {gemma_dir}"
+        assets = sorted(path for path in gemma_dir.iterdir() if path.suffix in (".json", ".model", ".txt"))
+        sources = {"ltx": cache_module.source_id(self.checkpoint_name)}
+        sources.update({f"gemma/{Path(path).name}": cache_module.source_id(path) for path in [*shards, *assets]})
+        root = Path(__file__).resolve().parents[2]
+        code_paths = sorted(Path(__file__).parent.glob("*.py")) + [
+            root / "layers" / "normalization.py",
+            root / "layers" / "linear.py",
+            root / "models" / "transformers" / "ltx" / "rope_ltx.py",
+        ]
+        code = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in code_paths}
+        native = (
+            [layer.self_attn._native_gqa for layer in self.gemma_encoder.layers]
+            if self.gemma_encoder is not None
+            else [os.environ.get("LTX_GEMMA_NATIVE_GQA", "0") == "1"] * self._num_layers
+        )
+        feature_mask_after_projection = (
+            self.feature_extractor._mask_after_projection
+            if self.feature_extractor is not None
+            else os.environ.get("LTX_FEATURE_MASK_AFTER_PROJECTION", "0") == "1"
+        )
+        connectors = {}
+        for axis in ("video", "audio") if self.mode == "av" else ("video",):
+            connector = getattr(self, f"{axis}_connector")
+            connectors[axis] = (
+                {
+                    "qk_stats": [block._qk_stats for block in connector.transformer_1d_blocks],
+                    "registers": connector.num_learnable_registers,
+                }
+                if connector is not None
+                else {
+                    "qk_stats": [
+                        os.environ.get("LTX_CONNECTOR_QK_STATS", "0") == "1"
+                        and self.parallel_config.tensor_parallel.factor > 1
+                    ]
+                    * 8,
+                    "registers": 128,
+                }
+            )
+        return {
+            "schema": 2,
+            "sources": sources,
+            "code": code,
+            "native_binary": cache_module.source_id(ttnn._ttnn.__file__),
+            "weight_cache_version": cache_module.CACHE_VERSION,
+            "feature_mask_after_projection": feature_mask_after_projection,
+            "model": {
+                "mode": self.mode,
+                "layers": self._num_layers,
+                "hidden_layer_index": self._hidden_layer_index,
+                "sequence_length": self._sequence_length,
+                "video_dim": self._video_dim,
+                "audio_dim": self._audio_dim,
+            },
+            "mesh": list(self.mesh_device.shape),
+            "arch": str(self.mesh_device.arch()),
+            "parallel": self.parallel_config._asdict(),
+            "ccl_topology": str(self.ccl_manager.topology),
+            "ccl_num_links": self.ccl_manager.num_links,
+            "gemma_native_gqa": native,
+            "connectors": connectors,
+        }
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
@@ -318,7 +393,7 @@ class GemmaTokenizerEncoderPair:
         cache_module.load_model(
             connector,
             model_name=ckpt_name,
-            subfolder=f"{axis}_connector",
+            subfolder=connector.weight_cache_subfolder(axis),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -349,6 +424,37 @@ class GemmaTokenizerEncoderPair:
         )
         return video, audio
 
+    def _encode_prompt_device(self, prompt: str) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Return borrowed trace outputs; consume/copy before another encode or trace replay."""
+        assert self.gemma_encoder is not None, "Call ensure_loaded() first"
+        tokens = self.tokenizer(
+            prompt, return_tensors="pt", padding="max_length", max_length=self._sequence_length, truncation=True
+        )
+        tt_ids = ttnn.from_torch(
+            tokens.input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        seq = tt_ids.shape[-1]
+        tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
+        fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
+        src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
+        return self._encode_device(
+            tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
+        )
+
+    def encode_to_device_buffers(self, prompt: str, video_buffer: ttnn.Tensor, audio_buffer: ttnn.Tensor) -> None:
+        """Copy a fresh static encode into caller-owned, preallocated DiT inputs.
+
+        The sinks must predate every consumer trace. No encoder output alias is
+        retained, and subsequent prompts update the same addresses.
+        """
+        assert not self.dynamic_load, "device prompt handoff requires resident encoder weights"
+        assert tuple(video_buffer.shape) == (1, 1, self._sequence_length, self._video_dim)
+        assert tuple(audio_buffer.shape) == (1, 1, self._sequence_length, self._audio_dim)
+        video, audio = self._encode_prompt_device(prompt)
+        assert audio is not None, "device prompt handoff requires AV mode"
+        ttnn.copy(ttnn.unsqueeze(video, 0), video_buffer)
+        ttnn.copy(ttnn.unsqueeze(audio, 0), audio_buffer)
+
     def encode(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
         """Tokenize → traced whole-encode device graph → host embeds, one
         ``(video_embeds, audio_embeds)`` per prompt. Pure compute; the disk cache lives in the
@@ -357,22 +463,7 @@ class GemmaTokenizerEncoderPair:
 
         results = []
         for prompt in prompts:
-            tokens = self.tokenizer(
-                prompt, return_tensors="pt", padding="max_length", max_length=self._sequence_length, truncation=True
-            )
-            tt_ids = ttnn.from_torch(
-                tokens.input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            seq = tt_ids.shape[-1]
-            # Per-prompt device inputs, built on host and copied into the trace on replay.
-            tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
-            fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
-            # src_idx/keep_mask are dim-independent → shared by both connectors (build once).
-            src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
-
-            video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
-            )
+            video_dev, audio_dev = self._encode_prompt_device(prompt)
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (
                 ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None

@@ -36,6 +36,27 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
 
 
+def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
+    """The initial device variant supports only the resident scalar LTX TP4 path."""
+    shape = tuple(x.shape)
+    weight = norm.weight.data if norm.weight is not None else None
+    if not (
+        norm.mesh_width == 4
+        and heads == 8
+        and len(shape) == 4
+        and shape[:2] == (1, 1)
+        and shape[-1] in (512, 1024)
+        and all(t is not None and t.dtype == ttnn.bfloat16 for t in (x, weight, cos, sin, transform))
+    ):
+        return False
+    return tuple(weight.shape) == (1, shape[-1]) and tuple(cos.shape) == tuple(sin.shape) == (
+        1,
+        heads,
+        shape[2],
+        shape[-1] // heads,
+    )
+
+
 class LTXAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
@@ -127,6 +148,12 @@ class LTXAttention(Module):
         self.qk_norm = qk_norm
         self.eps = eps
         self.is_self = is_self
+        # Fuse the self-attention rotation into Q/K RMSNorm's head-split writer.
+        # Cross-attention may gather K across SP before rotating it, so it keeps
+        # the separate rotation until that layout is validated independently.
+        self.fuse_qk_rope = os.environ.get("LTX_FUSE_QK_ROPE", "0") in ("1", "true", "True")
+        self.rope_active_cores_only = os.environ.get("LTX_ROPE_ACTIVE_CORES_ONLY", "0") == "1"
+        self.preserve_qk_rope_rounding = os.environ.get("LTX_FUSE_QK_ROPE_PRESERVE_BF16", "0") in ("1", "true", "True")
         self.query_input_dim = query_input_dim or dim
         self.output_dim = output_dim or dim
 
@@ -741,8 +768,42 @@ class LTXAttention(Module):
             )
 
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
-        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        # The optional fused RoPE avoids writing and rereading the unrotated Q/K.
+        self_rope = self.is_self and prompt_1BLP is None and rope_cos is not None
+        preserve_rounding = (
+            self.preserve_qk_rope_rounding
+            and self_rope
+            and all(
+                _can_preserve_qk_rope_rounding(norm, x, cos, sin, trans_mat, self.n_local_heads)
+                for norm, x, cos, sin in (
+                    (self.norm_q, q_1BNF, rope_cos, rope_sin),
+                    (
+                        self.norm_k,
+                        k_1BNF,
+                        k_rope_cos if k_rope_cos is not None else rope_cos,
+                        k_rope_sin if k_rope_sin is not None else rope_sin,
+                    ),
+                )
+            )
+        )
+        # The preserving request takes precedence: an unsupported layout falls
+        # back to the original composite, even if the FP32 fusion flag is set.
+        fuse_qk_rope = self_rope and (preserve_rounding if self.preserve_qk_rope_rounding else self.fuse_qk_rope)
+        q_rope_args = dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat) if fuse_qk_rope else {}
+        k_rope_args = (
+            dict(
+                rope_cos=k_rope_cos if k_rope_cos is not None else rope_cos,
+                rope_sin=k_rope_sin if k_rope_sin is not None else rope_sin,
+                trans_mat=trans_mat,
+            )
+            if fuse_qk_rope
+            else {}
+        )
+        if preserve_rounding:
+            q_rope_args["preserve_rope_rounding"] = True
+            k_rope_args["preserve_rope_rounding"] = True
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, **q_rope_args)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, **k_rope_args)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -773,14 +834,35 @@ class LTXAttention(Module):
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
-        if rope_cos is not None:
+        if rope_cos is not None and not fuse_qk_rope:
             _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+            active_core_args = (
+                {"active_cores_only": True}
+                if self.rope_active_cores_only
+                and q_BHNE.shape[0] == 1
+                and k_BHNE.shape[0] == 1
+                and all(
+                    t is not None and t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                    for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, _k_cos, _k_sin, trans_mat)
+                )
+                else {}
+            )
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                q_BHNE,
+                rope_cos,
+                rope_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                **active_core_args,
             )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                k_BHNE,
+                _k_cos,
+                _k_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                **active_core_args,
             )
 
         # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the

@@ -73,8 +73,8 @@ def test_connector_cache_is_content_keyed(*, mesh_device):
     name = os.path.basename(ckpt).removesuffix(".safetensors")
     modules = {
         ("feature_extractor", "bf16"): pair.feature_extractor,
-        ("video_connector", "float32"): pair.video_connector,
-        ("audio_connector", "float32"): pair.audio_connector,
+        (pair.video_connector.weight_cache_subfolder("video"), "float32"): pair.video_connector,
+        (pair.audio_connector.weight_cache_subfolder("audio"), "float32"): pair.audio_connector,
     }
 
     for (subfolder, dtype), module in modules.items():

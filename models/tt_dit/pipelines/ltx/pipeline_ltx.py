@@ -113,6 +113,7 @@ class LTXTransformerState:
     """
 
     def __init__(self) -> None:
+        self._euler_tail = None
         self._tt_video_lat = StateTensor()
         self._tt_audio_lat = StateTensor()
         self._tt_timestep = StateTensor()
@@ -295,6 +296,7 @@ class LTXPipeline:
         # temporal axis into seconds. Both are baked into the captured traces, so changing it
         # per request would silently replay a trace built for a different shape.
         self.fps = float(fps)
+        self._trace_euler_tail = os.environ.get("LTX_EULER_TAIL_TRACE", "0") == "1" and not dynamic_load
         # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
         # so static inputs are bound once and the latent/timestep buffers refreshed in place.
         self._trace_state: dict[str, LTXTransformerState] = {}
@@ -303,6 +305,7 @@ class LTXPipeline:
         # neither replay overwrites them.
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+        self._device_prompt_handoff = os.environ.get("LTX_DEVICE_PROMPT_HANDOFF", "0") == "1" and not dynamic_load
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
@@ -488,6 +491,10 @@ class LTXPipeline:
 
     def release_traces(self) -> None:
         """Release captured denoise traces and free their device trace memory."""
+        # Tail traces borrow the DiT producer's output buffers.
+        for state in self._trace_state.values():
+            if state._euler_tail is not None:
+                state._euler_tail.release()
         if self.transformer is not None:
             for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
                 tracer.release_trace()
@@ -495,22 +502,24 @@ class LTXPipeline:
             self.tt_vocoder_with_bwe.release_trace()
         if self.tt_mel_decoder is not None:
             self.tt_mel_decoder.release_trace()
+        if self.vae_decoder is not None:
+            self.vae_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
 
     def release_audio_submesh(self) -> None:
-        """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
+        """Release audio tensors and leave the shared queues safe for mesh teardown.
 
-        The submesh shares the parent mesh's command queue. ttnn forbids closing a
-        cq-sharing child while the parent is alive (close hangs) and forbids closing
-        the parent while the child is alive ("cq in use by child submesh"), so the
-        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
-        closes at process teardown. This only frees the audio device tensors. No-op when
-        audio runs on the full mesh.
+        Call after ``release_traces``. Synchronizing the child waits for its work but
+        leaves both meshes' command queues marked in use; closing either mesh can
+        then fail the shared-queue ownership check. Quiescing the parent drains and
+        resets its queues and every child's queues, including semaphore-init writes.
+        Keep the owned child alive for the caller's normal child-before-parent close
+        order. No-op when audio runs on the full mesh.
         """
         if self._owned_audio_submesh is not None:
-            ttnn.synchronize_device(self._owned_audio_submesh)
+            self.mesh_device.quiesce_devices()
             # The adapter owns both mel-decoder + vocoder (exposed via the tt_mel_decoder /
             # tt_vocoder_with_bwe properties); dropping it frees the submesh-resident audio tensors.
             self._audio_adapter = None
@@ -1062,12 +1071,16 @@ class LTXPipeline:
         self.transformer = state.model
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
-        """Disk-cache path for on-device prompt embeddings. Separate namespace from the
-        reference cache (different format) — lets a repeated prompt skip the encoder."""
+        """Reuse embeddings only for the same prompt, weights and encoder policy.
+
+        The old prompt-only namespace cannot establish source identity. Leave it
+        intact, but make the first request under each verified policy encode.
+        """
         cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
-        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
+        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings-v2")
         os.makedirs(embed_cache_dir, exist_ok=True)
-        key = hashlib.md5(("device||" + "||".join(prompts)).encode()).hexdigest()
+        identity = {"prompts": prompts, "encoder": self.gemma_encoder_pair.embedding_cache_identity()}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
     def encode_prompts(
@@ -1076,7 +1089,7 @@ class LTXPipeline:
         """Encode prompts on device via the Gemma encoder pair, with a prompt-embedding disk
         cache (orchestration kept here). A cache hit returns saved embeddings without running
         the encoder; ``use_cache=False`` forces a real encode (used by warmup)."""
-        cache_path = self._device_embed_cache_path(prompts)
+        cache_path = self._device_embed_cache_path(prompts) if use_cache else None
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
@@ -1349,6 +1362,8 @@ class LTXPipeline:
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
         with Watchdog("vae decode"):
+            if output_type == "yuv" and self.vae_decoder.trace_yuv_output and self.dynamic_load:
+                raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
             video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type == "yuv":
             return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
@@ -1373,12 +1388,10 @@ class LTXPipeline:
             logger.info(f"Upsampler cache miss — loading safetensors: {self._upsampler_path}")
             return load_file(self._upsampler_path)
 
-        blocking_key = conv3d_blocking_hash(self.upsampler)
-        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
         cache_module.load_model(
             self.upsampler,
             model_name=os.path.basename(self._upsampler_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
+            subfolder=self.upsampler.weight_cache_subfolder(),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -1438,7 +1451,10 @@ class LTXPipeline:
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         dummy = torch.zeros(1, latent_frames * latent_h * latent_w, self.in_channels)
         self._prepare_vae()
-        self.decode_latents(dummy, latent_frames, latent_h, latent_w)
+        # Capture the output tail before the subsequent audio captures. Delaying
+        # it until generation can put its workspace over their persistent inputs.
+        output_type = "yuv" if self.vae_decoder.fuse_yuv_output or self.vae_decoder.trace_yuv_output else "float"
+        self.decode_latents(dummy, latent_frames, latent_h, latent_w, output_type=output_type)
 
     def _resolve_fps(self, fps: float | None) -> float:
         """Resolve a per-call ``fps`` against the pipeline's own rate.

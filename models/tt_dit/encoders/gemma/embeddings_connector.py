@@ -11,13 +11,15 @@ Reference: ltx_core.text_encoders.gemma.embeddings_connector
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.normalization import RMSNorm
+from ...layers.normalization import DistributedRMSNorm, RMSNorm
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
@@ -57,8 +59,16 @@ class ConnectorBlock(Module):
 
         # Gemma-style QK normalization over the full inner dim, applied before RoPE
         # (reference Attention uses torch.nn.RMSNorm(inner_dim): raw weight, no +1).
-        self.q_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
-        self.k_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
+        self._qk_stats = (
+            os.environ.get("LTX_CONNECTOR_QK_STATS", "0") == "1" and parallel_config.tensor_parallel.factor > 1
+        )
+        norm_kwargs = dict(norm_eps=eps, bias=False, mesh_device=mesh_device)
+        norm_type = RMSNorm
+        if self._qk_stats:
+            norm_type = DistributedRMSNorm
+            norm_kwargs.update(mesh_axis=tp_axis, ccl_manager=ccl_manager)
+        self.q_norm = norm_type(dim, **norm_kwargs)
+        self.k_norm = norm_type(dim, **norm_kwargs)
         # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(x)), applied to attn output.
         # dtype=float32 routes the matmul through HiFi4 + fp32 dest acc to match the host fp32
         # baseline (mirrors attention_ltx; the gate is precision-sensitive over 8 blocks).
@@ -136,20 +146,41 @@ class ConnectorBlock(Module):
             if key in state:
                 state[key] = _permute_qk(state[key])
 
-    def forward(self, x, rope_cos=None, rope_sin=None, trans_mat=None):
-        # Self-attention with residual
-        residual = x
-        x = ttnn.experimental.dit_rms_norm_unary_fused(
-            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
-        )
-        attn_in = x  # normed input, reused for the per-head gate
-        q = self.to_q(x, compute_kernel_config=self.compute_config)
-        k = self.to_k(x, compute_kernel_config=self.compute_config)
-        v = self.to_v(x, compute_kernel_config=self.compute_config)
-
+    def _normalize_qk_and_split_heads(self, q, k, v, *, apply_rope):
         tp = self.parallel_config.tensor_parallel.factor
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        apply_rope = rope_cos is not None and rope_sin is not None
+        n_local_heads = self.num_heads // tp
+        B, S = q.shape[0], q.shape[1]
+
+        if apply_rope and self._qk_stats:
+            assert B == 1 or S % 32 == 0, "distributed connector RMS requires tile-aligned batched sequences"
+
+            # One RMS statistic over the FULL inner row, pooling all TP shards.
+            # Whole heads happen to be local, but per-head RMS is not equivalent.
+            # Learned weights retain the checkpoint's SPLIT->INTERLEAVED channel
+            # permutation and are now sharded along that same feature axis.
+            def normalize(norm, value):
+                value = norm(
+                    ttnn.unsqueeze(value, 0),
+                    num_heads_per_device=n_local_heads,
+                    per_head_norm=False,
+                    compute_kernel_config=self.rmsnorm_cc,
+                )
+                if B > 1:
+                    # DistributedRMSNorm folds batch into sequence in head mode.
+                    value = ttnn.reshape(value, (n_local_heads, B, S, self.head_dim))
+                    value = ttnn.permute(value, (1, 0, 2, 3))
+                return value
+
+            q, k = normalize(self.q_norm, q), normalize(self.k_norm, k)
+            v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(v, (B, 1, S, n_local_heads * self.head_dim)),
+                num_heads=n_local_heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return q, k, v
 
         # Gemma QK-norm over the full inner dim, BEFORE RoPE (raw-weight RMS, matching the
         # reference torch.nn.RMSNorm). Done on device — the q/k channels and the q_norm/k_norm
@@ -166,12 +197,9 @@ class ConnectorBlock(Module):
                 q = ttnn.mesh_partition(q, dim=2, cluster_axis=tp_axis)
                 k = ttnn.mesh_partition(k, dim=2, cluster_axis=tp_axis)
 
-        n_local_heads = self.num_heads // tp
-
         # Fused head split: QK-norm ran on the full inner dim above, so split here — after norm —
         # by concatenating q|k|v and using the fused nlp_create_qkv_heads. The SPLIT→INTERLEAVED
         # channel permute (done at load) is preserved, so RoPE below is unaffected.
-        B, S = q.shape[0], q.shape[1]
         qkv = ttnn.concat([q, k, v], dim=-1)  # (B, S, 3*n_local_heads*D)
         qkv = ttnn.reshape(qkv, (B, 1, S, 3 * n_local_heads * self.head_dim))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -181,6 +209,21 @@ class ConnectorBlock(Module):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        return q, k, v
+
+    def forward(self, x, rope_cos=None, rope_sin=None, trans_mat=None):
+        # Self-attention with residual
+        residual = x
+        x = ttnn.experimental.dit_rms_norm_unary_fused(
+            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
+        )
+        attn_in = x  # normed input, reused for the per-head gate
+        q = self.to_q(x, compute_kernel_config=self.compute_config)
+        k = self.to_k(x, compute_kernel_config=self.compute_config)
+        v = self.to_v(x, compute_kernel_config=self.compute_config)
+        tp = self.parallel_config.tensor_parallel.factor
+        apply_rope = rope_cos is not None and rope_sin is not None
+        q, k, v = self._normalize_qk_and_split_heads(q, k, v, apply_rope=apply_rope)
 
         # Interleaved RoPE on the head-split Q/K (cos/sin/trans_mat prepared by the caller).
         if apply_rope:
@@ -302,6 +345,11 @@ class EmbeddingsConnector(Module):
         self._rope_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         # Learnable registers tiled to [1, seq, dim], cached (constant after load).
         self._reg_cache: dict[int, ttnn.Tensor] = {}
+
+    def weight_cache_subfolder(self, axis: str) -> str:
+        """Do not mix replicated Q/K affine tensors with the TP-sharded layout."""
+        suffix = "_qk_stats_v1" if any(block._qk_stats for block in self.transformer_1d_blocks) else ""
+        return f"{axis}_connector{suffix}"
 
     def _rope_cos_sin(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Connector RoPE cos/sin for ``seq_len``, cached on device.

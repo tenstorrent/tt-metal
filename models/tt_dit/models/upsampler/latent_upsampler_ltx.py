@@ -17,7 +17,7 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...layers.module import Module, ModuleList
-from ...layers.normalization import GroupNorm3D
+from ...layers.normalization import DistributedGroupNorm, GroupNorm3D
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
@@ -42,6 +42,59 @@ def _mesh_partition_hw(x: ttnn.Tensor, pc: VaeHWParallelConfig) -> ttnn.Tensor:
     return x
 
 
+class _WidthStatsGroupNorm3D(GroupNorm3D):
+    """Keep the original full-extent norm and separately packed width-stats affine.
+
+    GroupNorm3D packs gamma/beta for its chosen DRAM grid; DistributedGroupNorm
+    requires virtual_cols=1. Both representations are prepared from the original
+    checkpoint vectors, never by reinterpreting the other's tensorbin.
+    """
+
+    def __init__(self, *, parallel_config: VaeHWParallelConfig, ccl_manager: CCLManager, **kwargs):
+        super().__init__(**kwargs)
+        self.width_stats = DistributedGroupNorm(
+            self.num_channels,
+            self.num_groups,
+            eps=self.eps,
+            mesh_device=self.mesh_device,
+            cluster_axis=parallel_config.width_parallel.mesh_axis,
+            mesh_axis=None,  # every device retains all channels and all 32 groups
+            ccl_manager=ccl_manager,
+        )
+        # Match GroupNorm3D's Welford group_norm default compute policy. The
+        # distributed op otherwise defaults approximate math off. BF16 cross-chip
+        # mean/variance packing still changes reduction order and needs a gate.
+        self.stats_compute_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        original_affine = {key: state[key] for key in ("weight", "bias") if key in state}
+        super()._prepare_torch_state(state)
+        state.update({f"width_stats.{key}": value for key, value in original_affine.items()})
+
+
+def _upsampler_group_norm(*, parallel_config: VaeHWParallelConfig, ccl_manager: CCLManager, **kwargs):
+    # Fused GN v1 has no spatial-row mask: each equal W partition must contain a
+    # multiple of 32 rows. For production T19 this excludes the first 9 norms,
+    # but admits the 8 norms after the 2x spatial upsample. Do not pad more zeros.
+    wf = parallel_config.width_parallel.factor
+    eligible = (
+        os.environ.get("LTX_UPSAMPLER_W_STATS_GN", "0") == "1"
+        and wf > 1
+        and kwargs.get("num_batches", 1) == 1
+        and kwargs.get("dtype", ttnn.bfloat16) == ttnn.bfloat16
+        and kwargs["input_nhw"] % (wf * 32) == 0
+    )
+    if eligible:
+        return _WidthStatsGroupNorm3D(parallel_config=parallel_config, ccl_manager=ccl_manager, **kwargs)
+    return GroupNorm3D(**kwargs)
+
+
 def _gn_hw_sharded(
     gn: GroupNorm3D,
     x: ttnn.Tensor,
@@ -54,6 +107,31 @@ def _gn_hw_sharded(
     rows/cols), then mesh_partition back. ``logical_h/logical_w<=0`` means full extent."""
     if x.layout != ttnn.ROW_MAJOR_LAYOUT:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    B, T, local_h, local_w, C = x.shape
+    full_h = local_h * pc.height_parallel.factor
+    full_w = local_w * pc.width_parallel.factor
+    if (
+        isinstance(gn, _WidthStatsGroupNorm3D)
+        and B == 1
+        and x.dtype == ttnn.bfloat16
+        and (logical_h <= 0 or logical_h == full_h)
+        and (logical_w <= 0 or logical_w == full_w)
+        and (T * full_h * local_w) % 32 == 0
+    ):
+        assert C == gn.num_channels and T * full_h * full_w == gn.input_nhw
+        if pc.height_parallel.factor > 1:
+            x = ccl.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
+        # Local rows enumerate T,H,W_local, with contiguous channels last. W
+        # devices partition the spatial set, not channels/groups; their pooled
+        # statistics therefore cover precisely T*H*W for each original group.
+        x = ttnn.reshape(x, (B, 1, T * full_h * local_w, C))
+        x = ttnn.tilize_with_zero_padding(x, use_multicore=True)
+        x = gn.width_stats(x, compute_kernel_config=gn.stats_compute_config)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (B, T, full_h, local_w, C))
+        if pc.height_parallel.factor > 1:
+            x = ttnn.mesh_partition(x, dim=2, cluster_axis=pc.height_parallel.mesh_axis)
+        return x
     x = _all_gather_hw(x, pc, ccl)
     B, T, padded_h, padded_w, C = x.shape
     lh = logical_h if logical_h > 0 else padded_h
@@ -134,11 +212,13 @@ class LTXUpsamplerResBlock(Module):
             num_batches=gn_num_batches,
             mesh_device=mesh_device,
             dtype=dtype,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
         self.conv1 = LTXCausalConv3d(channels, mid_channels, **conv_kwargs)
-        self.norm1 = GroupNorm3D(num_channels=mid_channels, **gn_kwargs)
+        self.norm1 = _upsampler_group_norm(num_channels=mid_channels, **gn_kwargs)
         self.conv2 = LTXCausalConv3d(mid_channels, channels, **conv_kwargs)
-        self.norm2 = GroupNorm3D(num_channels=channels, **gn_kwargs)
+        self.norm2 = _upsampler_group_norm(num_channels=channels, **gn_kwargs)
 
     def forward(self, x: ttnn.Tensor, logical_h: int = 0, logical_w: int = 0) -> ttnn.Tensor:
         pc, ccl = self.parallel_config, self.ccl_manager
@@ -207,6 +287,7 @@ class LTXLatentUpsampler(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self._width_stats_gn = os.environ.get("LTX_UPSAMPLER_W_STATS_GN", "0") == "1"
 
         H_in, W_in = input_hw
         H_out, W_out = H_in * 2, W_in * 2
@@ -234,8 +315,14 @@ class LTXLatentUpsampler(Module):
         self.initial_conv = LTXCausalConv3d(
             in_channels, mid_channels, kernel_size=3, stride=1, conv_dims=pre_dims, **block_kwargs
         )
-        self.initial_norm = GroupNorm3D(
-            num_channels=mid_channels, num_groups=32, input_nhw=pre_gn_nhw, mesh_device=mesh_device, dtype=dtype
+        self.initial_norm = _upsampler_group_norm(
+            num_channels=mid_channels,
+            num_groups=32,
+            input_nhw=pre_gn_nhw,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
 
         self.res_blocks = ModuleList(
@@ -319,18 +406,23 @@ class LTXLatentUpsampler(Module):
             logger.info(f"Upsampler cache miss — loading safetensors: {self._checkpoint_path}")
             return load_file(self._checkpoint_path)
 
-        blocking_key = conv3d_blocking_hash(self)
-        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
         cache_module.load_model(
             self,
             model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
+            subfolder=self.weight_cache_subfolder(),
             parallel_config=self._dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
+            sources=[self._checkpoint_path],
             get_torch_state_dict=_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")
+
+    def weight_cache_subfolder(self) -> str:
+        """Version both the standalone and serving cache for new affine packing."""
+        blocking_key = conv3d_blocking_hash(self)
+        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
+        return f"{subfolder}_wstats_gn_v1" if self._width_stats_gn else subfolder
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reference upsampler is ``Sequential[Conv2d, PixelShuffleND]``; flatten to Conv3d."""

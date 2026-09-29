@@ -30,7 +30,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
 from models.tt_dit.models.audio_vae.mel_decoder_ltx import AudioUpsample, MelDecoder, ResnetBlock
 from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1, Vocoder
@@ -90,6 +89,7 @@ def _build_pipeline(
     checkpoint: str,
     num_links: int,
     topology: ttnn.Topology,
+    traced: bool = False,
 ) -> tuple[LTXPipeline, DiTParallelConfig]:
     mesh_shape = tuple(mesh_device.shape)
     parallel_config = DiTParallelConfig(
@@ -103,15 +103,12 @@ def _build_pipeline(
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         checkpoint_name=None,
+        traced=traced,
     )
     pipeline.checkpoint_name = checkpoint
-    pipeline._audio_adapter = LTXAudioDecoderAdapter(
-        pipeline.checkpoint_name,
-        mesh_device=pipeline.mesh_device,
-        vae_ccl_manager=pipeline.vae_ccl_manager,
-        dit_parallel_config=pipeline.parallel_config,
-        traced=pipeline._traced,
-    )
+    # Use the serving constructor: it honors LTX_AUDIO_SUBMESH and selects its CCL
+    # manager. Building an adapter on pipeline.mesh_device silently ignores the flag.
+    pipeline._new_audio_decoder()
     return pipeline, parallel_config
 
 
