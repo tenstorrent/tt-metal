@@ -184,3 +184,53 @@ def test_device_offline_streaming_matches_upstream_streaming(device):
         with open(os.path.join(OUT_DIR, "results.json"), "w") as fh:
             json.dump({"backend": "ttnn-streaming-offline", "results": results}, fh, indent=2, ensure_ascii=False)
     assert not failures, failures
+
+
+# Stage B: streaming interleaved with the LLM (tt/pipeline.py `synthesize_stream`). One short case, greedy sampling.
+STREAM_CASE = "zero_shot_260-123286-0014"
+
+
+@pytest.mark.skipif(not INPUTS_DIR, reason="set COSYVOICE2_INPUTS")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 50_000_000}], indirect=True)
+@pytest.mark.timeout(0)  # a device job is never killed mid-op (pytest.ini sets 300 s)
+def test_device_streaming_interleaved_with_llm(device):
+    """With the decode trace on, a chunk's flow and HiFT run between decode steps while the trace is alive, after
+    `warmup_streaming()` compiled and verified every streaming geometry. Checked:
+    - at least one chunk's audio is ready before the LLM has finished;
+    - the streamed tokens (greedy) equal the batch tokens: the chunk work between decode steps doesn't disturb the
+      decode;
+    - no trace is left alive after the call;
+    - the streamed audio equals stage A's offline streaming of the same tokens, with the same noise, bit for bit."""
+    from dataclasses import replace
+
+    from models.experimental.cosyvoice2.tt.pipeline import CosyVoice2Config, CosyVoice2TTNN
+    from models.experimental.cosyvoice2.tt.prompt import PromptContext
+    from models.experimental.cosyvoice2.tt.streaming import stream_fixed_tokens
+
+    pipeline = CosyVoice2TTNN(device, replace(CosyVoice2Config.reported(), sampler="greedy"))
+    pipeline.warmup_buckets()
+    pipeline.warmup_streaming()
+    ctx = PromptContext.from_npz(os.path.join(INPUTS_DIR, f"{STREAM_CASE}.npz"))
+    text = ctx.meta["case"]["text"]
+
+    def noise_for(k, samples):
+        return torch.randn(1, samples, pipeline.harmonics, generator=torch.Generator().manual_seed(1000 + k))
+
+    streamed = pipeline.synthesize_stream(ctx, text, noise_for=noise_for)
+    assert pipeline.live_traces() == [], pipeline.live_traces()
+    tokens = streamed.tokens
+    batch = [t for ids in (pipeline.text.encode(s) for s in pipeline.text.normalize(text, split=True))
+             for t in pipeline.text_to_tokens(ctx, ids)]  # fmt: skip
+    assert pipeline.live_traces() == [], pipeline.live_traces()
+    during = [c for c in streamed.chunks if c["during_generation"]]
+    print(
+        f"\n  {STREAM_CASE}: {len(tokens)} tokens, {len(streamed.chunks)} chunks, {len(during)} ready during generation; "
+        f"first audio {streamed.first_audio_s:.3f} s, RTF {streamed.rtf:.3f}"
+    )
+    for c in streamed.chunks:
+        print(f"    chunk offset {c['offset']} hop {c['hop']}{' (final)' if c['final'] else ''}: start {c['start_s']:.3f} s, "
+              f"flow {c['flow']:.3f} s (CFM {c['cfm']:.3f}), HiFT {c['hift']:.3f} s, ready {c['ready_s']:.3f} s")  # fmt: skip
+    assert during, "no chunk was emitted while the LLM was generating"
+    assert tokens == batch, "streaming changed the greedy tokens"
+    offline = np.concatenate([c.audio for c in stream_fixed_tokens(pipeline, ctx, tokens, noise_for)])
+    assert np.array_equal(streamed.audio, offline), float(np.abs(streamed.audio - offline).max())

@@ -630,6 +630,7 @@ class TtQwen2LM:
         sampler: str = "ras",
         seed: int | None = None,
         use_trace: bool | None = None,
+        on_token=None,
         **sampling_kwargs,
     ) -> list[int]:
         """Text token ids -> semantic speech token ids, autoregressively.
@@ -660,6 +661,11 @@ class TtQwen2LM:
         the prefix plus `max_tokens` does not fit `args.max_seq_len` (see `required_max_seq_len`).
         Nothing else bounds the decode position, so an oversized request used to run off the end
         of the KV cache / RoPE table silently once generation got long enough.
+
+        `on_token(token)`, if given, runs after each accepted token, before the next decode step: streaming
+        (tt/streaming.py `StreamSession.push`) runs a chunk's flow and vocoder from there. With the decode trace on,
+        that work runs while the trace is alive, so every geometry it meets must already be compiled and verified
+        (`CosyVoice2TTNN.warmup_streaming`): nothing may compile or prepare weights under a live trace.
         """
         from .sampling import greedy, ras_sampling
 
@@ -699,6 +705,8 @@ class TtQwen2LM:
                 if token in stop_token_ids:
                     break
                 out.append(token)
+                if on_token is not None:
+                    on_token(token)
                 if use_trace:
                     logits = self._decode_step_traced(token, pos)
                 else:

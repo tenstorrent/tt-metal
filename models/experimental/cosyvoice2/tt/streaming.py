@@ -24,7 +24,10 @@ frames; front padding is unvoiced, so the sine phase at the first real frame is 
 the end to 128 or 256 (the tail effect docs/VALIDATION.md measures for bucketing).
 
 Offline (stage A, `stream_fixed_tokens`): the tokens are given up front, as if the LLM had finished; no trace is
-involved. docs/VALIDATION.md, "Streaming", has the gate against upstream's own streaming run.
+involved. Live (stage B, `StreamSession`, driven by `CosyVoice2TTNN.synthesize_stream`): the LLM's
+`generate(on_token=...)` pushes each token, and a due chunk's flow and HiFT run between two decode steps while the
+decode trace is alive, so every streaming geometry must be warmed first (`warmup_streaming`). Both stages run the same
+session code. docs/VALIDATION.md, "Streaming", has the gates.
 """
 from __future__ import annotations
 
@@ -172,19 +175,64 @@ def flow_chunk(pipeline, ctx, tokens: list[int], chunk: StreamChunk) -> torch.Te
     return mel[:, TOKEN_MEL_RATIO * chunk.offset : TOKEN_MEL_RATIO * (chunk.offset + chunk.hop)]
 
 
-def stream_fixed_tokens(pipeline, ctx, tokens: list[int], noise_for) -> list[StreamedChunk]:
-    """Stage A: the chunks of a fixed token list, flow then HiFT per chunk. `noise_for(k, samples)` gives HiFT call
-    k's sine noise, `[1, samples, harmonics]`."""
-    hift = HiFTStream(pipeline.hift, pipeline.harmonics, dtype=getattr(ttnn, pipeline.config.hift_source_dtype))
-    out = []
-    for k, chunk in enumerate(stream_schedule(len(tokens), ctx.n_prompt_tokens)):
-        ttnn.synchronize_device(pipeline.device)
+class StreamSession:
+    """One utterance streamed as its tokens arrive (stage B): `push` each token (it runs a chunk's flow and HiFT when
+    one is due), then `finish` once the LLM has ended (the final chunk). The hop restarts at 25 for every session,
+    so for every segment (notes: D3). `on_audio(audio)` receives each chunk's audio as soon as it exists; `chunks`
+    keeps each one with its times (seconds since `t0`): `ready_s` when its audio was done, plus flow and HiFT."""
+
+    def __init__(self, pipeline, ctx, noise_for, on_audio=None, t0: float | None = None):
+        self.pipeline, self.ctx, self.noise_for, self.on_audio = pipeline, ctx, noise_for, on_audio
+        self.tokens: list[int] = []
+        self.offset, self.hop, self.pad = 0, TOKEN_HOP, prompt_pad(ctx.n_prompt_tokens)
+        self.hift = HiFTStream(
+            pipeline.hift, pipeline.harmonics, dtype=getattr(ttnn, pipeline.config.hift_source_dtype)
+        )
+        self.chunks: list[StreamedChunk] = []
+        self.t0 = time.perf_counter() if t0 is None else t0
+
+    def push(self, token: int) -> None:
+        self.tokens.append(int(token))
+        hop = self.hop + (self.pad if self.offset == 0 else 0)
+        if len(self.tokens) - self.offset >= hop + PRE_LOOKAHEAD:
+            self._emit(StreamChunk(self.offset, hop, False))
+            self.offset += hop
+            self.hop = min(MAX_TOKEN_HOP, self.hop * HOP_SCALE)
+
+    def finish(self) -> None:
+        if len(self.tokens) > self.offset:
+            self._emit(StreamChunk(self.offset, len(self.tokens) - self.offset, True))
+
+    def _emit(self, chunk: StreamChunk) -> None:
+        device = self.pipeline.device
+        clock = getattr(self.pipeline, "_clock", None)  # the pipeline's stage clock times the CFM inside the flow
+        ttnn.synchronize_device(device)
         t0 = time.perf_counter()
-        mel = flow_chunk(pipeline, ctx, tokens, chunk)
-        ttnn.synchronize_device(pipeline.device)
+        cfm0 = clock.totals.get("flow_cfm", 0.0) if clock is not None else 0.0
+        mel = flow_chunk(self.pipeline, self.ctx, self.tokens, chunk)
+        ttnn.synchronize_device(device)
         t1 = time.perf_counter()
+        cfm = (clock.totals.get("flow_cfm", 0.0) - cfm0) if clock is not None else float("nan")
+        k = len(self.chunks)
         frames = mel.shape[1] + (0 if k == 0 else OVERLAP_FRAMES)
-        audio = hift.step(mel, chunk.final, noise_for(k, frames * HOP))
-        ttnn.synchronize_device(pipeline.device)
-        out.append(StreamedChunk(chunk, mel, audio, {"flow": t1 - t0, "hift": time.perf_counter() - t1}))
-    return out
+        audio = self.hift.step(mel, chunk.final, self.noise_for(k, frames * HOP))
+        ttnn.synchronize_device(device)
+        t2 = time.perf_counter()
+        timings = {"start_s": t0 - self.t0, "flow": t1 - t0, "cfm": cfm, "hift": t2 - t1, "ready_s": t2 - self.t0}
+        self.chunks.append(StreamedChunk(chunk, mel, audio, timings))
+        if self.on_audio is not None:
+            self.on_audio(audio)
+
+    @property
+    def audio(self) -> np.ndarray:
+        return np.concatenate([c.audio for c in self.chunks]) if self.chunks else np.zeros(0, np.float32)
+
+
+def stream_fixed_tokens(pipeline, ctx, tokens: list[int], noise_for) -> list[StreamedChunk]:
+    """Stage A: a fixed token list through a `StreamSession`, as if the LLM had produced it and ended.
+    `noise_for(k, samples)` gives HiFT call k's sine noise, `[1, samples, harmonics]`."""
+    session = StreamSession(pipeline, ctx, noise_for)
+    for token in tokens:
+        session.push(token)
+    session.finish()
+    return session.chunks

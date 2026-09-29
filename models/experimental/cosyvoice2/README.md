@@ -10,8 +10,9 @@ text-to-speech model, for [tenstorrent/tt-metal#54104](https://github.com/tensto
 ## Status
 
 The whole model runs on device, non-streaming: text → speech tokens (LLM) → mel (flow matching) → 24 kHz waveform
-(HiFT vocoder). **The four Stage 1 targets are met.** Streaming (the Stage 3 targets) is in progress. Its offline stage
-(fixed tokens, upstream's chunk schedule) is built and matches upstream's own streaming run (`docs/VALIDATION.md`).
+(HiFT vocoder). **The four Stage 1 targets are met.** Streaming runs too: chunks of audio are produced while the LLM
+generates, on upstream's chunk schedule. That schedule, run over fixed tokens, matches upstream's own streaming run
+(`docs/VALIDATION.md`). The Stage 3 targets are not measured yet.
 
 | target (#54104) | stage | measured | status |
 |---|---|---|---|
@@ -167,8 +168,8 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
   - So start-up runs a fixed warm-up sequence. It takes 3.2 minutes when the kernels are on disk and 30.5 minutes on
     an empty cache ([`PERF.md`](PERF.md)).
   - Any change to the code, the configuration or the checkpoint costs one cold start.
-- **Streaming is partly built.** The offline stage runs; streaming interleaved with the LLM is next, and the Stage 3
-  targets are unmeasured.
+- **Streaming needs its own warm-up.** A chunk runs between decode steps while the LLM's decode trace is alive, so
+  `warmup_streaming()` compiles and verifies every streaming geometry first. The Stage 3 targets are unmeasured.
 - **Blackhole is untested.**
   `tests/pcc/test_flow_decoder.py::test_device_decoder_fused_sdpa_ignores_tile_padding_at_t_1_mod_32` guards the
   fused-SDPA tile-padding bug reported for Blackhole ([#57608](https://github.com/tenstorrent/tt-metal/issues/57608)).

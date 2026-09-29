@@ -679,6 +679,45 @@ docstring) over a fixed token list, as if the LLM had finished.
     transcripts match upstream's word for word.
   - For scale, the same tokens non-streamed (the Stage 1 demo) score 0.68 % and 95.87.
 
+## Streaming, stage B: interleaved with the LLM (2026-09-29)
+
+**How it runs** (`CosyVoice2TTNN.synthesize_stream`; `tt/streaming.py` `StreamSession`):
+- The LLM's `generate(on_token=...)` hands each token to the session. When a chunk is due, its flow and HiFT run
+  between two decode steps, while the decode trace is alive.
+- So every streaming geometry is compiled and verified first, by `warmup_streaming()` after `warmup_buckets()`:
+  - the streaming flow at all 17 buckets;
+  - HiFT at 128 frames padded in front, 108 and 208, and 128 and 256 padded at the end, each with its conv checks.
+
+  Nothing compiles or prepares weights under a live trace.
+- `generate` releases the trace when it returns, before the final chunk. Nothing is alive after a call.
+- HiFT's state between chunks stays on the host: 8 mel frames and 3,840 source and 3,840 output samples, about
+  30 KB.
+- The hop restarts at 25 for every segment.
+- HiFT's noise comes from a generator of its own, so streaming leaves alone the global RNG that host-side RAS
+  sampling draws from. A seeded streamed call samples the same tokens as the non-streamed one.
+
+**The hang check came first** (this board runs KMD 2.9.0):
+- the opt-in allocation tracker on the CFM traces: 6 passed;
+- then the interleaved test itself under `TT_METAL_TRACE_ALLOC_TRACKING=1`, in its own process: passed, with no
+  trace-allocation violation and no hang. The tracker slows every decode-trace replay about 40x, so that run's
+  timings are not measurements.
+
+**The test** (`tests/e2e/test_streaming.py::test_device_streaming_interleaved_with_llm`, greedy sampling), on
+260-123286-0014:
+- 180 tokens and 4 chunks, 3 of them ready while the LLM was still generating;
+- the streamed tokens equal the batch tokens;
+- no trace is alive afterwards;
+- the streamed audio equals stage A's offline streaming of the same tokens with the same noise, bit for bit.
+
+(Greedy decoding runs this sentence to 180 tokens, where RAS sampling gives 75.)
+
+**The same test untracked, in the full suite:** first audio at 1.356 s, RTF 0.891. For the first chunk:
+- 0.373 s of text normalization and LLM until its 28 tokens;
+- flow 0.866 s, of which the CFM takes 0.685 s;
+- HiFT 0.118 s.
+
+The measurement proper follows ("Streaming, measured").
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch

@@ -278,6 +278,13 @@ class Synthesis:
     config: dict
     sample_rate: int = SAMPLE_RATE
     notes: list[str] = field(default_factory=list)
+    # streaming only: one record per chunk, times in seconds since the call began (`synthesize_stream`)
+    chunks: list[dict] = field(default_factory=list)
+
+    @property
+    def first_audio_s(self) -> float | None:
+        """Streaming: the time from the call to its first chunk's audio (time to first packet)."""
+        return self.chunks[0]["ready_s"] if self.chunks else None
 
     @property
     def audio_s(self) -> float:
@@ -469,7 +476,9 @@ class CosyVoice2TTNN:
     # ------------------------------------------------------------------------------------------------------------
     # stages
     # ------------------------------------------------------------------------------------------------------------
-    def text_to_tokens(self, ctx: PromptContext, text_ids: list[int], *, seed: int | None = None) -> list[int]:
+    def text_to_tokens(
+        self, ctx: PromptContext, text_ids: list[int], *, seed: int | None = None, on_token=None
+    ) -> list[int]:
         """Stage 1, the LLM: upstream's `Qwen2LM.inference`. The prompt transcript precedes the segment's ids, the
         prompt speech tokens follow the task token, and min/max length are 2x / 20x the segment's text tokens.
         Raises `SegmentTooLong` if the speech has not ended by `max_segment_speech_tokens`."""
@@ -488,6 +497,7 @@ class CosyVoice2TTNN:
             min_tokens=cfg.min_tokens_for(len(text_ids)),
             sampler=cfg.sampler,
             seed=seed,
+            on_token=on_token,
             **sampling,
         )
         if len(tokens) > cfg.max_segment_speech_tokens:
@@ -594,6 +604,94 @@ class CosyVoice2TTNN:
             notes=notes,
         )
 
+    def synthesize_stream(
+        self,
+        ctx: PromptContext,
+        text: str,
+        *,
+        rng: RandomSources | None = None,
+        on_audio=None,
+        noise_for=None,
+    ) -> Synthesis:
+        """Streaming synthesis: upstream's `inference_zero_shot(..., stream=True)`, segment for segment (tt/streaming.py).
+
+        Each segment's tokens feed a `StreamSession` as the LLM samples them. A chunk's flow and HiFT run between two
+        decode steps, while the decode trace is alive, so `warmup_streaming()` must have run: nothing may compile or
+        prepare weights under a live trace. `generate()` releases the trace when it returns, before the final chunk
+        (notes: D22, D31). `on_audio(audio)` receives each chunk's audio as soon as it is ready.
+
+        `noise_for(k, samples)` gives HiFT call k's sine noise. The default draws from a generator of its own: host-side
+        RAS sampling draws from torch's global RNG, and noise drawn from it between decode steps would change the
+        tokens, so a seeded call would not sample what `synthesize` samples. The result carries one record per chunk
+        (`chunks`, times since the call began) and `first_audio_s`."""
+        from .streaming import StreamSession
+
+        if ctx.mode != "zero_shot":
+            raise NotImplementedError(f"mode {ctx.mode!r}: only zero_shot is wired end to end so far")
+        rng = rng or RandomSources()
+        if noise_for is None:
+            noise_gen = torch.Generator().manual_seed((rng.llm_seed or 0) + 1)
+
+            def noise_for(k, samples):
+                return torch.randn(1, samples, self.harmonics, generator=noise_gen)
+
+        self._check_prompt_budget(ctx)
+        t_call = time.perf_counter()
+        segments = self.text.normalize(text, split=True)
+        seg_ids = [self.text.encode(s) for s in segments]
+        for s, ids in zip(segments, seg_ids):
+            if len(ids) > self.config.max_segment_text_tokens:
+                raise ValueError(
+                    f"segment of {len(ids)} text tokens exceeds max_segment_text_tokens="
+                    f"{self.config.max_segment_text_tokens}: {s[:80]!r}"
+                )
+        results, audio, notes, chunks = [], [], [], []
+        for i, (seg, ids) in enumerate(zip(segments, seg_ids)):
+            self._clock.take()
+            t0 = time.perf_counter()
+            session = StreamSession(self, ctx, noise_for, on_audio=on_audio, t0=t_call)
+            tokens = self._clock.wrap("llm", self.text_to_tokens)(
+                ctx, ids, seed=rng.llm_seed if i == 0 else None, on_token=session.push
+            )
+            t_llm_end = time.perf_counter() - t_call
+            if len(tokens) > self.config.max_segment_speech_tokens:  # text_to_tokens raised already; kept explicit
+                raise SegmentTooLong.past_cap(f"a segment of {len(ids)} text tokens", self.config)
+            session.finish()
+            if not tokens:
+                notes.append(f"segment {i}: the LLM stopped before any speech token; no audio")
+            t = self._clock.take()
+            chunk_flow = sum(c.timings["flow"] for c in session.chunks)
+            chunk_hift = sum(c.timings["hift"] for c in session.chunks)
+            during = [c for c in session.chunks if not c.chunk.final]
+            timings = {
+                "llm_prefill": t.get("llm_prefill", 0.0),
+                # the LLM stage's wall time includes the chunks run between its decode steps
+                "llm_decode": t["llm"]
+                - t.get("llm_prefill", 0.0)
+                - sum(c.timings["flow"] + c.timings["hift"] for c in during),
+                "flow": chunk_flow,
+                "flow_cfm": t.get("flow_cfm", 0.0),
+                "hift": chunk_hift,
+                "total": time.perf_counter() - t0,
+            }
+            wav = session.audio
+            results.append(SegmentResult(seg, ids, tokens, 2 * len(tokens), int(len(wav)), timings))
+            audio.append(wav.astype(np.float32))
+            for c in session.chunks:
+                chunks.append(
+                    {"segment": i, "offset": c.chunk.offset, "hop": c.chunk.hop, "final": c.chunk.final,
+                     "during_generation": c.timings["ready_s"] <= t_llm_end,
+                     "audio_s": len(c.audio) / SAMPLE_RATE, **c.timings}
+                )  # fmt: skip
+        return Synthesis(
+            audio=np.concatenate(audio) if audio else np.zeros(0, np.float32),
+            segments=results,
+            wall_s=time.perf_counter() - t_call,
+            config=self.config.describe(),
+            notes=notes,
+            chunks=chunks,
+        )
+
     def warmup(self, ctx: PromptContext, text: str = "Hello there.") -> Synthesis:
         """One throwaway call: compiles kernels and builds the device-side state every call reuses, so the calls
         that follow are not first calls. It cannot pre-resolve the flow's and vocoder's geometries for later
@@ -647,6 +745,50 @@ class CosyVoice2TTNN:
         frames = CHUNK_FRAMES + OVERLAP_FRAMES
         silent = torch.full((1, frames, 80), MEL_SILENCE)
         timed("hift_chunked", lambda: self.hift.inference_chunked(silent, torch.zeros(1, frames * HOP, self.harmonics)))
+        return clock
+
+    def warmup_streaming(self, on_geometry=None) -> dict[str, float]:
+        """Every geometry streaming meets, once, before any trace exists (call it after `warmup_buckets()`, in the same
+        fixed order every time): the flow's streaming path at every flow bucket (the chunk-causal attention programs;
+        the convs are the non-streaming set's), then HiFT's streaming calls with their first-sight conv checks: 128
+        frames padded in front (the first chunk), 108 and 208 (middle chunks), 128 and 256 padded at the end (the
+        final chunk). Returns the seconds each took."""
+        from .hifigan.chunking import HOP
+        from .streaming import PRE_LOOKAHEAD, HiFTStream
+
+        clock = {}
+
+        def timed(name, fn):
+            ttnn.synchronize_device(self.device)
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(self.device)
+            clock[name] = time.perf_counter() - t0
+            if on_geometry is not None:
+                on_geometry(name)
+
+        no_prompt, no_feat, emb = torch.zeros(1, 0, dtype=torch.int32), torch.zeros(1, 0, 80), torch.ones(1, 192)
+        for b in self.config.flow_token_buckets():
+            tokens = torch.zeros(1, b - 1, dtype=torch.int32)  # the look-ahead included, strictly below the bucket
+            timed(
+                f"flow_stream_{b}",
+                lambda b=b, t=tokens: self.flow.inference_streaming(
+                    t, no_prompt, no_feat, emb, b, context_len=PRE_LOOKAHEAD
+                ),
+            )
+
+        def hift_calls(first: int, middles: list[int], final: int):
+            stream = HiFTStream(self.hift, self.harmonics, dtype=getattr(ttnn, self.config.hift_source_dtype))
+            for i, frames in enumerate([first, *middles, final]):
+                cached = 0 if i == 0 else 8
+                stream.step(
+                    torch.full((1, frames, 80), MEL_SILENCE),
+                    i == len(middles) + 1,
+                    torch.zeros(1, (frames + cached) * HOP, self.harmonics),
+                )
+
+        timed("hift_stream_128_108_208_128", lambda: hift_calls(50, [100, 200], 62))
+        timed("hift_stream_128_256", lambda: hift_calls(50, [], 130))
         return clock
 
     def _hift_at(self, frames: int) -> None:
