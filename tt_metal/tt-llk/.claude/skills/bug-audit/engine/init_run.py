@@ -19,10 +19,11 @@ import argparse
 import datetime
 import fnmatch
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import save  # noqa: E402
 
 DEFAULT_EXT = (
@@ -92,8 +93,8 @@ if os.path.exists(os.path.join(out, "state.json")):
 
 
 def git(*args):
-    return subprocess.run(
-        ["git", "-C", root, *args], check=True, capture_output=True, text=True
+    return spawn.run(
+        "git", ["-C", root, *args], check=True, capture_output=True, text=True
     ).stdout
 
 

@@ -26,12 +26,13 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import key_of, load, run_dir, save, state  # noqa: E402
 
 out = run_dir()
@@ -116,9 +117,9 @@ def gh_search(kind, query, limit):
     "no candidates" would make an already-filed bug look new."""
     q = f"repo:{st['repo']} is:{'issue' if kind == 'issues' else 'pr'} {query}"
     for attempt in range(6):
-        r = subprocess.run(
+        r = spawn.run(
+            "gh",
             [
-                "gh",
                 "api",
                 "-X",
                 "GET",
@@ -342,9 +343,9 @@ elif argv[0] == "persist":
         m_repo = "/".join(m.get("url", "").split("github.com/", 1)[-1].split("/")[:2])
         if m["kind"] == "pr" and not is_open and m_repo in ("", st["repo"]):
             # a PR merged AFTER the audited commit means the bug is fixed upstream, not "still present"
-            pr = subprocess.run(
+            pr = spawn.run(
+                "gh",
                 [
-                    "gh",
                     "api",
                     f"repos/{st['repo']}/pulls/{m['number']}",
                     "--jq",
@@ -354,9 +355,9 @@ elif argv[0] == "persist":
                 text=True,
             ).stdout.strip()
             pinned = (
-                subprocess.run(
+                spawn.run(
+                    "git",
                     [
-                        "git",
                         "-C",
                         st["root"],
                         "rev-parse",
@@ -369,9 +370,9 @@ elif argv[0] == "persist":
                 == 0
             )  # bench runs have no single pinned commit
             if pr and pinned:
-                ancestor_rc = subprocess.run(
+                ancestor_rc = spawn.run(
+                    "git",
                     [
-                        "git",
                         "-C",
                         st["root"],
                         "merge-base",

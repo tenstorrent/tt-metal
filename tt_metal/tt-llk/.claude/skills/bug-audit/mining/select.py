@@ -23,10 +23,15 @@ import collections
 import fnmatch
 import json
 import os
-import random
 import re
-import subprocess
 import sys
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
+
+from common import seeded_order  # noqa: E402
 
 p = argparse.ArgumentParser()
 p.add_argument("cmd", choices=["holdout", "screened", "deep"])
@@ -124,8 +129,9 @@ TRIVIAL_LINE = re.compile(r"^(#\s*include\b|#\s*pragma\s+once\b|//|/\*|\*/|\*(\s
 
 def trivial_diff(oid, files):
     """True when every changed line is an include, a comment or blank: nothing an auditor could have flagged."""
-    d = subprocess.run(
-        ["git", "-C", a.git, "show", "-U0", "--format=", oid, "--", *files],
+    d = spawn.run(
+        "git",
+        ["-C", a.git, "show", "-U0", "--format=", oid, "--", *files],
         capture_output=True,
         text=True,
     ).stdout
@@ -183,7 +189,7 @@ if a.cmd == "holdout":
             }
         )
     pool.sort(key=lambda x: x["id"])
-    pick = random.Random(a.seed).sample(pool, min(a.n, len(pool)))
+    pick = seeded_order(pool, a.seed, lambda x: x["id"])[: a.n]
     with open(a.out, "w") as fh:
         for x in pick:
             fh.write(json.dumps(x) + "\n")
@@ -240,9 +246,8 @@ else:
                 and cases[cid]["fix"]
             ):
                 pool[t["component"].lower()].append(cid)
-        rnd = random.Random(a.seed)
-        for v in pool.values():
-            rnd.shuffle(v)
+        for k in pool:
+            pool[k] = seeded_order(pool[k], a.seed, str)
         comps = sorted(pool, key=lambda k: -len(pool[k]))
         added = 0
         while added < a.sample and any(pool.values()):

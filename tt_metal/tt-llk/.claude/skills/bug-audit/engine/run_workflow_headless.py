@@ -17,7 +17,11 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
 
 p = argparse.ArgumentParser()
 p.add_argument("--script", required=True)
@@ -68,7 +72,6 @@ while not os.path.exists(a.out) and attempt < a.max_attempts:
         f"completes, copy the workflow task's output file to {os.path.abspath(a.out)} with Bash cp and reply with the path."
     )
     cmd = [
-        "claude",
         "-p",
         "--input-format",
         "stream-json",
@@ -95,8 +98,14 @@ while not os.path.exists(a.out) and attempt < a.max_attempts:
         open(os.path.join(wd, f"{tag}.claude-{attempt:02d}.jsonl"), "w") as fo,
         open(os.path.join(wd, f"{tag}.claude.err"), "a") as fe,
     ):
-        proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=fo, stderr=fe, text=True, cwd=wd
+        proc = spawn.popen(
+            "claude",
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=fo,
+            stderr=fe,
+            text=True,
+            cwd=wd,
         )
         proc.stdin.write(
             json.dumps({"type": "user", "message": {"role": "user", "content": msg}})
@@ -117,7 +126,7 @@ while not os.path.exists(a.out) and attempt < a.max_attempts:
             if hits and os.path.getsize(hits[0]) > 50 and not os.path.exists(a.out):
                 try:
                     json.load(open(hits[0]))  # complete JSON = the workflow finished
-                    subprocess.run(["cp", hits[0], a.out])
+                    spawn.run("cp", [hits[0], a.out])
                     note(f"copied workflow output from {hits[0]}")
                 except ValueError:
                     pass
@@ -132,5 +141,5 @@ if not os.path.exists(a.out):
     note("GAVE UP; rerun the same command to resume")
     raise SystemExit(2)
 if a.then:
-    r = subprocess.run(a.then, shell=True, capture_output=True, text=True)
+    r = spawn.shell_run(a.then, capture_output=True, text=True)
     note(f"then: rc={r.returncode} {r.stdout.strip()[-800:]} {r.stderr.strip()[-400:]}")

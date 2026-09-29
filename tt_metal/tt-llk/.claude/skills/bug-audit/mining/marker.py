@@ -19,8 +19,13 @@ than none.
 import datetime as dt
 import glob
 import json
-import subprocess
+import os
 import sys
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 argv = sys.argv[1:]
 if len(argv) < 2:
@@ -100,9 +105,9 @@ elif cmd in ("delta", "show"):
             ("PRs merged", f"is:pr is:merged merged:>={since}"),
             ("PRs closed unmerged", f"is:pr is:closed is:unmerged closed:>={since}"),
         ):
-            r = subprocess.run(
+            r = spawn.run(
+                "gh",
                 [
-                    "gh",
                     "api",
                     "graphql",
                     "-f",
@@ -119,7 +124,7 @@ elif cmd in ("delta", "show"):
                 f"  {label} since {since}: {json.loads(r.stdout)['data']['search']['issueCount']}"
             )
         print(
-            f"  refresh: fetch_repo.py {m['repo']} <mine>/raw --since {since}, then build/triage/deep-read the new cases"
+            f"  refresh: fetch_repo.py {m['repo']} MINE/raw --since {since} (MINE = the mined store), then build/triage/deep-read the new cases"
         )
 else:
     sys.exit(__doc__)

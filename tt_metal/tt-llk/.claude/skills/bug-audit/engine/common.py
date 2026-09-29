@@ -5,6 +5,7 @@ manifest, per-batch findings and verdicts, and the derived reports. Pick the run
 BUG_AUDIT_RUN environment variable, or by running the script from inside the run directory.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -69,3 +70,10 @@ def findings_of(out, batch):
 
 def key_of(f):
     return f"{f['file']}:{f['line']}"
+
+
+def seeded_order(items, seed, key):
+    """A reproducible shuffle: the same seed and ids always give the same order, a new seed a new one."""
+    return sorted(
+        items, key=lambda x: hashlib.sha256(f"{seed}:{key(x)}".encode()).hexdigest()
+    )

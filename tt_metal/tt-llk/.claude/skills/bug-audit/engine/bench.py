@@ -29,16 +29,17 @@ import datetime
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import load, manifest, run_dir, save, state  # noqa: E402
 
 
 def git(repo, *args):
-    return subprocess.run(
-        ["git", "-C", repo, *args], check=True, capture_output=True, text=True
+    return spawn.run(
+        "git", ["-C", repo, *args], check=True, capture_output=True, text=True
     ).stdout
 
 
@@ -237,9 +238,9 @@ elif len(sys.argv) > 1 and sys.argv[1] == "judge-inputs":
                     }
                 )
         found.sort(key=lambda x: x["id"])  # shuffles arms together
-        diff = subprocess.run(
+        diff = spawn.run(
+            "git",
             [
-                "git",
                 "-C",
                 a.repo_path,
                 "show",

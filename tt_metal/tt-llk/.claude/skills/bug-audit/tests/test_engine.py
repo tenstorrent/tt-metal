@@ -172,7 +172,9 @@ def test_ledger_site_check(tmp_path):
     tree = tmp_path / "tree"
     write(str(tree / "src" / "k.cpp"), "int a;\nvoid run_kernel() {}\nint c;\n")
     src = open(os.path.join(ENGINE, "persist_wave.py")).read()
-    ns = {"os": os, "re": __import__("re"), "subprocess": __import__("subprocess")}
+    spawn = type(sys)("spawn")
+    spawn.__dict__.update(runpy.run_path(os.path.join(ENGINE, "spawn.py")))
+    ns = {"os": os, "re": __import__("re"), "spawn": spawn}
     exec(src[src.index("def last_nonblank") : src.index("reread = load(")], ns)
     ok = lambda s: ns["ledger_site_ok"](str(tree), s)  # noqa: E731
     assert ok("src/k.cpp:2") and ok("src/k.cpp:1-3") and ok("src/k.cpp:run_kernel")
@@ -289,11 +291,11 @@ def _mined(tmp_path, n=20, reverse=False):
 
 
 PINNED = [
-    "I101",
-    "I102",
-    "I104",
-    "I110",
-    "I112",
+    "I106",
+    "I111",
+    "I114",
+    "I118",
+    "I119",
 ]  # seed 7, n 5, the 20 synthetic cases above
 
 
@@ -732,23 +734,10 @@ def test_init_run_keeps_non_ascii_paths_in_scope(tmp_path):
     tree.mkdir()
     for name in ("a.c", "café.c"):
         (tree / name).write_text("int x;\n")
-    sp.run(["git", "init", "-q", str(tree)], check=True)
-    sp.run(["git", "-C", str(tree), "add", "."], check=True)
-    sp.run(
-        [
-            "git",
-            "-C",
-            str(tree),
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-qm",
-            "x",
-        ],
-        check=True,
-    )
+    git = lambda *a: sp.run(["git", *a], cwd=tree, check=True)  # noqa: E731
+    git("init", "-q")
+    git("add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x")
     out = tmp_path / "run"
     code, o, e = run(
         os.path.join(ENGINE, "init_run.py"),

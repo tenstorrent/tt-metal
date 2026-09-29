@@ -13,11 +13,10 @@ verifiers are killing real bugs, and the whole refuted pile needs a recheck, not
 """
 import json
 import os
-import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import key_of, load, run_dir, save, state  # noqa: E402
+from common import key_of, load, run_dir, save, seeded_order, state  # noqa: E402
 
 out = run_dir()
 st = state(out)
@@ -45,9 +44,8 @@ if argv[0] == "queue":
             if f["status"] == "refuted" and key_of(f) not in confirmed
         }.items()
     )
-    rnd = random.Random(opt("--seed", 1, int))
     k = round(len(refuted) * opt("--refuted-sample", 0.1, float))
-    sample = dict(rnd.sample(refuted, min(k, len(refuted))))
+    sample = dict(seeded_order(refuted, opt("--seed", 1, int), lambda kv: kv[0])[:k])
     added = 0
     for f in rows:
         key = key_of(f)

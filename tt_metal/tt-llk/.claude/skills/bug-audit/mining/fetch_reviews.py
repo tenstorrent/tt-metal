@@ -9,10 +9,14 @@ Bot accounts are dropped. The review workflow reads these.
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 repo, listfile, out = sys.argv[1:4]
 jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 6
@@ -35,12 +39,12 @@ if os.path.exists(out):
 
 def gql(query, fields):
     """One GraphQL call with retries; None when it keeps failing."""
-    args = ["gh", "api", "graphql", "-f", f"query={query}"]
+    args = ["api", "graphql", "-f", f"query={query}"]
     for k, v in fields.items():
         if v is not None:
             args += ["-F" if isinstance(v, int) else "-f", f"{k}={v}"]
     for t in range(8):
-        r = subprocess.run(args, capture_output=True, text=True)
+        r = spawn.run("gh", args, capture_output=True, text=True)
         if r.returncode == 0 and '"errors"' not in r.stdout[:300]:
             return json.loads(r.stdout)["data"]
         time.sleep(

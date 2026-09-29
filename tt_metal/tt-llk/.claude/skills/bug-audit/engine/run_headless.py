@@ -23,6 +23,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
 p = argparse.ArgumentParser()
@@ -63,7 +66,7 @@ def save_state(s):
 
 
 def py(*args, **kw):
-    return subprocess.run(["python3", *args], capture_output=True, text=True, **kw)
+    return spawn.run("python3", [*args], capture_output=True, text=True, **kw)
 
 
 def scan(wave):
@@ -98,7 +101,6 @@ def run_wave(wave, args_path, out_path):
         )
         st = json.load(open(os.path.join(run, "state.json")))
         cmd = [
-            "claude",
             "-p",
             "--input-format",
             "stream-json",
@@ -125,8 +127,14 @@ def run_wave(wave, args_path, out_path):
             open(logp, "w") as fo,
             open(os.path.join(raw_dir, f"wave{wave:03d}.claude.err"), "a") as fe,
         ):
-            proc = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=fo, stderr=fe, text=True, cwd=run
+            proc = spawn.popen(
+                "claude",
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=fo,
+                stderr=fe,
+                text=True,
+                cwd=run,
             )
             proc.stdin.write(
                 json.dumps(
@@ -154,7 +162,7 @@ def run_wave(wave, args_path, out_path):
                     try:  # fallback copy: the workflow finished but the model has not copied it yet
                         r = json.load(open(hits[0]))
                         if "results" in json.dumps(r)[:4000]:
-                            subprocess.run(["cp", hits[0], out_path])
+                            spawn.run("cp", [hits[0], out_path])
                             note(f"wave {wave}: copied workflow output from {hits[0]}")
                     except ValueError:
                         pass

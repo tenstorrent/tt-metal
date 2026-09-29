@@ -16,9 +16,14 @@ import argparse
 import collections
 import glob
 import json
+import os
 import re
-import subprocess
 import sys
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 p = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -71,9 +76,9 @@ print(f"loaded {len(issues)} issues, {len(prs)} PRs", file=sys.stderr)
 
 # ---- git history (first-parent, so a squash-merged PR is one commit) ----
 fmt = "%x1e%H%x1f%ct%x1f%s%x1f%b%x1f"
-log = subprocess.run(
+log = spawn.run(
+    "git",
     [
-        "git",
         "-C",
         a.git,
         "log",
@@ -293,9 +298,9 @@ for pn, pr in sorted(prs.items()):
 
 xref = collections.defaultdict(list)
 if a.xref_git:
-    xl = subprocess.run(
+    xl = spawn.run(
+        "git",
         [
-            "git",
             "-C",
             a.xref_git,
             "log",

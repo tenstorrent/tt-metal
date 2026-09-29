@@ -18,10 +18,11 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import load, manifest, run_dir, save, state  # noqa: E402
 
 out = run_dir()
@@ -73,8 +74,8 @@ def ledger_site_ok(tree, site):
     full = os.path.join(tree, path)
     if not os.path.isfile(full):
         if tree not in _suffix_cache:
-            r = subprocess.run(
-                ["git", "-C", tree, "ls-files"], capture_output=True, text=True
+            r = spawn.run(
+                "git", ["-C", tree, "ls-files"], capture_output=True, text=True
             )
             _suffix_cache[tree] = r.stdout.splitlines()
         hits = [f for f in _suffix_cache[tree] if f == path or f.endswith("/" + path)]

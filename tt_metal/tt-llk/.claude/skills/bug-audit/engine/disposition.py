@@ -29,10 +29,11 @@ import argparse
 import datetime
 import json
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import run_dir, state  # noqa: E402
 
 HERE = run_dir()
@@ -191,9 +192,9 @@ def cmd_sync(a):
     changed = 0
     for k, v in sorted(todo.items()):
         pr = v["pr"]
-        r = subprocess.run(
+        r = spawn.run(
+            "gh",
             [
-                "gh",
                 "pr",
                 "view",
                 str(pr),

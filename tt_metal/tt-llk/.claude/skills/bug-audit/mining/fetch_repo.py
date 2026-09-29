@@ -15,16 +15,20 @@ creation date would miss every long-lived bug closed since the last mining. Take
 import datetime as dt
 import json
 import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 here = os.path.dirname(os.path.abspath(__file__))
 repo, outdir = sys.argv[1:3]
 jobs = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 6
 created = json.loads(
-    subprocess.run(
-        ["gh", "api", f"repos/{repo}"], capture_output=True, text=True, check=True
+    spawn.run(
+        "gh", ["api", f"repos/{repo}"], capture_output=True, text=True, check=True
     ).stdout
 )["created_at"]
 since = sys.argv[sys.argv.index("--since") + 1] if "--since" in sys.argv else None
@@ -50,9 +54,9 @@ def run(kind, quals, a, b):
     # later day, a resumed full fetch) is missing whatever closed or opened after that, and is fetched again
     if os.path.exists(out) and dt.date.fromtimestamp(os.path.getmtime(out)) > b:
         return
-    r = subprocess.run(
+    r = spawn.run(
+        "python3",
         [
-            "python3",
             f"{here}/fetch_search.py",
             repo,
             kind,

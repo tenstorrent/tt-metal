@@ -5,7 +5,6 @@ The window is on the creation date by default; `--field closed` windows on the c
 incremental refresh needs (a bug opened long ago and closed this week lives in an old creation window).
 Exit 3 = window holds >1000 results; split it and rerun."""
 import json
-import subprocess
 import sys
 import time
 
@@ -30,12 +29,12 @@ q = f"repo:{repo} is:{kind} {quals} {field}:{win}"
 cur, n, total = None, 0, 0
 with open(out + ".part", "w") as f:
     while True:
-        args = ["gh", "api", "graphql", "-f", f"query={Q}", "-f", f"q={q}"]
+        args = ["api", "graphql", "-f", f"query={Q}", "-f", f"q={q}"]
         if cur:
             args += ["-f", f"c={cur}"]
         t = 0
         while True:
-            r = subprocess.run(args, capture_output=True, text=True)
+            r = spawn.run("gh", args, capture_output=True, text=True)
             if r.returncode == 0 and '"errors"' not in r.stdout[:300]:
                 break
             msg = r.stderr or r.stdout
@@ -60,6 +59,11 @@ with open(out + ".part", "w") as f:
         if not d["pageInfo"]["hasNextPage"]:
             break
 import os
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+)
+import spawn  # noqa: E402
 
 os.replace(out + ".part", out)
 print(win, n, total)

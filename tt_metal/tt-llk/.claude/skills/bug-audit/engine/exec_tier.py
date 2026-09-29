@@ -35,6 +35,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spawn  # noqa: E402
+
 from common import load, manifest, run_dir, save, state  # noqa: E402
 
 out = run_dir()
@@ -162,9 +164,8 @@ def run_cmd(name, cmd, tree, timeout):
     logp = os.path.join(EXEC, f"{name}.log")
     t0 = time.time()
     with open(logp, "w") as fh:
-        p = subprocess.Popen(
+        p = spawn.shell_popen(
             cmd,
-            shell=True,
             cwd=tree,
             stdout=fh,
             stderr=subprocess.STDOUT,
@@ -243,9 +244,9 @@ elif argv[0] == "run":
                 stem = os.path.splitext(os.path.basename(f))[0]
                 pat = f.replace("/", ".")[:-3] if f.endswith(".py") else stem
                 for root in tc.get("roots") or ["tests"]:
-                    g = subprocess.run(
+                    g = spawn.run(
+                        "grep",
                         [
-                            "grep",
                             "-rlw",
                             "--include=*.py",
                             "--include=*.cpp",
