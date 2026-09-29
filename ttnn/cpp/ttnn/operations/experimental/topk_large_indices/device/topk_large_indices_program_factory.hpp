@@ -64,6 +64,6 @@ struct TopkLargeIndicesProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program
