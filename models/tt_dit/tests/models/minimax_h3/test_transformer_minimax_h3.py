@@ -81,7 +81,16 @@ FFN_DIM = REAL_BLOCK_CONFIG["ffn_dim"]
 TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
 NORM_EPS = REAL_BLOCK_CONFIG["norm_eps"]
 QK_NORM_EPS = REAL_BLOCK_CONFIG["qk_norm_eps"]
-NUM_LAYERS = 2  # reduced from 50: the full-depth torch reference is far too slow on CPU
+NUM_LAYERS = 2  # the default row depth: an fp32 torch reference at the production shape is hopeless on CPU
+# Which quant preset each `weights` value builds the TT model with. `None` means bf16, the upstream
+# behaviour; the two bf8 entries are the presets the p150 actually ships, and both are measured
+# because they are different policies, not two names for one.
+_QUANT_BY_WEIGHTS = {
+    "random": None,
+    "checkpoint": None,
+    "checkpoint_bf8": "bf8_weights",
+    "checkpoint_bf8_out": "bf8_weights_bf8_out",
+}
 NUM_REFINER_LAYERS = 2
 IN_CHANNELS = 24
 AUDIO_IN_CHANNELS = 32
@@ -394,24 +403,48 @@ def _prepare_tt_inputs(
 
 @H3_MESH_PARALLEL
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "num_layers"),
     [
-        pytest.param(512, 256, 1280, (8, 8), (), "random", id="small_s2048"),
+        pytest.param(512, 256, 1280, (8, 8), (), "random", NUM_LAYERS, id="small_s2048"),
         pytest.param(
-            512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"
+            512, 256, 1344, (8, 8), (), "random", NUM_LAYERS, id="unaligned_s2112"
         ),  # multiple of TILE, not SP*TILE: tail padding
         pytest.param(
-            512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"
+            512, 414, 37296, (24, 42), (), "random", NUM_LAYERS, id="prod_768p_5s"
         ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", id="prod_768p_5s_real_weights"),
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", NUM_LAYERS, id="prod_768p_5s_real_weights"),
         # The p150 dtype policy on the same real weights: bf8 to_qkv/ff1/ff2, bf16 to_out. The
         # profile is what makes the 50-block stack fit 32 GB at all (38.5 GB -> 22.3 GB), so what it
         # costs in accuracy has to be measured rather than assumed.
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint_bf8", id="prod_768p_5s_real_weights_bf8"),
-        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", id="prod_768p_5s_fl2va"),
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint_bf8", NUM_LAYERS, id="prod_768p_5s_real_weights_bf8"),
+        # The OTHER shipped preset. `bf8_weights_bf8_out` narrows one input of the fused addcmul
+        # epilogue, which is why quant_config.py's own docstring says it has to be PCC-checked
+        # rather than assumed to behave like `bf8_weights` -- and it is the preset a 768p canvas
+        # needs, so it is not an exotic option but the one the largest supported shape runs on.
         pytest.param(
-            512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", id="prod_768p_5s_fl2va_first_last"
+            512, 414, 37296, (24, 42), (), "checkpoint_bf8_out", NUM_LAYERS, id="prod_768p_5s_real_weights_bf8_out"
+        ),
+        # FULL DEPTH, real checkpoint, at the small golden shape (537 packed rows: 15 text + 74
+        # audio + 448 video, 7 latent frames of 8x8). Every other real-weight row above is two
+        # blocks deep, because an fp32 torch reference at the production shape is hopeless on CPU.
+        # Two blocks do not measure 50 blocks of accumulation, and depth is exactly what adaLN row
+        # addressing, RoPE phase and residual precision errors grow with -- so the shape is shrunk
+        # instead of the depth, and the reference runs at the depth that ships.
+        pytest.param(15, 74, 448, (8, 8), (), "checkpoint", 50, id="golden_shape_full_depth_real_weights"),
+        pytest.param(15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, id="golden_shape_full_depth_real_weights_bf8"),
+        pytest.param(
+            512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", NUM_LAYERS, id="prod_768p_5s_fl2va"
+        ),
+        pytest.param(
+            512,
+            414,
+            37296,
+            (24, 42),
+            (("video", 2016, (24, 42)),),
+            "random",
+            NUM_LAYERS,
+            id="prod_768p_5s_fl2va_first_last",
         ),
         # production residues at reduced lengths; image ref on its OWN 64x64 grid, standalone audio block LAST
         pytest.param(
@@ -421,6 +454,7 @@ def _prepare_tt_inputs(
             (24, 42),
             (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
             "random",
+            NUM_LAYERS,
             id="ref2va_interleaved_audio_last",
         ),
     ],
@@ -436,6 +470,7 @@ def test_minimax_h3_transformer(
     grid: tuple[int, int],
     cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     weights: str,
+    num_layers: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -443,8 +478,18 @@ def test_minimax_h3_transformer(
     # worst measured plausible bug 0.9967; the bf16 port measured 0.999974. A quantized row is a
     # different question: bf8 weights are a deliberate loss of precision, and the bar it has to
     # clear is the model's (video 0.99 / audio 0.95), not the bf16 port's.
-    quant_config = resolve_quant_profile("bf8_weights" if weights.endswith("_bf8") else None)
-    MIN_PCC = 0.99 if quant_config is not None else 0.9995
+    #
+    # DEPTH CHANGES THE BAR TOO, and by more than the dtype does. 0.9995 was calibrated on a
+    # 2-block stack; at 50 blocks the same bf16 port measures 0.9949 with RMSE/sigma 10.1 % against
+    # 0.999979 / 0.7 % at depth 2, because every block's rounding is carried into the next one. A
+    # 2-block row therefore says nothing about whether a full stack is acceptable, and the 2-block
+    # bar says nothing about what a full stack should clear. At full depth the bar is the model's
+    # own contract -- what the pipeline has to deliver -- and the measured value is logged either
+    # way, so the number is on the record regardless of which side of the bar it lands.
+    quant_config = resolve_quant_profile(_QUANT_BY_WEIGHTS[weights])
+    full_depth = num_layers >= 50
+    MIN_PCC = 0.99 if (quant_config is not None or full_depth) else 0.9995
+    MIN_PCC_AUDIO = 0.95 if full_depth else MIN_PCC
 
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -474,26 +519,35 @@ def test_minimax_h3_transformer(
         f"seq_len={seq_len} (text={num_text} cond={num_cond} audio={num_audio} video={num_video}), "
         f"cond blocks={[(b['modality'], b['rows']) for b in cond_blocks]}, "
         f"cond video/audio rows={num_cond_video}/{num_cond_audio}, "
-        f"layers={NUM_LAYERS} (reduced from 50)"
+        f"layers={num_layers}" + ("" if num_layers == 50 else " (reduced from 50)")
     )
 
     checkpoint_state = None
     if weights.startswith("checkpoint"):
         directory = _checkpoint_dir()
         start = time.time()
-        checkpoint_state = _truncated_depth_state_dict(directory, NUM_LAYERS)
-        logger.info(f"read {len(checkpoint_state)} tensors for {NUM_LAYERS} layers in {time.time() - start:.1f}s")
+        checkpoint_state = _truncated_depth_state_dict(directory, num_layers)
+        logger.info(f"read {len(checkpoint_state)} tensors for {num_layers} layers in {time.time() - start:.1f}s")
 
+    config = {**TRANSFORMER_CONFIG, "num_layers": num_layers}
+    # Reference dtype. The shallow rows keep fp32, which is the strongest reference and costs
+    # nothing at 2 blocks. A 50-block reference in fp32 is 32 B parameters = ~130 GB of host RAM on
+    # top of the ~62 GB of checkpoint shards being read into it, which does not fit beside the TT
+    # host-side staging on this box. At full depth the reference is therefore bf16 -- the same dtype
+    # the CPU golden for this shape was generated in -- and the row measures depth accumulation
+    # against that, which is the question the shallow rows cannot answer.
+    ref_dtype = torch.float32 if num_layers < 50 else torch.bfloat16
     torch_model = TorchMiniMaxH3Transformer(
-        **TRANSFORMER_CONFIG,
+        **config,
         rope_freq_dim=ROPE_FREQ_DIM,
         rope_theta=ROPE_THETA,
-    )
+    ).to(ref_dtype)
     if checkpoint_state is not None:
         torch_model.load_state_dict(checkpoint_state, strict=True)
-        torch_model = torch_model.to(torch.float32)
+        # The shards are ~62 GB at full depth and the model owns its own copy now; holding both
+        # through the TT load is what pushes a full-depth row into swap.
+        checkpoint_state = None
     else:
-        torch_model = torch_model.to(torch.float32)
         randomize_norm_weights(torch_model)
     torch_model.eval()
 
@@ -534,12 +588,12 @@ def test_minimax_h3_transformer(
             return_dict=True,
         )
     # the port returns target rows only: drop the reference's leading conditioning rows before comparing
-    torch_video_out = torch_out.sample[:, num_cond_video:]
-    torch_audio_out = torch_out.audio_sample[:, num_cond_audio:]
+    torch_video_out = torch_out.sample[:, num_cond_video:].to(torch.float32)
+    torch_audio_out = torch_out.audio_sample[:, num_cond_audio:].to(torch.float32)
     logger.info(f"torch video {tuple(torch_video_out.shape)} audio {tuple(torch_audio_out.shape)}")
 
     tt_model = MiniMaxH3Transformer3DModel(
-        **TRANSFORMER_CONFIG,
+        **config,
         mesh_device=mesh_device,
         ccl_manager=inputs.ccl_manager,
         parallel_config=inputs.parallel_config,
@@ -566,10 +620,18 @@ def test_minimax_h3_transformer(
     tt_video_out = compose_replicated(tt_video_out)[:, :num_video]
     tt_audio_out = compose_replicated(tt_audio_out)[:, :num_audio]
 
+    # Both heads are measured before either is allowed to fail: `assert_quality` raises, so checking
+    # video first would hide the audio number on exactly the rows where it matters most.
     logger.info("Checking video output")
-    assert_quality(torch_video_out, tt_video_out, pcc=MIN_PCC)
+    video_failure = None
+    try:
+        assert_quality(torch_video_out, tt_video_out, pcc=MIN_PCC)
+    except Exception as exc:  # noqa: BLE001 - re-raised below, after the audio number is logged
+        video_failure = exc
     logger.info("Checking audio output")
-    assert_quality(torch_audio_out, tt_audio_out, pcc=MIN_PCC)
+    assert_quality(torch_audio_out, tt_audio_out, pcc=MIN_PCC_AUDIO)
+    if video_failure is not None:
+        raise video_failure
 
 
 # ---- full-depth run with the real checkpoint ----
