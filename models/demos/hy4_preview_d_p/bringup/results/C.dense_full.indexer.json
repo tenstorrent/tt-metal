@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "chunk0_worst_row_overlap_indexer_L00": {
+   "t": "2026-09-29T06:42:20",
+   "value": 1.0
+  },
+  "pcc_indexer_L00": {
+   "t": "2026-09-29T06:42:19",
+   "value": 0.9970767498016357
+  },
+  "self_selected_indexer_L00": {
+   "t": "2026-09-29T06:42:19",
+   "value": 1.0
+  },
+  "worst_row_overlap_indexer_L00": {
+   "t": "2026-09-29T06:42:19",
+   "value": 0.99072265625
+  }
+ },
+ "task": "C.dense_full.indexer"
+}
