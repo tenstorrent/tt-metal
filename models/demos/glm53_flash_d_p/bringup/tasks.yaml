@@ -542,6 +542,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 0
+  frozen:
+    at: '2026-09-29T05:07:27'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_07_ffn_collapse.py: b519f461eccfce20ed1d5b66a481ad7e576d447b57e74b55b731216bd982baa9
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_dense.ffn_norm
   title: kda_dense ffn_norm (norm) on device, layer 0
   step: implement
