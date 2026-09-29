@@ -18,11 +18,12 @@ Per stage, medians over the chunks of a stream (one PP_TIMING line per chunk and
             session this is pure transfer; un-synced it also holds the device tail of the compute.
   block     push + lease_out = the blocking send (stage busy after compute until the send completes). Pavlo's
             fit: ~7.5 ms at W=2048, 18 ms at 5120 (linear: 0.5 + 3.42e-3 * W ms).
+  pre_sync  synchronize_device before prefill_chunk (sync sessions): device work still queued from the last chunk
   recv      input wait: H2D socket (rank 0) or inbound D2D (the upstream compute + hop when this stage is idle)
   cycle     t_top(c+1) - t_top(c): the stage's loop period
   host_gap  cycle - (lease_in + lease_out + recv + pre_sync + compute|enqueue + push): host time outside every
             timed piece (logging, metadata decode, python)
-  hop       t_recv(s+1, c) - t_sent(s, c), only when stage s+1 was already waiting (its recv began before s sent):
+  hop       (sync sessions) t_recv(s+1, c) - t_sent(s, c), only when stage s+1 was already waiting (its recv began before s sent):
             forward + receiver drain. hop_start = CHUNK_START(s+1, c) - t_sent(s, c) on the same chunks.
   hop_sp2   the SP2-study definition: CHUNK_START(s+1) - (CHUNK_START(s) + compute(s)), next stage idle.
 Model check (sync sessions): tok/s = W / max_s(compute) and W / max_s(compute + block), vs the measured tok/s of
@@ -42,6 +43,8 @@ START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+
 COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
 PUSH = re.compile(r"\[producer\] push slot=\d+ cidx=\d+ start=(\d+)")
 DONE = re.compile(r"DONE wall=([\d.]+)s pushes=(\d+) requests=(\d+) tokens=(\d+)")
+PCC = re.compile(r"kv_cache_pcc_complete slots_checked=\d+ min_pcc=[-\d.]+(?: \w+_pcc=[-\d.]+)*")
+LAYER_PCC = re.compile(r"layer +(\d+): (K=[\d.]+ V=[\d.]+(?: index_k=[\d.]+)?)")
 DRAIN = re.compile(r"drained (\d+)/(\d+) layer acks in ([\d.]+)s")
 
 
@@ -140,6 +143,7 @@ def analyse(d):
                 lo = nxt.get("lease_out_ms") if nxt and r < ranks[-1] else None
                 v["block"].append((x.get("send_ms") or 0.0) + lo if lo is not None else None)
                 v["recv"].append(x.get("recv_ms"))
+                v["pre_sync"].append(x.get("pre_sync_ms"))
                 if nxt and "t_top" in nxt and "t_top" in x:
                     cyc = (nxt["t_top"] - x["t_top"]) * 1000.0
                     parts = [x.get(k) or 0.0 for k in ("lease_in_ms", "lease_out_ms", "recv_ms", "pre_sync_ms")]
@@ -147,7 +151,7 @@ def analyse(d):
                     v["host_gap"].append(cyc - sum(parts) - (work or 0.0) - (x.get("send_ms") or 0.0))
                 if r < ranks[-1]:
                     y = t.get((r + 1, c))
-                    if y and "t_sent" in x and "t_recv" in y:
+                    if sync == "1" and y and "t_sent" in x and "t_recv" in y:
                         recv_began = y["t_recv"] - y.get("recv_ms", 0.0) / 1000.0
                         if recv_began <= x["t_sent"]:
                             v["hop"].append((y["t_recv"] - x["t_sent"]) * 1000.0)
@@ -159,8 +163,28 @@ def analyse(d):
                         if prev <= end_r:
                             v["hop_sp2"].append((st[(r + 1, c)] - end_r) * 1000.0)
             per[r] = {k: (med(x), len([y for y in x if y is not None])) for k, x in v.items()}
+        # runner-side span: first chunk's t_start on the first stage -> last chunk's t_sent on the last stage
+        # (host stamps; in a sync session t_sent follows the device sync, so it is the end of the compute)
+        t0 = [t[(ranks[0], c)]["t_start"] for c in cs if "t_start" in t.get((ranks[0], c), {})]
+        t1 = [t[(ranks[-1], c)]["t_sent"] for c in cs if "t_sent" in t.get((ranks[-1], c), {})]
+        per["span"] = (max(t1) - min(t0), len(cs)) if t0 and t1 else None
         res[label] = per
-    return dict(W=W, sync=sync, share=share, ranks=ranks, per=res, streams=streams(d), n_timing=len(t))
+    steady = {}
+    for label, per in res.items():
+        cyc = max((row.get("cycle", (None, 0))[0] or 0.0) for r, row in per.items() if r != "span")
+        if cyc:
+            steady[label] = W / cyc * 1000.0
+    return dict(
+        W=W,
+        sync=sync,
+        share=share,
+        layers=env.get("PREFILL_NUM_LAYERS"),
+        ranks=ranks,
+        per=res,
+        streams=streams(d),
+        n_timing=len(t),
+        steady=steady,
+    )
 
 
 COLS = [
@@ -171,6 +195,7 @@ COLS = [
     "block",
     "lease_in",
     "recv",
+    "pre_sync",
     "cycle",
     "host_gap",
     "hop",
@@ -207,6 +232,7 @@ def main():
                 + ("(no DONE / drain line)" if v is None else f"chunks {v[0]:3d} time {v[2]:6.2f} s  tok/s {v[3]:7.0f}")
             )
         for label, per in a["per"].items():
+            span = per.pop("span", None)
             if not any(n for row in per.values() for _, n in row.values()):
                 lines.append(f"  [{label}]  no PP_TIMING / CHUNK_COMPUTE data")
                 continue
@@ -217,6 +243,16 @@ def main():
                     f"    s{r}{'':8}"
                     + " ".join(fmt(row.get(c, (None, 0))[0], 9) for c in COLS)
                     + f"   n={max((x[1] for x in row.values()), default=0)}"
+                )
+            cyc = max((per[r].get("cycle", (None, 0))[0] or 0.0) for r in per)
+            if cyc:
+                lines.append(
+                    f"    runner: steady {a['W'] / cyc * 1000:.0f} tok/s (W / slowest median cycle {cyc:.1f} ms)"
+                    + (
+                        f"; span {span[0]:.2f} s for {span[1]} chunks -> {span[1] * a['W'] / span[0]:.0f} tok/s"
+                        if span
+                        else ""
+                    )
                 )
             comp = {r: per[r].get("compute", (None, 0))[0] for r in per}
             blk = {r: per[r].get("block", (None, 0))[0] or 0.0 for r in per}
@@ -236,6 +272,7 @@ def main():
         if a["sync"] != "1":
             continue
         for label, per in a["per"].items():
+            per = {r: v for r, v in per.items() if r != "span"}
             comp = {r: per[r].get("compute", (None, 0))[0] for r in per}
             if not comp or not all(comp.values()):
                 continue
@@ -243,13 +280,15 @@ def main():
             m0 = a["W"] / max(comp.values()) * 1000
             m1 = a["W"] / max(comp[r] + blk[r] for r in comp) * 1000
             for other, b in sessions.items():
-                if b["sync"] == "1" or b["W"] != a["W"]:
+                if b["sync"] == "1" or b["W"] != a["W"] or b["layers"] != a["layers"]:
                     continue
                 v = b["streams"].get(label)
+                sb = b["steady"].get(label)
                 if v:
                     lines.append(
                         f"  W={a['W']} {label}: model {m0:.0f} tok/s (compute) / {m1:.0f} (compute + block); "
-                        f"{other} measured {v[3]:.0f} ({v[3] / m0 - 1:+.1%} vs compute-only, {v[3] / m1 - 1:+.1%} vs +block)"
+                        f"{other} producer {v[3]:.0f} ({v[3] / m0 - 1:+.1%} vs compute-only, {v[3] / m1 - 1:+.1%} vs +block)"
+                        + (f", runner steady {sb:.0f} ({sb / m0 - 1:+.1%} / {sb / m1 - 1:+.1%})" if sb else "")
                     )
     lines.append("")
     lines.append("## Async handoff A/B (lease vs OWN, un-synced, same W)")
@@ -257,14 +296,68 @@ def main():
         if a["sync"] == "1" or a["share"] != "0":
             continue
         for other, b in sessions.items():
-            if b["sync"] == "1" or b["share"] == "0" or b["W"] != a["W"]:
+            if b["sync"] == "1" or b["share"] == "0" or b["W"] != a["W"] or b["layers"] != a["layers"]:
                 continue
             for s, v in a["streams"].items():
                 w = b["streams"].get(s)
                 if "warm" in s or not v or not w:
                     continue
+                ls, os_ = b["steady"].get(s), a["steady"].get(s)
                 lines.append(
-                    f"  W={a['W']} {s:12} lease {w[3]:7.0f} tok/s  own {v[3]:7.0f} tok/s  ({v[3] / w[3] - 1:+.1%})"
+                    f"  W={a['W']} {s:12} producer: lease {w[3]:7.0f} tok/s  own {v[3]:7.0f} tok/s  ({v[3] / w[3] - 1:+.1%})"
+                    + (
+                        f";  runner steady: lease {ls:7.0f}  own {os_:7.0f}  ({os_ / ls - 1:+.1%})"
+                        if ls and os_
+                        else ""
+                    )
+                    + f"  [{other} vs {name}]"
+                )
+    for name, a in sessions.items():
+        wd = os.path.join(args.root, name, "watchdog")
+        if a["share"] == "0" and os.path.exists(wd):
+            last = {}
+            for r, c in parse_runner(os.path.join(args.root, name))[0]:
+                last[r] = max(last.get(r, -1), c)
+            lines.append(
+                f"  {name}: {open(wd).read().strip()} (killed by the watchdog); last PP_TIMING chunk per rank: "
+                + (", ".join(f"s{r} c={c}" for r, c in sorted(last.items())) or "none")
+                + f"; streams {', '.join(k for k, v in a['streams'].items() if v is None) or '-'} without a DONE"
+            )
+    lines.append("")
+    lines.append("## KV read-back PCC vs the golden (PREFILL_PRODUCER_CHECK_PCC=1 streams; last request per slot)")
+    for name, a in sessions.items():
+        for log in producer_logs(os.path.join(args.root, name)):
+            txt = open(log, errors="replace").read()
+            m = PCC.search(txt)
+            if m or "verify=True" in txt:
+                verdict = "PASSED" if "KV cache PCC PASSED" in txt else "below threshold" if m else "no result"
+                lines.append(
+                    f"  {name} share_fabric_links={a['share']} {os.path.basename(log)[:-4]}: {verdict}"
+                    + (f"  {m[0]}" if m else "")
+                )
+    per_layer = {}  # session -> {(slot pass, layer, cache): pcc}
+    for name in sessions:
+        for log in producer_logs(os.path.join(args.root, name)):
+            vals = LAYER_PCC.findall(open(log, errors="replace").read())
+            if vals:
+                seen = defaultdict(int)
+                d = {}
+                for layer, rest in vals:
+                    n = seen[layer]
+                    seen[layer] += 1
+                    for cache, v in re.findall(r"(\w+)=([\d.]+)", rest):
+                        d[(n, int(layer), cache)] = float(v)
+                per_layer[name] = d
+    for name, d in per_layer.items():
+        for other, e in per_layer.items():
+            if other == name or sessions[name]["share"] != "0" or sessions[other]["share"] == "0":
+                continue
+            common = set(d) & set(e)
+            if common:
+                k = max(common, key=lambda k: abs(d[k] - e[k]))
+                lines.append(
+                    f"  {name} vs {other}: {len(common)} per-layer PCCs, max |diff| {abs(d[k] - e[k]):.5f} "
+                    f"(slot pass {k[0]}, layer {k[1]} {k[2]}: {d[k]:.5f} vs {e[k]:.5f})"
                 )
     txt = "\n".join(lines) + "\n"
     print(txt, end="")

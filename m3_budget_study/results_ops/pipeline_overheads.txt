@@ -1,0 +1,180 @@
+P1-D pipeline overheads, 4 x (2,4) common runner (medians in ms per stage; n = chunks in the median).
+block = push + lease_out (blocking send); hop only on chunks where the next stage was already waiting.
+
+## ab_lease_w4096_sync0  W=4096 sync=0 share_fabric_links=1  (PP_TIMING lines: 1008; Pavlo block fit at this W: 14.5 ms)
+  cold_k2      chunks  48 time  20.02 s  tok/s    9821
+  cold_k4      chunks  48 time  13.48 s  tok/s   14585
+  cold_open    chunks  48 time  12.08 s  tok/s   16275
+  h139_k4      chunks  48 time  14.13 s  tok/s   13914
+  h139_open    chunks  48 time  12.76 s  tok/s   15408
+  [cold_k2]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     56.35      0.60      0.04      0.64      0.00    356.12         -    412.55      0.08         -         -         -   n=48
+    s1                -     61.58      0.62      0.04      0.66      0.04    343.59         -    406.84      0.12         -         -         -   n=48
+    s2                -     62.42      0.62      0.04      0.66      0.05    342.69         -    409.79      0.12         -         -         -   n=48
+    s3                -     61.45         -         -         -      0.05    347.02         -    408.00      0.22         -         -         -   n=48
+    runner: steady 9929 tok/s (W / slowest median cycle 412.5 ms); span 19.99 s for 48 chunks -> 9834 tok/s
+  [cold_k4]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     56.65      0.59      0.04      0.64      0.00    210.00         -    268.63      0.09         -         -         -   n=48
+    s1                -     62.28      0.59      0.04      0.63      0.05    198.80         -    261.61      0.12         -         -         -   n=48
+    s2                -     62.10      0.58      0.04      0.62      0.04    206.33         -    268.94      0.12         -         -         -   n=48
+    s3                -     61.92         -         -         -      0.05    207.40         -    269.38      0.22         -         -         -   n=48
+    runner: steady 15205 tok/s (W / slowest median cycle 269.4 ms); span 13.48 s for 48 chunks -> 14589 tok/s
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     57.73      0.59      0.05      0.64      0.00    201.16         -    258.31      0.09         -         -         -   n=48
+    s1                -     61.59      0.58      0.04      0.62      0.05    202.54         -    265.85      0.12         -         -         -   n=48
+    s2                -     61.65      0.59      0.04      0.63      0.04    206.41         -    268.91      0.12         -         -         -   n=48
+    s3                -     63.23         -         -         -      0.05    205.55         -    269.03      0.23         -         -         -   n=48
+    runner: steady 15225 tok/s (W / slowest median cycle 269.0 ms); span 13.45 s for 48 chunks -> 14614 tok/s
+  [h139_k4]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     58.09      0.61      0.04      0.66      0.00    223.96         -    282.44      0.09         -         -         -   n=48
+    s1                -     64.34      0.55      0.04      0.59      0.04    217.80         -    282.71      0.12         -         -         -   n=48
+    s2                -     62.92      0.59      0.04      0.63      0.04    218.42         -    282.76      0.12         -         -         -   n=48
+    s3                -     64.04         -         -         -      0.05    218.08         -    282.71      0.22         -         -         -   n=48
+    runner: steady 14486 tok/s (W / slowest median cycle 282.8 ms); span 14.15 s for 48 chunks -> 13894 tok/s
+  [h139_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     58.32      0.58      0.04      0.62      0.00    223.66         -    282.63      0.08         -         -         -   n=48
+    s1                -     63.82      0.58      0.04      0.62      0.04    217.92         -    282.90      0.12         -         -         -   n=48
+    s2                -     64.50      0.59      0.04      0.64      0.04    217.20         -    282.65      0.12         -         -         -   n=48
+    s3                -     65.48         -         -         -      0.05    215.22         -    283.95      0.24         -         -         -   n=48
+    runner: steady 14425 tok/s (W / slowest median cycle 284.0 ms); span 14.15 s for 48 chunks -> 13891 tok/s
+
+## ab_own_w4096_sync0  W=4096 sync=0 share_fabric_links=0  (PP_TIMING lines: 1; Pavlo block fit at this W: 14.5 ms)
+
+## d_w2048_sync1  W=2048 sync=1 share_fabric_links=1  (PP_TIMING lines: 224; Pavlo block fit at this W: 7.5 ms)
+  cold_open    chunks  24 time   3.08 s  tok/s   15958
+  h139_open    chunks  24 time   3.65 s  tok/s   13466
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           113.95     64.58      0.65      0.04      0.69      0.00     21.30      0.12    137.14      0.33      7.83     13.29     14.12   n=24
+    s1           131.28     73.56      0.70      0.04      0.74      0.05      5.07      0.12    137.68      0.43      4.87     13.62     14.99   n=24
+    s2           135.54     73.49      0.73      0.05      0.78      0.06      4.64      0.12    141.66      0.41      4.95      5.06      6.15   n=24
+    s3           132.53     73.12         -         -         -      0.10      8.48      0.13    141.72      0.38         -         -         -   n=24
+    runner: steady 14451 tok/s (W / slowest median cycle 141.7 ms); span 3.82 s for 24 chunks -> 12856 tok/s
+    model: bottleneck s2 compute 135.5 ms -> 15110 tok/s; with the blocking send s2 136.3 ms -> 15024 tok/s
+  [h139_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           166.03     78.68      0.78      0.05      0.79      0.00      3.77      0.93    171.28      0.42      5.22      5.35      6.51   n=24
+    s1           147.08     77.33      0.67      0.04      0.72      0.05     23.61      0.13    171.55      0.39      4.87      5.05      6.12   n=24
+    s2           149.61     78.78      1.13      0.04      1.22      0.05     19.91      0.13    172.25      0.43      5.10      5.25      7.51   n=24
+    s3           147.46     78.55         -         -         -      0.10     24.66      0.13    173.26      0.41         -         -         -   n=24
+    runner: steady 11821 tok/s (W / slowest median cycle 173.3 ms); span 4.58 s for 24 chunks -> 10727 tok/s
+    model: bottleneck s0 compute 166.0 ms -> 12335 tok/s; with the blocking send s0 166.8 ms -> 12276 tok/s
+
+## d_w4096_sync1  W=4096 sync=1 share_fabric_links=1  (PP_TIMING lines: 224; Pavlo block fit at this W: 14.5 ms)
+  cold_open    chunks  24 time   5.78 s  tok/s   17008
+  h139_open    chunks  24 time   6.08 s  tok/s   16168
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           211.34     86.30      0.74      0.05      0.79      0.00     44.81      0.17    257.78      0.41     10.79     12.01     12.97   n=24
+    s1           247.59     92.23      0.84      0.04      0.88      0.05     10.19      0.14    259.30      0.53      9.80     12.07     13.52   n=24
+    s2           260.64     90.65      0.77      0.04      0.81      0.05      9.73      0.14    272.13      0.51     10.06     10.18     11.33   n=24
+    s3           246.63     86.19         -         -         -      0.12     24.31      0.11    271.51      0.59         -         -         -   n=24
+    runner: steady 15051 tok/s (W / slowest median cycle 272.1 ms); span 7.26 s for 24 chunks -> 13544 tok/s
+    model: bottleneck s2 compute 260.6 ms -> 15715 tok/s; with the blocking send s2 261.5 ms -> 15666 tok/s
+  [h139_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           275.86     87.17      0.72      0.05      0.78      0.00      7.80      0.13    285.00      0.45     10.34     10.49     11.57   n=24
+    s1           249.25     93.11      0.82      0.04      0.86      0.05     34.26      0.14    284.90      0.52      9.45      9.64     10.81   n=24
+    s2           250.51     92.80      0.77      0.04      0.81      0.05     31.95      0.15    283.89      0.48     10.15     10.34     11.56   n=24
+    s3           248.90     87.72         -         -         -      0.12     33.96      0.15    283.72      0.45         -         -         -   n=24
+    runner: steady 14372 tok/s (W / slowest median cycle 285.0 ms); span 7.61 s for 24 chunks -> 12916 tok/s
+    model: bottleneck s0 compute 275.9 ms -> 14848 tok/s; with the blocking send s0 276.6 ms -> 14807 tok/s
+
+## d_w4096_sync1_fab1d  W=4096 sync=1 share_fabric_links=1  (PP_TIMING lines: 0; Pavlo block fit at this W: 14.5 ms)
+
+## d_w8192_sync1  W=8192 sync=1 share_fabric_links=1  (PP_TIMING lines: 224; Pavlo block fit at this W: 28.5 ms)
+  cold_open    chunks  24 time  10.92 s  tok/s   18004
+  h139_open    chunks  24 time  11.34 s  tok/s   17338
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           408.22     87.45      0.77      0.04      0.81      0.00     77.11      0.16    486.85      0.46     20.89     26.36     27.43   n=24
+    s1           465.45     91.93      0.76      0.04      0.81      0.05     20.32      0.14    487.69      0.51     19.00     24.55     25.79   n=24
+    s2           491.19     96.25      0.84      0.04      0.89      0.05     19.62      0.15    512.80      0.53     19.83     19.96     21.22   n=24
+    s3           467.92     82.47         -         -         -      0.12     43.58      0.14    512.83      0.54         -         -         -   n=24
+    runner: steady 15974 tok/s (W / slowest median cycle 512.8 ms); span 13.70 s for 24 chunks -> 14355 tok/s
+    model: bottleneck s2 compute 491.2 ms -> 16678 tok/s; with the blocking send s2 492.1 ms -> 16648 tok/s
+  [h139_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0           521.23     88.24      0.81      0.05      0.86      0.00     15.81      0.15    539.66      0.43     20.66     20.86     22.00   n=24
+    s1           454.68     93.61      0.82      0.04      0.87      0.05     81.98      0.15    539.08      0.53     18.72     18.90     20.15   n=24
+    s2           461.88     95.10      0.93      0.04      0.98      0.05     74.71      0.16    543.40      0.53     19.86     20.11     21.51   n=24
+    s3           462.61     83.27         -         -         -      0.13     75.85      0.17    549.60      0.56         -         -         -   n=24
+    runner: steady 14905 tok/s (W / slowest median cycle 549.6 ms); span 14.36 s for 24 chunks -> 13695 tok/s
+    model: bottleneck s0 compute 521.2 ms -> 15717 tok/s; with the blocking send s0 522.1 ms -> 15691 tok/s
+
+## p1e_rn_cap1m  W=4096 sync=1 share_fabric_links=1  (PP_TIMING lines: 176; Pavlo block fit at this W: 14.5 ms)
+  cold_open    chunks  12 time   0.24 s  tok/s  204800
+  h16k_open    chunks  24 time   0.54 s  tok/s  182044
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0             8.36      6.48      0.81      0.06      0.89      0.00      7.70      0.13     17.58      0.39     10.48     12.60     14.54   n=12
+    s1             6.96      4.63      0.73      0.05      0.78      0.05      9.35      0.13     17.89      0.40      9.60      9.80     10.83   n=12
+    s2             6.94      5.12      0.81      0.05      0.85      0.06     12.24      0.13     20.89      0.45     10.23     10.43     11.72   n=12
+    s3            19.32      9.91         -         -         -      0.08      2.71      0.11     22.65      0.44         -         -         -   n=12
+    runner: steady 180863 tok/s (W / slowest median cycle 22.6 ms); span 0.33 s for 12 chunks -> 151226 tok/s
+    model: bottleneck s3 compute 19.3 ms -> 211986 tok/s; with the blocking send s3 19.3 ms -> 211986 tok/s
+  [h16k_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0            11.34      6.38      0.81      0.08      0.90      0.00      7.80      0.11     20.56      0.42     10.53     16.04     17.18   n=24
+    s1             9.99      4.93      0.74      0.04      0.79      0.05      9.27      0.12     20.66      0.42      9.50     18.11     19.16   n=24
+    s2            10.07      5.21      0.72      0.05      0.79      0.06     10.45      0.12     21.99      0.41     10.34     12.27     12.97   n=24
+    s3            18.71     11.34         -         -         -      0.08      2.70      0.11     22.09      0.47         -         -         -   n=24
+    runner: steady 185398 tok/s (W / slowest median cycle 22.1 ms); span 0.60 s for 24 chunks -> 163607 tok/s
+    model: bottleneck s3 compute 18.7 ms -> 218926 tok/s; with the blocking send s3 18.7 ms -> 218926 tok/s
+
+## p1e_rn_cap64k  W=4096 sync=1 share_fabric_links=1  (PP_TIMING lines: 176; Pavlo block fit at this W: 14.5 ms)
+  cold_open    chunks  12 time   0.25 s  tok/s  196608
+  h16k_open    chunks  24 time   0.53 s  tok/s  185479
+  [cold_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0             8.35      6.32      0.76      0.06      0.82      0.00      7.70      0.14     17.64      0.40     10.10     11.77     12.76   n=12
+    s1             5.77      2.56      0.41      0.04      0.45      0.04     11.29      0.12     19.73      0.22      9.52     12.16     14.73   n=12
+    s2             5.99      3.02      0.46      0.04      0.50      0.05     15.60      0.12     22.70      0.25     10.38     17.68     18.80   n=12
+    s3            19.62     10.29         -         -         -      0.08      2.69      0.12     23.00      0.46         -         -         -   n=12
+    runner: steady 178056 tok/s (W / slowest median cycle 23.0 ms); span 0.34 s for 12 chunks -> 144497 tok/s
+    model: bottleneck s3 compute 19.6 ms -> 208735 tok/s; with the blocking send s3 19.6 ms -> 208735 tok/s
+  [h16k_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0            10.74      5.51      0.75      0.07      0.80      0.00      7.81      0.12     20.02      0.37     10.28     10.66     11.44   n=24
+    s1             8.80      3.11      0.49      0.04      0.53      0.04     10.10      0.10     19.98      0.26     10.01     12.40     13.12   n=24
+    s2             9.53      4.38      0.71      0.06      0.78      0.07     10.08      0.11     21.27      0.38     10.16     11.51     12.50   n=24
+    s3            16.69      8.06         -         -         -      0.08      4.12      0.09     21.70      0.37         -         -         -   n=24
+    runner: steady 188798 tok/s (W / slowest median cycle 21.7 ms); span 0.58 s for 24 chunks -> 169282 tok/s
+    model: bottleneck s3 compute 16.7 ms -> 245380 tok/s; with the blocking send s3 16.7 ms -> 245380 tok/s
+
+## pcc_lease_w4096_sync0  W=4096 sync=0 share_fabric_links=1  (PP_TIMING lines: 112; Pavlo block fit at this W: 14.5 ms)
+  pcc_open     chunks  24 time   5.73 s  tok/s   17156
+  [pcc_open]    compute   enqueue      push lease_out     block  lease_in      recv  pre_sync     cycle  host_gap       hop hop_start   hop_sp2
+    s0                -     57.32      0.62      0.05      0.67      0.00    198.40         -    255.92      0.09         -         -         -   n=24
+    s1                -     62.09      0.59      0.04      0.63      0.05    193.67         -    257.01      0.12         -         -         -   n=24
+    s2                -     61.60      0.59      0.04      0.63      0.04    206.88         -    269.61      0.11         -         -         -   n=24
+    s3                -     62.14         -         -         -      0.05    207.07         -    269.50      0.23         -         -         -   n=24
+    runner: steady 15192 tok/s (W / slowest median cycle 269.6 ms); span 7.01 s for 24 chunks -> 14031 tok/s
+
+## pcc_own_w4096_sync0  W=4096 sync=0 share_fabric_links=0  (PP_TIMING lines: 1; Pavlo block fit at this W: 14.5 ms)
+
+## Model (sync sessions) vs un-synced tok/s, same W and stream kind
+  W=4096 cold_open: model 15715 tok/s (compute) / 15666 (compute + block); ab_lease_w4096_sync0 producer 16275 (+3.6% vs compute-only, +3.9% vs +block), runner steady 15225 (-3.1% / -2.8%)
+  W=4096 h139_open: model 14848 tok/s (compute) / 14807 (compute + block); ab_lease_w4096_sync0 producer 15408 (+3.8% vs compute-only, +4.1% vs +block), runner steady 14425 (-2.9% / -2.6%)
+
+## Async handoff A/B (lease vs OWN, un-synced, same W)
+  ab_own_w4096_sync0: HANG (killed by the watchdog); last PP_TIMING chunk per rank: s0 c=0; streams warm without a DONE
+  pcc_own_w4096_sync0: HANG (killed by the watchdog); last PP_TIMING chunk per rank: s0 c=0; streams warm without a DONE
+
+## KV read-back PCC vs the golden (PREFILL_PRODUCER_CHECK_PCC=1 streams; last request per slot)
+  pcc_lease_w4096_sync0 share_fabric_links=1 pcc_open: below threshold  kv_cache_pcc_complete slots_checked=2 min_pcc=0.884626 k_pcc=0.964577 v_pcc=0.884626 index_k_pcc=0.976985
+
+## Findings (written by hand after the run; the sections above are the tools/pipeline_overheads.py output)
+- Blocking send (push + lease_out) is 0.6-1.2 ms per chunk at every W: 0.7/0.8/0.9 ms at W=2048/4096/8192, against
+  Pavlo's 7.5/14.5/28.5 ms fit. The sender is not held for the transfer. Host gap outside the timed pieces is
+  0.3-0.6 ms per stage.
+- Hop (sender push return -> receiver has the input, when the receiver is already waiting) is 4.9-7.8 / 9.5-10.8 /
+  18.7-20.9 ms at W=2048/4096/8192, about 2.4 ms per 1k tokens. This matches Pavlo's "send" magnitude, but it is
+  latency on an idle receiver, not time the sender is busy.
+- The old SP2 Part B cold gap (-12.4%: open loop 15.7k vs 17.9k predicted from a 228 ms standalone sparse stage) is
+  NOT the blocking send (0.3% of a stage). It is stage compute: in the pipeline the sparse stages take 247/261/247 ms
+  (sync, W=4096 cold), which alone gives 15.7k tok/s. The un-synced lease pipeline runs at 15.2k steady (cycle 269 ms,
+  -3.1% vs the sync compute bound); the rest of that -3% is input wait / handoff on the bottleneck stage (sync cycle
+  272 = compute 261 + recv 9.7). Producer-side tok/s (push wall + ack drain) reads 3-4% above the runner steady
+  rate because layer acks are host-side and the stream is short.
+- 1d fabric is not an option for the 4-rank runner: PREFILL_FABRIC_MODE=1d dies at startup with
+  TT_FATAL control_plane.cpp:859 `!is_1d_fabric || !is_multi_mesh` (d_w4096_sync1_fab1d). All sessions use 2d, as
+  E7 / SP2 Part B did.
+- PREFILL_D2D_SHARE_FABRIC_LINKS=0 (OWN, async handoff) deadlocks on the first chunk: stage 0 computes and pushes
+  chunk 0, stage 1 never receives it, no further PP_TIMING line on any rank; watchdog HANG after 300 s. Reproduced
+  once (pcc_own_w4096_sync0), not retried further. No timing or correctness numbers for OWN mode.
+- KV read-back check (merged mock migration, producer PREFILL_PRODUCER_CHECK_PCC=1 with the four rank device maps
+  merged) works on the 4-rank runner. Lease-mode control: both slots identical, K 0.9999 -> 0.965, V 0.9997 -> 0.885
+  decaying smoothly over layers 0-59 with no step at the stage boundaries (15/30/45), so the handoff is clean; the
+  0.93 default threshold is too tight for 60 layers with this config (bf4 experts). The un-synced lease timing
+  sessions themselves are timing-only.

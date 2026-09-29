@@ -1,0 +1,21 @@
+P1-E: dense attention cost vs KV slot capacity, W=4096, (2,4) SP=2 TP=4
+
+A. budget_sweep, dense layers 0-2 in one forward (median wall ms, min in brackets)
+  capacity    65536: h=0 n=4096: 16.74 [16.56]  h=16384 n=4096: 26.23 [24.40]  DRAM allocated/bank 0.16 GiB  STATUS=OK
+  capacity  1048576: h=0 n=4096: 16.97 [16.82]  h=16384 n=4096: 26.02 [25.07]  DRAM allocated/bank 0.27 GiB  STATUS=OK
+  h=0 n=4096: 1048576 vs 65536: +0.23 ms (+1.4%) for 3 dense layers; whole-capacity scan predicts +281 ms
+  h=16384 n=4096: 1048576 vs 65536: -0.21 ms (-0.8%) for 3 dense layers; whole-capacity scan predicts +281 ms
+
+B. runner, one layer per stage (median CHUNK_COMPUTE ms per stage; s0-s2 dense, s3 sparse)
+  capacity    65536 cold_open  s0    8.35  s1    5.77  s2    5.99  s3   19.62   (p1e_rn_cap64k)
+  capacity    65536 h16k_open  s0   10.74  s1    8.80  s2    9.53  s3   16.69   (p1e_rn_cap64k)
+  capacity  1048576 cold_open  s0    8.36  s1    6.96  s2    6.94  s3   19.32   (p1e_rn_cap1m)
+  capacity  1048576 h16k_open  s0   11.34  s1    9.99  s2   10.07  s3   18.71   (p1e_rn_cap1m)
+  cold_open: 1048576 vs 65536: s0 +0.01 (+0.1%)  s1 +1.19 (+20.6%)  s2 +0.95 (+15.9%)  s3 -0.30 (-1.5%)   (scan predicts +94 ms per dense stage)
+  h16k_open: 1048576 vs 65536: s0 +0.60 (+5.6%)  s1 +1.20 (+13.6%)  s2 +0.53 (+5.6%)  s3 +2.02 (+12.1%)   (scan predicts +94 ms per dense stage)
+
+Verdict (by hand): no whole-capacity scan. 1M vs 64k slot capacity changes 3 dense layers by -0.2 ms at h=16384
+(+0.2 ms at h=0) in the budget harness, and one dense layer per runner stage by +0.0...+1.2 ms (noise level, n=12/24),
+against +281 ms / +94 ms predicted by ~100 ms per 1M slot per dense layer per chunk. The 1M slot is really allocated
+(DRAM per bank 0.16 -> 0.27 GiB for 3 layers x 1 user). Dense cost follows the history h, not the capacity
+(cf. E2c +2%).

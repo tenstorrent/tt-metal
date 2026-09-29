@@ -54,19 +54,28 @@ ab_streams () {  # K=2 first: at most 2 chunks in flight never lets a stage over
   echo "h139_k4|PREFILL_PRODUCER_MAX_REQUESTS=48 PREFILL_PRODUCER_PREFIX_TOKENS=$HOT $G=4"
   echo "h139_open|PREFILL_PRODUCER_MAX_REQUESTS=48 PREFILL_PRODUCER_PREFIX_TOKENS=$HOT $G=10000"
 }
+pcc_streams () {  # KV read-back vs the golden (cold, real tokens [0, W)): only the last request per slot is checked
+  echo "warm|PREFILL_PRODUCER_MAX_REQUESTS=4 $G=10000"
+  echo "pcc_open|PREFILL_PRODUCER_MAX_REQUESTS=24 $G=10000 PREFILL_PRODUCER_CHECK_PCC=1"
+}
 h16k_streams () {  # P1-E (batch_p1e.sh): dense stages at h=16384, plus a cold control
   echo "warm|PREFILL_PRODUCER_MAX_REQUESTS=4 $G=10000"
   echo "cold_open|PREFILL_PRODUCER_MAX_REQUESTS=12 $G=10000"
   echo "h16k_warm|PREFILL_PRODUCER_MAX_REQUESTS=4 PREFILL_PRODUCER_PREFIX_TOKENS=16384 $G=10000"
   echo "h16k_open|PREFILL_PRODUCER_MAX_REQUESTS=24 PREFILL_PRODUCER_PREFIX_TOKENS=16384 $G=10000"
 }
+# pcc_* sessions: merged mock migration publishes the KV chunk table and per-rank device maps; the batch merges the
+# maps (all 32 chips are local) so a single-process producer can read every stage's KV back.
+PCC_ENV="PREFILL_ENABLE_MIGRATION=1 PREFILL_MOCK_MIGRATION=1 PREFILL_MIGRATION_DEVICE_MAP_PATH=@D@/kv_device_map.json"
 # id | W | sync | share_fabric_links | stream generator [| extra K=V ... overriding the runner + producer env]
 SESSIONS=(
   "d_w2048_sync1|2048|1|1|sync_streams"
   "d_w4096_sync1|4096|1|1|sync_streams"
   "d_w8192_sync1|8192|1|1|sync_streams"
   "ab_lease_w4096_sync0|4096|0|1|ab_streams"
+  "pcc_lease_w4096_sync0|4096|0|1|pcc_streams|$PCC_ENV"
   "ab_own_w4096_sync0|4096|0|0|ab_streams"
+  "pcc_own_w4096_sync0|4096|0|0|pcc_streams|$PCC_ENV"
 )
 # P1D_SESSIONS (newline-separated specs) replaces the list, e.g. from batch_p1e.sh.
 if [ -n "${P1D_SESSIONS:-}" ]; then mapfile -t SESSIONS <<< "$P1D_SESSIONS"; fi
@@ -138,6 +147,7 @@ session () {  # $1 = spec
   IFS='|' read -r id W sync share gen extra <<< "$1"
   id="${PREFIX:+${PREFIX}_}$id"
   local d="$PIPE/$id"
+  extra="${extra//@D@/$d}"
   mapfile -t S < <($gen)
   if [ "$DRY_RUN" = 1 ]; then
     echo "[p1d] DRY $id: W=$W sync=$sync share_fabric_links=$share layer_counts=${LAYER_COUNTS:-even} extra=${extra:-}"
@@ -169,13 +179,29 @@ session () {  # $1 = spec
   if [ -z "$status" ]; then
     up=$(( $(date +%s) - t0 )); echo "[p1d] runner $id up after ${up}s"
     watchdog "$rpid" "$d" "$t0" & local wpid=$!
+    local pmap=""
+    if [[ "${extra:-}" == *PREFILL_MOCK_MIGRATION=1* ]]; then
+      local k=0; until [ "$(ls "$d"/kv_device_map_r*.json 2>/dev/null | wc -l)" -ge 4 ] || [ $k -ge 30 ]; do sleep 2; k=$((k+1)); done
+      if "$PY" - "$d" <<'PY'
+import glob, json, sys
+d = sys.argv[1]
+m = {}
+for f in sorted(glob.glob(f"{d}/kv_device_map_r*.json")):
+    m.update(json.load(open(f)))
+json.dump(m, open(f"{d}/kv_device_map_merged.json", "w"))
+print(f"[p1d] merged {len(m)} chips into {d}/kv_device_map_merged.json")
+PY
+      then pmap="PREFILL_MIGRATION_DEVICE_MAP_PATH=$d/kv_device_map_merged.json"; fi
+    fi
     local n=${#S[@]} i=0 spec
     for spec in "${S[@]}"; do
       i=$((i + 1)); local name=${spec%%|*} envs=${spec#*|}
       [ $i -eq "$n" ] && envs="$envs PREFILL_SEND_SHUTDOWN=1"
       [ -e "$d/watchdog" ] && break
       # shellcheck disable=SC2086
-      producer "$d" "$name" "$d/binding.yaml" $envs; notes="$notes $name:$?"
+      producer "$d" "$name" "$d/binding.yaml" $envs $pmap; notes="$notes $name:$?"
+      local pcc; pcc="$(grep -hoE 'kv_cache_pcc_complete .*|KV cache PCC (PASSED|below)[^(]*' "$d/$name.log" | head -2 | tr '\n' ' ')"
+      [ -n "$pcc" ] && { echo "[p1d]   $pcc"; notes="$notes [$pcc]"; }
     done
     local t1; t1=$(date +%s)
     while kill -0 "$rpid" 2>/dev/null && [ $(( $(date +%s) - t1 )) -lt 300 ]; do sleep 5; done

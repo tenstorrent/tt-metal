@@ -29,6 +29,10 @@ profiles, (2,4) SP=2 TP=4, layers 0-6 (dense 0-2, sparse 3-6). Groups: heads, kv
   sparse misc 1.817 ms/layer: routing_setup 0.686 [1.316] (38%, 5 ops); norm 0.316 [0.319] (17%, 2 ops); segment_glue 0.241 [0.243] (13%, 5 ops); rope 0.192 [0.194] (11%, 16 ops); residual 0.147 [0.148] (8%, 3 ops); heads 0.137 [0.138] (8%, 4 ops); qk_norm 0.065 [0.065] (4%, 4 ops); kv_write 0.033 [0.033] (2%, 12 ops)
   dense  misc 0.927 ms/layer: norm 0.316 [0.318] (34%, 2 ops); rope 0.192 [0.195] (21%, 16 ops); heads 0.137 [0.138] (15%, 4 ops); segment_glue 0.100 [0.102] (11%, 3 ops); residual 0.096 [0.097] (10%, 2 ops); qk_norm 0.065 [0.066] (7%, 4 ops); kv_write 0.021 [0.022] (2%, 8 ops)
 
+## p1f_w4096_1x2  W=4096 B=2 h=139264+141312 input=prose
+  sparse misc 1.201 ms/layer: norm 0.315 [0.318] (26%, 2 ops); segment_glue 0.240 [0.242] (20%, 5 ops); rope 0.191 [0.192] (16%, 16 ops); residual 0.147 [0.148] (12%, 3 ops); heads 0.137 [0.138] (11%, 4 ops); routing_setup 0.072 [0.079] (6%, 5 ops); qk_norm 0.065 [0.065] (5%, 4 ops); kv_write 0.033 [0.033] (3%, 12 ops)
+  dense  misc 0.923 ms/layer: norm 0.314 [0.317] (34%, 2 ops); rope 0.193 [0.198] (21%, 16 ops); heads 0.137 [0.138] (15%, 4 ops); segment_glue 0.100 [0.101] (11%, 3 ops); residual 0.095 [0.096] (10%, 2 ops); qk_norm 0.065 [0.066] (7%, 4 ops); kv_write 0.021 [0.022] (2%, 8 ops)
+
 ## p0a_w8192_h0_code  W=8192 B=1 h=0 input=code
   sparse misc 2.891 ms/layer: routing_setup 1.260 [2.444] (44%, 5 ops); norm 0.626 [0.629] (22%, 2 ops); rope 0.343 [0.349] (12%, 8 ops); residual 0.288 [0.290] (10%, 3 ops); heads 0.221 [0.223] (8%, 2 ops); qk_norm 0.114 [0.116] (4%, 2 ops); kv_write 0.039 [0.040] (1%, 6 ops)
   dense  misc 1.516 ms/layer: norm 0.625 [0.629] (41%, 2 ops); rope 0.342 [0.348] (23%, 8 ops); heads 0.219 [0.223] (14%, 2 ops); residual 0.191 [0.195] (13%, 2 ops); qk_norm 0.114 [0.116] (8%, 2 ops); kv_write 0.026 [0.027] (2%, 4 ops)
@@ -57,48 +61,144 @@ profiles, (2,4) SP=2 TP=4, layers 0-6 (dense 0-2, sparse 3-6). Groups: heads, kv
   sparse misc 2.980 ms/layer: routing_setup 0.738 [1.408] (25%, 5 ops); norm 0.623 [0.627] (21%, 2 ops); segment_glue 0.481 [0.485] (16%, 9 ops); rope 0.382 [0.385] (13%, 32 ops); residual 0.287 [0.290] (10%, 3 ops); heads 0.274 [0.275] (9%, 8 ops); qk_norm 0.129 [0.130] (4%, 8 ops); kv_write 0.065 [0.066] (2%, 24 ops)
   dense  misc 1.811 ms/layer: norm 0.614 [0.621] (34%, 2 ops); rope 0.374 [0.379] (21%, 32 ops); heads 0.271 [0.272] (15%, 8 ops); segment_glue 0.196 [0.200] (11%, 5 ops); residual 0.186 [0.190] (10%, 2 ops); qk_norm 0.127 [0.128] (7%, 8 ops); kv_write 0.043 [0.044] (2%, 16 ops)
 
+## p1f_w8192_2x2  W=8192 B=4 h=139264+141312+0+2048 input=prose+code
+  sparse misc 2.339 ms/layer: norm 0.625 [0.629] (27%, 2 ops); segment_glue 0.482 [0.485] (21%, 9 ops); rope 0.383 [0.386] (16%, 32 ops); residual 0.288 [0.290] (12%, 3 ops); heads 0.274 [0.275] (12%, 8 ops); qk_norm 0.129 [0.130] (6%, 8 ops); routing_setup 0.093 [0.101] (4%, 5 ops); kv_write 0.065 [0.066] (3%, 24 ops)
+  dense  misc 1.830 ms/layer: norm 0.619 [0.627] (34%, 2 ops); rope 0.380 [0.384] (21%, 32 ops); heads 0.272 [0.273] (15%, 8 ops); segment_glue 0.200 [0.202] (11%, 5 ops); residual 0.188 [0.193] (10%, 2 ops); qk_norm 0.128 [0.129] (7%, 8 ops); kv_write 0.043 [0.044] (2%, 16 ops)
+
 Per-segment vs whole-tensor (packed calls / single calls per layer at the same W; run: tag ratio):
-  dense  concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  dense  k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  dense  q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  dense  residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  dense  rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  dense  seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
-  dense  seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
-  dense  split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse add_shared                   BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse index_k_typecast             Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse index_k_write                UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
-  sparse routing_setup_AllGather      AllGather                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse routing_setup_MaskedBincount MaskedBincount           p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse routing_setup_OffsetCumsum   OffsetCumsum             p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse routing_setup_UntilizeWithUnpadding UntilizeWithUnpadding    p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
-  sparse seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
-  sparse seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
-  sparse seg_slice_x                  Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
-  sparse split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  dense  k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  dense  q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  dense  residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  dense  rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  dense  seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only  p1f_w4096_1x2: packed-only  p1f_w8192_2x2: packed-only
+  dense  seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only  p1f_w4096_1x2: packed-only  p1f_w8192_2x2: packed-only
+  dense  split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse add_shared                   BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse index_k_typecast             Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse index_k_write                UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+  sparse routing_setup_AllGather      AllGather                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse routing_setup_MaskedBincount MaskedBincount           p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse routing_setup_OffsetCumsum   OffsetCumsum             p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse routing_setup_UntilizeWithUnpadding UntilizeWithUnpadding    p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0  p1f_w4096_1x2: whole-tensor 1.0  p1f_w8192_2x2: whole-tensor 1.0
+  sparse seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only  p1f_w4096_1x2: packed-only  p1f_w8192_2x2: packed-only
+  sparse seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only  p1f_w4096_1x2: packed-only  p1f_w8192_2x2: packed-only
+  sparse seg_slice_x                  Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only  p1f_w4096_1x2: packed-only  p1f_w8192_2x2: packed-only
+  sparse split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0  p1f_w4096_1x2: per-segment 2.0  p1f_w8192_2x2: per-segment 4.0
+
+Per-request vs per-segment, W=4096 B=2 segments: p1f_w4096_1x2 (1 slots), p0a_w4096_packed (2 slots)
+  dense  input_norm                   LayerNorm                whole-tensor  p1f_w4096_1x2: x1.00 0.157 ms  p0a_w4096_packed: x1.00 0.158 ms
+  dense  post_attn_norm               LayerNorm                whole-tensor  p1f_w4096_1x2: x1.00 0.157 ms  p0a_w4096_packed: x1.00 0.158 ms
+  dense  rope_q_slice                 Slice                    per-segment   p1f_w4096_1x2: x2.00 0.079 ms  p0a_w4096_packed: x2.00 0.079 ms
+  dense  split_heads                  NlpCreateHeads           per-segment   p1f_w4096_1x2: x2.00 0.072 ms  p0a_w4096_packed: x2.00 0.072 ms
+  dense  concat_heads                 NLPConcatHeads           per-segment   p1f_w4096_1x2: x2.00 0.064 ms  p0a_w4096_packed: x2.00 0.065 ms
+  dense  q_norm                       LayerNorm                per-segment   p1f_w4096_1x2: x2.00 0.055 ms  p0a_w4096_packed: x2.00 0.055 ms
+  dense  seg_slice_qkv                Slice                    packed-only   p1f_w4096_1x2: 2 calls 0.054 ms  p0a_w4096_packed: 2 calls 0.054 ms
+  dense  rope_q_concat                Concat                   per-segment   p1f_w4096_1x2: x2.00 0.050 ms  p0a_w4096_packed: x2.00 0.050 ms
+  dense  residual_attn                BinaryNg                 whole-tensor  p1f_w4096_1x2: x1.00 0.048 ms  p0a_w4096_packed: x1.00 0.048 ms
+  dense  residual_mlp                 BinaryNg                 whole-tensor  p1f_w4096_1x2: x1.00 0.047 ms  p0a_w4096_packed: x1.00 0.047 ms
+  dense  seg_concat_out               Concat                   packed-only   p1f_w4096_1x2: 1 calls 0.046 ms  p0a_w4096_packed: 1 calls 0.046 ms
+  dense  rope_q_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w4096_1x2: x2.00 0.035 ms  p0a_w4096_packed: x2.00 0.035 ms
+  dense  rope_k_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w4096_1x2: x2.00 0.016 ms  p0a_w4096_packed: x2.00 0.016 ms
+  dense  kv_write                     UpdatePaddedKvCache      per-segment   p1f_w4096_1x2: x2.00 0.012 ms  p0a_w4096_packed: x2.00 0.012 ms
+  dense  k_norm                       LayerNorm                per-segment   p1f_w4096_1x2: x2.00 0.010 ms  p0a_w4096_packed: x2.00 0.010 ms
+  dense  kv_typecast                  Typecast                 per-segment   p1f_w4096_1x2: x2.00 0.009 ms  p0a_w4096_packed: x2.00 0.009 ms
+  dense  rope_k_slice                 Slice                    per-segment   p1f_w4096_1x2: x2.00 0.007 ms  p0a_w4096_packed: x2.00 0.007 ms
+  dense  rope_k_concat                Concat                   per-segment   p1f_w4096_1x2: x2.00 0.005 ms  p0a_w4096_packed: x2.00 0.005 ms
+  sparse routing_setup_AllGather      AllGather                whole-tensor  p1f_w4096_1x2: x1.00 0.011 ms  p0a_w4096_packed: x1.00 0.626 ms
+  sparse input_norm                   LayerNorm                whole-tensor  p1f_w4096_1x2: x1.00 0.158 ms  p0a_w4096_packed: x1.00 0.158 ms
+  sparse post_attn_norm               LayerNorm                whole-tensor  p1f_w4096_1x2: x1.00 0.158 ms  p0a_w4096_packed: x1.00 0.158 ms
+  sparse seg_slice_x                  Slice                    packed-only   p1f_w4096_1x2: 2 calls 0.140 ms  p0a_w4096_packed: 2 calls 0.140 ms
+  sparse rope_q_slice                 Slice                    per-segment   p1f_w4096_1x2: x2.00 0.079 ms  p0a_w4096_packed: x2.00 0.079 ms
+  sparse split_heads                  NlpCreateHeads           per-segment   p1f_w4096_1x2: x2.00 0.072 ms  p0a_w4096_packed: x2.00 0.072 ms
+  sparse concat_heads                 NLPConcatHeads           per-segment   p1f_w4096_1x2: x2.00 0.065 ms  p0a_w4096_packed: x2.00 0.065 ms
+  sparse q_norm                       LayerNorm                per-segment   p1f_w4096_1x2: x2.00 0.055 ms  p0a_w4096_packed: x2.00 0.055 ms
+  sparse seg_slice_qkv                Slice                    packed-only   p1f_w4096_1x2: 2 calls 0.054 ms  p0a_w4096_packed: 2 calls 0.054 ms
+  sparse rope_q_concat                Concat                   per-segment   p1f_w4096_1x2: x2.00 0.050 ms  p0a_w4096_packed: x2.00 0.050 ms
+  sparse residual_mlp                 BinaryNg                 whole-tensor  p1f_w4096_1x2: x1.00 0.049 ms  p0a_w4096_packed: x1.00 0.049 ms
+  sparse add_shared                   BinaryNg                 whole-tensor  p1f_w4096_1x2: x1.00 0.049 ms  p0a_w4096_packed: x1.00 0.049 ms
+  sparse residual_attn                BinaryNg                 whole-tensor  p1f_w4096_1x2: x1.00 0.049 ms  p0a_w4096_packed: x1.00 0.049 ms
+  sparse seg_concat_out               Concat                   packed-only   p1f_w4096_1x2: 1 calls 0.047 ms  p0a_w4096_packed: 1 calls 0.047 ms
+  sparse rope_q_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w4096_1x2: x2.00 0.035 ms  p0a_w4096_packed: x2.00 0.035 ms
+  sparse routing_setup_MaskedBincount MaskedBincount           whole-tensor  p1f_w4096_1x2: x1.00 0.035 ms  p0a_w4096_packed: x1.00 0.035 ms
+  sparse routing_setup_UntilizeWithUnpadding UntilizeWithUnpadding    whole-tensor  p1f_w4096_1x2: x1.00 0.021 ms  p0a_w4096_packed: x1.00 0.021 ms
+  sparse rope_k_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w4096_1x2: x2.00 0.016 ms  p0a_w4096_packed: x2.00 0.016 ms
+  sparse kv_write                     UpdatePaddedKvCache      per-segment   p1f_w4096_1x2: x2.00 0.013 ms  p0a_w4096_packed: x2.00 0.012 ms
+  sparse k_norm                       LayerNorm                per-segment   p1f_w4096_1x2: x2.00 0.010 ms  p0a_w4096_packed: x2.00 0.010 ms
+  sparse kv_typecast                  Typecast                 per-segment   p1f_w4096_1x2: x2.00 0.009 ms  p0a_w4096_packed: x2.00 0.009 ms
+  sparse rope_k_slice                 Slice                    per-segment   p1f_w4096_1x2: x2.00 0.007 ms  p0a_w4096_packed: x2.00 0.007 ms
+  sparse index_k_write                UpdatePaddedKvCache      per-segment   p1f_w4096_1x2: x2.00 0.006 ms  p0a_w4096_packed: x2.00 0.006 ms
+  sparse rope_k_concat                Concat                   per-segment   p1f_w4096_1x2: x2.00 0.005 ms  p0a_w4096_packed: x2.00 0.005 ms
+  sparse index_k_typecast             Typecast                 per-segment   p1f_w4096_1x2: x2.00 0.005 ms  p0a_w4096_packed: x2.00 0.005 ms
+  sparse routing_setup_OffsetCumsum   OffsetCumsum             whole-tensor  p1f_w4096_1x2: x1.00 0.005 ms  p0a_w4096_packed: x1.00 0.005 ms
+
+Per-request vs per-segment, W=8192 B=4 segments: p1f_w8192_2x2 (2 slots), p0a_w8192_packed (4 slots)
+  dense  input_norm                   LayerNorm                whole-tensor  p1f_w8192_2x2: x1.00 0.310 ms  p0a_w8192_packed: x1.00 0.308 ms
+  dense  post_attn_norm               LayerNorm                whole-tensor  p1f_w8192_2x2: x1.00 0.310 ms  p0a_w8192_packed: x1.00 0.305 ms
+  dense  rope_q_slice                 Slice                    per-segment   p1f_w8192_2x2: x4.00 0.156 ms  p0a_w8192_packed: x4.00 0.154 ms
+  dense  split_heads                  NlpCreateHeads           per-segment   p1f_w8192_2x2: x4.00 0.144 ms  p0a_w8192_packed: x4.00 0.143 ms
+  dense  concat_heads                 NLPConcatHeads           per-segment   p1f_w8192_2x2: x4.00 0.129 ms  p0a_w8192_packed: x4.00 0.128 ms
+  dense  q_norm                       LayerNorm                per-segment   p1f_w8192_2x2: x4.00 0.109 ms  p0a_w8192_packed: x4.00 0.107 ms
+  dense  seg_slice_qkv                Slice                    packed-only   p1f_w8192_2x2: 4 calls 0.107 ms  p0a_w8192_packed: 4 calls 0.105 ms
+  dense  rope_q_concat                Concat                   per-segment   p1f_w8192_2x2: x4.00 0.099 ms  p0a_w8192_packed: x4.00 0.097 ms
+  dense  residual_attn                BinaryNg                 whole-tensor  p1f_w8192_2x2: x1.00 0.094 ms  p0a_w8192_packed: x1.00 0.093 ms
+  dense  residual_mlp                 BinaryNg                 whole-tensor  p1f_w8192_2x2: x1.00 0.094 ms  p0a_w8192_packed: x1.00 0.092 ms
+  dense  seg_concat_out               Concat                   packed-only   p1f_w8192_2x2: 1 calls 0.093 ms  p0a_w8192_packed: 1 calls 0.091 ms
+  dense  rope_q_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w8192_2x2: x4.00 0.070 ms  p0a_w8192_packed: x4.00 0.069 ms
+  dense  rope_k_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w8192_2x2: x4.00 0.032 ms  p0a_w8192_packed: x4.00 0.031 ms
+  dense  kv_write                     UpdatePaddedKvCache      per-segment   p1f_w8192_2x2: x4.00 0.025 ms  p0a_w8192_packed: x4.00 0.025 ms
+  dense  k_norm                       LayerNorm                per-segment   p1f_w8192_2x2: x4.00 0.019 ms  p0a_w8192_packed: x4.00 0.020 ms
+  dense  kv_typecast                  Typecast                 per-segment   p1f_w8192_2x2: x4.00 0.019 ms  p0a_w8192_packed: x4.00 0.018 ms
+  dense  rope_k_slice                 Slice                    per-segment   p1f_w8192_2x2: x4.00 0.014 ms  p0a_w8192_packed: x4.00 0.014 ms
+  dense  rope_k_concat                Concat                   per-segment   p1f_w8192_2x2: x4.00 0.009 ms  p0a_w8192_packed: x4.00 0.009 ms
+  sparse routing_setup_AllGather      AllGather                whole-tensor  p1f_w8192_2x2: x1.00 0.013 ms  p0a_w8192_packed: x1.00 0.658 ms
+  sparse post_attn_norm               LayerNorm                whole-tensor  p1f_w8192_2x2: x1.00 0.312 ms  p0a_w8192_packed: x1.00 0.312 ms
+  sparse input_norm                   LayerNorm                whole-tensor  p1f_w8192_2x2: x1.00 0.312 ms  p0a_w8192_packed: x1.00 0.311 ms
+  sparse seg_slice_x                  Slice                    packed-only   p1f_w8192_2x2: 4 calls 0.280 ms  p0a_w8192_packed: 4 calls 0.280 ms
+  sparse rope_q_slice                 Slice                    per-segment   p1f_w8192_2x2: x4.00 0.158 ms  p0a_w8192_packed: x4.00 0.158 ms
+  sparse split_heads                  NlpCreateHeads           per-segment   p1f_w8192_2x2: x4.00 0.145 ms  p0a_w8192_packed: x4.00 0.144 ms
+  sparse concat_heads                 NLPConcatHeads           per-segment   p1f_w8192_2x2: x4.00 0.130 ms  p0a_w8192_packed: x4.00 0.129 ms
+  sparse q_norm                       LayerNorm                per-segment   p1f_w8192_2x2: x4.00 0.110 ms  p0a_w8192_packed: x4.00 0.110 ms
+  sparse seg_slice_qkv                Slice                    packed-only   p1f_w8192_2x2: 4 calls 0.108 ms  p0a_w8192_packed: 4 calls 0.107 ms
+  sparse rope_q_concat                Concat                   per-segment   p1f_w8192_2x2: x4.00 0.100 ms  p0a_w8192_packed: x4.00 0.099 ms
+  sparse add_shared                   BinaryNg                 whole-tensor  p1f_w8192_2x2: x1.00 0.096 ms  p0a_w8192_packed: x1.00 0.096 ms
+  sparse residual_mlp                 BinaryNg                 whole-tensor  p1f_w8192_2x2: x1.00 0.096 ms  p0a_w8192_packed: x1.00 0.096 ms
+  sparse residual_attn                BinaryNg                 whole-tensor  p1f_w8192_2x2: x1.00 0.095 ms  p0a_w8192_packed: x1.00 0.095 ms
+  sparse seg_concat_out               Concat                   packed-only   p1f_w8192_2x2: 1 calls 0.094 ms  p0a_w8192_packed: 1 calls 0.095 ms
+  sparse rope_q_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w8192_2x2: x4.00 0.071 ms  p0a_w8192_packed: x4.00 0.070 ms
+  sparse routing_setup_UntilizeWithUnpadding UntilizeWithUnpadding    whole-tensor  p1f_w8192_2x2: x1.00 0.038 ms  p0a_w8192_packed: x1.00 0.038 ms
+  sparse routing_setup_MaskedBincount MaskedBincount           whole-tensor  p1f_w8192_2x2: x1.00 0.037 ms  p0a_w8192_packed: x1.00 0.037 ms
+  sparse rope_k_rotary                RotaryEmbeddingIndexed   per-segment   p1f_w8192_2x2: x4.00 0.032 ms  p0a_w8192_packed: x4.00 0.032 ms
+  sparse kv_write                     UpdatePaddedKvCache      per-segment   p1f_w8192_2x2: x4.00 0.025 ms  p0a_w8192_packed: x4.00 0.025 ms
+  sparse k_norm                       LayerNorm                per-segment   p1f_w8192_2x2: x4.00 0.019 ms  p0a_w8192_packed: x4.00 0.019 ms
+  sparse kv_typecast                  Typecast                 per-segment   p1f_w8192_2x2: x4.00 0.019 ms  p0a_w8192_packed: x4.00 0.019 ms
+  sparse rope_k_slice                 Slice                    per-segment   p1f_w8192_2x2: x4.00 0.014 ms  p0a_w8192_packed: x4.00 0.014 ms
+  sparse index_k_write                UpdatePaddedKvCache      per-segment   p1f_w8192_2x2: x4.00 0.012 ms  p0a_w8192_packed: x4.00 0.013 ms
+  sparse rope_k_concat                Concat                   per-segment   p1f_w8192_2x2: x4.00 0.010 ms  p0a_w8192_packed: x4.00 0.009 ms
+  sparse index_k_typecast             Typecast                 per-segment   p1f_w8192_2x2: x4.00 0.009 ms  p0a_w8192_packed: x4.00 0.009 ms
+  sparse routing_setup_OffsetCumsum   OffsetCumsum             whole-tensor  p1f_w8192_2x2: x1.00 0.005 ms  p0a_w8192_packed: x1.00 0.005 ms

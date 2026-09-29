@@ -199,6 +199,62 @@ def runs_from_table(path):
     return out
 
 
+def per_request_section(rows, single):
+    """Packed runs with the same W and B but different slot counts (e.g. 1 slot x 2 segments vs 2 x 1): an op's
+    packed/single call ratio is ~B when it runs per 2048-token segment, ~slots when it runs per request (slot),
+    ~1 when it runs once on the whole forward."""
+    key = lambda x: (x["W"], x["layer_type"], x["role"], x["op"])
+    runs = {}
+    for x in rows:
+        if x["forward"] == "packed":
+            runs[x["run_id"]] = (x["W"], x["B"], x["slots"])
+    groups = defaultdict(list)
+    for rid, (W, B, sl) in runs.items():
+        groups[(W, B)].append((sl, rid))
+    out = []
+    for (W, B), rs in sorted(groups.items()):
+        if len({sl for sl, _ in rs}) < 2:
+            continue
+        rs.sort()
+        out += [
+            "",
+            f"Per-request vs per-segment, W={W} B={B} segments: " + ", ".join(f"{rid} ({sl} slots)" for sl, rid in rs),
+        ]
+        calls = defaultdict(dict)
+        ms = defaultdict(dict)
+        for x in rows:
+            if x["run_id"] in {r for _, r in rs}:
+                calls[key(x)][x["run_id"]] = x["calls_per_layer"]
+                ms[key(x)][x["run_id"]] = x["mean_ms_per_layer"]
+        for k in sorted(calls, key=lambda k: (k[1], -max(ms[k].values()))):
+            s = single.get(k, 0.0)
+            ratios = {rid: (calls[k].get(rid, 0.0) / s if s else None) for _, rid in rs}
+            if all(r is None for r in ratios.values()):
+                verdict = "packed-only"
+            else:
+                fits = []
+                for h in ("per-segment", "per-request", "whole-tensor"):
+                    good = True
+                    for sl, rid in rs:
+                        r, want = ratios[rid], (B if h == "per-segment" else sl if h == "per-request" else 1)
+                        good &= r is not None and abs(r - want) <= 0.25 * want
+                    if good:
+                        fits.append(h)
+                verdict = fits[0] if len(fits) == 1 else "/".join(fits) if fits else "other"
+            out.append(
+                f"  {k[1]:6} {k[2]:28} {k[3]:24} {verdict:13} "
+                + "  ".join(
+                    (
+                        f"{rid}: x{ratios[rid]:.2f} {ms[k].get(rid, 0.0):.3f} ms"
+                        if ratios[rid] is not None
+                        else f"{rid}: {calls[k].get(rid, 0.0):.0f} calls {ms[k].get(rid, 0.0):.3f} ms"
+                    )
+                    for _, rid in rs
+                )
+            )
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", default=str(RES / "p0a_runs.csv"), help="run table(s), comma separated")
@@ -223,6 +279,7 @@ def main():
     rows = []
     for rid, r in sorted(runs.items()):
         W, B = int(r["W"]), int(r["B"])
+        slots = len([x for x in r.get("segments", "").split(",") if x]) or 1
         csv_path = r["csv"]
         if not Path(csv_path).is_file():
             print(f"[misc] {rid}: {csv_path} missing, skipped")
@@ -241,6 +298,7 @@ def main():
                     W=W,
                     h=r["h"],
                     B=B,
+                    slots=slots,
                     input=r["input"],
                     forward="packed" if B > 1 else "single",
                     layer_type=lt,
@@ -290,7 +348,7 @@ def main():
             x["packed_over_single_calls"] = ";".join(f"{rid}:{r}" for rid, (_, r) in ts)
 
     cols = [
-        "run_id", "forward", "W", "h", "B", "input", "layer_type", "n_layers", "zone", "role", "group", "op",
+        "run_id", "forward", "W", "h", "B", "slots", "input", "layer_type", "n_layers", "zone", "role", "group", "op",
         "calls_per_layer", "worst_ms_per_layer", "mean_ms_per_layer", "share_of_misc_mean", "seg_tag",
         "packed_over_single_calls",
     ]  # fmt: skip
@@ -337,6 +395,7 @@ def main():
         seen[(lt, role, op)][rid] = f"{t} {ratio}".strip()
     for (lt, role, op), d in sorted(seen.items()):
         lines.append(f"  {lt:6} {role:28} {op:24} " + "  ".join(f"{rid}: {v}" for rid, v in sorted(d.items())))
+    lines += per_request_section(rows, single)
     Path(args.summary).write_text("\n".join(lines) + "\n")
     print(f"[misc] summary -> {args.summary}")
 
