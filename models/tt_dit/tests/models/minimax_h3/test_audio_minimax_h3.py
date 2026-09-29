@@ -506,6 +506,18 @@ MESH = [
         },
         id="mesh1x32",
     ),
+    # The QB2: four chips on a line. This is the only row that measures the t-sharded decoder as the
+    # small-mesh pipeline actually runs it, where `_PRESETS_BH[(1, 4)]` sets `audio_t_shard` and
+    # `_resolve_audio_t_shard` lands on factor 4 along the TP axis.
+    pytest.param(
+        (1, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
+        id="mesh1x4",
+    ),
 ]
 # (t_factor, mesh_axis) per mesh shape. The factor must equal the length of the axis it shards: factor=2
 # or 4 on an 8-wide axis dies in `_partition_t` ("height begin index aligned to tiles"), because the
@@ -513,7 +525,7 @@ MESH = [
 #
 # KNOWN_BROKEN must stay empty -- an entry silences the per-factor PSNR assert, the only guard against a
 # fast wrong answer. Short clips work via `Vocoder._upload_BCT`'s per-shard tile-floor.
-FACTORS_BY_MESH = {(4, 8): [(1, 1), (4, 0), (8, 1)], (1, 32): [(1, 1), (32, 1)]}
+FACTORS_BY_MESH = {(4, 8): [(1, 1), (4, 0), (8, 1)], (1, 32): [(1, 1), (32, 1)], (1, 4): [(1, 1), (4, 1)]}
 KNOWN_BROKEN: set[tuple[int, int]] = set()
 # 207 is the production short clip. 192 (T mod 32 == 0) puts the last real row on the final row of its
 # shard with no pad buffer before the next shard: the layout where a fully-padded shard's garbage tail
@@ -631,6 +643,16 @@ def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
     # Only sharded factors that pad exercise the tail path; one that pads nothing (e.g. 4 at 192 latents,
     # 48 rows/shard) decodes bit-identically to unsharded and would only add a cold compile.
     factors = [(f, a) for f, a in factors if f == 1 or _shards_pad(num_latent_frames, f)]
+    # On a mesh whose only sharded factor divides this T exactly, that filter leaves factor 1 alone
+    # and there is nothing T-parallel left to measure. 4x8 never hits this (4 and 8 cannot both
+    # divide evenly), but 1x4 at 192 latents does: 48 rows a shard, no pad, no tail path. Skip it
+    # here rather than letting the "no parallel factor ran at all" assert below read it as the
+    # T-parallel path being unavailable, which is a different and much worse finding.
+    if not [f for f, _ in factors if f != 1]:
+        pytest.skip(
+            f"no padding sharded factor for T={num_latent_frames} on mesh {tuple(mesh_device.shape)}: "
+            f"every sharded factor divides it exactly, so only the unsharded baseline would run"
+        )
 
     baseline_out = None
     baseline_s = None
