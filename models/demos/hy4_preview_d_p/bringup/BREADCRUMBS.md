@@ -936,3 +936,30 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py
+
+## S.dense_full.10 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (steps 1-10 on device, the last one ffn_norm) starting from swap 09. It keeps the
+  gated pcc_swap_out (0.98) and every swap-09 check. Swap 08's out-vs-CPU-tail check now also sees the device
+  ffn_norm. It adds these checks:
+  - ffn_norm vs golden: rel <= 0.01, row norm ratio [0.99, 1.01], worst row <= 0.03 (upstream error included).
+  - ffn_norm vs the CPU ffn_norm on the same device ffn_x: rel <= 0.008, ratio [0.993, 1.007], row <= 0.015.
+  - the module again on device ffn_x x 30 (bf16) vs the CPU step: rel <= 0.006, ratio [0.993, 1.007], row <= 0.015.
+- CPU mutation study in /tmp/hy4_s10/study.py (outside the repo); the table is in the test docstring. 8 of 27
+  mutations pass the out gate. Each one fails an added check or an existing out check.
+
+Decisions
+- The limits vs the CPU step and on x 30 are the component test's. The limits vs golden are looser (swap style)
+  because the upstream device ffn_x error (rel 0.0046) is included.
+- RMS over half the columns and LayerNorm sit right at the existing out limits (0.0103 / 0.0102 on the CPU), so
+  the added checks are what catches them (ratio and worst row).
+
+Results
+- BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999984, out rel 0.00564. ffn_norm vs golden 0.0044 / [0.9976, 1.0017] /
+  0.0074; vs CPU 0.0018 / [0.9983, 1.0003] / 0.0024; x 30 0.0017 / [0.9992, 1.0010] / 0.0021. out vs CPU tail
+  0.0026 / row 0.0046 (swap 09: 0.0023).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_10_ffn_norm.py
