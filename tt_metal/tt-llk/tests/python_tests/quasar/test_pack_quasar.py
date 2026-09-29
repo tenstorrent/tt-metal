@@ -5,7 +5,6 @@ from typing import List
 
 import pytest
 import torch
-from helpers.chip_architecture import is_4row_arch
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -183,13 +182,6 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
-_MX_FORMATS = (
-    []
-    if is_4row_arch()
-    else [DataFormat.MxFp4, DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2]
-)
-
-
 PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -201,7 +193,10 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int16,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
-        *_MX_FORMATS,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
