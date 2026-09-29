@@ -1087,6 +1087,13 @@ tasks:
     - attn_norm
     - q_a
     layer: 1
+  frozen:
+    at: '2026-09-29T10:52:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py: 8d083526f1f5c83a4e4c056963451730eb588ab687616c1901f4cd1528f4e7a5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.indexer
   title: moe_full indexer (op) on device, layer 1
   step: implement
