@@ -62,6 +62,30 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
     return cos, sin
 
 
+# Widest per-device row the fused per-head QK-norm can keep resident in L1, in columns.
+# 1792 is 14 heads x 128 -- the TP=4 Galaxy shard this model has always run. At TP=1 all 56 heads
+# are on one chip, the row is 7168, and the op raises before its block-major head-major layout can
+# recover ("circular buffers ... grow to 1862724 B which is beyond max L1 size of 1572864 B").
+# A column budget rather than a head count, so it still holds if head_dim changes.
+_PER_HEAD_NORM_MAX_COLS = 1792
+
+
+def per_head_norm_groups(num_heads: int, head_dim: int) -> int:
+    """Fewest equal groups of heads that keep one fused per-head norm inside L1.
+
+    1 means "one call", which is what every mesh wide enough to shard the heads gets, so the
+    grouping is inert everywhere it is not needed.
+    """
+    cols = num_heads * head_dim
+    if cols <= _PER_HEAD_NORM_MAX_COLS:
+        return 1
+    for groups in range(2, num_heads + 1):
+        if num_heads % groups == 0 and cols // groups <= _PER_HEAD_NORM_MAX_COLS:
+            return groups
+    # Every head on its own: the narrowest the split can go.
+    return num_heads
+
+
 class MiniMaxH3Attention(Module):
     """Full self-attention over one packed sequence. MiniMax-H3 has no cross-attention.
 
@@ -181,6 +205,9 @@ class MiniMaxH3Attention(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
         )
+        # At TP=1 the whole 56-head row lands on one chip and the fused per-head norm overflows L1;
+        # splitting it into groups of heads is the same arithmetic on a narrower row.
+        self.qk_norm_head_groups = per_head_norm_groups(self.n_local_heads, head_dim)
         self.norm_q = DistributedRMSNorm(**qk_norm_kwargs)
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
@@ -541,6 +568,7 @@ class MiniMaxH3Attention(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=self.rope_trans_mat if rope_cos is not None else None,
+            head_groups=self.qk_norm_head_groups,
         )
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
