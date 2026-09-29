@@ -727,13 +727,24 @@ def _exact_allowance(op, input_format, output_format):
     return 0, "the output can represent every value this op produces from that input"
 
 
-@pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
+@pytest.mark.parametrize(
+    "op",
+    sorted(
+        set(EXACT_BY_CONSTRUCTION) | set(EXACT_ZERO_BY_CONSTRUCTION),
+        key=lambda op: op.name,
+    ),
+    ids=lambda op: op.name,
+)
 def test_an_exact_op_never_carries_a_wide_budget(op):
     """These are the canaries: a budget past the pack path means the number was fitted
-    to a failure."""
+    to a failure. For the exactly rounded ops "any drift is a regression" is the whole
+    claim, so each must also *have* a step budget somewhere: the provenance guard lets a
+    measured 0 be written as 1, and a dropped row would read as a passing op."""
+    seen = False
     for budget_op, in_fmt, fmt, contract in _live_step_budgets():
         if budget_op is not op:
             continue
+        seen = True
         allowance, why = _exact_allowance(op, in_fmt, fmt)
         assert contract.max_ulp <= allowance, (
             f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
@@ -741,6 +752,10 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
             f"{why}. The op is exact by construction; investigate the datapath or the "
             "golden rather than widening the budget."
         )
+    if op in EXACT_ZERO_BY_CONSTRUCTION:
+        assert (
+            seen
+        ), f"{op.name} resolves to no ULP contract at all; the row was dropped"
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
@@ -797,25 +812,6 @@ def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
     assert waived <= demoted, "stale waiver(s): " + ", ".join(
         sorted(f"{i.name}->{o.name} dest={d.name}" for _, i, o, d in waived - demoted)
     )
-
-
-@pytest.mark.parametrize("op", EXACT_ZERO_BY_CONSTRUCTION, ids=lambda op: op.name)
-def test_an_exactly_rounded_op_carries_a_zero_budget(op):
-    """ "Any drift is a regression" is the claim for these ops. The provenance guard lets
-    a measured 0 be written as 1, so only this test notices that 1."""
-    seen = False
-    for budget_op, in_fmt, fmt, contract in _live_step_budgets():
-        if budget_op is not op:
-            continue
-        seen = True
-        allowance, why = _exact_allowance(op, in_fmt, fmt)
-        assert contract.max_ulp <= allowance, (
-            f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
-            f"max_ulp={contract.max_ulp}, past the {allowance} it may have because "
-            f"{why}. This op is exactly rounded by construction; anything more is "
-            "the contract going away. Re-measure before widening it."
-        )
-    assert seen, f"{op.name} resolves to no ULP contract at all; the row was dropped"
 
 
 def test_no_budget_exceeds_its_formats_usable_ceiling():
