@@ -1,0 +1,37 @@
+{
+ "metrics": {
+  "add_coef_max_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 1.0
+  },
+  "add_coef_min_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 1.0
+  },
+  "add_rel_l2_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 2.645637708909021e-09
+  },
+  "add_worst_row_rel_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 8.388403749393092e-09
+  },
+  "pcc_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 0.99999643830317
+  },
+  "rel_l2_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 0.0026702871546149254
+  },
+  "row_norm_ratio_max_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 1.0042921304702759
+  },
+  "row_norm_ratio_min_attn_residual_L00": {
+   "t": "2026-09-29T07:45:55",
+   "value": 0.9958651065826416
+  }
+ },
+ "task": "C.dense_full.attn_residual"
+}
