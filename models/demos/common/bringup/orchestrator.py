@@ -14,7 +14,10 @@ Per task:
                                                            (reference passes, zero stub fails), then implement.
                                                            A swap test is frozen without the review (F49: it gates
                                                            every swapped step itself) unless agents.swap_review
-                                                           names its block type; a failed freeze starts the review
+                                                           names its block type; a failed freeze starts the review.
+                                                           A component test (CHECKS="auto", F56) likewise when
+                                                           agents.component_review leaves its block type out
+                                                           (default all: reviewed) and its mistake sweep passes
   failed attempts (DEFAULT_POLICY)                         implement / device fix: WIP commit, then ``ttnn-expert-debugger``
                                                            (TTNN only) with the WIP sha, logs and triage; other roles
                                                            (reference, plan, contract, test): STOPPED for a person
@@ -80,6 +83,8 @@ DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # numerics), so only roles whose code is TTNN device code escalate to it: implement, and fix after a device gate.
 # Everything else (reference, plan, contract, test, fix after a CPU gate) stops for a person with the logs.
 # The spec overrides per role: agents.policy.<role>: {attempts, escalate: debugger | stop, debugger_attempts}.
+# F56: "all" keeps the test-role review of component tests until the owner switches the default to "none"
+COMPONENT_REVIEW_DEFAULT = "all"
 DEFAULT_POLICY = {
     # defer_after_debugger: once the debugger is out of attempts, one last implement attempt may defer a component
     # step to op-gen (F46) instead of stopping.
@@ -618,6 +623,15 @@ class Orchestrator:
             return False
         return v in ("all", True) or block_type in (v if isinstance(v, list) else [v])
 
+    def component_review(self, block_type: str) -> bool:
+        """Spec ``agents.component_review``: all | none | [block types] (default all, COMPONENT_REVIEW_DEFAULT). F56: a
+        component test with the built-in checks is frozen without a test-role review when this leaves its block type
+        out, provided its mistake sweep (BRINGUP_IMPL=mutations) passes."""
+        v = self.spec.get("agents.component_review", COMPONENT_REVIEW_DEFAULT)
+        if v in (None, False, "none", []):
+            return False
+        return v in ("all", True) or block_type in (v if isinstance(v, list) else [v])
+
     def freeze_tests(self, task: dict) -> str | None:
         """Render, review (test role), freeze. None on success, else the reason to stop.
 
@@ -632,6 +646,19 @@ class Orchestrator:
         elif "step" in b:
             render_component_test(self.spec, b["block_type"], b["step"])
         previous = ""
+        if "step" in b and "swapped" not in b and not self.component_review(b["block_type"]):
+            try:
+                rec = freeze_task(self.spec, self.led, task["id"], mutations=True)
+                self.echo(
+                    f"  [{task['id']}] component test frozen without review (F56): reference={rec.get('reference')} "
+                    f"stub={rec.get('stub')} mutations={rec.get('mutations')}"
+                )
+                return None
+            except FreezeError as e:
+                previous = str(e)
+                self.echo(
+                    f"  [{task['id']}] freeze without review failed, starting the test role: {previous.splitlines()[0]}"
+                )
         if "swapped" in b and not self.swap_review(b["block_type"]):
             try:
                 rec = freeze_task(self.spec, self.led, task["id"])
