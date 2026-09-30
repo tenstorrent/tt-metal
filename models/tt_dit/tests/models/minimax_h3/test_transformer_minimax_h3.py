@@ -463,6 +463,46 @@ def _prepare_tt_inputs(
         # end-to-end clip would say so.
         pytest.param(15, 74, 448, (8, 8), (), "checkpoint", 50, "turbo", id="golden_shape_full_depth_turbo"),
         pytest.param(15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, "turbo", id="golden_shape_full_depth_turbo_bf8"),
+        # The same row with the adapter fused on the HOST in fp32, before construction-time
+        # quantization, instead of added into the already-quantized device weight. This is the only
+        # thing that separates "the merge ordering is a bug" from "a rank-128 delta is below
+        # bfloat8_b's noise floor": per layer the adapter moves a linear's output by 3.6e-5 to
+        # 1.5e-4 relative while bf8 moves it by 7.5e-3, so nothing about one layer can decide it --
+        # only fifty blocks of a coherent delta accumulating against incoherent rounding can.
+        pytest.param(
+            15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, "turbo_host", id="golden_shape_full_depth_turbo_bf8_host"
+        ),
+        # The same host fuse rounded back to the checkpoint's bf16, which is also exactly what the
+        # torch reference does to itself. Device and reference then hold the SAME fused weight, so
+        # whatever this row loses is bfloat8_b alone -- where the fp32 row also carries a delta the
+        # bf16 reference threw away, and cannot tell the two apart.
+        pytest.param(
+            15,
+            74,
+            448,
+            (8, 8),
+            (),
+            "checkpoint_bf8",
+            50,
+            "turbo_host_bf16",
+            id="golden_shape_full_depth_turbo_bf8_host_bf16",
+        ),
+        # The control for the fp32 row, and the only thing that tells its result apart from a
+        # mechanical fault: the identical fp32 state-dict path with the adapter scaled to ZERO. An
+        # fp32 copy of a bf16 weight quantizes to exactly the same bfloat8_b, so this row must
+        # reproduce the device-bind numbers. If it does not, the fp32 path is broken and the host
+        # fuse row measures the breakage rather than the adapter.
+        pytest.param(
+            15,
+            74,
+            448,
+            (8, 8),
+            (),
+            "checkpoint_bf8",
+            50,
+            "turbo_host_zero",
+            id="golden_shape_full_depth_turbo_bf8_host_zero",
+        ),
         pytest.param(
             512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", NUM_LAYERS, None, id="prod_768p_5s_fl2va"
         ),
@@ -574,7 +614,7 @@ def test_minimax_h3_transformer(
     )
 
     turbo_file = os.environ.get(TURBO_FILE_ENV)
-    if lora == "turbo" and not (turbo_file and os.path.exists(turbo_file)):
+    if lora is not None and not (turbo_file and os.path.exists(turbo_file)):
         pytest.skip(f"set {TURBO_FILE_ENV} to a lightx2v MiniMax-H3 Turbo safetensors file")
 
     checkpoint_state = None
@@ -604,8 +644,8 @@ def test_minimax_h3_transformer(
         checkpoint_state = None
     else:
         randomize_norm_weights(torch_model)
-    base_state = {k: v.clone() for k, v in torch_model.state_dict().items()} if lora == "turbo" else None
-    if lora == "turbo":
+    base_state = {k: v.clone() for k, v in torch_model.state_dict().items()} if lora is not None else None
+    if lora is not None:
         fused = _fuse_adapter_into_torch(torch_model, turbo_file)
         logger.info(f"fused {fused} adapter targets into the torch reference from {os.path.basename(turbo_file)}")
     torch_model.eval()
@@ -659,9 +699,17 @@ def test_minimax_h3_transformer(
         is_fsdp=is_fsdp,
         quant_config=quant_config,
     )
-    # With an adapter the TT model is loaded from the BASE checkpoint and gets the delta through the
+    # "turbo": the TT model is loaded from the BASE checkpoint and gets the delta through the
     # production loader, so it crosses every device-side transform instead of arriving pre-merged.
-    tt_model.load_torch_state_dict(base_state if lora == "turbo" else torch_model.state_dict())
+    # "turbo_host": the delta is fused into the state dict in fp32 BEFORE the model quantizes it, so
+    # the device-side transforms are bypassed and the quantizer sees W + delta. The reference is the
+    # same bf16 torch fuse either way, so the two rows are directly comparable.
+    if lora in ("turbo_host", "turbo_host_zero", "turbo_host_bf16"):
+        host_scale = 0.0 if lora == "turbo_host_zero" else 1.0
+        host_dtype = torch.bfloat16 if lora == "turbo_host_bf16" else torch.float32
+        host_fused = _host_fuse_state_dict(base_state, turbo_file, extra_scale=host_scale, dtype=host_dtype)
+        logger.info(f"host-fused {host_fused} adapter targets into the TT state dict as {host_dtype} at x{host_scale}")
+    tt_model.load_torch_state_dict(base_state if lora is not None else torch_model.state_dict())
     if lora == "turbo":
         handle = load_h3_adapter_into(tt_model, turbo_file, name=os.path.basename(turbo_file))
         assert handle is not None and len(handle) > 0, "the adapter bound zero targets"
@@ -699,17 +747,11 @@ def test_minimax_h3_transformer(
         raise video_failure
 
 
-def _fuse_adapter_into_torch(model, path: str, extra_scale: float = 1.0) -> int:
-    """Merge a LoRA safetensors file's ``alpha/rank * B@A`` into a torch model's own weights.
+def _adapter_pairs(path: str) -> tuple[dict[str, dict[str, torch.Tensor]], float]:
+    """``{base: {"A": ..., "B": ...}}`` plus the file-level alpha, for a LoRA safetensors file.
 
-    The reference half of an adapter-bound PCC row. The adapter's key bases ARE diffusers module
-    paths, so no mapping table is needed here -- and deliberately so: the device side has to permute
-    rope channels, interleave heads and pack ``[gate|up]`` before its ``B`` lands in the right rows,
-    and the whole point of comparing against a plain torch fuse is that none of those transforms
-    exist on this side to cancel a mistake on the other.
-
-    A and B are cast through bfloat16 because that is what ``register_lora`` uploads; comparing an
-    fp32 host fuse against a bf16 device one would charge the port for the adapter's own rounding.
+    Shared by the reference fuse and the host fuse so the two can never disagree about which key
+    targets which weight -- the whole point of comparing them is that only the merge differs.
     """
     with safe_open(path, framework="pt") as handle:
         metadata = handle.metadata() or {}
@@ -723,7 +765,47 @@ def _fuse_adapter_into_torch(model, path: str, extra_scale: float = 1.0) -> int:
         match = re.match(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$", key)
         assert match, f"unexpected adapter key {key}"
         pairs[match.group("base")][slots[match.group("slot")]] = tensor
+    return pairs, float(file_alpha)
 
+
+def _host_fuse_state_dict(
+    state: dict[str, torch.Tensor], path: str, extra_scale: float = 1.0, dtype: torch.dtype = torch.float32
+) -> int:
+    """Merge the adapter into a state dict in place, in FLOAT32, before anything quantizes it.
+
+    The fused weights are left as fp32 on purpose. The checkpoint is bf16, and rounding ``W + delta``
+    back to bf16 throws most of the delta away before the quantizer ever sees it: measured on
+    ``transformer_blocks.0.attn.to_out.0``, ``bf8(fp32(W+d))`` differs from ``bf8(W)`` in 10.4 % of
+    elements where ``bf8(bf16(W+d))`` differs in 0.1 %. A host fuse that rounds through the
+    checkpoint dtype is therefore barely less of a no-op than merging into the quantized weight,
+    which is the failure this row exists to distinguish itself from.
+    """
+    pairs, file_alpha = _adapter_pairs(path)
+    for base, ab in sorted(pairs.items()):
+        a, b = ab["A"], ab["B"]
+        key = f"{base}.weight"
+        weight = state.get(key)
+        assert weight is not None, f"adapter targets {key}, which this state dict does not have"
+        scale = extra_scale * float(file_alpha) / a.shape[0]
+        delta = (b.to(torch.bfloat16).to(torch.float32) @ a.to(torch.bfloat16).to(torch.float32)) * scale
+        assert delta.shape == weight.shape, f"{base}: delta {tuple(delta.shape)} vs weight {tuple(weight.shape)}"
+        state[key] = (weight.to(torch.float32) + delta).to(dtype)
+    return len(pairs)
+
+
+def _fuse_adapter_into_torch(model, path: str, extra_scale: float = 1.0) -> int:
+    """Merge a LoRA safetensors file's ``alpha/rank * B@A`` into a torch model's own weights.
+
+    The reference half of an adapter-bound PCC row. The adapter's key bases ARE diffusers module
+    paths, so no mapping table is needed here -- and deliberately so: the device side has to permute
+    rope channels, interleave heads and pack ``[gate|up]`` before its ``B`` lands in the right rows,
+    and the whole point of comparing against a plain torch fuse is that none of those transforms
+    exist on this side to cancel a mistake on the other.
+
+    A and B are cast through bfloat16 because that is what ``register_lora`` uploads; comparing an
+    fp32 host fuse against a bf16 device one would charge the port for the adapter's own rounding.
+    """
+    pairs, file_alpha = _adapter_pairs(path)
     params = dict(model.named_parameters())
     for base, ab in sorted(pairs.items()):
         a, b = ab["A"], ab["B"]

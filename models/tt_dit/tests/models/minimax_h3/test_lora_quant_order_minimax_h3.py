@@ -230,11 +230,14 @@ def test_quantize_then_merge_matches_merge_then_quantize(
         "row maximum, and a rank-128 adapter delta is 1.7e-4 (v1.2_768p at alpha/rank) to 3.3e-3 "
         "(v0.1 at the scale-1 fallback) of the weight -- below the step, so `ttnn.add` returns the "
         "weight unchanged. The briefed ordering `quantize(W + delta)` does carry the delta "
-        "(max|err| 1.6e-2 to 3.1e-2, RMSE/sigma 7.5e-3), which is what makes this a fixable "
-        "ordering bug rather than a precision limit. End-to-end consequence on a p150: the same "
-        "seeded 512x288x56 request returns a BIT-IDENTICAL clip with the adapter at strength 1.0, "
-        "at 0.0625, and with no adapter at all. strict=True so this flips to a failure the moment "
-        "the merge is fixed."
+        "(max|err| 1.6e-2 to 3.1e-2, RMSE/sigma 7.5e-3). End-to-end consequence on a p150 before "
+        "the fix: the same seeded 512x288x56 request returned a BIT-IDENTICAL clip with the "
+        "adapter at strength 1.0, at 0.0625, and with no adapter at all. RESOLVED NOT BY FIXING "
+        "THIS but by routing around it -- `fuse_h3_adapter_into_state_dict` merges on the host "
+        "before construction-time quantization whenever the DiT is quantized (see "
+        "test_a_host_fuse_reaches_the_quantized_weight), because the behaviour measured here is a "
+        "property of bfloat8_b and not something the merge can fix. It stays strict=True so that "
+        "if ttnn ever makes the in-place add carry a sub-step delta, this says so."
     ),
 )
 @H3_MESH_PARALLEL
@@ -292,3 +295,72 @@ def test_the_adapter_delta_survives_a_quantized_merge(
         f"{len(BLOCKS) * len(TARGETS)} targets ({', '.join(unchanged)}) -- the delta rounded away "
         "against the tile row's shared exponent, so the adapter does nothing on a quantized mesh"
     )
+
+
+def test_a_host_fuse_reaches_the_quantized_weight() -> None:
+    """The fix for the defect above: fusing before quantization puts the delta in the weight.
+
+    Host only -- ``ttnn.from_torch`` quantizes to ``bfloat8_b`` without a device, and the question
+    is about the tensor, not about a mesh.
+
+    Two things are asserted and they are different. That the fused state dict is exactly
+    ``(W + scale*B@A)`` in the checkpoint's dtype is arithmetic. That its bfloat8_b quantization
+    differs from the base weight's on a real fraction of elements is the part that matters: the
+    device merge satisfies the first and fails the second, which is precisely how it generated
+    base-model clips under an adapter's name.
+    """
+    turbo = os.environ.get(TURBO_FILE_ENV)
+    model_root = os.environ.get(MODEL_PATH_ENV)
+    if not turbo or not os.path.exists(turbo):
+        pytest.skip(f"set {TURBO_FILE_ENV} to a lightx2v MiniMax-H3 Turbo safetensors file")
+    if not model_root:
+        pytest.skip(f"set {MODEL_PATH_ENV} to a MiniMax-H3 diffusers snapshot")
+    from ....experimental.lora.h3_adapter_loader import fuse_h3_adapter_into_state_dict
+
+    directory = Path(model_root) / "transformer"
+    keys = [f"{tmpl.format(i=index)}.weight" for index in BLOCKS for tmpl, _ in TARGETS]
+    base = {key: _checkpoint_weight(directory, key) for key in keys}
+    # The fuse raises on a target it cannot place, so a partial state dict has to be the whole
+    # adapter's worth of targets or nothing. Give it every key it asks for, base weights only.
+    with safe_open(turbo, framework="pt") as handle:
+        wanted = sorted({k.rsplit(".lora_", 1)[0] + ".weight" for k in handle.keys() if ".lora_" in k})
+    state = {key: _checkpoint_weight(directory, key) for key in wanted}
+
+    scales = fuse_h3_adapter_into_state_dict(state, turbo, name=os.path.basename(turbo))
+    assert len(scales) == len(wanted), f"fused {len(scales)} targets against {len(wanted)} adapter targets"
+    assert set(scales.values()) == {0.0625}, f"unexpected effective scales {sorted(set(scales.values()))}"
+
+    def quantize(tensor: torch.Tensor) -> torch.Tensor:
+        device_tensor = ttnn.from_torch(
+            tensor.unsqueeze(0).unsqueeze(0).to(torch.float32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        return ttnn.to_torch(device_tensor).reshape(tensor.shape).to(torch.float32)
+
+    for key in keys:
+        adapter_base = key[: -len(".weight")]
+        a, b, scale = _adapter_pair(turbo, adapter_base)
+        expected = base[key].to(torch.float32)
+        expected = expected + (b.to(torch.bfloat16).to(torch.float32) @ a.to(torch.bfloat16).to(torch.float32)) * scale
+        fused = state[key]
+        assert fused.dtype == base[key].dtype, (
+            f"{key}: the fuse returned {fused.dtype} where the checkpoint is {base[key].dtype}. Keeping fp32 models a "
+            "DIFFERENT model than the adapter was distilled against -- measured at full depth, it costs audio PCC "
+            "0.982 -> 0.801 against a reference that fuses the way diffusers does."
+        )
+        torch.testing.assert_close(fused.to(torch.float32), expected.to(fused.dtype).to(torch.float32), rtol=0, atol=0)
+
+        # The delta has to reach the quantized weight AT ALL -- which the device merge does not, and
+        # is the entire defect. The bar is deliberately "more than nothing" and not a fraction:
+        # measured here, a bf16 host fuse moves 0.06 % of elements, an fp32 one 10.4 %, and the
+        # device merge 0 %. Fraction is the wrong yardstick because the 0.06 % is COHERENT -- the
+        # same rank-128 update in all fifty blocks -- and at full depth it is worth audio PCC
+        # 0.9739 -> 0.9817 against a reference carrying the same adapter, where the fp32 fuse's
+        # hundredfold larger fraction scores 0.801 by no longer matching how diffusers fuses. That
+        # end-to-end number is the real proof; this test only guards the necessary condition.
+        moved = (quantize(fused) != quantize(base[key])).to(torch.float32).mean().item()
+        assert moved > 0.0, (
+            f"{key}: quantizing the host-fused weight is bit-identical to quantizing the base weight, so the delta "
+            "did not survive the fuse and the adapter would do nothing on a quantized DiT -- which is exactly the "
+            "defect the device-side merge has"
+        )
+        logger.info(f"{key}: the host fuse moves {moved:.4%} of elements through bfloat8_b")

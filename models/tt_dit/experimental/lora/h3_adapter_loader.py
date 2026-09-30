@@ -160,6 +160,76 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
     return handle
 
 
+def fuse_h3_adapter_into_state_dict(
+    state: dict[str, torch.Tensor], path: str, *, scale: float = 1.0, name: str = ""
+) -> dict[str, float]:
+    """Merge an adapter into a MiniMax-H3 checkpoint state dict, on the host, before the model
+    quantizes it. Returns the effective scale applied per target.
+
+    Why this exists next to :func:`load_h3_adapter_into` rather than instead of it
+    ---------------------------------------------------------------------------
+    The device merge adds the delta into the weight the model already built. When that weight is
+    ``bfloat8_b`` -- which it is on every small mesh, where the DiT only fits quantized -- the merge
+    is a no-op: a tile row shares one exponent, so the quantization step is ~2^-7 of the row maximum
+    while a rank-128 Turbo delta is 1.7e-4 of the weight, and ``ttnn.add`` returns the row unchanged.
+    Measured at full depth on the real checkpoint and the real published adapter, against a torch
+    reference carrying the same adapter (video / audio PCC):
+
+        base weights, adapter merged on device   0.988175 / 0.974997
+        base weights, no adapter at all          0.985166 / 0.973932   <- the device merge's own row
+        this host fuse                           0.989664 / 0.981733
+
+    The middle row is the point: merging on device moved the model no further from an adapter-free
+    one than rounding noise does, so an end-to-end clip generated that way is a base-model clip.
+
+    The fused weight is written back in the checkpoint's own dtype, which for MiniMax-H3 is bf16.
+    That is not a rounding concession, it is the reference semantics -- ``diffusers`` fuses a LoRA
+    with ``weight.add_(delta)`` on a bf16 parameter, so a host fuse that kept fp32 would model a
+    DIFFERENT model than the one the adapter was distilled against. It matters more than it sounds:
+    the same row run with fp32 fused weights scores 0.801 audio against this 0.982, because the part
+    of the delta bf16 discards is large enough to change the audio branch at fifty blocks of depth.
+
+    Keys need no mapping table -- an adapter's target bases ARE the checkpoint's module paths -- and
+    no layout transform, because the fuse happens before ``_prepare_torch_state`` permutes rope
+    channels, interleaves heads or packs ``[gate|up]``, and all three are linear in the weight.
+    """
+    raw, metadata = _read(path)
+    pairs, alphas = _collect_pairs(raw)
+    if not pairs:
+        raise RuntimeError(f"no LoRA-style keys (lora_A/lora_B, lora_down/lora_up) in {path}")
+    file_alpha = _file_alpha(metadata)
+    if file_alpha is None and not alphas:
+        logger.warning(
+            f"{name or path} carries no alpha in its tensors or its metadata, so every target fuses at "
+            "scale 1.0 -- ~16x what a published alpha/rank would give. Check the file is a publish."
+        )
+
+    scales: dict[str, float] = {}
+    unmapped: list[str] = []
+    for base, ab in sorted(pairs.items()):
+        key = f"{base}.weight"
+        weight = state.get(key)
+        if weight is None:
+            unmapped.append(base)
+            continue
+        eff = scale * _scale_of(base, ab, alphas, file_alpha)
+        # A and B go through bfloat16 because that is the precision the adapter publishes and the
+        # device loader uploads; the product and the sum are fp32 so only the final store rounds.
+        delta = ab["B"].to(torch.bfloat16).to(torch.float32) @ ab["A"].to(torch.bfloat16).to(torch.float32)
+        if tuple(delta.shape) != tuple(weight.shape):
+            raise ValueError(f"{base}: delta {tuple(delta.shape)} does not fit weight {tuple(weight.shape)}")
+        state[key] = (weight.to(torch.float32) + delta * eff).to(weight.dtype)
+        scales[base] = eff
+
+    if unmapped:
+        sample = ", ".join(unmapped[:5])
+        more = "" if len(unmapped) <= 5 else f" (+{len(unmapped) - 5} more)"
+        raise RuntimeError(f"{len(unmapped)} adapter target(s) are not in this checkpoint: {sample}{more}")
+
+    logger.info(f"{name or path}: host-fused {len(scales)} LoRA targets at scale {sorted(set(scales.values()))}")
+    return scales
+
+
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     with safe_open(path, framework="pt", device="cpu") as handle:
         return {key: handle.get_tensor(key) for key in handle.keys()}, dict(handle.metadata() or {})

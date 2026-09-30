@@ -70,7 +70,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
-from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
+from ...experimental.lora.h3_adapter_loader import fuse_h3_adapter_into_state_dict, load_h3_adapter_into
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -540,11 +540,18 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
-        # Registered onto the built transformer, never fused into the checkpoint, so the weight
-        # cache stays adapter-independent and one cached copy serves every adapter and strength.
+        # Two merge paths, chosen by the DiT's weight dtype rather than by preference. On bf16
+        # weights the adapter is registered onto the built transformer, which keeps the weight cache
+        # adapter-independent so one cached copy serves every adapter and strength. On QUANTIZED
+        # weights that merge does nothing at all -- bfloat8_b's shared per-tile-row exponent steps in
+        # units far larger than a rank-128 delta, so `ttnn.add` returns the weight unchanged and the
+        # model generates base-model output under an adapter's name. There the adapter is fused into
+        # the checkpoint on the host instead, before the model quantizes it, and the adapter becomes
+        # part of the cache key because the cached tensors are then adapter-specific.
         self.lora_path = None if lora_path is None else Path(lora_path)
         self.lora_strength = float(lora_strength)
         self._lora_handle = None
+        self._lora_host_scales = None
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -1426,7 +1433,17 @@ class MiniMaxH3Pipeline:
             mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
         if self.dit_quant_profile is not None:
             mode = f"{mode}_{self.dit_quant_profile.cache_tag}"
+        # ... and a host-fused build holds the ADAPTER's weights, not the checkpoint's. Sharing a
+        # directory with the adapter-free build would serve one model's weights under the other's
+        # name in whichever order the two ran, so the file, its size and the strength are all keyed.
+        if self._lora_fuses_on_host():
+            stamp = f"{self.lora_path.name}:{self.lora_path.stat().st_size}:{self.lora_strength:g}"
+            mode = f"{mode}_lora-{hashlib.sha256(stamp.encode()).hexdigest()[:12]}"
         return mode
+
+    def _lora_fuses_on_host(self) -> bool:
+        """Does this adapter have to be merged before quantization to have any effect at all?"""
+        return self.lora_path is not None and self.dit_quant_profile is not None
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
@@ -1454,11 +1471,9 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
-            get_torch_state_dict=lambda: self._read_safetensors(
-                self.transformer_subfolder, drop=is_adaln_key if self.precomputed_adaln else None
-            ),
+            get_torch_state_dict=self._transformer_torch_state_dict,
         )
-        if self.lora_path is not None and self._lora_handle is None:
+        if self.lora_path is not None and not self._lora_fuses_on_host() and self._lora_handle is None:
             self._lora_handle = load_h3_adapter_into(
                 self._transformer,
                 str(self.lora_path),
@@ -1466,6 +1481,22 @@ class MiniMaxH3Pipeline:
                 name=self.lora_path.name,
             )
         return self._transformer
+
+    def _transformer_torch_state_dict(self) -> dict[str, torch.Tensor]:
+        """The DiT's checkpoint, with the adapter already in it when the weights will be quantized.
+
+        Called only on a cache miss, so the fuse costs nothing on a warm start -- the cached tensors
+        are the fused ones, which is why `_dit_weight_mode` keys the directory on the adapter.
+        """
+        state = self._read_safetensors(
+            self.transformer_subfolder, drop=is_adaln_key if self.precomputed_adaln else None
+        )
+        if self._lora_fuses_on_host():
+            self._host_log(f"fusing {self.lora_path.name} into the checkpoint before quantization")
+            self._lora_host_scales = fuse_h3_adapter_into_state_dict(
+                state, str(self.lora_path), scale=self.lora_strength, name=self.lora_path.name
+            )
+        return state
 
     # ------------------------------------------------------------------ precomputed AdaLN
 
