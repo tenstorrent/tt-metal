@@ -1792,6 +1792,9 @@ tasks:
   title: 'Attention: HiFi2 matmuls in the SDPA (owner pick)'
   step: perf
   role: perf
+  ab:
+    env:
+      XING_MLA_SDPA_FIDELITY: HiFi4
   deps:
   - X.2
   device: true
@@ -1823,6 +1826,9 @@ tasks:
   title: mHC on the fused bring-up ops (ttnn.bringup.mhc_post, then mhc_pre) (owner pick)
   step: perf
   role: perf
+  ab:
+    env:
+      XING_RESIDUAL_MIX: addcmul
   deps:
   - P.1
   device: true
@@ -1858,6 +1864,9 @@ tasks:
   title: mHC coefficients + collapse on the fused ttnn.bringup.mhc_pre (Xing mode) (owner pick)
   step: perf
   role: perf
+  ab:
+    env:
+      XING_HC_IMPL: composed
   deps:
   - P.2
   device: true
@@ -1892,6 +1901,9 @@ tasks:
   title: 'Routed experts: HiFi2 (owner pick)'
   step: perf
   role: perf
+  ab:
+    env:
+      XING_EXPERTS_FIDELITY: hifi4
   deps:
   - P.2b
   device: true
