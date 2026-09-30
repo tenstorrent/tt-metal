@@ -32,7 +32,7 @@ from safetensors import safe_open
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
@@ -1138,7 +1138,7 @@ def test_kimi_prefill_block_chunked_padded(
 # from the chunked_group_a_v1 indexer-kcache vLLM trace (PREFILL_TRACE_DIR). The PCC here (teacher-forced,
 # expected ~1.0) isolates the per-layer op accuracy; contrast it with the chained transformer's per-layer
 # PCC (which accumulates) to confirm the deep-layer sag is accumulation, not an indexer bug. The indexer_k
-# golden is captured only for the DSA full-indexer layers (glm_5_1: all; glm_5_2: 0-2 + every 4th).
+# golden is captured only for the DSA full-indexer layers (glm_5_3: 0-2 + every 4th).
 
 
 def run_chunked_block_glm_indexer(
@@ -1147,7 +1147,7 @@ def run_chunked_block_glm_indexer(
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     if not resolve_has_indexer(config):
-        pytest.skip("indexer-K teacher-forced test is DSA-only (glm_5_1 / glm_5_2)")
+        pytest.skip("indexer-K teacher-forced test is DSA-only (glm_5_3)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -1278,8 +1278,8 @@ def run_chunked_block_glm_indexer(
         logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
 
     p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
-    # Index cache is compact (GLM-5.2 reuse): this full layer wrote its full-indexer rank slot (== layer_idx
-    # for glm_5_1). KVPE is per-layer and the block owns one slot (0).
+    # Index cache is compact (GLM-5.3 reuse): this full layer wrote its full-indexer rank slot.
+    # KVPE is per-layer and the block owns one slot (0).
     dev_idx = unrotate_cache_layer(
         gather_cache_tp0(tt_index_kv_cache, mesh_device)[full_indexer_rank(config, layer_idx)], p, total_len
     )
@@ -1308,7 +1308,7 @@ def run_chunked_block_glm_indexer(
         pytest.param(
             (8, 4),
             # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-            torus_xy_device_params(fabric_payload_size=GLM52Config.FABRIC_PAYLOAD_SIZE, l1_small_size=768),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE, l1_small_size=768),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1316,7 +1316,7 @@ def run_chunked_block_glm_indexer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block_indexer_teacher_forced(

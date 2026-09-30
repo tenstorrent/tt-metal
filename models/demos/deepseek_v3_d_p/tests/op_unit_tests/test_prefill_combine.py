@@ -21,7 +21,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
@@ -375,7 +375,7 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
-    ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
+    ("glm_53", GLM53Config, ONLY_PROXY_QB_MESH),
     ("kimi_k2_7", KimiK27Config, ONLY_PROXY_QB_MESH),
     ("minimax_m27", MiniMaxM27Config, ONLY_PROXY_QB_MESH),
     ("dsv4_pro", DeepSeekV4ProConfig, ONLY_PROXY_QB_MESH),

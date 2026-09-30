@@ -4,14 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <filesystem>
 #include <algorithm>
 #include <memory>
 #include <mutex>
-#include <future>
 #include <set>
 #include <vector>
-#include <unordered_set>
 
 #include <tracy/Tracy.hpp>
 
@@ -36,7 +33,6 @@
 
 #include <umd/device/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
@@ -678,11 +674,6 @@ tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() con
 const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
-}
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {

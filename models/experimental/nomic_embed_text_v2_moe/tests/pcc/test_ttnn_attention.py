@@ -26,7 +26,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     DECORRELATED_PCC,
     DENSE_LAYER,
-    TOKEN_SHAPES,
+    DENSE_SHAPES,
     from_block_layout,
     hidden_states,
     keep_mask,
@@ -39,6 +39,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     rotary_tables,
     to_device,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -74,7 +75,7 @@ def interleaved_tables(device, config, seqlen, dtype=ttnn.bfloat16):
     )
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", DENSE_SHAPES)
 def test_attention_unmasked(device, config, reference, tt_attention, batch, seqlen):
     """Projection, rotary, bidirectional SDPA and the output projection, with no padding."""
     x = hidden_states(batch, seqlen, config.hidden_size)
@@ -87,7 +88,7 @@ def test_attention_unmasked(device, config, reference, tt_attention, batch, seql
     assert_with_pcc(ref, from_block_layout(out), MODULE_PCC)
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", DENSE_SHAPES)
 def test_attention_with_ragged_padding(device, config, reference, tt_attention, batch, seqlen):
     """The same module with 25% of each row padded, compared on the kept positions.
 
@@ -192,7 +193,7 @@ def test_the_module_overrides_the_causal_default(device, config, reference, tt_a
     causal, acausal = (
         ttnn.to_torch(
             ttnn.transformer.scaled_dot_product_attention(
-                *operands, is_causal=flag, compute_kernel_config=tt_config.compute_kernel_config
+                *operands, is_causal=flag, compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA)
             )
         ).float()
         for flag in (True, False)
