@@ -3,7 +3,6 @@
 
 
 import pytest
-from conftest import skip_for_blackhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -350,7 +349,6 @@ def _comp_dest_acc(formats):
     return DestAccumulation.No
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.UInt16], same=True),
@@ -370,7 +368,6 @@ def test_perf_eltwise_unary_sfpu_comp_uint16(
     ).run(perf_report)
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.UInt32], same=True),
