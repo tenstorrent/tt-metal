@@ -140,3 +140,35 @@
   rms), so 3 x pieces are required.
 - Tests added: `test_mhc_pre_precision_baseline.py::test_mhc_pre_fp32_stream_exact_projection` (2 shapes, post-logit
   rms < 1e-4). Probes 008–022 (FPU rounding characterization).
+
+## Refinement 3 — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast)
+- Date: 2026-09-30
+- What was done: built design regime R2 (W column broadcast). Rank r of the first group row reads its W slice from
+  DRAM once and multicasts it chunk by chunk (`W_CHUNK_TILES`, so compute's W split still pipelines) down its
+  physical column to rank r of every other group: `Mcast1D(PerColumn)` + `mcast_pipe` Sender/ReceiverPipe on the
+  reader's NoC0, Counter data-ready, no handshake (the `cb_weight` landing is write-once). The sender publishes
+  chunk j to its own compute before the mcast and has chunk j+1's DRAM read in flight during it. Receivers issue
+  their X block 0 read before the W receive (verifier note: overlap the mcast with the first X block). Path gate:
+  `W_BCAST` knob and `group_h == 1` and ≥ 2 full active group rows; every other shape keeps the R1 per-core W read.
+  Bias is still read per core.
+  - Reused: `cb_weight` and its chunked push contract, the compute kernel (unchanged), the combine, `_cb_table`.
+  - Added: reader W roles (DRAM / sender / receiver), `SEM_W_READY`, the Mcast1D wire (CT + RT) in the descriptor.
+- Perf (BH p150, device kernel ns):
+
+  | Shape (T×C) | bf16 X before | bf16 X after | fp32 X before | fp32 X after |
+  |---|---|---|---|---|
+  | 640×7168 | 272.0 µs | 191.6 µs | 567 µs | 504 µs |
+  | 640×1792 | 105.8 µs | 88.4 µs | 176 µs | 152 µs |
+  | 1280×4096 | 263.9 µs | 197.3 µs | 515 µs | 422 µs |
+  | 4096×1792 | 372.5 µs | 351.3 µs | 660 µs | 651 µs |
+
+  X0-before-W prefetch on vs off (bf16): 191.6 vs 193.9, 88.4 vs 91.2, 197.3 vs 214.5, 351.3 vs 355.7 µs (kept).
+  Now: the reader ends at ~122 µs on 640×7168 bf16 (≈ the 121 µs DRAM target); compute/writer run to ~190 µs. The
+  remaining gap is the per-block compute + combine tail after the last X block (2 blocks per core), i.e.
+  Refinement 5's knobs / perf lamp L3.
+- Accuracy achieved: unchanged math (bit-identical W landing). Unit suite 27/27 (acceptance, blocking, precision
+  baselines incl. bf16-X/fp32-W post/comb < 5e-4 rel-RMS and fp32 exact-projection gates).
+- Golden test progress: slice 26/26 (640×28672 ×4 dtype combos, 1000×7168, 1×28672 decode, 1280×7168, large
+  Sinkhorn logits, identical streams, both depth chains); full suite expected 206/206 as before.
+- Issues encountered: one Tracy capture-tool crash / timeout on a profile run (capture-side infra; the re-run was clean).
+- Tests added: none (the existing perf test covers the path; `--dev` run of 640×7168 clean under the watcher).

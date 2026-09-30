@@ -4,7 +4,9 @@
 // mhc_pre reader (NCRISC, NoC0).
 //
 // load_resident_constants (once):
-//   - W slice of this rank -> cb_weight, K order p = c*n + i  (W page i*Ct + c_start + c).
+//   - W slice of this rank -> cb_weight, K order p = c*n + i  (W page i*Ct + c_start + c). Filled per the
+//     W role (R1: own DRAM read; R2: column sender reads + multicasts, receivers get it by mcast and issue
+//     their X block 0 read first so it overlaps the W delivery).
 //   - bias -> cb_bias_coef in coefficient-major form (slot k, every lane = b[k]; zero elsewhere).
 //     The bias tile is staged through the not-yet-pushed first cb_x_resident slot (disjoint lifetime).
 //   - reduce scaler (SUM / REDUCE_ROW, 1.0).

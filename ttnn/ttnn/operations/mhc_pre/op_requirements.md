@@ -175,7 +175,7 @@ Lever: exact fp32 → bf16 splits of X in the fp32-stream path.
 
   I did neither here, because fp32 is not the perf focus and both are out of this heading's scope.
 
-### [ ] Refinement 3 — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast)
+### [x] Refinement 3 — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast)
 
 **Type**: perf
 
@@ -210,6 +210,17 @@ The dominant lever is the design's deferred regime **R2: W column broadcast.**
 - There is no regression across the config-spanning guard set: one representative per distinct kernel path ×
   dtype × weight_dtype × group shape (`group_h = 1` vs `> 1`, `group_cores = 1`), for example 640×1792 fp32,
   1×28672 decode, 32×128, and 1280×4096 bf16/bf16.
+
+**Outcome**: R2 built (reader-only change: `Mcast1D(PerColumn)`, Counter signal, write-once landing so no handshake;
+path-gated to `group_h == 1` with ≥ 2 full active group rows, else R1; knob `W_BCAST`). Receivers issue their X block 0
+read before the W receive. BH p150 device-kernel ns, bf16 X / fp32 W: 640×7168 **272.0 → 191.6 µs** (−30 %; 1.58× the
+121 µs target), 640×1792 105.8 → 88.4, 1280×4096 263.9 → 197.3, 4096×1792 372.5 → 351.3; fp32 X 567 → 504, 176 → 152,
+515 → 422, 660 → 651. X0-before-W measured on vs off: 191.6 vs 193.9 / 197.3 vs 214.5 (kept). Bottleneck now: the
+reader (NCRISC) ends at ~122 µs (≈ the DRAM target, X read at ~300 GB/s) while compute/writer run to ~190 µs — the
+wall is the post-arrival tail of the last block (projection, combine round trip, coefficients, y-mix, y store,
+Sinkhorn) with only 2 blocks per core. Next: overlap/shorten that tail (Refinement 5 knobs: block_token_tiles,
+L3 project(b+1) before coefficients(b), split y store), not done here because the verifier scoped this heading to
+the one T3 lever.
 
 ### [ ] Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
 

@@ -113,3 +113,12 @@ Totals: DRAM ≈ 73.4 + 36.7 + 0.4 + 18.4 + 0.16 ≈ **129 MB** (fp32). The DRAM
   depth-2 prefetch survives on every TARGET shape.
 - The `_l1_bytes` affine solve over-estimates the `min(bt, 4)` terms for bt > 4 (conservative).
 - Data-movement budget unchanged: the pieces, grids and running partial are on-chip only.
+
+## Refinement 3 (W column broadcast, regime R2)
+
+- No CB change: `cb_weight` is filled by the column mcast instead of a DRAM read on receivers (same address on
+  every core, write-once, pushed in the same `W_CHUNK_TILES` chunks). One more semaphore (`SEM_W_READY`).
+- Data-movement budget, when R2 applies (`group_h == 1`, ≥ 2 full group rows active — e.g. T=640, C=7168):
+  **W crosses DRAM once** (was G_t = 10×): fp32 W 36.7 MB → 3.67 MB. Added NoC: 3.67 MB × (G_t − 1) column
+  mcast deliveries, one-shot at kernel start. Totals at T=640, C=7168: fp32 X ≈ 96 MB (minimum), bf16 X ≈ 50 MB
+  (minimum). Shapes with `group_h > 1` (decode, small Mt) keep the per-group W read.
