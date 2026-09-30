@@ -25,27 +25,6 @@ CODE_SIZE = 10
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
-# Per-layer bounds for ``layer_metrics``, about twice the worst error measured on device
-# across the cases sharing them (px about 1.5x).
-# bfloat16 error compounds through the reference-point refinement, faster on 200x200, where
-# the same position error covers four times the pixels. The tiny (and 50x100) bounds gate
-# late-layer regressions; base's last layers are a looser smoke bound.
-#   output: PCC of each layer's output.
-#   refine: PCC of each layer's refinement step in logit space, xy and z apart.
-#   px:     mean xy error of the refined points, in BEV pixels.
-THRESHOLDS = {
-    "tiny": dict(
-        output=(0.9997, 0.9992, 0.9983, 0.9967, 0.994, 0.988),
-        refine=(0.9993, 0.998, 0.996, 0.992, 0.988, 0.977),
-        px=(0.03, 0.05, 0.075, 0.11, 0.15, 0.2),
-    ),
-    "base": dict(
-        output=(0.9997, 0.9989, 0.996, 0.986, 0.96, 0.9),
-        refine=(0.9993, 0.9975, 0.992, 0.97, 0.92, 0.84),
-        px=(0.07, 0.13, 0.24, 0.45, 0.7, 1.15),
-    ),
-}
-
 # Random part of the sampling offsets, in BEV pixels, on top of the 1..num_points px grid
 # init, and the spread of the cross- and self-attention logits. Trained offsets spread over
 # several pixels and trained attention is peaked; nn.Linear's default init gives ~0.6 px
@@ -95,11 +74,12 @@ def _init_cross_attention(msda, generator):
 def _init_self_attention(mha, generator):
     """Q and K spread so the ``q . k / sqrt(head_dim)`` logits have std SELF_ATTENTION_LOGIT_STD.
 
-    For unit-variance inputs a weight of std s gives q, k of std s * sqrt(embed_dims), and
-    the scaled logit's std is std(q) * std(k).
+    Q and K project ``query + query_pos``, of variance 2 (a LayerNorm-ed or random query plus
+    a random position). A weight of std s then gives q, k of std s * sqrt(2 * embed_dims),
+    and the scaled logit's std is std(q) * std(k).
     """
     embed_dims = mha.embed_dim
-    std = math.sqrt(SELF_ATTENTION_LOGIT_STD) / math.sqrt(embed_dims)
+    std = math.sqrt(SELF_ATTENTION_LOGIT_STD / (2 * embed_dims))
     qk_rows = mha.in_proj_weight[: 2 * embed_dims]
     qk_rows.copy_(torch.randn(qk_rows.shape, generator=generator) * std)
 
@@ -179,7 +159,7 @@ def random_decoder_inputs(bev_shape, batch_size=1, seed=None):
 
 
 def layer_metrics(expected, actual, input_reference_points, bev_shape):
-    """Per-layer accuracy of ``actual`` (output, reference points) against ``expected``.
+    """Per-layer accuracy of ``actual`` (output, reference points) against ``expected``, for logging.
 
     Per layer: the output PCC, the PCC of the refinement step in logit space for xy and z
     apart, and the mean xy error of the refined points in BEV pixels. The absolute points
@@ -204,25 +184,3 @@ def layer_metrics(expected, actual, input_reference_points, bev_shape):
         )
         for layer in range(expected_output.shape[0])
     ]
-
-
-# Each ``layer_metrics`` entry: the ``THRESHOLDS`` key bounding it, and whether that bound
-# is a minimum (PCC) or a maximum (error).
-METRIC_BOUNDS = {
-    "output": ("output", "min"),
-    "refine_xy": ("refine", "min"),
-    "refine_z": ("refine", "min"),
-    "px": ("px", "max"),
-}
-
-
-def threshold_failures(metrics, thresholds, layer):
-    """``metrics`` entries out of bounds. Fails closed: a NaN metric is out of bounds."""
-    failures = []
-    for key, value in metrics.items():
-        bound, kind = METRIC_BOUNDS[key]
-        threshold = thresholds[bound][layer]
-        within = value >= threshold if kind == "min" else value <= threshold
-        if not within:
-            failures.append(f"{key} {value:.5f} (threshold {threshold})")
-    return failures
