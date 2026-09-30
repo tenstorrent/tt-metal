@@ -1096,6 +1096,71 @@ fewer Euler steps or a cheaper step.
 **For Stage 3:** at 10 Euler steps, the first chunk's CFM costs 0.66 s eager, or 0.51 s traced. The three levers are
 the step count, the head merge and the trace. The step sweep measures the first.
 
+## The Euler step sweep: 10, 8, 6 and 5 steps (Stage 3, 2026-09-30)
+
+**How** (notes: `scripts/2026-09-30/steps_draws.py`, `ref_steps.py`, `phase_steps.sh`, `steps_summary.py`,
+`steps_distance.py`):
+- D43's protocol: five vocoder noise draws per utterance (seeds 1–5, the tokens fixed by LLM seed 1986), Stage 1 and
+  streaming, TT and the reference, scored by `scripts/eval_draws.py`.
+- The step count is the only change.
+  - The port reads it from `tt/flow/flow.py`'s `N_TIMESTEPS`, and upstream from the `n_timesteps` its flow passes to
+    `CausalConditionalCFM.forward`. The notes scripts set each one in their own process.
+  - The PR's code and its 10 steps (upstream's) are unchanged.
+  - The CFM's fixed starting noise and its cosine time schedule stay as they are.
+- **TT:** one process, both warm-ups, then each step count in turn, with nothing else on the host. Its 10-step run
+  reproduced D43's draws exactly: 60 of 60 wavs identical.
+- **The reference:** upstream's Stage 1 on its own tokens, and upstream's streaming of TT's tokens, as in D43.
+  - 10 steps is D43's draws.
+  - Every run at 8, 6 and 5 steps sampled D43's tokens for its side and mode: 60 of 60, TT and reference.
+
+**Quality:** corpus WER and SIM, mean (range) over the five draws:
+
+| Euler steps | WER, every group | SIM, TT Stage 1 | SIM, reference Stage 1 | SIM, TT streaming | SIM, reference streaming |
+|---|---|---|---|---|---|
+| 10 | 0.68 % | 95.88 (95.84–95.92) | 95.22 (95.21–95.24) | 95.83 (95.81–95.87) | 95.89 (95.87–95.91) |
+| 8 | 0.68 % | 95.95 (95.92–95.96) | 95.27 (95.26–95.28) | 95.91 (95.85–95.95) | 95.87 (95.85–95.89) |
+| 6 | 0.68 % | 95.77 (95.76–95.80) | 95.09 (95.07–95.10) | 95.87 (95.84–95.91) | 95.86 (95.85–95.88) |
+| 5 | 0.68 % | 95.91 (95.87–95.94) | 95.42 (95.41–95.43) | 95.98 (95.96–96.01) | 95.90 (95.88–95.92) |
+
+- **WER is 0.68 % in every draw of every group.** No utterance's WER moves from its 10-step value, on either side,
+  in either mode.
+- **SIM stays within 0.2 of its 10-step value on both sides,** moving both ways across the groups.
+
+**The audio does change.** Whole-utterance log-mel L1 (the stage A gate's measure), mean (max) over six utterances ×
+five draws, between wavs of the same tokens and the same draw:
+
+| Euler steps | TT Stage 1 vs its 10 steps | reference Stage 1 vs its 10 steps | TT streaming vs its 10 steps | reference streaming vs its 10 steps |
+|---|---|---|---|---|
+| 8 | 0.110 (0.143) | 0.101 (0.124) | 0.123 (0.169) | 0.114 (0.160) |
+| 6 | 0.162 (0.220) | 0.140 (0.167) | 0.176 (0.250) | 0.169 (0.245) |
+| 5 | 0.187 (0.240) | 0.167 (0.216) | 0.189 (0.222) | 0.181 (0.223) |
+
+- **For scale:**
+  - two noise draws of one side differ by 0.011–0.029;
+  - TT's streaming differs from upstream's by 0.100–0.110 at every step count. The two draw their noise
+    differently, so that includes a noise difference.
+- **Upstream moves as much as the port does.** So this is the model's own sensitivity to the step count, not the
+  port's.
+- **At 5 steps each side moves 1.6–1.9 times the port's distance from upstream at 10.** WER and SIM do not
+  register it, and neither measures naturalness. The wavs for listening are TT's and upstream's, seed 1, every step
+  count (notes: `scripts/2026-09-30/steps_listening.sh`).
+
+**Latency** (TT; 30 streamed utterances and 30 Stage 1 utterances per step count):
+
+| Euler steps | first audio | first audio, worst per draw | streaming RTF, worst per draw | streaming RTF, aggregate | first chunk's flow | of it, the CFM | Stage 1 RTF, worst per draw | Stage 1 RTF, aggregate |
+|---|---|---|---|---|---|---|---|---|
+| 10 | 1.363–1.544 s | 1.450–1.544 s | 1.092–1.142 | 0.851–0.864 | 0.82–0.94 s | 0.68–0.75 s | 0.645–0.663 | 0.486–0.488 |
+| 8 | 1.208–1.401 s | 1.321–1.401 s | 0.980–1.028 | 0.776–0.796 | 0.71–0.83 s | 0.54–0.61 s | 0.572–0.620 | 0.459–0.469 |
+| 6 | 1.067–1.243 s | 1.186–1.243 s | 0.878–0.915 | 0.703–0.715 | 0.57–0.65 s | 0.41–0.45 s | 0.533–0.567 | 0.438–0.445 |
+| 5 | 0.981–1.140 s | 1.107–1.140 s | 0.819–0.837 | 0.667–0.682 | 0.49–0.55 s | 0.34–0.36 s | 0.510–0.543 | 0.420–0.432 |
+
+- **Each Euler step costs the first chunk about 70 ms.** The CFM falls in proportion (0.68–0.75 s at 10 steps,
+  0.34–0.36 s at 5), and nothing else moves.
+- **At 5 steps, first audio is still 0.98–1.14 s and the worst streaming RTF 0.82–0.84.** The step count alone reaches
+  neither Stage 3 target (0.5 s, 0.4).
+- **What is left of the first chunk at 5 steps:** the LLM's 0.37–0.47 s, the rest of the flow (0.15–0.20 s), the
+  CFM's 0.35 s and HiFT's 0.12 s.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch

@@ -119,3 +119,8 @@ first audio 1,469 ms, worst RTF 1.110).
   - 64.7 ms eager, of which the host spends 62.6 ms enqueueing the estimator's 1,158 ops; 49.2 ms traced;
   - on the device, 47.8 ms of kernel time, 18.5 ms of it merging attention heads (a transpose and a reshape in each
     of the 56 transformer blocks).
+- **Fewer Euler steps** (`docs/VALIDATION.md`, "The Euler step sweep"): each step costs the first chunk about 70 ms.
+  - At 8 steps: first audio 1.21–1.40 s, worst streaming RTF 0.98–1.03.
+  - At 5 steps: first audio 0.98–1.14 s, worst streaming RTF 0.82–0.84, Stage 1 worst 0.51–0.54.
+  - WER and SIM do not move, but the audio does.
+  - The reported configuration keeps upstream's 10 steps.
