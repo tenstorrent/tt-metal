@@ -1813,12 +1813,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
-    // Bind by reference instead of copying: the 2704 B copy landed on base firmware's stack on Wormhole
-    // active ERISC (the router runs on the inherited sp) and overflowed it once the inter-mesh path
-    // started indexing the table at runtime, which stopped the compiler from scalarizing the copy away.
-    const tt::tt_fabric::routing_l1_info_t& routing_table = *routing_table_l1;
+    // Read the routing table in place
+    const auto& routing_table =
+        *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table.state_manager);
 
     // Keep hot routing coordinates in address-untaken scalars so they remain in registers across the
     // main loop; the RISC data cache is disabled for this build.
