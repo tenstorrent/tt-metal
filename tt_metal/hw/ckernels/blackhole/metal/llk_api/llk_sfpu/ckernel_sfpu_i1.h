@@ -11,6 +11,8 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
+#include <limits>
+
 namespace ckernel::sfpu {
 
 // ======================================================================
@@ -22,7 +24,11 @@ namespace ckernel::sfpu {
 //              FP32: 7 numer + 8 denom coeffs in t (= n13/d14 in x) → <0.001 FP32 ULP analytical
 //   |x| > 10:  asymptotic expansion
 //                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
-//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 88.5].
+//              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 91.9].
+//              exp(|x|) is taken as exp(|x|/2) applied twice, with the 1/sqrt(|x|)
+//              factor between the two multiplies: i1 is finite up to |x| = 91.9022
+//              but exp(|x|) overflows fp32 at 88.7229, so a single exponential
+//              cannot cover i1's own finite range.
 //
 // Code shape (chosen to relieve SFPI LRA budget):
 //   1. Compute polynomial result unconditionally and store to DST.
@@ -32,7 +38,10 @@ namespace ckernel::sfpu {
 // register allocator schedule the two paths sequentially rather than
 // keeping the polynomial alive across the asymptotic block.
 //
-// Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow.
+// Inputs are clamped to [-91.9022, 91.9022], the largest |x| with a finite i1;
+// beyond it the result is stated as its analytic limit ±inf. (The clamp used to
+// sit at 88.5, which made it a SATURATING reduction: i1(1e10) and i1(3.3e38) both
+// returned the single constant i1(88.5) = 1.15e37, finite where i1 is infinite.)
 // In-domain accuracy is unchanged from the polynomial-only baseline.
 // OOD accuracy: ~10⁶ FP32 ULP (clamping) → <60 FP32 ULP (asymptotic with
 // accurate FP32 exp).
@@ -45,13 +54,18 @@ namespace ckernel::sfpu {
 // Note: this function must stay minimalist — SFPU LRA is limited.
 // Every operation here competes with the main loop.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
-    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
-    // overflow/underflow, so the safe wrappers' clamping/guards are dead
-    // and skipped.
+    // exp(|x|/2), applied TWICE with the 1/sqrt(|x|) factor between the two
+    // multiplies. i1 stays finite up to |x| = 91.9022 but exp(|x|) itself overflows
+    // fp32 at 88.7229, so a single exp(|x|) cannot reach the top of i1's finite
+    // range; exp(|x|/2) peaks at exp(45.95) = 8.3e19 and the reordered product
+    // (exp_half*rsqrt*P)*exp_half never leaves the normal range. Unsafe variants:
+    // |x|/2 in [5, 45.96] precludes overflow/underflow, so the safe wrappers'
+    // clamping/guards are dead and skipped.
+    const sfpi::vFloat half_abs = 0.5f * abs_x;
 #ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
+    const sfpi::vFloat exp_half = _sfpu_exp_fp32_accurate_unsafe_(half_abs);
 #else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
+    const sfpi::vFloat exp_half = _sfpu_exp_21f_bf16_unsafe_<true>(half_abs);
 #endif
 
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
@@ -79,19 +93,25 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -3.3467922914e-01f);
 
     // i1 is odd: copy sign of original x onto positive magnitude.
-    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
+    return sfpi::copysgn((exp_half * rsqrt_y * correction) * exp_half, x_signed);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
-    constexpr float I1_MAX_INPUT = 88.5f;
+    // |x| at which i1 reaches FLT_MAX, from x - 0.5*ln(2*pi*x) = ln(FLT_MAX):
+    // i1(91.9021) = 3.4028e38, i1(91.9022) > FLT_MAX. Clamping at the old 88.5 was a
+    // SATURATING range reduction -- every |x| > 88.5, including 1e10 and 3.3e38,
+    // collapsed onto the single constant i1(88.5) = 1.15e37, finite where i1 is
+    // infinite. Clamp at the true overflow point instead and state the tail as its
+    // analytic limit; the asymptotic's split exponential covers (88.5, 91.9022].
+    constexpr float I1_MAX_INPUT = 91.9022f;
     constexpr float I1_THRESHOLD = 10.0f;
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
+        // Clamp to [-91.9022, 91.9022] — the largest |x| with a finite i1.
         x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
         const sfpi::vFloat abs_x = sfpi::abs(x);
@@ -133,6 +153,11 @@ inline void calculate_i1() {
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
+        v_endif;
+
+        // |x| >= 91.9022: i1 exceeds FLT_MAX, so the analytic limit is +-inf. The
+        // clamp saturated abs_x here, which is exactly the condition to test.
+        v_if(abs_x >= I1_MAX_INPUT) { val = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), x); }
         v_endif;
 #ifndef INP_FLOAT32
         val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);

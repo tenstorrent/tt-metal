@@ -77,7 +77,13 @@ __attribute__((noinline)) void calculate_digamma_fresh_cpp()
             }
             v_endif;
         }
-        const sfpi::vFloat r  = fresh_recip_positive_blinn(x);
+        // The 6.3.18 tail is a correction in 1/x. For x beyond 2^63 every term of it
+        // is far below one fp32 ulp of ln(x), and 1/x itself is no longer a normal
+        // float -- the Blinn magic-constant seed is only defined while it is, and at
+        // x = 3.3e38 the integer subtraction underflows into the sign bit, giving
+        // r = -inf and psi(3.3e38) = +inf where the answer is ln(x) = 88.5.
+        // Bound the ARGUMENT of the correction; ln(x) still sees the true x.
+        const sfpi::vFloat r  = fresh_recip_positive_blinn(sfpi::min(x, 9.2233720e18f)); // 2^63
         const sfpi::vFloat r2 = r * r;
         sfpi::vFloat tail     = A3;
         tail                  = tail * r2 + A2;

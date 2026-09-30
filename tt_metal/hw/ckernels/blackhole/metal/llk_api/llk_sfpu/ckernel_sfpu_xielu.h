@@ -85,6 +85,15 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Set the new exponent
     result = sfpi::setexp(p, new_exp);
 
+    // setexp writes the 8-bit exponent FIELD and wraps mod 256 instead of saturating.
+    // The z clamp above bounds z, not new_exp: when it fires, r leaves the
+    // [-ln2/2, ln2/2] reduction range, so p < 1, p_exp < 127 and p_exp + k_int goes
+    // NEGATIVE -- e.g. x = -89 gives 124 + (-126) = -2, written as field 254, so a
+    // value that must underflow to 0 came back as 2.6e38. exp() of an argument this
+    // negative is below the smallest fp32 normal, so the correct result is exactly 0.
+    v_if (new_exp <= 0) { result = 0.0f; }
+    v_endif;
+
     return result;
 }
 

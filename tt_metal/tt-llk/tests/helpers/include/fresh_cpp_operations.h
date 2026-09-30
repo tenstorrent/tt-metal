@@ -7,6 +7,7 @@
 // state the math one row at a time: no fixed LREGs, raw instructions, replay slots,
 // SFPLOADMACRO templates, or hand-interleaved software schedule.
 #include <cstdint>
+#include <limits>
 
 // Storm-contract migrations: canonical per-op semantic bodies live in
 // fresh_cpp/<op>.h (see fresh_cpp/README.md); shared semantic helpers in
@@ -690,18 +691,20 @@ __attribute__((noinline)) void calculate_hardsigmoid_fresh_cpp()
 // and every helper constant is literal.
 inline sfpi::vFloat calculate_i1_asymptotic_fresh_cpp(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed)
 {
-    // exp(|x|): |x| in [10, 88.5] precludes over/underflow, so the unclamped
-    // recombination is exact here (the production kernel's _unsafe_ contract).
+    // exp(|x|/2), applied TWICE with the 1/sqrt(|x|) factor between the two
+    // multiplies: i1 stays finite to |x| = 91.9022 but exp(|x|) overflows fp32 at
+    // 88.7229, so one exp(|x|) cannot reach the top of i1's finite range.
+    // |x|/2 in [5, 45.96] precludes over/underflow for the recombination below.
     constexpr float ONE_LN2    = 1.4426950216293334961f;
     constexpr float C0         = 1.0017248f;
     constexpr float C1         = 7.839635491371155e-08f;
     constexpr float C2         = 4.791750143340323e-15f;
-    const sfpi::vFloat xlog2   = abs_x * ONE_LN2 + 127.0f;
+    const sfpi::vFloat xlog2   = (0.5f * abs_x) * ONE_LN2 + 127.0f;
     const sfpi::vInt zi        = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
     const sfpi::vFloat z       = sfpi::as<sfpi::vFloat>(zi);
     sfpi::vFloat frac          = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
     frac                       = (C2 * frac + C1) * frac + C0;
-    const sfpi::vFloat exp_abs = sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
+    const sfpi::vFloat exp_half = sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
 
     // 1/sqrt(|x|): the same SQRT_23 seed/coefficients as the fresh sqrt body.
     sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1));
@@ -720,7 +723,7 @@ inline sfpi::vFloat calculate_i1_asymptotic_fresh_cpp(const sfpi::vFloat abs_x, 
     correction              = correction * inv_abs_x + -1.4960495444e-01f;
     correction              = correction * inv_abs_x + 3.9894228967e-01f;
 
-    return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
+    return sfpi::copysgn((exp_half * rsqrt_y * correction) * exp_half, x_signed);
 }
 
 template <int ITERATIONS>
@@ -728,7 +731,13 @@ __attribute__((noinline)) void calculate_i1_fresh_cpp()
 {
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat x           = sfpi::symmetric_clamp(sfpi::dst_reg[0], 88.5f);
+        // 91.9022 is the largest |x| with a finite i1 (i1(91.9022) = FLT_MAX).
+        // Clamping at 88.5 was a SATURATING reduction: every |x| above it, 1e10 and
+        // 3.3e38 included, collapsed onto the single constant i1(88.5) = 1.15e37,
+        // finite where i1 is infinite. Clamp at the overflow point and state the
+        // tail as its analytic limit below.
+        constexpr float I1_MAX_INPUT = 91.9022f;
+        sfpi::vFloat x           = sfpi::symmetric_clamp(sfpi::dst_reg[0], I1_MAX_INPUT);
         const sfpi::vFloat abs_x = sfpi::abs(x);
 
         // Rational path (valid for |x| <= 10), production constants per arm.
@@ -767,6 +776,13 @@ __attribute__((noinline)) void calculate_i1_fresh_cpp()
         v_if (abs_x > 10.0f)
         {
             val = calculate_i1_asymptotic_fresh_cpp(abs_x, x);
+        }
+        v_endif;
+
+        // |x| >= 91.9022: i1 exceeds FLT_MAX, so the value is +-inf by definition.
+        v_if (abs_x >= I1_MAX_INPUT)
+        {
+            val = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), x);
         }
         v_endif;
 #ifndef INP_FLOAT32

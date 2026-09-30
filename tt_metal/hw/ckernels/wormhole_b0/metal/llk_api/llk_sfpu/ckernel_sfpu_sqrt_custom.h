@@ -25,9 +25,15 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
         sfpi::vFloat neg_half_val = val * -0.5f;
+        // Newton-Raphson y <- y*(1.5 - 0.5*val*y^2). The residual is evaluated as
+        // (approx * neg_half_val) * approx and NOT (approx * approx) * neg_half_val:
+        // approx^2 = 1/val underflows fp32 to zero once val exceeds ~2**64 (the SFPU
+        // flushes subnormals), which silently reduced each iteration to a bare *1.5
+        // and made sqrt(3.3e38) 2.16x too large. The reassociated product keeps both
+        // factors normal over the whole fp32 range and is otherwise identical.
 #pragma GCC unroll 2
         for (int i = 0; i < NEWTON_ITERATIONS; i++) {
-            approx = ((approx * approx) * neg_half_val + 1.5f) * approx;
+            approx = ((approx * neg_half_val) * approx + 1.5f) * approx;
         }
         out = approx * val;
     }
