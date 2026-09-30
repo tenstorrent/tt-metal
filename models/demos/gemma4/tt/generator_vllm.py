@@ -71,7 +71,18 @@ def _full_isl_prefill_chunk_size(max_seq_len: int) -> int:
 class _Gemma4VllmOptimizations:
     @staticmethod
     def get_tensor_dtype(decoder_id, tensor, prefetcher=False):
-        del decoder_id, tensor, prefetcher
+        del decoder_id, prefetcher
+        # GEMMA4_KV_BFP8: the SERVING pools allocate through
+        # allocate_vllm_kv_cache(_per_layer), which reads this override -- the
+        # env gate in Gemma4Model.__init__ only covers the metal/demo path, so
+        # without this branch every serving boot silently stayed bf16 while
+        # the metal needle gate ran bfp8 (caught by a DP=4 pool OOM whose
+        # failing buffer decoded to ~1024 B/token, 2026-09-30).
+        if os.environ.get("GEMMA4_KV_BFP8", "0") == "1":
+            from models.tt_transformers.tt.model_config import TensorGroup
+
+            if tensor == TensorGroup.KV_CACHE:
+                return ttnn.bfloat8_b
         return ttnn.bfloat16
 
 
