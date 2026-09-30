@@ -105,7 +105,7 @@ inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
-    // loop; as literals inside the loop they would be re-materialised on every row (G09-P4).
+    // loop; as literals inside the loop they would be re-materialised on every row.
     // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
     // Unassigned for every other op, so do not read them outside the XLOGY branch.
     sfpi::vFloat log_c;

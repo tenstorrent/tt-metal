@@ -13,6 +13,9 @@ namespace ckernel
 namespace sfpu
 {
 
+// Biased fp32 exponent of 1.0: setexp(x, FP32_EXP_BIAS) rescales x into [1, 2).
+constexpr std::uint32_t FP32_EXP_BIAS = 127;
+
 /**
  * @brief Constants of the ln(x) approximation used by _calculate_log_body_ / _init_log_.
  *
@@ -20,10 +23,11 @@ namespace sfpu
  * max |error| over [1, 2] = 4.4e-04. _init_log_ programs LN2, A and B into vConstFloatPrgm0-2;
  * C and D do not fit the three program registers and are passed to the body by the caller.
  *
- * Bind them to a vFloat *outside* the row loop: sfpi materialises a float literal with an
- * SFPLOADI pair at every use, so a literal inside the loop costs two instructions per row,
- * while a vFloat bound before the loop is loop-invariant and stays in a free LREG
- * (Blackhole SFPU review, G09-P4).
+ * Bind C and D to a vFloat *outside* the row loop. sfpi 7.83.0 materialises an fp32 literal
+ * that is not exact in 16 bits with an SFPLOADI pair at every use, so inside the loop it costs
+ * two instructions per row, while a vFloat bound before the loop is loop-invariant and stays in
+ * a free LREG. Only such literals are affected: 0.0f and 1.0f come from constant registers, and
+ * a bf16/fp16-exact literal is a single SFPLOADI.
  */
 struct LogPoly
 {
@@ -36,9 +40,13 @@ struct LogPoly
 
 /**
  * @brief Constants of the ln(x) approximation used by _calculate_log_body_no_init_, which owns
- * no program constant register: x * (x * (x * A - B) + C) - D, 3rd order polynomial determined
- * using rminimax over [1, 2]. Written with the subtractions of the original so that the emitted
- * SFPMADs are unchanged. See LogPoly for why callers bind these outside their row loop.
+ * no program constant register.
+ *
+ * x * (x * (x * A - B) + C) - D, 3rd order polynomial determined using rminimax over [1, 2].
+ * B and D are subtracted, not added, so the SFPMAD sequence stays fixed. LN2 is deliberately
+ * the coarse 0.692871 (about 4e-4 below ln 2), not LogPoly::LN2: lgamma, digamma and POW
+ * results are defined by it, so "correcting" it changes their output. See LogPoly for why
+ * callers bind these outside their row loop.
  */
 struct LogPolyNoInit
 {
@@ -52,15 +60,17 @@ struct LogPolyNoInit
 /**
  * @brief ln(in) from the cubic on the mantissa plus exponent * ln2, before the ln(0) = -inf fixup.
  *
- * Requires _init_log_ to have programmed vConstFloatPrgm0-2; @p c and @p d are LogPoly::C / D
- * bound by the caller outside its row loop.
+ * @param in: Input value.
+ * @param c: LogPoly::C, bound by the caller outside its row loop.
+ * @param d: LogPoly::D, bound by the caller outside its row loop.
+ * @note Call @ref _init_log_ before this function; it reads vConstFloatPrgm0-2.
  */
 sfpi_inline sfpi::vFloat _calculate_log_series_(const sfpi::vFloat in, const sfpi::vFloat c, const sfpi::vFloat d)
 {
     ////////////////////////////
     // "normalize to calculation range"
     ////////////////////////////
-    sfpi::vFloat x = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat x = setexp(in, FP32_EXP_BIAS); // rescale in to [1, 2)
 
     ////////////////////////////
     // Minimax cubic approximation of ln(x) on x in [1, 2), Horner form:
@@ -83,9 +93,16 @@ sfpi_inline sfpi::vFloat _calculate_log_series_(const sfpi::vFloat in, const sfp
 /**
  * @brief One row of ln(x) in place in Dest.
  *
- * @param c       LogPoly::C, bound by the caller outside its row loop.
- * @param d       LogPoly::D, bound by the caller outside its row loop.
- * @param dst_idx Dest tile index of the row.
+ * The zero test is bitwise (`== 0.0F` lowers to an SFPSETCC zero test), so -0.0 is not mapped
+ * to -inf: it takes the polynomial path and comes out finite (about -92.5). Of the two callers,
+ * XLOGY's `in1 < 0.0f` guard turns -0.0 into NaN before it gets here; _calculate_log_ feeds
+ * raw Dest rows, so there ln(-0.0) is finite. sfpi::is_zero would fix that for one more
+ * instruction on every row.
+ *
+ * @param c: LogPoly::C, bound by the caller outside its row loop.
+ * @param d: LogPoly::D, bound by the caller outside its row loop.
+ * @param dst_idx: Dest tile index of the row.
+ * @note Call @ref _init_log_ before this function.
  */
 sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d, const std::uint32_t dst_idx = 0)
 {
@@ -96,14 +113,10 @@ sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d
     sfpi::vFloat result = _calculate_log_series_(in, c, d);
 
     ////////////////////////////
-    // Base case when input is 0. ln(0) = -inf
-    // `== 0.0F` lowers to a bitwise SFPSETCC zero test, so -0.0 is not selected here (G09-C1).
-    // Measured on Blackhole: no caller can deliver one (XLOGY's `in1 < 0.0f` guard returns NaN
-    // for -0.0 first, lgamma reflects x < 0.5, digamma only logs x > 102), and sfpi::is_zero
-    // would cost one more instruction on every row for nothing observable.
+    // Base case when input is 0. ln(0) = -inf (bitwise test, -0.0 is not selected; see above)
     ////////////////////////////
     v_if (in == 0.0F)
-    { // Reload for register pressure
+    {
         result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
@@ -114,8 +127,14 @@ sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d
 /**
  * @brief One row of log_base(x) = ln(x) * base_scale in place in Dest.
  *
- * @param base_scale 1/ln(base), bound by the caller outside its row loop.
- * The ln(0) = -inf fixup is applied after the scaling.
+ * The ln(0) = -inf fixup is applied after the scaling, so log_base(0) is -inf for every
+ * base_scale. Same bitwise zero test as _calculate_log_body_: -0.0 is not mapped to -inf.
+ *
+ * @param c: LogPoly::C, bound by the caller outside its row loop.
+ * @param d: LogPoly::D, bound by the caller outside its row loop.
+ * @param base_scale: 1/ln(base), bound by the caller outside its row loop.
+ * @param dst_idx: Dest tile index of the row.
+ * @note Call @ref _init_log_ before this function.
  */
 sfpi_inline void _calculate_log_with_base_body_(
     const sfpi::vFloat c, const sfpi::vFloat d, const sfpi::vFloat base_scale, const std::uint32_t dst_idx = 0)
@@ -127,7 +146,7 @@ sfpi_inline void _calculate_log_with_base_body_(
     sfpi::vFloat result = _calculate_log_series_(in, c, d) * base_scale;
 
     ////////////////////////////
-    // Base case when input is 0. ln(0) = -inf
+    // Base case when input is 0. ln(0) = -inf (bitwise test, -0.0 is not selected)
     ////////////////////////////
     v_if (in == 0.0F)
     {
@@ -141,17 +160,26 @@ sfpi_inline void _calculate_log_with_base_body_(
 /**
  * @brief ln(base) without any program constant register.
  *
- * @param ln2 LogPolyNoInit::LN2, bound by the caller outside its row loop.
- * @param d   LogPolyNoInit::D (subtracted), bound by the caller outside its row loop.
+ * Only ln2 and D are taken from the caller: a loop that also runs sfpu_reciprocal_iter (lgamma)
+ * has two LREGs to spare, not five, so A, B and C are materialised at their use. The two are
+ * template-typed so that a caller with no LREG to spare at all (digamma, whose piecewise
+ * rational already holds all eight) passes the plain float constants and has them materialised
+ * at their use as well; a vFloat built at the call site would be live across the whole body.
  *
- * Only these two of the five constants are taken from the caller: a loop that also runs
- * sfpu_reciprocal_iter (lgamma) has two LREGs to spare, not five. The other three are
- * materialised at their use.
+ * The zero test is bitwise, so -0.0 is not mapped to -inf. No caller delivers one: lgamma
+ * reflects x < 0.5 to 1 - x first, and digamma only logs x > 102.
+ *
+ * @tparam Ln2T: sfpi::vFloat (held in an LREG) or float (materialised at use).
+ * @tparam DT: sfpi::vFloat (held in an LREG) or float (materialised at use).
+ * @param base: Input value.
+ * @param ln2: LogPolyNoInit::LN2.
+ * @param d: LogPolyNoInit::D (subtracted).
  */
-sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base, const sfpi::vFloat ln2, const sfpi::vFloat d)
+template <typename Ln2T, typename DT>
+sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base, const Ln2T ln2, const DT d)
 {
     // Normalize base to calculation range
-    sfpi::vFloat x = setexp(base, 127); // set exp to exp bias (put base in range of 1-2)
+    sfpi::vFloat x = setexp(base, FP32_EXP_BIAS); // rescale base to [1, 2)
 
     // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
     sfpi::vFloat series_result = x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - d;
@@ -163,7 +191,7 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base, const s
     // De-normalize to original range
     sfpi::vFloat log_result = expf * ln2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
 
-    // Base case when input is 0. ln(0) = -inf
+    // Base case when input is 0. ln(0) = -inf (bitwise test, -0.0 is not selected)
     v_if (base == 0.0f)
     {
         log_result = -std::numeric_limits<float>::infinity();
@@ -175,37 +203,29 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base, const s
 
 /**
  * @brief ln(base) with every constant materialised at its use, for a caller whose loop has no
- * LREG to spare (digamma's piecewise rational already holds all eight).
+ * LREG to spare.
  *
- * A twin of the form above rather than a wrapper around it: a vFloat built at the call site is
- * live across the whole body and does not fit, a literal at its use costs registers only there.
+ * @param base: Input value.
  */
 sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 {
-    // Normalize base to calculation range
-    sfpi::vFloat x = setexp(base, 127); // set exp to exp bias (put base in range of 1-2)
-
-    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
-    sfpi::vFloat series_result = x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
-
-    // Convert exponent to float
-    auto exp          = sfpi::convert<sfpi::vSMag>(sfpi::exexp(base));
-    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
-
-    // De-normalize to original range
-    sfpi::vFloat vConstLn2  = LogPolyNoInit::LN2;
-    sfpi::vFloat log_result = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
-
-    // Base case when input is 0. ln(0) = -inf
-    v_if (base == 0.0f)
-    {
-        log_result = -std::numeric_limits<float>::infinity();
-    }
-    v_endif;
-
-    return log_result;
+    return _calculate_log_body_no_init_(base, LogPolyNoInit::LN2, LogPolyNoInit::D);
 }
 
+/**
+ * @brief ln(x), or log_base(x) when HAS_BASE_SCALING, on iterations rows of Dest in place.
+ *
+ * LogPoly::C and D (and the base scale) are bound once here and held in LREGs across the row
+ * loop. -0.0 is not mapped to -inf: the body's zero test is bitwise, so ln(-0.0) comes out
+ * finite.
+ *
+ * @tparam APPROXIMATION_MODE: Unused; the same cubic serves both modes.
+ * @tparam HAS_BASE_SCALING: Multiply ln(x) by the base scale, values = <true/false>
+ * @tparam ITERATIONS: Unused; the row count is the runtime iterations argument.
+ * @param iterations: Number of Dest rows to process.
+ * @param log_base_scale_factor: 1/ln(base) as fp16a bits; read only when HAS_BASE_SCALING.
+ * @note Call @ref _init_log_ before this function.
+ */
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
 inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_factor)
 {
@@ -232,6 +252,11 @@ inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_f
     }
 }
 
+/**
+ * @brief Program vConstFloatPrgm0-2 with LogPoly::LN2, A and B for _calculate_log_body_.
+ *
+ * @tparam APPROXIMATION_MODE: Unused; the same constants serve both modes.
+ */
 template <bool APPROXIMATION_MODE>
 inline void _init_log_()
 {

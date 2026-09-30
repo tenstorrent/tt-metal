@@ -24,7 +24,7 @@ inline void calculate_lgamma_stirling() {
     constexpr float r1 = -0.0027777777f;  // -1/360
 
     // Two of the log body's constants are bound here and held in LREGs across the loop; as
-    // literals inside the loop they would be re-materialised on every row (G09-P4). Two is what
+    // literals inside the loop they would be re-materialised on every row. Two is what
     // this loop has room for next to the reciprocal: a third fails to allocate.
     const sfpi::vFloat log_ln2 = LogPolyNoInit::LN2;
     const sfpi::vFloat log_d = LogPolyNoInit::D;
