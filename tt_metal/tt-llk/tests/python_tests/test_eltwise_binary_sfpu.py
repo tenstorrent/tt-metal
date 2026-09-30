@@ -1982,6 +1982,16 @@ def _tt_poly_declared_softshrink_bw(x):
     return result.astype(np.float64) * 1.0
 
 
+def _tt_poly_declared_softsign_bw(x):
+    def _declared_derivative(x):
+        abs = np.abs
+        return np.broadcast_to(
+            np.asarray(1 / (1 + abs(x)) ** 2, dtype=np.float64), x.shape
+        )
+
+    return _declared_derivative(x)
+
+
 @pytest.mark.memory_layout("debug")
 @pytest.mark.parametrize(
     "op,mask_only,declared_reference,boundaries",
@@ -1996,6 +2006,7 @@ def _tt_poly_declared_softshrink_bw(x):
         ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
         ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
         ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
+        ("softsign_bw", False, _tt_poly_declared_softsign_bw, ()),
     ],
 )
 def test_tt_poly_generated_backward_bf16_llk(
