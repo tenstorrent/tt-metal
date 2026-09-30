@@ -11,6 +11,14 @@ mesh: every moment reports its parameter's placements and distribution shape, a 
 device-for-device into a fresh model, and (TP) an optimizer step cannot relabel a parameter through a mislabelled
 gradient.
 
+Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, ``AdamWFullPrecision``, ``SGD``)
+and ``MuonComposite`` have Python classes; ``MorehAdamW``, ``AdamWComposite`` and ``SGDComposite`` have none, but
+``ttml.optimizers.create_optimizer`` reaches them through the C++ ``OptimizerRegistry`` and hands back an
+``OptimizerBase`` whose ``step`` / ``get_state_dict`` dispatch virtually (nanobind falls back to the registered base
+class when the dynamic type has no binding). The fused kernels pin their outputs to the parameter's topology in the
+device op; the composites are built from generic ``ttnn`` binary ops, whose outputs take the UNION of their inputs'
+labels, so they restore the parameter's topology after every in-place ``set_value`` instead.
+
 TP: ``TPBlock`` mixes replicated params with weights sharded on dims 2 and 3 and a sharded bias.
 FSDP: ``ttml.fsdp.fully_shard`` installs ``Shard(dim)`` on the ``"fsdp"`` axis of every managed parameter -- by a
 host roundtrip in the eager path, by rewriting the lazy mapper before ``materialize_module`` allocates in the lazy
@@ -39,8 +47,26 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shard)
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
-# Every Python-bound optimizer with per-parameter state that accepts sharded params (Muon rejects them).
+# Fused-kernel optimizers with a Python class.
 OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD"]
+
+# Composite optimizers, reachable only through ``create_optimizer`` (registry keys in optimizer_registry.cpp). The
+# weight-decay default (0.01) is kept on the AdamW variants so the unpinned weight-decay intermediate in
+# ``AdamWComposite::step`` is exercised; the momentum variants take the SGD "first update" branch on step one and
+# the regular branch on step two.
+COMPOSITE_CONFIGS = {
+    "MorehAdamW": {"type": "MorehAdamW"},
+    "AdamWComposite": {"type": "AdamWComposite"},
+    "AdamWComposite+kahan": {"type": "AdamWComposite", "kahan_summation": True},
+    "AdamWComposite+amsgrad": {"type": "AdamWComposite", "amsgrad": True},
+    "SGDComposite": {"type": "SGDComposite", "momentum": 0.9, "dampening": 0.1},
+    "SGDComposite+nesterov": {"type": "SGDComposite", "momentum": 0.9, "nesterov": True},
+}
+COMPOSITES = list(COMPOSITE_CONFIGS)
+
+# Everything that accepts sharded parameters (Muon rejects them, so it is only in the replicated-parameter test).
+SHARDED_PARAM_OPTIMIZERS = OPTIMIZERS + COMPOSITES
+ALL_OPTIMIZERS = SHARDED_PARAM_OPTIMIZERS + ["MuonComposite"]
 
 
 # --- shared helpers -------------------------------------------------------------------------------------------
@@ -58,6 +84,11 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name == "SGD":
         cfg = ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.0, nesterov=False)
         return ttml.optimizers.SGD(params, cfg)
+    if name == "MuonComposite":
+        cfg = ttml.optimizers.MuonConfig.make(lr=1e-3, momentum=0.95, ns_steps=5)
+        return ttml.optimizers.MuonComposite(params, cfg)
+    if name in COMPOSITE_CONFIGS:
+        return ttml.optimizers.create_optimizer({"lr": 1e-3, **COMPOSITE_CONFIGS[name]}, params)
     raise ValueError(f"Unknown optimizer name: {name!r}")
 
 
@@ -206,7 +237,7 @@ def _trained_tp(name: str):
 
 
 class TestTP:
-    @pytest.mark.parametrize("opt_name", OPTIMIZERS)
+    @pytest.mark.parametrize("opt_name", SHARDED_PARAM_OPTIMIZERS)
     def test_moments_carry_parameter_topology(self, tp_mesh, opt_name):
         params, opt = _trained_tp(opt_name)
         expected = {name: _layout(t) for name, t in params.items()}
@@ -228,42 +259,82 @@ class TestTP:
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
         _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp("AdamW")[1:])
 
-    @pytest.mark.parametrize("opt_name", OPTIMIZERS)
-    def test_step_keeps_parameter_topology_despite_mislabelled_grad(self, tp_mesh, opt_name):
-        """The AdamW/SGD update kernels write the parameter in place and hand it back as the op output, and ttnn
-        derives an output's topology from the union of the op's inputs. A gradient carrying a wrong label -- a CCL
-        output that kept a stale ``Shard`` on the axis it reduced, say -- must not be able to relabel the parameter
-        or its moments, because the checkpointer gathers by that label. Every parameter here is replicated; every
-        gradient has the parameter's per-device shape but is labelled ``Shard(3)`` on the tp axis."""
-        model = LinearLayer(DIM, DIM)
-        params = model.parameters()
-        opt = _make_optimizer(opt_name, params)
-        before = {name: _layout(t) for name, t in params.items()}
-        assert all(all(p == ("replicate",) for p in placements) for placements, _ in before.values()), before
-        moments_before = {(path, name): _layout(m) for path, name, m in _state_tensors(opt.get_state_dict())}
+    @pytest.mark.parametrize("param_label", ["nd", "collapsed_1d"])
+    @pytest.mark.parametrize("opt_name", ALL_OPTIMIZERS)
+    def test_step_keeps_parameter_topology_despite_mislabelled_grad(self, tp_mesh, opt_name, param_label):
+        """An optimizer step writes the parameter back through the op output (fused kernels: in place; composites:
+        ``set_value`` of a ``ttnn.add``/``subtract`` result), and ttnn derives an output's topology from the union
+        of the op's inputs. A gradient carrying a wrong label -- a CCL output that kept a stale ``Shard`` on the
+        axis it reduced, say -- must not be able to relabel the parameter or its state, because the checkpointer
+        gathers by that label. Every parameter here is replicated; every gradient has the parameter's per-device
+        shape but is labelled ``Shard(3)`` on the tp axis with the N-D distribution shape ``[1, 2]``.
 
+        ``nd``: the parameter carries the N-D label ``[1, 2] / (Replicate, Replicate)``; the union would turn it
+        into the gradient's ``Shard(3)`` label. ``collapsed_1d``: the parameter carries the default mappers' 1-D
+        label ``[2] / (Replicate,)``; the union of labels of different rank drops to the framework default. Two
+        steps, re-setting the mislabelled gradient each time, so the SGD momentum "first update" branch and the
+        Muon step-0 buffer aliasing are followed by a regular step.
+
+        Negative control: before the composites restored the parameter's topology, ``MorehAdamW``,
+        ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` reported the parameter (and the
+        moments, which are computed from the gradient) as ``Shard(3)`` after the first step of the ``nd`` case,
+        and dropped the label in the ``collapsed_1d`` case; the fused kernels pass by their device op's
+        ``compute_output_topologies``."""
         tp_axis = tp_mesh.axis_index("tp")
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        mislabel = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, tp_axis)
-        for name, t in params.items():
-            local_shape = list(t.get_value(NATIVE).shape)
-            wide = local_shape[:-1] + [local_shape[-1] * tp_mesh.axis_size("tp")]  # sharded on dim 3 -> local_shape
-            grad = ttml.autograd.Tensor.from_numpy(
-                np.full(wide, 0.01, dtype=np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mislabel
+        if param_label == "nd":
+            replicate = ttnn.create_mesh_mapper(
+                device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in tp_mesh.shape])
             )
-            assert list(grad.get_value(NATIVE).shape) == local_shape
-            assert _layout(grad)[0][tp_axis] == (
-                "shard",
-                3,
-            ), f"precondition: gradient labelled Shard(3), got {_layout(grad)}"
-            t.set_grad(grad.get_value(NATIVE))
+        else:
+            replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+        rng = np.random.default_rng(0)
+        params = ttml.NamedParameters()
+        for name in ("weight", "other"):
+            t = ttml.autograd.Tensor.from_numpy(
+                rng.standard_normal((1, 1, DIM, DIM), dtype=np.float32),
+                ttnn.Layout.TILE,
+                ttnn.DataType.BFLOAT16,
+                replicate,
+            )
+            t.set_requires_grad(True)
+            params[name] = t
+        opt = _make_optimizer(opt_name, params)
 
-        opt.step()
+        before = {name: _layout(t) for name, t in params.items()}
+        expected_rank = 2 if param_label == "nd" else 1
+        for placements, dist_shape in before.values():
+            assert all(p == ("replicate",) for p in placements), before
+            assert len(dist_shape) == expected_rank, f"precondition: {param_label} label, got {before}"
+        moments_before = {(path, name): _layout(m) for path, name, m in _state_tensors(opt.get_state_dict())}
+        assert moments_before, "optimizer state dict holds no per-parameter tensors"
+        assert all(layout == before[name] for (_, name), layout in moments_before.items()), moments_before
 
-        after = {name: _layout(t) for name, t in params.items()}
-        assert after == before, f"an optimizer step relabelled parameters:\n  before {before}\n  after  {after}"
-        moments_after = {(path, name): _layout(m) for path, name, m in _state_tensors(opt.get_state_dict())}
-        assert moments_after == moments_before, "an optimizer step relabelled optimizer state"
+        mislabel = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, tp_axis)
+        for step in range(2):
+            for name, t in params.items():
+                local_shape = list(t.get_value(NATIVE).shape)
+                wide = local_shape[:-1] + [local_shape[-1] * tp_mesh.axis_size("tp")]  # sharded on dim 3 -> local
+                grad = ttml.autograd.Tensor.from_numpy(
+                    rng.standard_normal(wide, dtype=np.float32) * 0.01,
+                    ttnn.Layout.TILE,
+                    ttnn.DataType.BFLOAT16,
+                    mislabel,
+                )
+                assert list(grad.get_value(NATIVE).shape) == local_shape
+                grad_layout = _layout(grad)
+                assert grad_layout[0][tp_axis] == ("shard", 3), f"precondition: Shard(3) gradient, got {grad_layout}"
+                assert grad_layout != before[name], "precondition: gradient label must differ from the parameter's"
+                t.set_grad(grad.get_value(NATIVE))
+
+            opt.step()
+
+            after = {name: _layout(t) for name, t in params.items()}
+            assert after == before, f"step {step} relabelled parameters:\n  before {before}\n  after  {after}"
+            moments_after = {(path, name): _layout(m) for path, name, m in _state_tensors(opt.get_state_dict())}
+            assert moments_after == moments_before, (
+                f"step {step} relabelled optimizer state:\n  before {moments_before}\n  after  {moments_after}"
+            )
 
 
 # --- FSDP -----------------------------------------------------------------------------------------------------
@@ -329,7 +400,7 @@ def _assert_fsdp_layout(model: Model, mesh) -> dict:
 
 class TestFSDP:
     @pytest.mark.parametrize("init", ["eager", "lazy"])
-    @pytest.mark.parametrize("opt_name", OPTIMIZERS)
+    @pytest.mark.parametrize("opt_name", SHARDED_PARAM_OPTIMIZERS)
     def test_moments_carry_parameter_topology(self, fsdp_mesh, init, opt_name):
         model = _build_fsdp_model(init)
         params = model.parameters()

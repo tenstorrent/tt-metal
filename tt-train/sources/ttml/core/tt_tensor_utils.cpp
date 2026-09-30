@@ -81,6 +81,12 @@ ttnn::Tensor ones_like(const ttnn::Tensor& tensor) {
     return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
 }
 
+ttnn::Tensor with_tensor_topology(ttnn::Tensor value, const tt::tt_metal::TensorTopology& topology) {
+    // Tensor copies share their attributes, so this relabels every alias of `value` as well.
+    value.update_tensor_topology(topology);
+    return value;
+}
+
 ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
     return ttnn::empty(shape, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, memory_config);
