@@ -16,6 +16,7 @@
    "out_dtype": "bfloat8_b",
    "precomputed_adaln": true,
    "profile": "bf8_weights_bf8_out",
+   "profile_note": "this block records the STAGE 05 storage sweep, whose winner was bf8_weights_bf8_out. Stage 06 then changed the ARITHMETIC (fp32 destination accumulate off) on the same storage, which is a different profile NAME for the same cached tensorbins, so the served p150.dit_quant_profile is bf8_weights_bf8_out_nofp32acc and this block's `profile` is not the served one. Flagged by the third stage-review as an internal contradiction; it is a provenance-versus-served distinction and it is now labelled rather than silently divergent.",
    "qkv_dtype": "bfloat8_b",
    "why": "the only alternative measured (bf4_ff) is not faster and costs CLIP; see rejected[]"
   },
@@ -44,7 +45,8 @@
     "profile": "bf4_ff",
     "verdict": "rejected on both axes: 0.9 s is inside run-to-run noise, so bf4 on ff1/ff2 buys no time, and it costs 0.026 of CLIP -- past the 0.02 bar. It is a MEMORY lever (-5.38 GiB), worth keeping in the registry for a canvas that does not otherwise fit, not a speed lever."
    }
-  ]
+  ],
+  "served_profile_is_in_p150_not_here": true
  },
  "matrix": [
   {
@@ -592,7 +594,7 @@
    "width": 960
   }
  ],
- "optimized_by": "stage 06 (see artifacts/s06/results.json); the matrix[] rows are stage 05 measurements at the PRE-optimization tree and are left as recorded. p150's DEFAULT also changed working point here -- NFE 8 -> NFE 4 on a five-prompt paired tiebreak -- which is a separate thing from the optimization gain and is recorded as such in p150.choice_reason and p150.superseded_nfe8_point.",
+ "optimized_by": "stage 06 (see artifacts/s06/results.json); the matrix[] rows are stage 05 measurements at the PRE-optimization tree and are left as recorded. p150's DEFAULT also changed working point here -- NFE 8 -> NFE 4 on a five-prompt paired tiebreak -- which is a separate thing from the optimization gain and is recorded as such in p150.choice_reason and p150.superseded_nfe8_point. datatype_sweep[] is likewise a stage-05 record: its p150_policy.profile is the storage winner, not the served profile -- see datatype_sweep.p150_policy.profile_note.",
  "p150": {
   "audio_shift": 3.0,
   "choice_reason": "NFE 4, on the tiebreak stage 06 finally ran. Stage 05 chose NFE 8 on a +0.0582 CLIP margin at ONE prompt while recording that CLIP's own spread between adjacent points of one identical configuration is ~0.045. Re-run PAIRED over five prompts at this exact point and seed: NFE 8 wins 3 of 5, mean delta +0.0106 with a per-prompt stdev of 0.0255 (sem 0.0114, paired t 0.93 -- not distinguishable from zero), and the entire margin is the one prompt the original decision was made on: excluding it the mean delta is -0.0004. The latency price for that unestablished effect was 38.9%. Counter-reading, stated rather than hidden: stage 05's literal rule was 'keep the higher NFE if the margin is >= 0.01' and the 5-prompt mean margin (+0.0106) technically still clears it -- but that rule reads a mean without its spread, which is the flaw that produced the wrong answer the first time. Reverting is one line and every number is in the stage-06 record (nfe_tiebreak). The 80.6 s here is worst-of-five warm samples measured AT this profile; it is a working-point change and NOT part of stage 06's 147.7 -> 134.2 s optimization gain, which was measured at the NFE 8 point this default has now left.",
