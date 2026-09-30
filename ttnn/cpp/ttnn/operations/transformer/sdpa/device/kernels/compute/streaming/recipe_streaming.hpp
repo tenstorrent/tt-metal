@@ -314,6 +314,18 @@ void blocked_matmul_and_pack(
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
+#if defined(SDPA_KO_QKMM) || defined(SDPA_KO_PVMM)
+#ifdef SDPA_KO_QKMM
+    if constexpr (transpose) {
+        inner_dim = 0;
+    }
+#endif
+#ifdef SDPA_KO_PVMM
+    if constexpr (!transpose) {
+        inner_dim = 0;
+    }
+#endif
+#endif
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
