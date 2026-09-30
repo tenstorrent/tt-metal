@@ -85,3 +85,8 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
 - glm53: merge prepared in worktree tt-metal2-merge (b25381730df, with F49; glm53 F48-F52 renumbered F50-F54; 248
   selftests). Artifacts copied from bh-qbge-09 (35.3 GB bringup + 16.7 GB tt_cache, file counts and sizes match).
   Lands after run1 (O.1) finishes, then build and device checks.
+- 01:52 O.1 PASS a688c187046 (attempt 1: 8 fork calls, 0 uncovered, 0 failing, 6 forks). The orchestrator still started
+  attempt 2 because of the fork_calls.json path false positive (fixed as F55 in the merge branch). Owner: kill it and
+  mark O.1 passed. Killed the orchestrator and the attempt-2 agent between device runs (no files changed by it),
+  restored state.json from the O.1 gate commit (O.1 PASS), removed the PAUSE file, reset the board on the owner's word
+  (tt-smi -r; 4 p150b back). Run1 COMPLETE: 105/105 PASS, 0 deferred.
