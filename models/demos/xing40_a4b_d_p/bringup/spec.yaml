@@ -1,0 +1,139 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup). Written by the /bringup intake skill,
+# approved by a person (python -m models.demos.common.bringup approve intake --spec <this file>).
+# Xing4.0-29B-A4B (China Telecom, formerly TeleChat), text decoder only (MTP layer 40 skipped), all 40 layers, chunked
+# prefill on the 8x Blackhole p150b LoudBox, mesh 2x4, FABRIC_2D. mHC 4-stream residual (20-iteration Sinkhorn) +
+# dense MLA (DeepSeek-V3 style, YaRN) + DeepSeek MoE (64 experts top-4, 1 shared, sigmoid noaux_tc, x2.0).
+model: xing40_a4b_d_p
+display_name: Xing4.0-29B-A4B
+hf_id: XingChen-AGI/Xing4.0-29B-A4B
+model_dir: models/demos/xing40_a4b_d_p
+hooks: models.demos.xing40_a4b_d_p.bringup.hooks
+num_layers: 40
+prior: null
+layers: all
+box:
+  name: Blackhole LoudBox, 8x p150b, mesh 2x4 (FABRIC_2D)
+  chip: Blackhole p150b
+  mesh: [2, 4]                     # the box's default mesh descriptor (p150_x8: 2x4)
+  chip_dram_gb: 32
+  device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
+  test_timeout_s: 3600
+target: {seq: 56320, chunk: 5120, dtype: bf16}
+ladder:
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 50k prefix, device 50k->55k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+block_types:                       # every block: two mHC steps (4 streams, pre/post sigmoid gates, clamped comb logits,
+                                   #   20-iteration Sinkhorn) around attention and MLP; attention in every layer is dense
+                                   #   causal MLA (32 heads, q_lora 768, kv_lora 512, qk 128+64 interleaved RoPE, v 128,
+                                   #   YaRN factor 64: scale x mscale^2)
+  dense:                           # MLA + dense SwiGLU 9216
+    layers: "0-1"
+    representative: 0
+  moe:                             # MLA + MoE: 64 experts top-4 (SwiGLU 1024), 1 shared expert, sigmoid scores +
+    layers: "2-39"                 #   correction bias, normalized, x2.0
+    representative: 2
+state:
+  kind: mla
+  tensors: [kv_latent]             # kv_latent [seq, 576] = kv_a_layernorm(latent 512) | k_pe 64 (RoPE applied)
+  format: mla_latent
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text:                              # chat / reasoning model: the book is the model's reply with thinking off
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
+  template_kwargs: {enable_thinking: false}
+  min_top1: 0.4
+hf:
+  revision: baae3c3e813cad5f888f1f485cfff659c89076c5
+  parity_seq: 2048                 # no sliding window
+  trust_remote_code: true          # modeling_xing4_0.py ships with the checkpoint; builds on python_env's 5.12.1
+checkpoint:
+  expect:
+    "model.embed_tokens.weight": [131072, 3584]
+    "lm_head.weight": [131072, 3584]
+    "model.norm.weight": [3584]
+    "model.layers.*.attn_hc.hc_fn": [24, 14336]
+    "model.layers.*.attn_hc.hc_base": [24]
+    "model.layers.*.attn_hc.hc_scale": [3]
+    "model.layers.*.ffn_hc.hc_fn": [24, 14336]
+    "model.layers.*.self_attn.q_a_proj.weight": [768, 3584]
+    "model.layers.*.self_attn.q_b_proj.weight": [6144, 768]
+    "model.layers.*.self_attn.kv_a_proj_with_mqa.weight": [576, 3584]
+    "model.layers.*.self_attn.kv_b_proj.weight": [8192, 512]
+    "model.layers.*.self_attn.o_proj.weight": [3584, 4096]
+    "model.layers.0.mlp.gate_proj.weight": [9216, 3584]
+    "model.layers.1.mlp.down_proj.weight": [3584, 9216]
+    "model.layers.*.mlp.gate.weight": [64, 3584]
+    "model.layers.*.mlp.gate.e_score_correction_bias": [64]
+    "model.layers.*.mlp.experts.*.gate_proj.weight": [1024, 3584]
+    "model.layers.*.mlp.experts.*.down_proj.weight": [3584, 1024]
+    "model.layers.*.mlp.shared_experts.up_proj.weight": [1024, 3584]
+  count:
+    "model.layers.*.attn_hc.hc_fn": 40
+    "model.layers.*.mlp.gate.weight": 39   # 38 MoE layers + the MTP layer 40
+  config:
+    num_hidden_layers: 40
+    hidden_size: 3584
+    num_attention_heads: 32
+    num_key_value_heads: 32
+    q_lora_rank: 768
+    kv_lora_rank: 512
+    qk_nope_head_dim: 128
+    qk_rope_head_dim: 64
+    v_head_dim: 128
+    intermediate_size: 9216
+    moe_intermediate_size: 1024
+    n_routed_experts: 64
+    num_experts_per_tok: 4
+    n_shared_experts: 1
+    first_k_dense_replace: 2
+    hc_mult: 4
+    hc_sinkhorn_iters: 20
+    routed_scaling_factor: 2.0
+contract: {adapter: xing40_a4b_d_p}
+agents:
+  rules:                           # the owner's rules, shown in every brief
+    - "Always use 2D fabric: the mesh (2x4) opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure
+      CCLs, dispatch and combine for it; never open a device or build a test with FABRIC_1D, FABRIC_1D_RING or a torus."
+    - "Text decoder only: never build, load or test the MTP layer (model.layers.40.*: eh_proj, enorm, hnorm,
+      shared_head). There is no vision or audio part."
+    - "Closest repo models: glm53_flash_d_p (the same mHC: 4 streams, 20-iteration Sinkhorn, tt/residual.py mix as one
+      matmul; reference/glm_ref.py hc_weights; MLA pieces), hy4_preview_d_p (MLA latent cache + hyper-connection gates
+      + DeepSeek-style sigmoid noaux_tc MoE with a shared expert on Blackhole p150b; tt/ihc.py), deepseek_v3_d_p (tt/mla,
+      tt/mhc; dense DeepSeek-V3 MLA + YaRN), mimo_v2_6_d_p_2x2 (MoE dispatch / combine on a 2D mesh). Differences to
+      check: Xing's attention is dense causal MLA (no indexer, no sinks, no output gate); mHC comb logits are clamped to
+      [-30, 30] and row-max-subtracted before exp; the final hidden is the plain mean of the 4 streams, then norm; RoPE
+      is interleaved (config rope_interleave true) with YaRN (factor 64, softmax scale x mscale^2)."
+    - "Be aware of the bring-up ops in ttnn/ttnn/bringup (INDEX.md: dispatch, combine, offset_cumsum,
+      unified_routed_expert_ffn, sdpa, rms_norm_ttnn, indexer_score); use them as you see fit. Never edit an existing
+      TTNN op: fork it (skill bringup-fork-op) or extend an existing fork behind an option."
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /localdev/dnijemcevic/bringup/xing40_a4b_d_p/hf/modeling_xing4_0.py
+      - /localdev/dnijemcevic/bringup/xing40_a4b_d_p/hf/configuration_xing4_0.py
+      - /localdev/dnijemcevic/bringup/xing40_a4b_d_p/hf/config.json
+      - models/demos/glm53_flash_d_p/reference
+      - models/demos/hy4_preview_d_p/reference
+    plan:
+      - models/demos/glm53_flash_d_p/tt
+      - models/demos/glm53_flash_d_p/bringup/plan.yaml
+      - models/demos/hy4_preview_d_p/tt
+      - models/demos/hy4_preview_d_p/bringup/plan.yaml
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/mimo_v2_6_d_p_2x2/bringup/plan.yaml
+    implement:
+      - models/demos/glm53_flash_d_p/tt
+      - models/demos/hy4_preview_d_p/tt
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/mimo_v2_6_d_p_2x2/tt
+  policy: {}
+  swap_review: none
+paths:
+  hf: /localdev/dnijemcevic/bringup/xing40_a4b_d_p/hf
+intake:
+  smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
+dashboard: {styles: [standard, teletext]}   # owner: both
