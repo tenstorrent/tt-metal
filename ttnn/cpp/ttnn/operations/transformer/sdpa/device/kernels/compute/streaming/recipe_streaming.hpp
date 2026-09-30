@@ -729,7 +729,7 @@ void sub_exp_block_bcast_cols(
         }
 #endif
 #if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK)
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
         pack_reconfig_data_format(reduce_cb);
 #endif
         configure_single_tile_pack(reduce_cb);
@@ -755,7 +755,7 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 16)
         pack_reconfig_data_format(inout_cb);
 #endif
 #endif
@@ -1377,7 +1377,7 @@ static void sdpa_inner_loop_step(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_zero_sum, 0, VectorMode::None)));
         tile_regs_commit();
         tile_regs_wait();
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 32)
         pack_reconfig_data_format(cur.sum);
 #endif
         configure_single_tile_pack(cur.sum);
@@ -1385,7 +1385,7 @@ static void sdpa_inner_loop_step(
         for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
             pack_tile<true>(0, cur.sum, 2 * r + 1);
         }
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 32)
         pack_reconfig_data_format(cb_qkt_im);
 #endif
         tile_regs_release();
