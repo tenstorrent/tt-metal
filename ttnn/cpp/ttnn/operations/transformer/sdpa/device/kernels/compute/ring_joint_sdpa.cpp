@@ -632,6 +632,8 @@ void kernel_main() {
             if constexpr (seg_accum_enabled) {
                 // Fold this iteration's state (acc_state.prev) into the long-term state held in the restore CBs.
                 if (seg_active && acc_state.last_call_k_chunks > 0) {
+                    // Same as the K-split epilogue: a one-chunk segment leaves the packer at the QKT@V subblock width.
+                    configure_single_tile_pack(cb_max_A);
                     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
                     const AccumulatorHalf long_term = {cb_sum_in, cb_max_in, cb_prev_out};
                     if (seg_state_valid) {
