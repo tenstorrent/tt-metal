@@ -9,6 +9,7 @@
 #include "api/tensor/tensor_binding_token.h"
 #include "internal/tensor/array_wrapper.h"
 #include "internal/tensor/dspec.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "internal/tensor/helpers.h"
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
@@ -696,10 +697,14 @@ auto make_tensor_accessors(const std::tuple<Tokens...>& tokens) {
  * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
  */
 namespace tensor_accessor {
+// Whether a NoC transfer reads or writes the tensor. The Quasar address generator has a source and a destination
+// side; reads walk on the source side, writes on the destination side (see api/tensor/transfer_noc_addr.h).
+enum class TransferDir : uint8_t { Read = 0, Write = 1 };
+
 // Defined in api/tensor/transfer_noc_addr.h (included by api/tensor/noc_traits.h, the NoC transfer path). Declared
 // here so the wrapper below can erase it alongside get_noc_addr; a kernel that hands a wrapper to the NoC APIs has
 // included noc_traits.h, so the definition is in its translation unit.
-template <typename Accessor>
+template <TransferDir Dir, typename Accessor>
 inline uint64_t transfer_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, uint8_t noc);
 }  // namespace tensor_accessor
 
@@ -713,25 +718,38 @@ public:
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
         }),
-        transfer_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
-            return tensor_accessor::transfer_noc_addr(*static_cast<const Accessor*>(accessor), page_idx, offset, noc);
-        }) {}
+        transfer_noc_addr_fn([](const void* accessor, bool write, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+            const auto& a = *static_cast<const Accessor*>(accessor);
+            return write ? tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Write>(
+                               a, page_idx, offset, noc)
+                         : tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read>(
+                               a, page_idx, offset, noc);
+        }) {
+        // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
+        // can't name its tensor. Note it here, as both read and written: over-approximating this one binding is safe,
+        // where OPAQUE would make the whole kernel un-analyzable.
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Accessor>();
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Accessor>();
+    }
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
     }
 
-    // Address for a NoC transfer of the page -- only for the noc_traits_t path; see transfer_noc_addr.h.
+    // Address for a NoC transfer of the page -- only for the noc_traits_t path; see transfer_noc_addr.h. The direction
+    // is known where the wrapper is used, but the accessor's type is erased here, so it travels as an argument.
+    template <tensor_accessor::TransferDir Dir>
     uint64_t transfer_noc_addr(uint32_t page_idx, uint32_t offset, uint8_t noc) const {
-        return transfer_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
+        return transfer_noc_addr_fn(accessor_ptr, Dir == tensor_accessor::TransferDir::Write, page_idx, offset, noc);
     }
 
 private:
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+    using TransferNocAddrFn = uint64_t (*)(const void*, bool, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
-    GetNocAddrFn transfer_noc_addr_fn = nullptr;
+    TransferNocAddrFn transfer_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {

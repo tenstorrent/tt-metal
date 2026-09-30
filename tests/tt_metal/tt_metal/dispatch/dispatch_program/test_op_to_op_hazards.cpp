@@ -106,7 +106,11 @@ Program build_writer(
         .source = kWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"pattern", "stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
+        .hw_config =
+            exp::DataMovementHardwareConfig{
+                .config_1xx =
+                    exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -140,7 +144,11 @@ Program build_reader(
         .source = kReaderKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .hw_config =
+            exp::DataMovementHardwareConfig{
+                .config_1xx =
+                    exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}},
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -180,7 +188,11 @@ Program build_raw_writer(
         .source = kRawWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "pattern", "stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
+        .hw_config =
+            exp::DataMovementHardwareConfig{
+                .config_1xx =
+                    exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});

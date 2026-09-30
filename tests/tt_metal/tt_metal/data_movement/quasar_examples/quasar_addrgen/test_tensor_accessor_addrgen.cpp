@@ -33,6 +33,7 @@
 #include <numeric>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,6 +42,7 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
@@ -72,10 +74,12 @@ constexpr auto kFillKernel =
 // software TensorAccessor addresses.
 constexpr auto kDisableAddrgenDefine = "TT_TA_ADDRGEN_DISABLE";
 // Test instrumentation: each tensor-side kernel counts how its transfer addresses were produced and writes
-// {hw, sw_ineligible, sw_unsupported, seeks, transfers issued, skips} to its report_addr RTA. See TransferStats in
-// transfer_noc_addr.h.
+// {hw, sw_ineligible, sw_unsupported, seeks, transfers issued, skips, restores, write seeks, write restores} to its
+// report_addr RTA. See TransferStats in transfer_noc_addr.h.
 constexpr auto kAddrgenStatsDefine = "TT_TA_ADDRGEN_STATS";
-constexpr uint32_t kNumStatsWords = 6;
+constexpr uint32_t kNumStatsWords = 10;  // word 9: stack bytes the kernel never used (ta_multi/mixed/reader)
+constexpr uint32_t kStatsStride = 64;    // bytes reserved per kernel's report
+static_assert(kNumStatsWords * sizeof(uint32_t) <= kStatsStride);
 
 constexpr uint32_t kNumDfbEntries = 4;
 
@@ -390,7 +394,7 @@ std::shared_ptr<distributed::MeshBuffer> make_l1_region(distributed::MeshDevice&
     return distributed::MeshBuffer::create(replicated, local, &device);
 }
 
-// Checks one tensor-side kernel's {hw, sw_ineligible, sw_unsupported, seeks, transfers, skips} report.
+// Checks one tensor-side kernel's {hw, sw_ineligible, sw_unsupported, seeks, transfers, skips, restores} report.
 void expect_transfer_stats(
     const std::string& kernel,
     const std::vector<uint32_t>& stats,
@@ -407,12 +411,17 @@ void expect_transfer_stats(
     const uint32_t seeks = stats[3];
     const uint32_t transfers = stats[4];
     const uint32_t skips = stats[5];
+    const uint32_t restores = stats[6];
+    if (stats[9] != 0xDEADBEEFu) {
+        log_info(tt::LogTest, "{}: {} bytes of stack never used", kernel, stats[9]);
+    }
     const std::string counts = fmt::format(
-        "{}: hw {} ({} seeks, {} skips), sw_ineligible {}, sw_unsupported {} of {} transfers",
+        "{}: hw {} ({} seeks, {} skips, {} restores), sw_ineligible {}, sw_unsupported {} of {} transfers",
         kernel,
         hw,
         seeks,
         skips,
+        restores,
         ineligible,
         unsupported,
         transfers);
@@ -443,6 +452,39 @@ void expect_transfer_stats(
         EXPECT_EQ(ineligible, pages) << counts << " -- banks not walkable: expected the software fallback";
     } else {
         EXPECT_EQ(hw, pages) << counts << " -- expected every transfer address from the HW AddrGen";
+    }
+}
+
+// Op-to-op R/W inference: what a kernel's ELF says it reads and writes (Paul's .tt.BUF_RW notes, emitted by the NoC
+// APIs' endpoint address helpers). Slots are per-binding ids, so only the set structure is compared.
+ll_api::BufRwInfo query_buf_rw(
+    distributed::MeshWorkload& workload, distributed::MeshDevice& device, const std::string& kernel) {
+    auto& programs = workload.get_programs();
+    EXPECT_EQ(programs.size(), 1u);
+    auto k = programs.begin()->second.impl().get_kernel_by_spec_name(kernel);
+    EXPECT_NE(k, nullptr) << "no kernel " << kernel;
+    return k ? k->query_buf_rw(*device.get_devices()[0]) : ll_api::BufRwInfo{};
+}
+
+// Which bound tensors a kernel touches, as the notes must record them.
+enum class TensorRole { None, Reads, Writes };
+
+void expect_buf_rw(
+    const std::string& kernel, const ll_api::BufRwInfo& rw, TensorRole role, size_t num_tensors, IterMode mode) {
+    EXPECT_FALSE(rw.opaque) << kernel << ": only Noc APIs on bound tensors -- analyzable";
+    const std::set<uint32_t>& touched = role == TensorRole::Writes ? rw.writes : rw.reads;
+    const std::set<uint32_t>& other = role == TensorRole::Writes ? rw.reads : rw.writes;
+    if (role == TensorRole::None) {
+        EXPECT_TRUE(rw.reads.empty() && rw.writes.empty()) << kernel << ": touches no bound tensor";
+        return;
+    }
+    // Distinct slots per binding: this is what tells three tensors of one kernel apart.
+    EXPECT_EQ(touched.size(), num_tensors) << kernel << ": one record per bound tensor";
+    if (mode == IterMode::Wrapper) {
+        // The type-erasing wrapper notes its binding as both read and written (see AbstractTensorAccessorWrapper).
+        EXPECT_EQ(other, touched) << kernel << ": wrapper over-approximates its binding as read + written";
+    } else {
+        EXPECT_TRUE(other.empty()) << kernel << ": the DFB side is not a bound tensor";
     }
 }
 
@@ -522,8 +564,6 @@ void run_case(
     Program program = m2::MakeProgramFromSpec(device, spec);
 
     // Transfer-stats reports: producer's words at +0, consumer's at +kStatsStride.
-    constexpr uint32_t kStatsStride = 32;
-    static_assert(kNumStatsWords * sizeof(uint32_t) <= kStatsStride);
     auto stats_region = make_l1_region(device, 2 * kStatsStride);
     const uint32_t producer_report = static_cast<uint32_t>(stats_region->address());
     const uint32_t consumer_report = producer_report + kStatsStride;
@@ -575,7 +615,7 @@ void run_case(
         ASSERT_EQ(readback, expected) << "source staging not visible before launch";
     }
 
-    LaunchProgram(device, std::move(program));
+    auto workload = LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -595,6 +635,14 @@ void run_case(
     slow_dispatch::ReadFromL1(device, node, consumer_report, kNumStatsWords * sizeof(uint32_t), stats);
     expect_transfer_stats(
         "writer", stats, lc, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly, walkable);
+
+    expect_buf_rw(
+        "producer",
+        query_buf_rw(workload, device, "producer"),
+        producer_is_ta ? TensorRole::Reads : TensorRole::None,
+        1,
+        iter_mode);
+    expect_buf_rw("consumer", query_buf_rw(workload, device, "consumer"), TensorRole::Writes, 1, iter_mode);
 }
 
 // Layout rows. Names are gtest-safe (alphanumeric + underscore).
@@ -1312,6 +1360,403 @@ INSTANTIATE_TEST_SUITE_P(
                iter_mode_name(info.param.iter_mode) + (info.param.implicit_sync ? "" : "_Explicit");
     });
 
+// ============================================================================
+// Walk contention: three tensors per DM core, two address generators
+// ============================================================================
+//
+// ta_multi_reader_to_dfb reads page p of src0, src1, src2 round-robin; ta_multi_writer_from_dfb writes dst0..2 the same
+// way. Each core has 3 walks for 2 address generators, so after warm-up every transfer finds its walk parked. With
+// spill/restore (default) that is a register restore and the software seeks stay what one tensor alone would need;
+// built with TT_TA_ADDRGEN_NO_SPILL an evicted walk is dropped, so every transfer is a software seek.
+namespace contention {
+
+constexpr uint32_t kNumTensors = 3;
+constexpr auto kMultiReader =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_multi_reader_to_dfb.cpp";
+constexpr auto kMultiWriter =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_multi_writer_from_dfb.cpp";
+
+struct Param {
+    std::string layout;         // a layout_cases() name
+    uint32_t seeks_per_tensor;  // software seeks one tensor alone needs in page-id order
+    bool spill;
+};
+
+void PrintTo(const Param& p, std::ostream* os) { *os << p.layout << (p.spill ? "/Spill" : "/NoSpill"); }
+
+std::vector<Param> params() {
+    std::vector<Param> out;
+    for (const auto& [layout, seeks] : std::vector<std::pair<std::string, uint32_t>>{
+             {"InterleavedDram", 1}, {"WidthL1", 1}, {"HeightL1", 1}, {"NdBlockRoundRobinL1", 2}}) {
+        out.push_back({layout, seeks, true});
+        out.push_back({layout, seeks, false});
+    }
+    return out;
+}
+
+}  // namespace contention
+
+class TensorAccessorAddrgenContention : public QuasarMeshDeviceSingleCardFixture,
+                                        public ::testing::WithParamInterface<contention::Param> {};
+
+TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    const auto cases = layout_cases();
+    const auto it = std::find_if(cases.begin(), cases.end(), [&](const LayoutCase& c) { return c.name == p.layout; });
+    ASSERT_NE(it, cases.end()) << p.layout;
+    const LayoutCase lc = resolve_grid(device, *it);
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+
+    const m2::NodeCoord node{0, 0};
+    const uint32_t page_size = page_size_bytes(lc);
+    const uint32_t pages = num_pages(lc);
+    const uint32_t words_per_page = page_size / sizeof(uint32_t);
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+
+    std::vector<MeshTensor> ins, outs;
+    for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+        ins.push_back(MeshTensor::allocate_on_device(device, tensor_spec));
+        outs.push_back(MeshTensor::allocate_on_device(device, tensor_spec));
+    }
+
+    auto make = [&](const std::string& name,
+                    const char* source,
+                    const std::string& dfb_accessor,
+                    m2::DFBEndpointType endpoint,
+                    const std::string& tensor_prefix) {
+        m2::KernelSpec kernel{
+            .unique_id = m2::KernelSpecName{name},
+            .source = std::filesystem::path{source},
+            .num_threads = 1,
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "report_addr"}},
+            .hw_config = m2::DataMovementHardwareConfig{},
+        };
+        kernel.dfb_bindings = {
+            {.dfb_spec_name = m2::DFBSpecName{"staging"},
+             .accessor_name = dfb_accessor,
+             .endpoint_type = endpoint,
+             .access_pattern = m2::DFBAccessPattern::STRIDED}};
+        for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+            const std::string tensor = tensor_prefix + std::to_string(t);
+            m2::test_helpers::BindTensorParameterToKernel(kernel, tensor, tensor);
+        }
+        kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+        for (const auto& [define, value] : addrgen_bringup_defines(device)) {
+            kernel.compiler_options.defines.emplace(define, value);
+        }
+        if (!p.spill) {
+            kernel.compiler_options.defines.emplace("TT_TA_ADDRGEN_NO_SPILL", "1");
+        }
+        if (std::getenv("TT_TA_ADDRGEN_TRACE") != nullptr) {  // debug: per-transfer address trace (device print)
+            kernel.compiler_options.defines.emplace("TT_TA_ADDRGEN_TRACE", "1");
+        }
+        return kernel;
+    };
+    m2::KernelSpec producer = make("producer", contention::kMultiReader, "out", m2::DFBEndpointType::PRODUCER, "src");
+    m2::KernelSpec consumer = make("consumer", contention::kMultiWriter, "in", m2::DFBEndpointType::CONSUMER, "dst");
+
+    auto dfb = m2::test_helpers::MakeMinimalDFB("staging", page_size, kNumDfbEntries);
+    dfb.data_format_metadata = to_data_format(lc.dtype);
+    m2::ProgramSpec spec{
+        .name = "ta_addrgen_contention_" + lc.name,
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"producer", "consumer"})},
+    };
+    for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+        spec.tensor_parameters.push_back(
+            {.unique_id = m2::TensorParamName{"src" + std::to_string(t)}, .spec = tensor_spec});
+        spec.tensor_parameters.push_back(
+            {.unique_id = m2::TensorParamName{"dst" + std::to_string(t)}, .spec = tensor_spec});
+    }
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    auto stats_region = make_l1_region(device, 2 * kStatsStride);
+    const uint32_t producer_report = static_cast<uint32_t>(stats_region->address());
+    const uint32_t consumer_report = producer_report + kStatsStride;
+    std::vector<uint32_t> stats_init(2 * kStatsStride / sizeof(uint32_t), 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, producer_report, stats_init);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"producer"},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"num_pages", pages}, {"report_addr", producer_report}})},
+        {.kernel = m2::KernelSpecName{"consumer"},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"num_pages", pages}, {"report_addr", consumer_report}})},
+    };
+    for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+        params.tensor_args.emplace(m2::TensorParamName{"src" + std::to_string(t)}, std::cref(ins[t]));
+        params.tensor_args.emplace(m2::TensorParamName{"dst" + std::to_string(t)}, std::cref(outs[t]));
+    }
+    m2::SetProgramRunArgs(program, params);
+
+    std::vector<std::vector<uint32_t>> expected(contention::kNumTensors);
+    std::vector<uint32_t> zeros(pages * words_per_page, 0);
+    std::vector<uint32_t> readback;
+    for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+        expected[t].resize(pages * words_per_page);
+        for (uint32_t i = 0; i < expected[t].size(); ++i) {
+            expected[t][i] = ((t + 1) << 28) ^ (i * 2654435761u);  // distinct per tensor
+        }
+        slow_dispatch::WriteToBuffer(ins[t].mesh_buffer(), expected[t]);
+        slow_dispatch::WriteToBuffer(outs[t].mesh_buffer(), zeros);
+        slow_dispatch::ReadFromBuffer(ins[t].mesh_buffer(), readback);
+        ASSERT_EQ(readback, expected[t]) << "source " << t << " staging not visible before launch";
+    }
+
+    auto workload = LaunchProgram(device, std::move(program));
+
+    for (uint32_t t = 0; t < contention::kNumTensors; ++t) {
+        slow_dispatch::ReadFromBuffer(outs[t].mesh_buffer(), readback);
+        ASSERT_EQ(readback.size(), expected[t].size());
+        for (uint32_t i = 0; i < readback.size(); ++i) {
+            ASSERT_EQ(readback[i], expected[t][i]) << "tensor " << t << ": first mismatch at page "
+                                                   << i / words_per_page << " word " << i % words_per_page;
+        }
+    }
+
+    const uint32_t transfers = contention::kNumTensors * pages;
+    for (const auto& [kernel, report_addr] :
+         {std::pair<std::string, uint32_t>{"reader", producer_report},
+          std::pair<std::string, uint32_t>{"writer", consumer_report}}) {
+        std::vector<uint32_t> stats;
+        slow_dispatch::ReadFromL1(device, node, report_addr, kNumStatsWords * sizeof(uint32_t), stats);
+        expect_transfer_stats(
+            kernel,
+            stats,
+            lc,
+            transfers,
+            IterMode::PageIdLoop,
+            /*addrgen_allowed=*/true,
+            interleaved_banks_walkable(device, lc.buffer_type));
+        const uint32_t seeks = stats[3];
+        const uint32_t restores = stats[6];
+        if (p.spill) {
+            // Each walk is seeked as it would be alone; every transfer after the first three restores a parked walk.
+            EXPECT_EQ(seeks, contention::kNumTensors * p.seeks_per_tensor) << kernel;
+            EXPECT_EQ(restores, transfers - contention::kNumTensors) << kernel;
+        } else {
+            // Round-robin over 3 walks with 2 address generators evicts the walk needed next: every transfer seeks.
+            EXPECT_EQ(seeks, transfers) << kernel;
+            EXPECT_EQ(restores, 0u) << kernel;
+        }
+    }
+
+    // Op-to-op R/W inference: three bound tensors per kernel must be three distinct records.
+    expect_buf_rw(
+        "producer",
+        query_buf_rw(workload, device, "producer"),
+        TensorRole::Reads,
+        contention::kNumTensors,
+        IterMode::PageIdLoop);
+    expect_buf_rw(
+        "consumer",
+        query_buf_rw(workload, device, "consumer"),
+        TensorRole::Writes,
+        contention::kNumTensors,
+        IterMode::PageIdLoop);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Walks,
+    TensorAccessorAddrgenContention,
+    ::testing::ValuesIn(contention::params()),
+    [](const ::testing::TestParamInfo<contention::Param>& info) {
+        return info.param.layout + (info.param.spill ? "_Spill" : "_NoSpill");
+    });
+
+// ============================================================================
+// Reads and writes in one kernel: source sides vs destination sides
+// ============================================================================
+//
+// ta_mixed_reader_writer reads three tensors and writes one, page by page. Reads walk on the address generators'
+// source sides and writes on their destination sides, so:
+//   - the three read walks share two source slots: 3 seeks, then every read after the first three restores a parked
+//   walk;
+//   - the write walk keeps its destination slot: 1 seek and no restores, however the reads behave.
+// (With one shared pool of slots, the reads would evict the write walk too.)
+// Sources and destinations may have different layouts (even different memories: an L1-sharded source with a DRAM
+// destination walks two different ATT windows on the two sides of one address generator). The copied page size and
+// page count must match.
+struct MixedParam {
+    std::string src_layout;
+    std::string dst_layout;
+    uint32_t seeks_per_src;  // software seeks one source tensor needs alone
+    uint32_t seeks_per_dst;
+};
+
+void PrintTo(const MixedParam& p, std::ostream* os) { *os << p.src_layout << "->" << p.dst_layout; }
+
+class TensorAccessorAddrgenMixed : public QuasarMeshDeviceSingleCardFixture,
+                                   public ::testing::WithParamInterface<MixedParam> {};
+
+TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& param = GetParam();
+    auto& device = *devices_.at(0);
+    const auto cases = layout_cases();
+    auto find_layout = [&](const std::string& name) {
+        const auto it = std::find_if(cases.begin(), cases.end(), [&](const LayoutCase& c) { return c.name == name; });
+        EXPECT_NE(it, cases.end()) << name;
+        return resolve_grid(device, *it);
+    };
+    const LayoutCase lc = find_layout(param.src_layout);
+    const LayoutCase lc_dst = find_layout(param.dst_layout);
+    for (const LayoutCase* c : {&lc, &lc_dst}) {
+        if (const auto reason = skip_reason(device, *c); !reason.empty()) {
+            GTEST_SKIP() << c->name << ": " << reason;
+        }
+    }
+    ASSERT_EQ(page_size_bytes(lc), page_size_bytes(lc_dst)) << "copy needs equal page sizes";
+    ASSERT_EQ(num_pages(lc), num_pages(lc_dst)) << "copy needs equal page counts";
+    constexpr uint32_t kNumSrc = 3;
+    constexpr uint32_t kNumDst = 1;
+
+    const m2::NodeCoord node{0, 0};
+    const uint32_t page_size = page_size_bytes(lc);
+    const uint32_t pages = num_pages(lc);
+    const uint32_t words_per_page = page_size / sizeof(uint32_t);
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    const TensorSpec dst_tensor_spec = make_tensor_spec(lc_dst);
+
+    std::vector<MeshTensor> ins, outs;
+    for (uint32_t t = 0; t < kNumSrc; ++t) {
+        ins.push_back(MeshTensor::allocate_on_device(device, tensor_spec));
+    }
+    for (uint32_t t = 0; t < kNumDst; ++t) {
+        outs.push_back(MeshTensor::allocate_on_device(device, dst_tensor_spec));
+    }
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"mixed"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/"
+                                        "ta_mixed_reader_writer.cpp"},
+        .num_threads = 1,
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "scratch_addr", "report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    m2::ProgramSpec spec{
+        .name = "ta_addrgen_mixed_" + lc.name,
+        .kernels = {kernel},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"mixed"})},
+    };
+    auto add_tensor = [&](const std::string& name, const TensorSpec& tensor_spec_for) {
+        m2::test_helpers::BindTensorParameterToKernel(spec.kernels[0], name, name);
+        spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{name}, .spec = tensor_spec_for});
+    };
+    for (uint32_t t = 0; t < kNumSrc; ++t) {
+        add_tensor("src" + std::to_string(t), tensor_spec);
+    }
+    for (uint32_t t = 0; t < kNumDst; ++t) {
+        add_tensor("dst" + std::to_string(t), dst_tensor_spec);
+    }
+    spec.kernels[0].compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    for (const auto& [define, value] : addrgen_bringup_defines(device)) {
+        spec.kernels[0].compiler_options.defines.emplace(define, value);
+    }
+    if (std::getenv("TT_TA_ADDRGEN_TRACE") != nullptr) {  // debug: per-transfer address trace (device print)
+        spec.kernels[0].compiler_options.defines.emplace("TT_TA_ADDRGEN_TRACE", "1");
+    }
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    auto scratch = make_l1_region(device, kNumSrc * page_size);
+    auto stats_region = make_l1_region(device, kStatsStride);
+    std::vector<uint32_t> stats_init(kStatsStride / sizeof(uint32_t), 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, stats_region->address(), stats_init);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"mixed"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+             node,
+             {{"num_pages", pages},
+              {"scratch_addr", static_cast<uint32_t>(scratch->address())},
+              {"report_addr", static_cast<uint32_t>(stats_region->address())}})}};
+    for (uint32_t t = 0; t < kNumSrc; ++t) {
+        params.tensor_args.emplace(m2::TensorParamName{"src" + std::to_string(t)}, std::cref(ins[t]));
+    }
+    for (uint32_t t = 0; t < kNumDst; ++t) {
+        params.tensor_args.emplace(m2::TensorParamName{"dst" + std::to_string(t)}, std::cref(outs[t]));
+    }
+    m2::SetProgramRunArgs(program, params);
+
+    std::vector<std::vector<uint32_t>> expected(kNumSrc);
+    std::vector<uint32_t> zeros(pages * words_per_page, 0);
+    std::vector<uint32_t> readback;
+    for (uint32_t t = 0; t < kNumSrc; ++t) {
+        expected[t].resize(pages * words_per_page);
+        for (uint32_t i = 0; i < expected[t].size(); ++i) {
+            expected[t][i] = ((t + 1) << 28) ^ (i * 2654435761u);
+        }
+        slow_dispatch::WriteToBuffer(ins[t].mesh_buffer(), expected[t]);
+        slow_dispatch::ReadFromBuffer(ins[t].mesh_buffer(), readback);
+        ASSERT_EQ(readback, expected[t]) << "source " << t << " staging not visible before launch";
+    }
+    for (uint32_t t = 0; t < kNumDst; ++t) {
+        slow_dispatch::WriteToBuffer(outs[t].mesh_buffer(), zeros);
+        slow_dispatch::ReadFromBuffer(outs[t].mesh_buffer(), readback);
+        ASSERT_EQ(readback, zeros) << "destination " << t << " zero-fill not visible before launch";
+    }
+
+    auto workload = LaunchProgram(device, std::move(program));
+
+    for (uint32_t t = 0; t < kNumDst; ++t) {  // dst t is a copy of src t
+        slow_dispatch::ReadFromBuffer(outs[t].mesh_buffer(), readback);
+        ASSERT_EQ(readback, expected[t]) << "destination " << t << " differs from source " << t;
+    }
+
+    std::vector<uint32_t> stats;
+    slow_dispatch::ReadFromL1(device, node, stats_region->address(), kNumStatsWords * sizeof(uint32_t), stats);
+    const uint32_t transfers = (kNumSrc + kNumDst) * pages;
+    expect_transfer_stats(
+        "mixed",
+        stats,
+        lc,
+        transfers,
+        IterMode::PageIdLoop,
+        /*addrgen_allowed=*/true,
+        interleaved_banks_walkable(device, lc.buffer_type));
+    EXPECT_EQ(stats[0], transfers) << "every read and write address from the HW AddrGen (both layouts walkable here)";
+    const uint32_t seeks = stats[3];
+    const uint32_t restores = stats[6];
+    const uint32_t write_seeks = stats[7];
+    const uint32_t write_restores = stats[8];
+    const uint32_t read_seeks = seeks - write_seeks;
+    const uint32_t read_restores = restores - write_restores;
+    EXPECT_EQ(write_seeks, kNumDst * param.seeks_per_dst)
+        << "each write walk seeks once and keeps its destination slot";
+    EXPECT_EQ(write_restores, 0u) << "reads must not evict writes";
+    EXPECT_EQ(read_seeks, kNumSrc * param.seeks_per_src);
+    EXPECT_EQ(read_restores, kNumSrc * pages - kNumSrc) << "three read walks share two source slots";
+
+    // Every tensor is a distinct record, reads and writes separate (dst0/dst1 never appear as read).
+    const ll_api::BufRwInfo rw = query_buf_rw(workload, device, "mixed");
+    EXPECT_FALSE(rw.opaque);
+    EXPECT_EQ(rw.reads.size(), kNumSrc);
+    EXPECT_EQ(rw.writes.size(), kNumDst);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Walks,
+    TensorAccessorAddrgenMixed,
+    ::testing::Values(
+        MixedParam{"InterleavedDram", "InterleavedDram", 1, 1},
+        MixedParam{"WidthL1", "WidthL1", 1, 1},
+        MixedParam{"HeightL1", "HeightL1", 1, 1},
+        MixedParam{"NdBlockRoundRobinL1", "NdBlockRoundRobinL1", 2, 2},
+        // Different memories on the two sides: read L1 banks while writing DRAM banks, and the reverse.
+        MixedParam{"HeightL1", "InterleavedDram", 1, 1},
+        MixedParam{"InterleavedDram", "HeightL1", 1, 1}),
+    [](const ::testing::TestParamInfo<MixedParam>& info) {
+        return info.param.src_layout + "_to_" + info.param.dst_layout;
+    });
+
 // Randomized fuzz layer: same fixture/body as PatternMatrix, params drawn by fuzz_cases() instead of
 // the curated matrix(). Deterministic by default; see fuzz_cases() for the seed/count env overrides.
 INSTANTIATE_TEST_SUITE_P(
@@ -1635,11 +2080,16 @@ struct Config {
     std::string name;
     uint32_t bank_order = kBankInner;
     uint32_t num_banks = 1;
+    uint32_t bank_base = 0;  // BankingConfig.base (endpoint id of the first bank)
     uint32_t bank_start = 0;
     uint32_t inner_start = 0;
     uint32_t outer_start = 0;
     bool use_outer = true;
     uint32_t pop_amount = 1;  // addresses each pop advances by (hardware skip)
+    bool plain_pop = false;   // use the count-less pop (must equal pop_amount 1)
+    uint32_t spill_after = 0;  // save + move the walk to the other addrgen after this many pops (0 = off)
+    bool spill_dirty = false;  // the other addrgen runs a different walk before the restore
+    bool dest_side = false;    // program/pop the destination side (must match the same loop model)
 };
 
 // Model: each loop counts from its programmed start, and on reaching its end wraps to 0 (not to its start) and
@@ -1648,7 +2098,7 @@ struct Config {
 std::vector<uint64_t> model(const Config& c) {
     uint64_t x = c.inner_start;
     uint64_t y = c.use_outer ? c.outer_start : 0;
-    uint32_t bank = c.bank_start;
+    uint32_t bank = c.bank_start;  // relative to c.bank_base
     auto step_x = [&] {
         x += kInnerStride;
         if (x >= kInnerEnd) {
@@ -1677,7 +2127,7 @@ std::vector<uint64_t> model(const Config& c) {
     };
     std::vector<uint64_t> out;
     for (uint32_t i = 0; i < kNumPops; ++i) {
-        out.push_back(x + y + (static_cast<uint64_t>(bank) << kBankShift));
+        out.push_back(x + y + (static_cast<uint64_t>(c.bank_base + bank) << kBankShift));
         // A pop of N advances through N addresses of the loop nest (N = 0 behaves like 1).
         for (uint32_t n = 0; n < std::max<uint32_t>(c.pop_amount, 1); ++n) {
             switch (c.bank_order) {
@@ -1707,6 +2157,68 @@ std::vector<Config> configs() {
          .inner_start = 0x80,
          .outer_start = 0x2000},
         {.name = "BankOuter2", .bank_order = kBankOuter, .num_banks = 2},
+        // The count-less pop must advance by exactly one (the builtin it wraps once passed a pop amount of 0).
+        {.name = "BankMiddle2MidStartPlainPop",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .outer_start = 0x2000,
+         .plain_pop = true},
+        // Save the walk mid-way, restore it into the other address generator: the sequence must be seamless.
+        {.name = "BankInner2OuterSpill", .bank_order = kBankInner, .num_banks = 2, .spill_after = 3},
+        {.name = "BankMiddle2MidStartSpill",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .outer_start = 0x2000,
+         .spill_after = 5},
+        // Restore into an address generator that was just running another walk (no reset), as the walkers do.
+        {.name = "BankMiddle2Base2SpillDirty",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_base = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .spill_after = 5,
+         .spill_dirty = true},
+        {.name = "Bank1Base3SpillDirty", .num_banks = 1, .bank_base = 3, .spill_after = 3, .spill_dirty = true},
+        // Nonzero bank base: BANK_CURRENT must save and restore as the same (base-relative) value.
+        {.name = "Bank1Base3Spill", .num_banks = 1, .bank_base = 3, .spill_after = 3},
+        {.name = "BankMiddle2Base2Spill",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_base = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .spill_after = 5},
+        // The destination side has its own registers and bank-order field; it must follow the same loop model, with
+        // pops, skips, the count-less pop, and save/restore.
+        {.name = "DestBankInner2Outer", .bank_order = kBankInner, .num_banks = 2, .dest_side = true},
+        {.name = "DestBankMiddle2MidStart",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .outer_start = 0x2000,
+         .dest_side = true},
+        {.name = "DestBankOuter2", .bank_order = kBankOuter, .num_banks = 2, .dest_side = true},
+        {.name = "DestBankMiddle2Skip5PlainPop",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .plain_pop = true,
+         .dest_side = true},
+        {.name = "DestBankMiddle2Skip5", .bank_order = kBankMiddle, .num_banks = 2, .pop_amount = 5, .dest_side = true},
+        {.name = "DestBankMiddle2Base2SpillDirty",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_base = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .spill_after = 5,
+         .spill_dirty = true,
+         .dest_side = true},
         // Skips that cross the bank and inner-loop wraps.
         {.name = "BankInner2Skip3", .bank_order = kBankInner, .num_banks = 2, .pop_amount = 3},
         {.name = "BankMiddle2MidStartSkip5",
@@ -1729,7 +2241,8 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
     const auto& c = GetParam();
     auto& device = *devices_.at(0);
     const m2::NodeCoord node{0, 0};
-    constexpr uint32_t kReportBytes = loop_probe::kNumPops * sizeof(uint64_t);
+    constexpr uint32_t kNumStateWords = 12;  // AddrgenSrcState fields, see addrgen_loop_probe.cpp
+    constexpr uint32_t kReportBytes = (loop_probe::kNumPops + kNumStateWords) * sizeof(uint64_t);
     auto report = unit_tests::dm::ta_addrgen::make_l1_region(device, kReportBytes);
     std::vector<uint32_t> report_init(kReportBytes / sizeof(uint32_t), 0xDEADBEEF);
     slow_dispatch::WriteToL1(device, node, report->address(), report_init);
@@ -1743,11 +2256,16 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
         .compile_time_args =
             {{"bank_order", c.bank_order},
              {"num_banks", c.num_banks},
+             {"bank_base", c.bank_base},
              {"bank_start", c.bank_start},
              {"inner_start", c.inner_start},
              {"outer_start", c.outer_start},
              {"use_outer", c.use_outer ? 1u : 0u},
-             {"pop_amount", c.pop_amount}},
+             {"pop_amount", c.pop_amount},
+             {"plain_pop", c.plain_pop ? 1u : 0u},
+             {"spill_after", c.spill_after},
+             {"spill_dirty", c.spill_dirty ? 1u : 0u},
+             {"dest_side", c.dest_side ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
         .hw_config = m2::DataMovementHardwareConfig{},
     };
@@ -1783,6 +2301,27 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
             loop_probe::describe(got),
             loop_probe::describe(expected[i]),
             got == expected[i] ? "" : "  <-- differs");
+    }
+    if (c.spill_after != 0) {
+        static constexpr const char* kStateNames[] = {
+            "bank_current",
+            "bank_base",
+            "bank_size",
+            "bank_skip",
+            "inner_stride",
+            "inner_end",
+            "inner_address",
+            "outer_stride",
+            "outer_end",
+            "outer_address",
+            "bank_offset",
+            "bank_order"};
+        table += fmt::format("\n  saved after pop {}:", c.spill_after - 1);
+        for (uint32_t i = 0; i < kNumStateWords; ++i) {
+            const uint64_t v = (static_cast<uint64_t>(raw[2 * (loop_probe::kNumPops + i) + 1]) << 32) |
+                               raw[2 * (loop_probe::kNumPops + i)];
+            table += fmt::format(" {}=0x{:x}", kStateNames[i], v);
+        }
     }
     log_info(tt::LogTest, "addrgen loop probe {}:{}", c.name, table);
     EXPECT_EQ(first_bad, -1) << c.name << ": first difference from the loop model at pop " << first_bad << table;

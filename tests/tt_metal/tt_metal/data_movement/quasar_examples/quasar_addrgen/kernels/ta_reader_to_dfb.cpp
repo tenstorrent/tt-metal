@@ -15,8 +15,9 @@
 //                  0 = explicit reserve_back / async_read / barrier / push_back
 // Named RTAs:
 //   start_page, num_pages,
-//   report_addr: L1 address for 5 words {hw, sw_ineligible, sw_unsupported, seeks,
-//                transfers issued, skips} -- how each transfer address was
+//   report_addr: L1 address for 9 words {hw, sw_ineligible, sw_unsupported, seeks,
+//                transfers issued, skips, restores,
+//                write seeks, write restores} -- how each transfer address was
 //                produced (TT_TA_ADDRGEN_STATS builds only; see api/tensor/transfer_noc_addr.h)
 
 #include "api/dataflow/dataflow_buffer.h"
@@ -24,7 +25,34 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+#if defined(TT_TA_ADDRGEN_STATS) && defined(ARCH_QUASAR)
+// Stack high-water mark, for the walker-state budget (DM cores share 8 KB between thread-local storage and stack):
+// paint the free stack with a pattern at entry, count the untouched words at exit. Same scheme as
+// internal/debug/stack_usage.h, which only exists with the watcher on. Reported as bytes never used.
+extern thread_local uint32_t __stack_base_lwm[];
+extern uint32_t __stack_base_offset[];
+static inline void paint_stack() {
+    uint32_t* base = __stack_base_lwm + reinterpret_cast<uintptr_t>(__stack_base_offset);
+    uint32_t* sp;
+    asm volatile("mv %0,sp" : "=r"(sp));
+    for (uint32_t* p = sp - 8; p != base;) {  // leave a few words for this function's own frame
+        *--p = 0xBABABABAu;
+    }
+}
+static inline uint32_t unused_stack_bytes() {
+    uint32_t* base = __stack_base_lwm + reinterpret_cast<uintptr_t>(__stack_base_offset);
+    uint32_t* p = base;
+    while (*p == 0xBABABABAu) {
+        ++p;
+    }
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p) - reinterpret_cast<uintptr_t>(base));
+}
+#endif
+
 void kernel_main() {
+#if defined(TT_TA_ADDRGEN_STATS) && defined(ARCH_QUASAR)
+    paint_stack();
+#endif
     constexpr uint32_t iter_mode = get_arg(args::iter_mode);
     constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
     const uint32_t start_page = get_arg(args::start_page);
@@ -115,6 +143,10 @@ void kernel_main() {
     report[3] = tensor_accessor::detail::transfer_stats.seeks;
     report[4] = transfers;
     report[5] = tensor_accessor::detail::transfer_stats.skips;
+    report[6] = tensor_accessor::detail::transfer_stats.restores;
+    report[7] = tensor_accessor::detail::transfer_stats.write_seeks;
+    report[8] = tensor_accessor::detail::transfer_stats.write_restores;
+    report[9] = unused_stack_bytes();
 #else
     (void)report_addr;
     (void)transfers;

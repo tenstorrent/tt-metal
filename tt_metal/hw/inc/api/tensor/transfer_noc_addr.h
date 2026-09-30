@@ -38,6 +38,9 @@ struct TransferStats {
     uint32_t sw_unsupported = 0;  // no hardware recipe for this layout/accessor (or the hardware path is off)
     uint32_t seeks = 0;           // of the hw addresses, how many needed the walk (re)programmed in software first
     uint32_t skips = 0;           // of the hw addresses, how many the hardware skipped forward to (no reprogramming)
+    uint32_t restores = 0;        // of the hw addresses, how many first wrote a parked walk's saved registers back
+    uint32_t write_seeks = 0;     // seeks / restores of the write direction only (reads = totals minus these)
+    uint32_t write_restores = 0;
 };
 inline thread_local TransferStats transfer_stats{};
 #define TT_TA_ADDRGEN_COUNT(field) (++::tensor_accessor::detail::transfer_stats.field)
@@ -45,30 +48,64 @@ inline thread_local TransferStats transfer_stats{};
 #define TT_TA_ADDRGEN_COUNT(field) ((void)0)
 #endif
 
+// Count what a hardware transfer cost (see PopInfo): seeks, skips, restores; writes also in their own counters.
+#define TT_TA_ADDRGEN_COUNT_HW(Dir, info)                \
+    do {                                                 \
+        TT_TA_ADDRGEN_COUNT(hw);                         \
+        if ((info).seeked) {                             \
+            TT_TA_ADDRGEN_COUNT(seeks);                  \
+            if constexpr ((Dir) == TransferDir::Write) { \
+                TT_TA_ADDRGEN_COUNT(write_seeks);        \
+            }                                            \
+        }                                                \
+        if ((info).skipped) {                            \
+            TT_TA_ADDRGEN_COUNT(skips);                  \
+        }                                                \
+        if ((info).restored) {                           \
+            TT_TA_ADDRGEN_COUNT(restores);               \
+            if constexpr ((Dir) == TransferDir::Write) { \
+                TT_TA_ADDRGEN_COUNT(write_restores);     \
+            }                                            \
+        }                                                \
+    } while (0)
+
 }  // namespace tensor_accessor::detail
 
 #if defined(TT_TA_ADDRGEN_ACTIVE)
 #include "internal/tt-2xx/quasar/tensor/tensor_accessor_addrgen.h"
 #endif
 
+// Debug: print every hardware transfer address next to the software one (TT_TA_ADDRGEN_TRACE; needs device print).
+#if defined(TT_TA_ADDRGEN_ACTIVE) && defined(TT_TA_ADDRGEN_TRACE)
+#include "api/debug/device_print.h"
+#define TT_TA_ADDRGEN_TRACE_ADDR(dir, index, hw, sw, info)                           \
+    DEVICE_PRINT(                                                                    \
+        "addrgen dir {} page {} hw 0x{:x} sw 0x{:x} seek {} skip {} restore {}{}\n", \
+        static_cast<uint32_t>(dir),                                                  \
+        index,                                                                       \
+        hw,                                                                          \
+        sw,                                                                          \
+        static_cast<uint32_t>((info).seeked),                                        \
+        static_cast<uint32_t>((info).skipped),                                       \
+        static_cast<uint32_t>((info).restored),                                      \
+        (hw) == (sw) ? "" : "  MISMATCH")
+#else
+#define TT_TA_ADDRGEN_TRACE_ADDR(dir, index, hw, sw, info) ((void)0)
+#endif
+
 namespace tensor_accessor {
 
 // Transfer address of page `page_id` (+ `offset` bytes) of `accessor`. Accessor may be any type with
 // get_noc_addr(page_id, offset, noc) -- e.g. something wrapped by AbstractTensorAccessorWrapper.
-template <typename Accessor>
+template <TransferDir Dir, typename Accessor>
 inline uint64_t transfer_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, uint8_t noc) {
 #if defined(TT_TA_ADDRGEN_ACTIVE)
     if constexpr (tt_addrgen::has_hw_recipe<Accessor>) {
         uint64_t hw_addr;
         tt_addrgen::PopInfo info;
-        if (tt_addrgen::try_transfer_noc_addr(accessor, page_id, offset, noc, hw_addr, info)) {
-            TT_TA_ADDRGEN_COUNT(hw);
-            if (info.seeked) {
-                TT_TA_ADDRGEN_COUNT(seeks);
-            }
-            if (info.skipped) {
-                TT_TA_ADDRGEN_COUNT(skips);
-            }
+        if (tt_addrgen::try_transfer_noc_addr<Dir>(accessor, page_id, offset, noc, hw_addr, info)) {
+            TT_TA_ADDRGEN_TRACE_ADDR(Dir, page_id, hw_addr, accessor.get_noc_addr(page_id, offset, noc), info);
+            TT_TA_ADDRGEN_COUNT_HW(Dir, info);
             return hw_addr;
         }
         TT_TA_ADDRGEN_COUNT(sw_ineligible);
@@ -81,20 +118,14 @@ inline uint64_t transfer_noc_addr(const Accessor& accessor, uint32_t page_id, ui
 
 // Transfer address of an iterator page. Same decision as above; the software fallback reuses the address the
 // iterator already computed instead of recomputing it.
-template <typename Accessor>
+template <TransferDir Dir, typename Accessor>
 inline uint64_t transfer_noc_addr(const AccessorPage<Accessor>& page, uint32_t offset, uint8_t noc) {
 #if defined(TT_TA_ADDRGEN_ACTIVE)
     if constexpr (tt_addrgen::has_hw_recipe<Accessor>) {
         uint64_t hw_addr;
         tt_addrgen::PopInfo info;
-        if (tt_addrgen::try_transfer_noc_addr(page.accessor(), page.page_id(), offset, noc, hw_addr, info)) {
-            TT_TA_ADDRGEN_COUNT(hw);
-            if (info.seeked) {
-                TT_TA_ADDRGEN_COUNT(seeks);
-            }
-            if (info.skipped) {
-                TT_TA_ADDRGEN_COUNT(skips);
-            }
+        if (tt_addrgen::try_transfer_noc_addr<Dir>(page.accessor(), page.page_id(), offset, noc, hw_addr, info)) {
+            TT_TA_ADDRGEN_COUNT_HW(Dir, info);
             return hw_addr;
         }
         TT_TA_ADDRGEN_COUNT(sw_ineligible);
@@ -107,21 +138,15 @@ inline uint64_t transfer_noc_addr(const AccessorPage<Accessor>& page, uint32_t o
 
 // Transfer address of a shard_pages() page. The hardware walk follows the shard's storage order (page_in_shard),
 // which is what shard_pages() yields; the software fallback reuses the iterator's address.
-template <typename Accessor>
+template <TransferDir Dir, typename Accessor>
 inline uint64_t transfer_noc_addr(const ShardPage<Accessor>& page, uint32_t offset, uint8_t noc) {
 #if defined(TT_TA_ADDRGEN_ACTIVE)
     if constexpr (tt_addrgen::has_hw_recipe<Accessor>) {
         uint64_t hw_addr;
         tt_addrgen::PopInfo info;
-        if (tt_addrgen::try_transfer_shard_page_noc_addr(
+        if (tt_addrgen::try_transfer_shard_page_noc_addr<Dir>(
                 page.accessor(), page.shard_id(), page.page_in_shard(), offset, noc, hw_addr, info)) {
-            TT_TA_ADDRGEN_COUNT(hw);
-            if (info.seeked) {
-                TT_TA_ADDRGEN_COUNT(seeks);
-            }
-            if (info.skipped) {
-                TT_TA_ADDRGEN_COUNT(skips);
-            }
+            TT_TA_ADDRGEN_COUNT_HW(Dir, info);
             return hw_addr;
         }
     }
@@ -132,20 +157,14 @@ inline uint64_t transfer_noc_addr(const ShardPage<Accessor>& page, uint32_t offs
 
 // Transfer address of a whole shard, or `offset` bytes into it (ShardView). Consecutive transfers into the same shard
 // reuse the base the hardware produced for it (counted as hw, not as a seek).
-template <typename Accessor>
+template <TransferDir Dir, typename Accessor>
 inline uint64_t transfer_shard_noc_addr(const Accessor& accessor, uint32_t shard_id, uint32_t offset, uint8_t noc) {
 #if defined(TT_TA_ADDRGEN_ACTIVE)
     if constexpr (tt_addrgen::has_hw_recipe<Accessor>) {
         uint64_t hw_addr;
         tt_addrgen::PopInfo info;
-        if (tt_addrgen::try_transfer_shard_noc_addr(accessor, shard_id, offset, noc, hw_addr, info)) {
-            TT_TA_ADDRGEN_COUNT(hw);
-            if (info.seeked) {
-                TT_TA_ADDRGEN_COUNT(seeks);
-            }
-            if (info.skipped) {
-                TT_TA_ADDRGEN_COUNT(skips);
-            }
+        if (tt_addrgen::try_transfer_shard_noc_addr<Dir>(accessor, shard_id, offset, noc, hw_addr, info)) {
+            TT_TA_ADDRGEN_COUNT_HW(Dir, info);
             return hw_addr;
         }
     }

@@ -15,8 +15,9 @@
 //                  0 = explicit wait_front / async_write / barrier / pop_front
 // Named RTAs:
 //   start_page, num_pages,
-//   report_addr: L1 address for 5 words {hw, sw_ineligible, sw_unsupported, seeks,
-//                transfers issued, skips} -- how each transfer address was
+//   report_addr: L1 address for 9 words {hw, sw_ineligible, sw_unsupported, seeks,
+//                transfers issued, skips, restores,
+//                write seeks, write restores} -- how each transfer address was
 //                produced (TT_TA_ADDRGEN_STATS builds only; see api/tensor/transfer_noc_addr.h)
 
 #include "api/dataflow/dataflow_buffer.h"
@@ -116,6 +117,9 @@ void kernel_main() {
     report[3] = tensor_accessor::detail::transfer_stats.seeks;
     report[4] = transfers;
     report[5] = tensor_accessor::detail::transfer_stats.skips;
+    report[6] = tensor_accessor::detail::transfer_stats.restores;
+    report[7] = tensor_accessor::detail::transfer_stats.write_seeks;
+    report[8] = tensor_accessor::detail::transfer_stats.write_restores;
 #else
     (void)report_addr;
     (void)transfers;

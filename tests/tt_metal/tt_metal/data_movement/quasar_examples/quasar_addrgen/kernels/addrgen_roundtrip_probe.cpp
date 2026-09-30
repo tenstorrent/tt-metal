@@ -25,13 +25,14 @@ void kernel_main() {
     constexpr uint64_t kBase = 0x1234'5678'0000ULL;
 
     uint64_t peeks[3];
-    overlay::reset_addrgen_1();
-    peeks[0] = overlay::peek_src_addrgen_1();
-    overlay::setup_src_inner_loop_addrgen_1(/*stride=*/0x100, /*size=*/0x100000, /*addr_offset=*/kInnerOffset);
-    peeks[1] = overlay::peek_src_addrgen_1();
-    overlay::setup_src_base_start_addrgen_1(kBase);
-    peeks[2] = overlay::peek_src_addrgen_1();
-    overlay::setup_src_base_start_addrgen_1(0);
+    overlay::reset_addrgen<overlay::ADDRGEN_1>();
+    peeks[0] = overlay::peek_src_addrgen<overlay::ADDRGEN_1>();
+    overlay::setup_src_inner_loop_addrgen<overlay::ADDRGEN_1>(
+        /*stride=*/0x100, /*end=*/0x100000, /*start=*/kInnerOffset);
+    peeks[1] = overlay::peek_src_addrgen<overlay::ADDRGEN_1>();
+    overlay::setup_src_base_start_addrgen<overlay::ADDRGEN_1>(kBase);
+    peeks[2] = overlay::peek_src_addrgen<overlay::ADDRGEN_1>();
+    overlay::setup_src_base_start_addrgen<overlay::ADDRGEN_1>(0);
 
     DEVICE_PRINT("addrgen probe: reset 0x{:x} inner 0x{:x} inner+base 0x{:x}\n", peeks[0], peeks[1], peeks[2]);
 

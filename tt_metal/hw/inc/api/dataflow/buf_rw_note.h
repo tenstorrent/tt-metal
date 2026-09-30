@@ -50,6 +50,10 @@ struct endpoint<T, std::void_t<decltype(T::DSpec::binding_id)>> {
     static constexpr bool present = (slot != tensor_accessor::NO_BINDING_ID);
 };
 
+// Endpoints that stand for a tensor accessor without being one -- PageView / ShardView, iterator pages -- specialize
+// endpoint to the accessor's (see api/tensor/noc_traits.h). AbstractTensorAccessorWrapper erases its accessor's type,
+// so its constructor notes the binding instead (both READ and WRITE: it can't know which the kernel will do).
+
 // Emit a READ/WRITE record for endpoint T iff it is a token-bound tensor accessor.
 template <uint32_t Kind, typename T>
 inline void note_if_bound() {
