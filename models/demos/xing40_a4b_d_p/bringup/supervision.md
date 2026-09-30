@@ -47,3 +47,15 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
 - Owner delegation (05:50): run autonomously from here; reset boards when needed (no other device job running);
   investigate wrong-looking results myself, keeping in mind that swap (F49) and component (F56) tests freeze on built-in
   checks without a review agent. Still the owner's: perf picks, op-gen launches, pushes.
+- 06:00-06:25 C.dense.attn_hc: F56 sweep failed (noise1e-2 slips: [S, 24] gates output, bf16 projection, calibrated
+  limit 0.0148 > the 0.007 whole-output noise), review agent ran as designed and added per-part checks (pre / post /
+  comb rel, comb column sums, ranges); frozen b2e0f923971, PASS af8ce847bf0 (composed Sinkhorn on device, one
+  [S/4, 32] all_reduce axis 1; no fork). Accepted. S.dense.01 PASS cb38f2865f3 (frozen without review, F49).
+  C.dense.attn_collapse frozen without review (F56 sweep PASS), PASS b924b40968d. Accepted.
+- 06:30 owner asked to look at the F56 branch again: new commit fb9ccf40814 (worst-column rel L2 for outputs <= 64
+  columns, component_col 0.015; proof on all 42 reviewed Hy4 tests: 0 misses, 84/84 controls, 41/42 sweeps pass).
+  Paused before S.dense.02, cherry-picked (e8828a10407). It applies to the already-frozen attn_hc test (checks auto):
+  re-ran the gate on device: PASS, worst column vs cpu 0.0100, vs golden 0.0111 (Hy4 device iHC <= 0.0075): passes
+  with ~1.35x headroom; watch ffn_hc / moe attn_hc for column-only failures. Owner noted the 64-column cutoff is a
+  heuristic; proposed follow-up for the F56 branch: check the worst column on every float output with a per-column
+  limit from the precision model, no NARROW cutoff (owner to decide). Resumed.
