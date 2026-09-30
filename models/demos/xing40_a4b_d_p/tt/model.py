@@ -81,7 +81,9 @@ class TtEmbedding:
     over axis 0, ROW_MAJOR in DRAM (470 MB per chip), cached as a tensorbin. ids: [1, 1, 1, S/4] uint32 ROW_MAJOR per
     chip (row split over axis 0, replicated over axis 1) -> streams [1, 1, S/4, 4 x 1792] fp32."""
 
-    def __init__(self, mesh, weight: torch.Tensor, n: int, cache: bool = True):
+    # cache=False by default: ttnn.as_tensor's cache hit on this mmap-backed ROW_MAJOR mesh tensor spins for >25 min
+    # (known_issues: "ttnn.as_tensor cache hit spins"); the fresh build takes 1.5 s.
+    def __init__(self, mesh, weight: torch.Tensor, n: int, cache: bool = False):
         from models.demos.xing40_a4b_d_p.tt.experts import CACHE_ROOT
 
         self.mesh, self.n = mesh, n
