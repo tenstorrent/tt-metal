@@ -37,7 +37,7 @@ def digest(tensor):
 @pytest.mark.parametrize("device_params", [{**DEVICE_PARAMS, "trace_region_size": 8_000_000}], indirect=True)
 @pytest.mark.parametrize(
     "rows,nonzero_state,committed_rows",
-    [(rows, nonzero, None) for rows in (32, 128, 2048) for nonzero in (False, True)]
+    [(rows, nonzero, None) for rows in (32, 128, 2048, 4096) for nonzero in (False, True)]
     + [(32, True, committed) for committed in (0, 1, 5, 31)],
 )
 @pytest.mark.parametrize("entry", ["head_major", "token_major"])
