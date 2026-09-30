@@ -42,19 +42,23 @@ namespace tt::tt_metal {
 
 namespace m2 = experimental;
 
-TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
+namespace {
+
+// Producer fills two DFB entries with known scalars; the compute kernel reads them back on every TRISC
+// and writes a 7-word result slot per thread. Both compute kernels share this result layout.
+void run_read_tile_value_test(distributed::MeshDevice& mesh_device, const char* compute_kernel_source) {
     using DataT = std::uint32_t;
 
-    constexpr uint32_t num_producers = 1;
-    constexpr uint32_t num_consumers = 1;
-    constexpr uint32_t entry_size = 1024;
-    constexpr uint32_t num_entries = 2;
+    constexpr std::uint32_t num_producers = 1;
+    constexpr std::uint32_t num_consumers = 1;
+    constexpr std::uint32_t entry_size = 1024;
+    constexpr std::uint32_t num_entries = 2;
 
-    constexpr uint32_t num_results_per_thread = 7;
+    constexpr std::uint32_t num_results_per_thread = 7;
     const auto& hal = MetalContext::instance().hal();
-    const uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    const uint32_t compute_class = static_cast<uint32_t>(HalProcessorClassType::COMPUTE);
-    const uint32_t num_trisc_threads = hal.get_processor_class_num_fw_binaries(tensix_idx, compute_class);
+    const std::uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const std::uint32_t compute_class = static_cast<std::uint32_t>(HalProcessorClassType::COMPUTE);
+    const std::uint32_t num_trisc_threads = hal.get_processor_class_num_fw_binaries(tensix_idx, compute_class);
     constexpr std::array<const char*, 4> trisc_slot_names = {"UNPACK", "MATH", "PACK", "ISOLATE_SFPU"};
     ASSERT_GE(num_trisc_threads, 3u);
     ASSERT_LE(num_trisc_threads, trisc_slot_names.size());
@@ -65,8 +69,8 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     // Distinct low/high halfwords so uint16 reads can distinguish T-indexing from uint32-indexing + truncate.
     constexpr DataT tile1_val0 = 0xABCD1234u;
     constexpr DataT tile1_val1 = 0x33333333u;
-    constexpr uint16_t tile1_val0_lo = 0x1234u;
-    constexpr uint16_t tile1_val0_hi = 0xABCDu;
+    constexpr std::uint16_t tile1_val0_lo = 0x1234u;
+    constexpr std::uint16_t tile1_val0_hi = 0xABCDu;
     // Both entries stay at the front; tile_index 0/1 address fifo_rd_ptr + {0, fifo_page_size}.
     // Per thread: {tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0],
     //             read_tile_value<uint16_t>(1)[0], read_tile_value<uint16_t>(1)[1]}
@@ -75,7 +79,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     // Each participating TRISC writes expected_per_thread to a distinct L1 slot.
     std::vector<DataT> expected_scalar_reads;
     expected_scalar_reads.reserve(num_results_per_thread * num_trisc_threads);
-    for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
+    for (std::uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         expected_scalar_reads.insert(
             expected_scalar_reads.end(), expected_per_thread.begin(), expected_per_thread.end());
     }
@@ -86,10 +90,10 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     const m2::KernelSpecName CONSUMER{"consumer"};
     const m2::TensorParamName IN_TENSOR{"in_tensor"};
 
-    const uint32_t words_per_entry = entry_size / sizeof(DataT);
+    const std::uint32_t words_per_entry = entry_size / sizeof(DataT);
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
-    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -100,7 +104,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
-    if (this->device().arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         producer_hw = m2::DataMovementHardwareConfig{
             .config_2xx =
                 m2::DataMovementHardwareConfig::DataMovement2XXConfig{
@@ -140,7 +144,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     m2::KernelSpec consumer{
         .unique_id = CONSUMER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_read_tile_value_compute.cpp",
+        .source = compute_kernel_source,
         .num_threads = num_consumers,
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
@@ -162,10 +166,10 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
-    const uint32_t result_l1_addr = top_of_l1_scratch_addr(this->device(), result_size_bytes);
+    const std::uint32_t result_size_bytes = static_cast<std::uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
+    const std::uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, result_size_bytes);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -182,7 +186,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
     m2::SetProgramRunArgs(program, params);
 
-    const uint32_t total_words = num_entries * words_per_entry;
+    const std::uint32_t total_words = num_entries * words_per_entry;
     auto input = tt::test_utils::generate_uniform_random_vector<DataT>(0, 1000000, total_words);
     input[0] = tile0_val0;
     input[1] = tile0_val1;
@@ -192,26 +196,40 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     constexpr DataT result_sentinel = 0xDEADBEEFu;
     std::vector<DataT> result_init(expected_scalar_reads.size(), result_sentinel);
-    slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_l1_addr, result_init);
 
-    LaunchProgram(this->device(), std::move(program));
+    LaunchProgram(mesh_device, std::move(program));
 
     tt_driver_atomics::mfence();
     std::vector<DataT> scalar_results;
-    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_size_bytes, scalar_results);
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), result_l1_addr, result_size_bytes, scalar_results);
     ASSERT_EQ(scalar_results.size(), expected_scalar_reads.size());
-    for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
+    for (std::uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         const auto begin = scalar_results.begin() + thread * num_results_per_thread;
         EXPECT_EQ(std::vector<DataT>(begin, begin + num_results_per_thread), expected_per_thread)
             << "TRISC thread slot " << thread << " (" << trisc_slot_names[thread] << ")";
     }
 }
 
+}  // namespace
+
+TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
+    run_read_tile_value_test(
+        this->device(), "tests/tt_metal/tt_metal/test_kernels/compute/dfb_read_tile_value_compute.cpp");
+}
+
+// ckernel::read_tile_value / get_tile_address (api/compute/cb_api.h) must return the same value on every
+// TRISC. On Quasar the isolated-SFPU TRISC also runs kernel_main and must not be left out of the broadcast.
+TEST_F(UnitMeshFixture, DataflowBufferReadTileValueCbApi) {
+    run_read_tile_value_test(
+        this->device(), "tests/tt_metal/tt_metal/test_kernels/compute/cb_api_read_tile_value_compute.cpp");
+}
+
 namespace {
 
-using ExtentRecord = std::array<uint32_t, 8>;
+using ExtentRecord = std::array<std::uint32_t, 8>;
 
-enum ExtentField : uint32_t {
+enum ExtentField : std::uint32_t {
     EntrySize = 0,
     StrideSize,
     TotalNumEntries,
@@ -222,7 +240,7 @@ enum ExtentField : uint32_t {
     RingSpanNumEntries,
 };
 
-inline uint32_t strided_num_tcs(bool is_producer, uint32_t num_producers, uint32_t num_consumers) {
+inline std::uint32_t strided_num_tcs(bool is_producer, std::uint32_t num_producers, std::uint32_t num_consumers) {
     if (is_producer) {
         return num_consumers >= num_producers ? num_consumers / num_producers : 1u;
     }
@@ -230,15 +248,19 @@ inline uint32_t strided_num_tcs(bool is_producer, uint32_t num_producers, uint32
 }
 
 struct ExtentLayoutParams {
-    uint32_t capacity = 0;
-    uint32_t stride_in_entries = 0;
-    uint32_t ring_bytes = 0;
-    uint32_t num_tcs_on_risc = 0;
+    std::uint32_t capacity = 0;
+    std::uint32_t stride_in_entries = 0;
+    std::uint32_t ring_bytes = 0;
+    std::uint32_t num_tcs_on_risc = 0;
 };
 
 inline ExtentLayoutParams compute_strided_layout(
-    uint32_t num_entries, uint32_t entry_size, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
-    const uint32_t max_pc = std::max(num_producers, num_consumers);
+    std::uint32_t num_entries,
+    std::uint32_t entry_size,
+    std::uint32_t num_producers,
+    std::uint32_t num_consumers,
+    bool is_producer) {
+    const std::uint32_t max_pc = std::max(num_producers, num_consumers);
     return ExtentLayoutParams{
         .capacity = num_entries / max_pc,
         .stride_in_entries = max_pc,
@@ -247,8 +269,11 @@ inline ExtentLayoutParams compute_strided_layout(
     };
 }
 
-inline uint32_t expected_strided_ring_span_bytes(
-    uint32_t entry_size, uint32_t local_ring_bytes, uint32_t num_tcs_on_risc, uint32_t num_endpoint_threads) {
+inline std::uint32_t expected_strided_ring_span_bytes(
+    std::uint32_t entry_size,
+    std::uint32_t local_ring_bytes,
+    std::uint32_t num_tcs_on_risc,
+    std::uint32_t num_endpoint_threads) {
     if (num_tcs_on_risc <= 1) {
         return local_ring_bytes;
     }
@@ -259,11 +284,15 @@ inline uint32_t expected_strided_ring_span_bytes(
 }
 
 inline ExtentRecord expected_strided_extent(
-    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
+    std::uint32_t entry_size,
+    std::uint32_t num_entries,
+    std::uint32_t num_producers,
+    std::uint32_t num_consumers,
+    bool is_producer) {
     const auto layout = compute_strided_layout(num_entries, entry_size, num_producers, num_consumers, is_producer);
-    const uint32_t total_bytes = num_entries * entry_size;
-    const uint32_t num_endpoint_threads = is_producer ? num_producers : num_consumers;
-    const uint32_t ring_span_bytes =
+    const std::uint32_t total_bytes = num_entries * entry_size;
+    const std::uint32_t num_endpoint_threads = is_producer ? num_producers : num_consumers;
+    const std::uint32_t ring_span_bytes =
         expected_strided_ring_span_bytes(entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
     return ExtentRecord{
         entry_size,
@@ -279,14 +308,18 @@ inline ExtentRecord expected_strided_extent(
 
 // ALL consumer (cap=ALL): capacity/stride follow num_producers; TC counts match DMTensix ALL.
 inline ExtentRecord expected_all_extent(
-    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
+    std::uint32_t entry_size,
+    std::uint32_t num_entries,
+    std::uint32_t num_producers,
+    std::uint32_t num_consumers,
+    bool is_producer) {
     (void)num_consumers;
-    const uint32_t capacity = num_entries / num_producers;
-    const uint32_t stride_in_entries = 1;
-    const uint32_t total_bytes = num_entries * entry_size;
-    const uint32_t ring_bytes = entry_size * (stride_in_entries * (capacity - 1u) + 1u);
-    const uint32_t num_tcs_on_risc = is_producer ? 1u : num_producers;
-    const uint32_t ring_span_bytes = num_tcs_on_risc <= 1 ? ring_bytes : total_bytes;
+    const std::uint32_t capacity = num_entries / num_producers;
+    const std::uint32_t stride_in_entries = 1;
+    const std::uint32_t total_bytes = num_entries * entry_size;
+    const std::uint32_t ring_bytes = entry_size * (stride_in_entries * (capacity - 1u) + 1u);
+    const std::uint32_t num_tcs_on_risc = is_producer ? 1u : num_producers;
+    const std::uint32_t ring_span_bytes = num_tcs_on_risc <= 1 ? ring_bytes : total_bytes;
     return ExtentRecord{
         entry_size,
         entry_size * stride_in_entries,
@@ -300,10 +333,10 @@ inline ExtentRecord expected_all_extent(
 }
 
 inline ExtentRecord expected_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
+    std::uint32_t entry_size,
+    std::uint32_t num_entries,
+    std::uint32_t num_producers,
+    std::uint32_t num_consumers,
     bool is_producer,
     m2::DFBAccessPattern consumer_access_pattern) {
     if (consumer_access_pattern == m2::DFBAccessPattern::ALL) {
@@ -331,43 +364,43 @@ inline void expect_wh_bh_aliases(const ExtentRecord& rec) {
     EXPECT_EQ(rec[StrideSize], rec[EntrySize]);
 }
 
-inline ExtentRecord read_extent_record(distributed::MeshDevice& mesh_device, CoreCoord core, uint32_t l1_addr) {
-    constexpr uint32_t num_fields = 8;
-    constexpr uint32_t record_bytes = num_fields * sizeof(uint32_t);
-    std::vector<uint32_t> words(num_fields, 0u);
+inline ExtentRecord read_extent_record(distributed::MeshDevice& mesh_device, CoreCoord core, std::uint32_t l1_addr) {
+    constexpr std::uint32_t num_fields = 8;
+    constexpr std::uint32_t record_bytes = num_fields * sizeof(std::uint32_t);
+    std::vector<std::uint32_t> words(num_fields, 0u);
     slow_dispatch::ReadFromL1(mesh_device, core, l1_addr, record_bytes, words);
     ExtentRecord rec{};
-    for (uint32_t i = 0; i < num_fields; ++i) {
+    for (std::uint32_t i = 0; i < num_fields; ++i) {
         rec[i] = words[i];
     }
     return rec;
 }
 
 struct ProducerProbeConfig {
-    uint32_t num_tc_snapshots = 1;
+    std::uint32_t num_tc_snapshots = 1;
     bool rotate_tc = false;
-    uint32_t credits_to_post = 0;
+    std::uint32_t credits_to_post = 0;
 };
 
 struct ConsumerProbeConfig {
-    uint32_t num_tc_snapshots = 1;
+    std::uint32_t num_tc_snapshots = 1;
     bool rotate_tc = false;
     bool drain_producer_rotate_credits = false;
     bool drain_last_tc_credit = false;
 };
 
 struct ExtentProbeParams {
-    uint32_t num_producers = 1;
-    uint32_t num_consumers = 1;
-    uint32_t entry_size = 1024;
-    uint32_t num_entries = 16;
+    std::uint32_t num_producers = 1;
+    std::uint32_t num_consumers = 1;
+    std::uint32_t entry_size = 1024;
+    std::uint32_t num_entries = 16;
     m2::DFBAccessPattern consumer_access_pattern = m2::DFBAccessPattern::STRIDED;
     ProducerProbeConfig producer{};
     ConsumerProbeConfig consumer{};
 };
 
 void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbeParams& params) {
-    constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
+    constexpr std::uint32_t extent_record_bytes = 8 * sizeof(std::uint32_t);
 
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
 
@@ -410,7 +443,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     m2::KernelSpec producer{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
-        .num_threads = static_cast<uint8_t>(params.num_producers),
+        .num_threads = static_cast<std::uint8_t>(params.num_producers),
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "out",
@@ -429,7 +462,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     m2::KernelSpec consumer{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
-        .num_threads = static_cast<uint8_t>(params.num_consumers),
+        .num_threads = static_cast<std::uint8_t>(params.num_consumers),
         .dfb_bindings =
             {{.dfb_spec_name = DFB,
               .accessor_name = "in",
@@ -458,11 +491,11 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
 
     Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
-    const uint32_t consumer_records = params.consumer.num_tc_snapshots;
-    const uint32_t producer_result_l1 =
+    const std::uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
+    const std::uint32_t consumer_records = params.consumer.num_tc_snapshots;
+    const std::uint32_t producer_result_l1 =
         top_of_l1_scratch_addr(mesh_device, (producer_records + consumer_records) * extent_record_bytes);
-    const uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
+    const std::uint32_t consumer_result_l1 = producer_result_l1 + producer_records * extent_record_bytes;
 
     m2::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
@@ -496,9 +529,9 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         false,
         params.consumer_access_pattern);
 
-    for (uint32_t t = 0; t < params.num_producers; ++t) {
-        for (uint32_t s = 0; s < params.producer.num_tc_snapshots; ++s) {
-            const uint32_t l1_addr =
+    for (std::uint32_t t = 0; t < params.num_producers; ++t) {
+        for (std::uint32_t s = 0; s < params.producer.num_tc_snapshots; ++s) {
+            const std::uint32_t l1_addr =
                 producer_result_l1 + (t * params.producer.num_tc_snapshots + s) * extent_record_bytes;
             const ExtentRecord rec = read_extent_record(mesh_device, core, l1_addr);
             if (is_quasar) {
@@ -512,7 +545,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
         }
     }
 
-    for (uint32_t s = 0; s < params.consumer.num_tc_snapshots; ++s) {
+    for (std::uint32_t s = 0; s < params.consumer.num_tc_snapshots; ++s) {
         const ExtentRecord rec = read_extent_record(mesh_device, core, consumer_result_l1 + s * extent_record_bytes);
         if (is_quasar) {
             expect_extent_record(rec, expected_consumer);
