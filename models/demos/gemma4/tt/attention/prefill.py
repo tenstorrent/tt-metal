@@ -35,6 +35,25 @@ from .weights import AttentionWeights
 TILE_HEIGHT = 32
 
 
+def _paged_fill_cache(cache, x, *args, **kwargs):
+    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
+
+    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
+    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
+    fill so callers' own deallocation of ``x`` stays balanced.
+    """
+    if x.dtype == cache.dtype:
+        return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
+    xc = ttnn.typecast(x, cache.dtype)
+    try:
+        return ttnn.experimental.paged_fill_cache(cache, xc, *args, **kwargs)
+    finally:
+        try:
+            xc.deallocate(True)
+        except Exception:
+            pass
+
+
 def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device, force_inline=False):
     """Resolve the per-request fill length as a device tensor for
     ``paged_fill_cache``'s kernel-side bounded-fill cap, or None to fall back
@@ -290,7 +309,7 @@ def flush_deferred_bounded_fills(layers):
                 k_f = _zero_extend_ring_fill(p["k_fill"], _mod)
                 v_f = _zero_extend_ring_fill(p["v_fill"], _mod)
                 try:
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         p["k_cache"],
                         k_f,
                         p["page_table"],
@@ -298,7 +317,7 @@ def flush_deferred_bounded_fills(layers):
                         block_size=p["block_size"],
                         **p["paged_modulo_kwargs"],
                     )
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         p["v_cache"],
                         v_f,
                         p["page_table"],
@@ -325,7 +344,7 @@ def flush_deferred_bounded_fills(layers):
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
             k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
             v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
-            ttnn.experimental.paged_fill_cache(
+            _paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
                 pending["page_table"],
@@ -333,7 +352,7 @@ def flush_deferred_bounded_fills(layers):
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
             )
-            ttnn.experimental.paged_fill_cache(
+            _paged_fill_cache(
                 pending["v_cache"],
                 v_merged,
                 pending["page_table"],
@@ -548,7 +567,7 @@ def _prefill_forward_single(
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         k_cache,
                         k_fill,
                         fill_page_table,
@@ -557,7 +576,7 @@ def _prefill_forward_single(
                         **paged_modulo_kwargs,
                         **fill_kwargs,
                     )
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         v_cache,
                         v_fill,
                         fill_page_table,
@@ -593,7 +612,7 @@ def _prefill_forward_single(
                             [0, 0, 0, 0],
                             [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
                         )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     k_cache,
                     k_fill,
                     fill_page_table,
@@ -601,7 +620,7 @@ def _prefill_forward_single(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     v_cache,
                     v_fill,
                     fill_page_table,
@@ -1112,7 +1131,7 @@ def prefill_forward(
                         if _t is not _orig:
                             _t.deallocate(True)
                     continue
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     k_cache,
                     _k_merged,
                     page_table,
@@ -1120,7 +1139,7 @@ def prefill_forward(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     v_cache,
                     _v_merged,
                     page_table,
