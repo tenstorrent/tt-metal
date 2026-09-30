@@ -107,6 +107,11 @@ COMP_OPS = [
     MathOperation.GreaterThanEqualZero,
 ]
 
+# Ops that sweep the comp format set and reuse the comp input builders. Signbit is a pure sign-bit
+# test (it differs from less_than_zero only at -0.0 and NaN), so the comp stimuli, which seed both
+# zero signs and both signs in every face, cover it too.
+COMP_FORMAT_OPS = COMP_OPS + [MathOperation.Signbit]
+
 RELU_CC_OPS = [
     MathOperation.Lrelu,
     MathOperation.ReluMin,
@@ -509,7 +514,7 @@ def prepare_unary_inputs(
         return prepare_cumsum_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
-    if mathop in COMP_OPS:
+    if mathop in COMP_FORMAT_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
         if input_format in (DataFormat.UInt16, DataFormat.UInt8):
@@ -798,7 +803,7 @@ OP_CONFIGS = [
         OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
         for op in ROUNDING_OPS
     ],
-] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
+] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_FORMAT_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
@@ -807,7 +812,7 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     """Float formats for every op, plus the integer/UInt16 formats only comp sweeps."""
     if cfg.mathop == MathOperation.Typecast:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
-    if cfg.mathop in COMP_OPS:
+    if cfg.mathop in COMP_FORMAT_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
     return SFPU_UNARY_FORMATS
 
@@ -890,8 +895,8 @@ def test_eltwise_unary_sfpu_quasar(
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
     tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
-    floor/ceil/trunc/frac/round, and the six
-    compare-to-zero modes), validated against the UnarySFPUGolden reference.
+    floor/ceil/trunc/frac/round, the six
+    compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
     shared format matrix.
     """
