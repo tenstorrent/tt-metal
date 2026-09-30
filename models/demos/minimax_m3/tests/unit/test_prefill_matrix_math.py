@@ -14,6 +14,9 @@ _PKG = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "prefill_m
 _spec = importlib.util.spec_from_file_location("matrix_math", os.path.join(_PKG, "matrix_math.py"))
 mp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mp)
+_tspec = importlib.util.spec_from_file_location("matrix_table", os.path.join(_PKG, "matrix_table.py"))
+mt = importlib.util.module_from_spec(_tspec)
+_tspec.loader.exec_module(mt)
 
 
 def _ends(c0, n, period, t0=1000.0, fill_extra=0.0, stages=16):
@@ -123,3 +126,15 @@ def test_read_rank_csv_accepts_only_complete_lines(tmp_path):
     assert rows == {0: (1000.0, 50.0), 2: (1000.2, 60.0)}  # short/junk rows skipped; torn last line ignored
     f.write_text(f.read_text() + ".5\n")
     assert mp.read_rank_csv(str(tmp_path), 15)[3] == (1000.3, 61.5)
+
+
+def test_percentile_labels_exact_for_new_and_nearest_within_tolerance_for_cached():
+    # new-token axis: exact only (5120 sits within 5120 of 640 but must NOT inherit p25)
+    assert mt._lbl(5120, mt.NEW_PCT) == "5120"
+    assert mt._lbl(6900, mt.NEW_PCT) == "6900 (p90)"
+    assert mt._lbl(1200, mt.NEW_PCT) == "1200"
+    # cached axis: values rounded down to a 2048 multiple keep their label; the NEAREST key wins
+    assert mt._lbl(311296, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "311296 (p75)"
+    assert mt._lbl(312320, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "312320 (p75)"
+    assert mt._lbl(0, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "0"
+    assert mt._lbl(100000, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "100000"

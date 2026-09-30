@@ -481,7 +481,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     # ---- Legacy single-stage path (direct call, stage_layout is None). ----
     # The pre-#48826 behavior, still exercised by direct callers that don't build a stage_layout
-    # (e.g. test_glm52_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
+    # (e.g. test_glm53_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
     # from the cache itself. tp_axis=None (TP-replicated) is tp_factor == 1 below, so both layouts run
     # the same loop: one device group per row, spanning the whole row's slice.
     host_name = socket.gethostname()

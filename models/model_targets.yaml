@@ -368,6 +368,17 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
 
+  paddleocr-vl-1.6:
+    aliases: ["PaddleOCR-VL-1.6", "PaddlePaddle/PaddleOCR-VL-1.6"]
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+
   gemma-4-26b-a4b:
     aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
     skus:

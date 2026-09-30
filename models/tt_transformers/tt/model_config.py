@@ -983,7 +983,7 @@ class ModelArgs:
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
             # Mixtral prefill program configs
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
@@ -1451,6 +1451,18 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
+                # N150/Llama 8B: default K block 8 exceeded available L1 by
+                # 60,256 bytes with trace-owned tensors live. Four 32-wide tiles
+                # still divide K=4096 and halve the input CB staging vs. 8.
+                # Validated at 512/1024/2048 tokens (MLP PCC > 0.9996); this is
+                # a measured fit, not an assertion that 4 is throughput-optimal.
+                in0_block_w=(
+                    4
+                    if self.device_name == "N150"
+                    and self.base_model_name == "Llama-3.1-8B"
+                    and seq_len >= self.prefill_len_cutoff
+                    else None
+                ),
                 per_core_N=(
                     math.ceil(
                         (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
@@ -2903,7 +2915,9 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get(
+            "norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps"))
+        )  # layer_norm_eps: Command-R (cohere) HF key
         self.vocab_size = text_config["vocab_size"]
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
@@ -3034,6 +3048,8 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        # Command-R (cohere): final-logit scalar applied post-linear on the LM head.
+        self.logit_scale = text_config.get("logit_scale", None)
 
         # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
         # Attn-score softcapping is not applied (see __init__ comment); only the
@@ -3559,6 +3575,15 @@ class ModelArgs:
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            elif self.model_type == "cohere":
+                # Command-R rotates Q/K INTERLEAVED-native (HF modeling_cohere overrides
+                # rotate_half: adjacent pairs (2i,2i+1) + repeat_interleave cache) — unlike
+                # llama's NeoX half-split. The stock NeoX->Meta reverse_permute therefore
+                # SCRAMBLES already-interleaved cohere Q/K pairs; the ttnn interleaved
+                # rotary op is correct only with the unpermuted layout. Root-caused
+                # 2026-08-28 (quality defect): layer-0 PCC 0.9324 -> 0.9998 at seq 36
+                # (served math probe 422 restored) by skipping the permute.
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format

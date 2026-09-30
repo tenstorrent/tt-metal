@@ -6,9 +6,12 @@
 #include <tt_stl/fmt.hpp>
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/program/slow_dispatch.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -134,7 +137,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload);
     }
     return false;  // Slow dispatch doesn't support pinned memory
 }
@@ -165,7 +168,7 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(
@@ -248,8 +251,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
-    // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+    // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
+    tt_metal::slow_dispatch::LaunchProgramAsync(*local_devices[0], program, /*force_slow_dispatch=*/false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop
@@ -262,7 +265,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     if (blocking) {
         // Can be parallelized: wait across all devices
         for (auto* device : local_devices) {
-            tt_metal::detail::WaitProgramDone(device, program);
+            tt_metal::slow_dispatch::WaitProgramDone(*device, program);
+            tt_metal::detail::ReadDeviceProfilerResults(device);
         }
     } else {
         {
