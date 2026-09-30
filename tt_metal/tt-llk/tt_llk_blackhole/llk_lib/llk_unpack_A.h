@@ -359,6 +359,7 @@ inline void _llk_unpack_A_init_(
     // The plain SrcA path (no broadcast, no dest accumulate or reuse, no face transpose, no unpack to dest) also gets
     // the block body of _llk_unpack_A_block_ recorded in the replay buffer. The face transpose path records its own
     // two entries in the MOP config above and never takes the block path.
+    block_replay_body = BlockReplayBody::None;
     if constexpr (BType == BroadcastType::NONE && !acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {
         if (transpose_of_faces == 0 && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
@@ -367,12 +368,15 @@ inline void _llk_unpack_A_init_(
             {
                 case 1:
                     llk_unpack_a_detail::load_block_replay<1>();
+                    block_replay_body = BlockReplayBody::UnpackA_1;
                     break;
                 case 2:
                     llk_unpack_a_detail::load_block_replay<2>();
+                    block_replay_body = BlockReplayBody::UnpackA_2;
                     break;
                 default:
                     llk_unpack_a_detail::load_block_replay<4>();
+                    block_replay_body = BlockReplayBody::UnpackA_4;
                     break;
             }
         }
@@ -529,7 +533,12 @@ inline void _llk_unpack_A_block_(
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
 
-    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
+    // Unpack to dest keeps its per tile handshake with the math thread. A block call whose body the init did not
+    // record (a face count other than the init's, or an init of another path since) also takes the per tile calls,
+    // which run whatever the last init programmed, exactly as before the block path existed.
+    const bool body_recorded = block_replay_body == static_cast<BlockReplayBody>(num_faces);
+    LLK_ASSERT(body_recorded, "_llk_unpack_A_block_ needs the body recorded by _llk_unpack_A_init_ of the plain path with the same num_faces");
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) || !body_recorded)
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {

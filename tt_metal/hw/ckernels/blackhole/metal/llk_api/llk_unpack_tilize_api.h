@@ -6,7 +6,6 @@
 
 #include "sanitizer/api.h"
 #include <cstdint>
-#include "llk_unpack_A_api.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
 
@@ -33,9 +32,6 @@ inline void llk_unpack_tilize_init_impl(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
 
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
-    // The tilize init records its own replay body over the one llk_unpack_A_init recorded for llk_unpack_A_block;
-    // a copy_block after this init needs a copy_init first, as its contract says.
-    llk_unpack_A_block_path_ready = false;
 }
 
 inline void llk_unpack_tilize_impl(

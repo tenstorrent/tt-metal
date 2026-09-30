@@ -204,6 +204,21 @@ inline void switch_config_context_from(const std::uint32_t context_used)
     }
 }
 
+// Which block body the unpack thread's replay buffer holds. The init that records a body sets it, every other init of
+// this family clears it, and the block calls fall back to their per tile calls when it does not name their body, so a
+// block call after an init that recorded something else cannot replay a foreign body. The unpack A values equal the
+// face count the body was recorded for.
+enum class BlockReplayBody : std::uint8_t
+{
+    None      = 0,
+    UnpackA_1 = 1,
+    UnpackA_2 = 2,
+    UnpackA_4 = 4,
+    Tilize    = 8,
+};
+
+inline BlockReplayBody block_replay_body = BlockReplayBody::None;
+
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
 {
@@ -983,10 +998,10 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
 // Wait for the math thread to publish the DEST slot of this tile, then consume the publication. The math thread
 // posts MATH_DONE from its instruction stream once every earlier math instruction has completed and the section
 // acquire before this tile has passed (math_unpack_to_dest_math_ready), so the UNPACRs of the MOP, held by the
-// unpack stall, cannot write DEST before that point; the sync stall keeps the SEMGET behind the wait. The semaphore
-// has max 1, so the math thread cannot publish a second tile before this one is consumed, and the unpack thread
-// cannot post UNPACK_TO_DEST twice before the math thread has taken the first post (that post needs the MOP, which
-// needs this wait).
+// unpack stall, cannot write DEST before that point; the sync stall keeps the SEMGET behind the wait. The math thread
+// cannot publish a second tile before this one is consumed (its next post waits for the UNPACK_TO_DEST post of this
+// tile, which needs the MOP, which needs this wait), so the count alternates between 0 and 1 whatever the semaphore's
+// maximum (the firmware and the test harness initialise it with max 1).
 inline void wait_for_dest_available()
 {
     TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);

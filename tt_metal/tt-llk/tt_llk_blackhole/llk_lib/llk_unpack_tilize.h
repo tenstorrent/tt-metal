@@ -108,6 +108,7 @@ inline void _llk_unpack_tilize_init_(
 {
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
+    block_replay_body = BlockReplayBody::None;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     // Program Ch1.Z stride from unpack_dst_format's datum size, required by the
@@ -202,6 +203,7 @@ inline void _llk_unpack_tilize_init_(
         {
             llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0>();
             llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN>();
+            block_replay_body = BlockReplayBody::Tilize;
         }
     }
 }
@@ -449,7 +451,11 @@ inline void _llk_unpack_tilize_block_(
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
 
-    if (IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest)
+    // The 8-bit and unpack to dest paths keep their per tile calls, and so does a block call whose body the init did
+    // not record (an init of another path since), which then runs whatever the last init programmed.
+    const bool body_recorded = block_replay_body == BlockReplayBody::Tilize;
+    LLK_ASSERT(IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || body_recorded, "_llk_unpack_tilize_block_ needs the body recorded by _llk_unpack_tilize_init_");
+    if (IS_8BIT_FORMAT(unpack_src_format) || unpack_to_dest || !body_recorded)
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
