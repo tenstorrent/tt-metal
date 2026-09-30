@@ -1,0 +1,69 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "routed experts",
+   "gb": 3.31201171875
+  },
+  {
+   "group": "activations (planner estimate)",
+   "gb": 2.5
+  },
+  {
+   "group": "attention",
+   "gb": 1.058349609375
+  },
+  {
+   "group": "state: MLA latent cache (576) layers 0-39",
+   "gb": 0.604248046875
+  },
+  {
+   "group": "extra: contract KV copy (reserve)",
+   "gb": 0.6
+  },
+  {
+   "group": "embedding (hidden split over columns)",
+   "gb": 0.4375
+  },
+  {
+   "group": "shared expert",
+   "gb": 0.3896484375
+  },
+  {
+   "group": "extra: ring_mla KV scratch, RoPE and dispatch tables, CCL buffers",
+   "gb": 0.35
+  },
+  {
+   "group": "dense mlp (layers 0-1)",
+   "gb": 0.1845703125
+  },
+  {
+   "group": "lm_head (vocab-sharded over 8)",
+   "gb": 0.109375
+  },
+  {
+   "group": "mHC projection",
+   "gb": 0.05126953125
+  },
+  {
+   "group": "router",
+   "gb": 0.03247976303100586
+  },
+  {
+   "group": "norms, mHC scalars",
+   "gb": 0.0003737807273864746
+  }
+ ],
+ "total_gb": 9.629826200008392,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 8307,
+ "mesh": [
+  4,
+  2
+ ],
+ "seq": 56320,
+ "users": 1
+}
