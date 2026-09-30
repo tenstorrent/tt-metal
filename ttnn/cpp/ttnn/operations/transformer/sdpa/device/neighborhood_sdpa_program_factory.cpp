@@ -58,9 +58,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const uint32_t kv_chunk_count = ceil_div(plan.gather_brick_count, tiles_per_kv_chunk);
 
     // A chunk WIDER than the stride means its bricks do not share a context window, so the mask
-    // cannot be one tile per slot broadcast down the query rows -- each brick needs its own. That
-    // is only reachable via DIFFVAE_NA_UNSAFE_CHUNK today, so this follows the same switch rather
-    // than costing anything on the shipped path.
+    // cannot be one tile per slot broadcast down the query rows -- each brick needs its own.
     const bool per_brick_mask = query_tile_rows > 1 && !(config.query_chunk_sites() == config.stride);
     const uint32_t mask_tiles_per_kv_chunk = per_brick_mask ? query_tile_rows * tiles_per_kv_chunk : tiles_per_kv_chunk;
 
