@@ -290,9 +290,9 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
 
     // No second poll of the context semaphore: the next call polls it before it writes its configuration, so the RISC
-    // returns at once and decodes the next call's metadata while the unpacker drains this one (see
-    // llk_unpack_AB_custom_mm.h).
-    reset_config_context();
+    // returns at once and decodes the next call's metadata while the unpacker drains this one; the other context is
+    // handed to a follower of the two-context protocol (see llk_unpack_AB_custom_mm.h).
+    switch_config_context(unp_cfg_context);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
