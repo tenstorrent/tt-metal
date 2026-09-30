@@ -11,7 +11,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Kernel profiler zones (device-profiler builds); the ring-joint factory sets it from TT_SDPA_PROFILE_ZONES.
-// The joint and exp-ring factories do not emit it, so their zones stay off.
 #ifndef SDPA_PROFILE_ZONES
 #define SDPA_PROFILE_ZONES 0
 #endif
@@ -80,11 +79,10 @@ inline __attribute__((always_inline)) void fine_sync([[maybe_unused]] bool on) {
 }
 }  // namespace sdpa_profile
 
-// Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
-// When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
-// When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-// MaybeDeviceZoneScopedNIf(ENABLED, name, on): also needs `on` when a window is set, else MaybeDeviceZoneScopedN.
+// MaybeDeviceZoneScopedN(ENABLED, name): DeviceZoneScopedN when ENABLED, otherwise nothing.
+// MaybeDeviceZoneScopedNIf(ENABLED, name, on): also gated at runtime by `on` while a window is set.
 // MaybeDeviceZoneScopedNWindow(ENABLED, name, on): a gated zone that exists only while a window is set.
+// MaybeDeviceZoneScopedNFine(ENABLED, name, on): a gated zone that exists only with SDPA_PROFILE_FINE_ZONES.
 #if defined(PROFILE_STREAMING)
 // Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
 #define MaybeDeviceZoneScopedN(ENABLED, name)

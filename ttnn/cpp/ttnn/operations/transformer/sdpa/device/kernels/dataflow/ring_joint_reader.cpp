@@ -1010,7 +1010,6 @@ void kernel_main() {
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
             for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
-                // Same window as compute's (q_iter is the Q index within this core's range).
                 [[maybe_unused]] const bool prof_win = sdpa_profile::window_hit(ring_iter, q_iter, k_chunk);
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;

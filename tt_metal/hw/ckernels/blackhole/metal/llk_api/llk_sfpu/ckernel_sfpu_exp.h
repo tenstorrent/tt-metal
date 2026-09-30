@@ -774,7 +774,6 @@ void exp_init() {
         constexpr float offset_fp32 = __builtin_bit_cast(float, offset);
 
         constexpr float A_scaled = A * scale_fp32;
-        // The threshold guards scale * x - offset; (B-C) absorbs -A * offset.
         constexpr float THRESHOLD_scaled = (THRESHOLD + offset_fp32) / scale_fp32;
         constexpr float B_minus_C_shifted = B_minus_C - A * offset_fp32;
 
@@ -953,7 +952,6 @@ void exp_init() {
         constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
         constexpr float offset_fp32 = __builtin_bit_cast(float, offset);
         constexpr float A_scaled = A * scale_fp32;
-        // (B-C) absorbs -A * offset: i = A * (scale * x - offset) + (B-C).
         constexpr float B_minus_C_shifted = B_minus_C - A * offset_fp32;
 
         // Load constant A into LREG[12]

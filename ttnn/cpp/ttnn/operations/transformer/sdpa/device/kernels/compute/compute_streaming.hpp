@@ -43,8 +43,8 @@ constexpr bool sdpa_fixed_offset_softmax = SDPA_FIXED_OFFSET_SOFTMAX == 1;
 #ifndef SDPA_FIXED_OFFSET_BITS
 #define SDPA_FIXED_OFFSET_BITS 0
 #endif
-// Row-sum seed for fixed mode: a row whose every P underflowed still normalizes to 0 instead of 0/0.
-constexpr float sdpa_fixed_sum_epsilon = 1.1754944e-38f;  // bf16 min normal
+// Row-sum seed for fixed mode (bf16 min normal): a row whose every P underflowed normalizes to 0, not 0/0.
+constexpr float sdpa_fixed_sum_epsilon = 1.1754944e-38f;
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
@@ -54,8 +54,6 @@ constexpr bool reduce_trigger_supported = false;
 #else
 constexpr bool reduce_trigger_supported = true;
 #endif
-
-// MaybeDeviceZoneScopedN / MaybeDeviceZoneScopedNIf and the profiling window: sdpa_profile_zones.hpp.
 
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
@@ -456,11 +454,8 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
-// Fixed-offset softmax QK^T subblock: matmul into DEST, exp(scale * S - c) on the PACK SFPU, pack P to out_cb
-// and L1-accumulate the tile row sums into sum_cb[row] (fresh on column 0). The caller holds the packer ReLU on.
-// Consecutive subblocks alternate the pack order so the L1-acc bit and the pack MOP change once per subblock:
-// !sums_first enters with (acc off, out_cb row MOP) and leaves with (acc on, sum_cb single-tile MOP),
-// sums_first the reverse. Each sum tile still sees its columns in order, column 0 as the overwrite.
+// Fixed-offset QK^T subblock: matmul, PACK-SFPU exp(scale * S - c), pack P, L1-accumulate row sums (caller's ReLU on).
+// !sums_first enters (L1-acc off, out_cb row MOP) and leaves (acc on, sum_cb tile MOP); sums_first is the reverse.
 template <bool profiling_enabled, uint32_t in1_stride, uint32_t out_num_cols, int fidelity>
 void blocked_matmul_exp_pack(
     uint32_t in0_cb,
@@ -580,16 +575,11 @@ void inplace_v_matmul_pack_batched(
     }
 }
 
-/**
- * Re-enter the no-mop matmul for the PV phase after the QK^T phase's init. A different PV fidelity
- * needs the full init (the replay image is recorded per fidelity); otherwise the addrmod-only reinit.
- * LoFi always re-records: its replay image bakes the operand clear chosen from the init's ct/rt, and a
- * QK^T image recorded for a narrowed tail chunk (ct < rt) deadlocks the PV matmul (ct >= rt).
- * rerecord = false: the replay already holds this PV image (same fidelity, same reuse_a), reinit only.
- */
+// PV-phase matmul re-entry: full init when the replay image differs from the recorded one (fidelity change, or
+// LoFi, whose image bakes the init's ct/rt); rerecord = false says the replay already holds this PV image.
 ALWI void pv_mm_no_mop_reinit_short(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim, bool rerecord = true) {
-    constexpr bool pv_lofi = PV_MATH_FIDELITY == 0;  // MathFidelity::LoFi
+    constexpr bool pv_lofi = PV_MATH_FIDELITY == 0;
     if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY || pv_lofi) {
         if (rerecord) {
             mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
@@ -1523,11 +1513,8 @@ static void sdpa_inner_loop_step(
     uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
     uint32_t kt_index_offset = 0;
     constexpr bool fixed = sdpa_fixed_offset_softmax;
-    // Fixed mode: the accumulators start on is_first_iter, empty or seeded from prev; every later chunk
-    // L1-accumulates onto the same tiles with no push/pop until the last chunk publishes them.
     const bool acc_overwrite = !fixed || (is_first_iter && !seed_from_prev);
-    // Fixed mode sums each chunk's P tiles in chunk_sum_cb and folds that into cur.sum once per chunk: one
-    // bf16 rounding of the running total per chunk, as the standard path's SALAD does, not one per tile.
+    // Fixed mode: each chunk's row sums land in chunk_sum_cb and fold into cur.sum once, one bf16 rounding per chunk.
     const uint32_t step_sum_cb = fixed ? chunk_sum_cb : cur.sum;
 
     if constexpr (!fixed) {
@@ -1708,7 +1695,7 @@ static void sdpa_inner_loop_step(
         }
         if constexpr (fixed) {
             if (dest_exp && kt_num_full_subblocks % 2 == 1) {
-                PACK((llk_pack_reconfig_l1_acc(0)));  // an odd count ends on the sums' L1-acc
+                PACK((llk_pack_reconfig_l1_acc(0)));
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
@@ -1790,7 +1777,7 @@ static void sdpa_inner_loop_step(
             }
         }
 
-        // Max reduce: reads from cb_qkt_im at q_subblock position (fixed mode: cur.max already holds zeros)
+        // Max reduce: reads from cb_qkt_im at q_subblock position
         if constexpr (!fixed) {
             MaybeDeviceZoneScopedNIf(profiling_enabled, "Reduce max", prof_win);
             CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
@@ -1818,7 +1805,7 @@ static void sdpa_inner_loop_step(
     }
     if constexpr (fixed) {
         if (dest_exp) {
-            PACK((llk_pack_relu_config(ReluConfig::none())));  // O can be negative: off before the PV packs
+            PACK((llk_pack_relu_config(ReluConfig::none())));
         }
     }
 
@@ -1868,7 +1855,6 @@ static void sdpa_inner_loop_step(
 
         // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
-        // Fixed mode always accumulates in cur.out and copies it out to save_out_cb at the end of the step.
         const uint32_t out_cb = (!fixed && save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
 
         // V wait deferred: don't block here. The sub_exp drain loop below
@@ -1891,8 +1877,7 @@ static void sdpa_inner_loop_step(
             }
         }
 
-        // Fixed mode without a mask stamp has no drain: row group 0 joins the single-chain PV loop below, so
-        // each chunk lands on the running O with one L1 accumulate instead of one per K subblock.
+        // Fixed mode without a mask stamp has no drain: row group 0 joins the PV loop below.
         const bool split_group0 = !(fixed && dest_exp);
         const uint32_t first_pv_group = split_group0 ? 1 : 0;
         if (!split_group0) {
@@ -2031,7 +2016,6 @@ static void sdpa_inner_loop_step(
         // UNPACK takes the barrier before the last PV group only and the fold runs after group 0 (PV loop below).
         const bool pv_early = fixed && dest_exp;
         if constexpr (fixed) {
-            // Every row group's P is summed by now: publish this chunk's row sums for the fold.
             CircularBuffer(chunk_sum_cb).push_back(Sq_chunk_t);
         }
 
@@ -2049,7 +2033,6 @@ static void sdpa_inner_loop_step(
             }
         }
 
-        // The datacopy leaves the matmul replay image alone; the next PV group's reinit restores the rest.
         [[maybe_unused]] auto fold_chunk_sum = [&]() {
             MaybeDeviceZoneScopedNWindow(profiling_enabled, "FOLD", prof_win);
             sdpa_fold_chunk_sum(chunk_sum_cb, cur.sum, Sq_chunk_t, dst_size);
@@ -2088,7 +2071,6 @@ static void sdpa_inner_loop_step(
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
-            // Fixed mode: no rescale, prev is already folded into the in-place accumulator.
             if constexpr (!fixed) {
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 {
@@ -2205,7 +2187,6 @@ static void sdpa_inner_loop_step(
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
             if constexpr (fixed) {
-                // In-place accumulation: nothing to rescale; the rows are published after the last K chunk.
                 if (pv_early && q_subblock == 0) {
                     fold_chunk_sum();
                 }
@@ -2569,7 +2550,7 @@ void sdpa_standard_v2(
                 0,
                 false,
                 INVALID_CB,
-                cb_sum_A);  // fixed mode: per-chunk row-sum scratch (the idle A half)
+                cb_sum_A);
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
@@ -2650,7 +2631,6 @@ void sdpa_standard_v2(
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if constexpr (sdpa_fixed_offset_softmax) {
-                // No ping-pong: cur accumulates in place; only its zero max tiles are left at the end.
                 if (is_last) {
                     sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
                 }
@@ -3207,7 +3187,6 @@ void sdpa_ring_v2(
             const bool fifo_exit = use_l1_state_fifo && is_last_k && !is_last_ring_iter;
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
-            // Fixed mode keeps the sum in q_cur and copies it out to step_save_sum_cb inside the step.
             uint32_t step_save_sum_cb = INVALID_CB;
             if constexpr (fixed) {
                 step_save_sum_cb = save_to_staging ? cb_sum_out : INVALID_CB;
@@ -3216,7 +3195,6 @@ void sdpa_ring_v2(
             } else if (fifo_exit) {
                 q_cur.sum = cb_sum_in;
             }
-            // Fixed mode: the first K chunk after a staging restore seeds the accumulators from prev.
             const bool step_seed_from_prev = fixed && restore_from_staging && KV_chunks_processed == 1;
             const bool step_is_first = is_first || step_seed_from_prev;
 
@@ -3338,7 +3316,7 @@ void sdpa_ring_v2(
                 q_base_tiles,
                 step_seed_from_prev,
                 step_save_sum_cb,
-                acc_state.prev.sum,  // fixed mode: per-chunk row-sum scratch (the idle A half)
+                acc_state.prev.sum,
                 prof_win);
 
             if constexpr (fixed) {
@@ -3406,7 +3384,6 @@ void sdpa_ring_v2(
             // Pop the accumulator CB for max — dual-write doesn't replace the alias,
             // so the accumulator CB still has tiles from the last K-chunk's reduce.
             // (Sum doesn't need this because planting replaced the alias entirely.)
-            // Fixed mode: the zero max tiles sit in the never-swapped q_cur.max instead.
             sdpa_cb_pop_front_out_of_line(fixed ? q_cur.max : q_prev.max, Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
