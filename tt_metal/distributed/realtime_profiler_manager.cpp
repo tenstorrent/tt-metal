@@ -54,6 +54,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
@@ -525,12 +526,12 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
     // RT_PROFILER_SOCKET_CONFIG_SIZE has headroom over today's SocketSenderSize, but assert
     // it here so a future growth of the sender config triggers a deterministic startup failure.
     TT_FATAL(
-        RT_PROFILER_SOCKET_CONFIG_SIZE >= D2HSocket::required_config_buffer_size(),
+        RT_PROFILER_SOCKET_CONFIG_SIZE >= D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)),
         "RT_PROFILER_SOCKET_CONFIG_SIZE ({} B) is smaller than D2HSocket's required config "
         "buffer size ({} B). Bump RT_PROFILER_SOCKET_CONFIG_SIZE in "
         "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp and rebuild.",
         RT_PROFILER_SOCKET_CONFIG_SIZE,
-        D2HSocket::required_config_buffer_size());
+        D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)));
     uint32_t config_buffer_addr_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
     uint32_t sync_request_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
@@ -750,10 +751,10 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
             realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
-                device, realtime_profiler_program, /*force_slow_dispatch=*/true);
-            ::tt::tt_metal::detail::LaunchProgram(
-                device, realtime_profiler_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(
+                *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::slow_dispatch::LaunchProgramAsync(
+                *device, realtime_profiler_program, /*force_slow_dispatch=*/true);
 
             // realtime_profiler_msg_t is outside mailboxes_t, so LaunchProgram's writes do
             // not race with config_buffer_addr; ordering this write here is intentional.

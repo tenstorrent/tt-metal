@@ -30,7 +30,7 @@ void kernel_main() {
         }
 
 #ifdef ARCH_QUASAR
-        __atomic_add_fetch(reinterpret_cast<uint32_t*>(&arrivals[r]), 1u, __ATOMIC_SEQ_CST);
+        __atomic_add_fetch(const_cast<uint32_t*>(&arrivals[r]), 1u, __ATOMIC_SEQ_CST);
 #else
         arrivals[r] += 1;
 #endif
@@ -39,7 +39,7 @@ void kernel_main() {
         // Thread 0 snapshots the arrival count after the barrier. All threads have passed sync_threads(), observed[r] must equal num_threads.
         if (thread_id == 0) {
 #ifdef ARCH_QUASAR
-            observed[r] = __atomic_load_n(reinterpret_cast<uint32_t*>(&arrivals[r]), __ATOMIC_SEQ_CST);
+            observed[r] = __atomic_load_n(const_cast<uint32_t*>(&arrivals[r]), __ATOMIC_SEQ_CST);
 #else
             observed[r] = arrivals[r];
 #endif
@@ -49,7 +49,7 @@ void kernel_main() {
         // Each thread increments post[r] to prove it reached the post-barrier phase of this
         // round. The host checks post[r] == num_threads to confirm no thread skipped ahead.
 #ifdef ARCH_QUASAR
-        __atomic_add_fetch(reinterpret_cast<uint32_t*>(&post[r]), 1u, __ATOMIC_SEQ_CST);
+        __atomic_add_fetch(const_cast<uint32_t*>(&post[r]), 1u, __ATOMIC_SEQ_CST);
 #else
         post[r] += 1;
 #endif

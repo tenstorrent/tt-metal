@@ -35,58 +35,58 @@
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(1);
-    const uint32_t idx_table_addr = get_arg_val<uint32_t>(2);
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t idx_table_addr = get_common_arg_val<uint32_t>(2);
 
-    const uint32_t my_mt = get_arg_val<uint32_t>(3);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(4);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(5);
+    const uint32_t my_mt = get_arg_val<uint32_t>(0);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(1);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
 
-    // Weight-multicast runtime args (indices 6..15).
-    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(6);
+    // Weight-multicast runtime args (indices 3..12).
+    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(3);
     const bool is_in1_sender = is_in1_sender_u32 != 0;
-    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(7);
-    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(8);
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(9);
-    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(10);
-    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(11);
-    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(12);
-    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(13);
-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(14);
-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(15);
+    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(4);
+    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(5);
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(6);
+    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(7);
+    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(8);
+    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(9);
+    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(10);
+    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(11);
+    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(12);
 
-    // x (in0) multicast runtime args (indices 16..25).
-    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(16);
+    // x (in0) multicast runtime args (indices 13..22).
+    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(13);
     const bool is_in0_sender = is_in0_sender_u32 != 0;
-    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(17);
-    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(18);
-    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(19);
-    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(20);
-    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(21);
-    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(22);
-    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(23);
-    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(24);
-    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(25);
+    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(14);
+    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(15);
+    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(16);
+    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(17);
+    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(18);
+    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(19);
+    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(20);
+    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(21);
+    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(22);
 
     // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
     // on its act_ready_sem for GRID_X - 1 incs from the receivers; then
     // mcasts cb_activated -> all M-row cores' cb_in0_down_full L1; then
     // mcasts act_valid_sem to release receivers.
-    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(26);
-    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(27);
+    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(23);
+    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(24);
 
     // UP_SPLIT local handshake (reader <-> writer): up_go = slot reserved,
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
-    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(28);
-    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(29);
+    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(25);
+    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(26);
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
 
-    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 30.
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at M_ROW_NOC_RT_OFFSET.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
     // COUNTS_BCAST occupies 7 args before the M-row NoC table.
-    constexpr uint32_t COUNTS_BCAST_RT = 30;
+    constexpr uint32_t COUNTS_BCAST_RT = 27;
     // DOWN_SPLIT go/done sems sit between COUNTS_BCAST and the M-row NoC table.
     constexpr uint32_t DOWN_SEM_RT = COUNTS_BCAST_RT + 7;
     // IN1_WRITER_MCAST go/done sems follow the DOWN_SPLIT pair.
@@ -210,25 +210,24 @@ void kernel_main() {
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
     // `start` (= expert_region_offsets) accessor. Appended last in the reader's
-    // accessor stream. start_addr is the runtime arg after the GRID_X-pair M-row
-    // NoC table at M_ROW_NOC_RT_OFFSET.
-    const uint32_t start_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
+    // accessor stream. Its buffer binding is shared across all worker cores.
+    const uint32_t start_addr = get_common_arg_val<uint32_t>(3);
     constexpr uint32_t start_accessor_offset = idx_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
     const auto start_acc = TensorAccessor(start_args, start_addr);
 
     // Per-expert weight base addresses follow start_addr in three contiguous
-    // runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
-    // down[0..N). gate_addr(e) = arg[WEIGHTS_RT + e], etc.
-    constexpr uint32_t WEIGHTS_RT = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1;
+    // common-runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
+    // down[0..N). gate_addr(e) = arg[COMMON_WEIGHTS + e], etc.
+    constexpr uint32_t COMMON_WEIGHTS = 4;
 
 #ifdef FUSE_BIAS
     // gpt-oss expert biases. CT bias CB ids + accessor descriptors follow the
     // start accessor; per-expert bias base addresses follow the weight blocks in
     // three further runtime-arg blocks (gate_bias[0..N), up_bias, down_bias)
-    // starting at BIAS_RT. Read per expert in the loop, added by the compute
+    // starting at COMMON_BIAS. Read per expert in the loop, added by the compute
     // kernel (gate/up before the activation, down after the down matmul).
-    constexpr uint32_t BIAS_RT = WEIGHTS_RT + 3 * experts_per_chip;
+    constexpr uint32_t COMMON_BIAS = COMMON_WEIGHTS + 3 * experts_per_chip;
     constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
     constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
     constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
@@ -405,9 +404,12 @@ void kernel_main() {
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
-        const uint32_t gate_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 0 * experts_per_chip + local_expert_id);
-        const uint32_t up_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 1 * experts_per_chip + local_expert_id);
-        const uint32_t down_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 2 * experts_per_chip + local_expert_id);
+        const uint32_t gate_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0 * experts_per_chip + local_expert_id);
+        const uint32_t up_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1 * experts_per_chip + local_expert_id);
+        const uint32_t down_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2 * experts_per_chip + local_expert_id);
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
@@ -457,9 +459,12 @@ void kernel_main() {
         // columns are discarded either way — the gate/up ones by the down
         // phase's K bound, the down ones by the writer.
         {
-            const uint32_t gbias_addr = get_arg_val<uint32_t>(BIAS_RT + 0 * experts_per_chip + local_expert_id);
-            const uint32_t ubias_addr = get_arg_val<uint32_t>(BIAS_RT + 1 * experts_per_chip + local_expert_id);
-            const uint32_t dbias_addr = get_arg_val<uint32_t>(BIAS_RT + 2 * experts_per_chip + local_expert_id);
+            const uint32_t gbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + local_expert_id);
+            const uint32_t ubias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 1 * experts_per_chip + local_expert_id);
+            const uint32_t dbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 2 * experts_per_chip + local_expert_id);
             const auto gate_bias_acc = TensorAccessor(gate_bias_args, gbias_addr, get_tile_size(cb_gate_bias));
             const auto up_bias_acc = TensorAccessor(up_bias_args, ubias_addr, get_tile_size(cb_up_bias));
             const auto down_bias_acc = TensorAccessor(down_bias_args, dbias_addr, get_tile_size(cb_down_bias));

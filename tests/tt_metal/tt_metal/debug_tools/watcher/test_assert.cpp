@@ -57,6 +57,7 @@ static void RunTest(
     HalProcessorIdentifier processor,
     dev_msgs::debug_assert_type_t assert_type = dev_msgs::DebugAssertTripped,
     uint32_t hw_assert_cause = 0) {
+    const auto device_id = mesh_device->get_device_ids()[0];
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -82,7 +83,7 @@ static void RunTest(
     switch (processor.core_type) {
         case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
-            virtual_core = device->worker_core_from_logical_core(logical_core);
+            virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
             experimental::KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
                 .source = kernel,
@@ -100,7 +101,7 @@ static void RunTest(
                     auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                         ? tt_metal::NOC::RISCV_1_default
                                         : tt_metal::NOC::RISCV_0_default;
-                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
+                    // Configure the KernelSpec per arch so it runs on either.
                     if (is_quasar) {
                         // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
                         // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
@@ -108,12 +109,15 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen2Config{};
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen1Config{
-                            .processor = gen1_processor,
-                            .noc = gen1_noc,
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = gen1_processor,
+                                    .noc = gen1_noc,
+                                },
                         };
                     }
                     break;
@@ -126,11 +130,7 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    if (is_quasar) {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen2Config{};
-                    } else {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen1Config{};
-                    }
+                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
@@ -158,7 +158,7 @@ static void RunTest(
                 GTEST_SKIP();
             }
             logical_core = *eth_cores.begin();
-            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            virtual_core = mesh_device->ethernet_core_from_logical_core(logical_core);
             EthernetConfig eth_config{.noc = tt_metal::NOC::NOC_0};
             if (!is_active) {
                 eth_config.eth_mode = Eth::IDLE;
@@ -176,7 +176,7 @@ static void RunTest(
             }
             // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
             logical_core = {0, 1};
-            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "drisc";
             break;
@@ -186,7 +186,7 @@ static void RunTest(
                 log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(device)) {
+            if (detail::sd_cq_kernel_tests_should_skip(*mesh_device)) {
                 log_info(LogTest, "Skipping: soc descriptor has no dispatch-engine cores.");
                 GTEST_SKIP();
             }
@@ -197,22 +197,20 @@ static void RunTest(
                     "TT_METAL_TENSIX_DISPATCH_CORES).");
                 GTEST_SKIP();
             }
-            logical_core = tt::tt_metal::detail::dispatch_engine_core(device, 0);
-            virtual_core = tt::tt_metal::detail::dispatch_engine_virtual_core(device, 0);
+            logical_core = detail::dispatch_engine_core(*mesh_device, 0);
+            virtual_core = detail::dispatch_engine_virtual_core(*mesh_device, 0);
             const auto dm_processor = static_cast<DataMovementProcessor>(processor.processor_type);
             assert_kernel = tt::tt_metal::detail::CreateDispatchEngineKernel(
                 program,
                 kernel,
                 logical_core,
                 dm_processor,
-                experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
-                    .is_legacy_kernel = true});
+                experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .is_legacy_kernel = true});
             break;
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
-    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device_id, logical_core, virtual_core);
 
     // Build runtime arg setter that targets either the Metal 2.0 named-name path (TENSIX) or
     // the legacy handle (ETH/DRAM).
@@ -330,7 +328,7 @@ static void RunTest(
 
     std::string expected = fmt::format(
         "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} {} Current kernel: {}.",
-        device->id(),
+        device_id,
         core_str,
         logical_core.x,
         logical_core.y,

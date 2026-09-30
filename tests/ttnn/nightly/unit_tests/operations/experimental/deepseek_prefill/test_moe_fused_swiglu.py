@@ -69,7 +69,7 @@ _ISL_SHORT_BLOCK_SWEEP = [67, 289]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 # "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
 # kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
 # SwiGLU-OAI's production shapes. Neither is reachable through SINGLE_EXPERT_MODELS at its real
 # dims (minimax_m3 is absent; gptoss is there but only ever runs SiLU), so the activation had no
@@ -98,6 +98,7 @@ def run_moe_fused_swiglu(
     gate_bias=None,
     up_bias=None,
     down_bias=None,
+    check_cache=False,
 ):
     """
     One chip, one expert, moe_fused_swiglu called directly.
@@ -211,6 +212,37 @@ def run_moe_fused_swiglu(
         up_biases=None if up_bias is None else [up_bias],
         down_biases=None if down_bias is None else [down_bias],
     )
+    if check_cache:
+        # Keep the original buffers live and change the down projection's sign.
+        # Reverse the active rows too, so stale input bindings fail the numerical check.
+        ttnn.synchronize_device(device)
+        fresh_input = torch_input.clone()
+        fresh_input[:active_tokens] = torch_active.flip(0)
+        fresh_x = to_device(fresh_input.reshape(tuple(x.shape)), x.dtype, x.layout)
+        fresh_counts, fresh_idx = ttnn.clone(counts), ttnn.clone(idx)
+        fresh_gate, fresh_up = ttnn.clone(w_gate), ttnn.clone(w_up)
+        fresh_down = to_device(-weights["down_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
+        fresh_biases = [None if bias is None else ttnn.clone(bias) for bias in (gate_bias, up_bias)]
+        fresh_down_bias = None if down_bias is None else ttnn.neg(down_bias)
+        entries = device.num_program_cache_entries()
+        fresh_output = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+            fresh_x,
+            [fresh_gate],
+            [fresh_up],
+            [fresh_down],
+            fresh_counts,
+            fresh_idx,
+            input_m_tiles=allocated_tokens // 32,
+            core_grid=core_grid,
+            activation=activation,
+            gate_biases=None if fresh_biases[0] is None else [fresh_biases[0]],
+            up_biases=None if fresh_biases[1] is None else [fresh_biases[1]],
+            down_biases=None if fresh_down_bias is None else [fresh_down_bias],
+        )
+        assert device.num_program_cache_entries() == entries
+        output = fresh_output
+        torch_output_active = -torch_output_active.flip(0)
+
     tt_output = ttnn.to_torch(output)[0, 0]
 
     if active_tokens == 0:
@@ -262,7 +294,7 @@ def _isl_params(active_sweep, only_models=None):
     7168 -> 3584 first, so EMB_SIZE would run it at 2x its real K. Its case is separate below.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
@@ -272,7 +304,6 @@ def _isl_params(active_sweep, only_models=None):
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )
@@ -383,6 +414,7 @@ def test_moe_fused_swiglu_bias(device, activation, live: str):
         gate_bias=_bias_tensor(device, hidden_dim, live in ("gate", "all")),
         up_bias=_bias_tensor(device, hidden_dim, live in ("up", "all")),
         down_bias=_bias_tensor(device, emb_dim, live in ("down", "all")),
+        check_cache=True,
     )
 
 
@@ -400,4 +432,20 @@ def test_moe_fused_swiglu_swigluoai(device, emb_dim: int, hidden_dim: int, activ
         active_tokens=active_tokens,
         x_row_major=True,
         activation=ttnn.RoutedExpertActivation.SwiGluOai,
+    )
+
+
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
+def test_moe_fused_swiglu_cached_multicast_args(device, x_row_major):
+    """Shared multicast metadata must survive cache hits with fresh activation/weight buffers."""
+    _skip_if_grid_too_small(device)
+    run_moe_fused_swiglu(
+        device,
+        allocated_tokens=256,
+        emb_dim=6144,
+        hidden_dim=2048,
+        active_tokens=67,
+        x_row_major=x_row_major,
+        check_cache=True,
     )

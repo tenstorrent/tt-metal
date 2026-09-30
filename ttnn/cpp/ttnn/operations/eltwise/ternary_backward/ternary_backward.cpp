@@ -62,10 +62,18 @@ std::vector<std::optional<Tensor>> addcdiv_bw(
     grad_tensor.emplace_back(are_required_outputs[0] ? std::optional<Tensor>(grad) : std::nullopt);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
+    // tensor2 is inverted once and reused for both gradients. The second gradient used to
+    // form tensor2^2 and invert that, which loses the answer at both ends of the range --
+    // infinity below |tensor2| = 1.0842e-19, zero above 2^63 (see the note in rdiv_bw).
+    // Sharing the reciprocal is also one op cheaper than squaring and inverting.
+    std::optional<Tensor> recip_tensor2;
+    if (are_required_outputs[1] || are_required_outputs[2]) {
+        recip_tensor2 = ttnn::reciprocal(tensor2, output_mem_config);
+    }
     if (are_required_outputs[1]) {
         Tensor grad_a = ttnn::multiply(
             ttnn::multiply(grad, value, std::nullopt, output_mem_config),
-            ttnn::reciprocal(tensor2, output_mem_config),
+            *recip_tensor2,
             std::nullopt,
             output_mem_config);
         grad_tensor.emplace_back(ttnn::where(
@@ -83,8 +91,8 @@ std::vector<std::optional<Tensor>> addcdiv_bw(
             std::nullopt,
             output_mem_config);
         Tensor grad_b = ttnn::multiply(
-            tmp,
-            ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config),
+            ttnn::multiply(tmp, *recip_tensor2, std::nullopt, output_mem_config),
+            *recip_tensor2,
             std::nullopt,
             output_mem_config);
         grad_tensor.emplace_back(ttnn::where(
@@ -94,6 +102,9 @@ std::vector<std::optional<Tensor>> addcdiv_bw(
             output_mem_config));
     } else {
         grad_tensor.emplace_back(std::nullopt);
+    }
+    if (recip_tensor2.has_value()) {
+        recip_tensor2->deallocate();
     }
     return grad_tensor;
 }

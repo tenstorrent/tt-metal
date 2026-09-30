@@ -41,18 +41,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 
-# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
 # without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
-TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
 
-# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
-# linear-attention layers with no TT implementation, so only its MLA layer is testable.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
-
-TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     download_infinitebench_subset,
@@ -568,7 +563,7 @@ def _resolve_hf_snapshot_dir(path: Path) -> Path:
     return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
     safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
 
-    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.1``) or a plain
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.3``) or a plain
     checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
     """
     if (path / "model.safetensors.index.json").exists():
@@ -604,7 +599,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
-            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.3)
             # by descending into its current snapshot, where config.json + the safetensors index live.
             model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
@@ -692,7 +687,7 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
-    # Hand-built config takes precedence: some models (e.g. GLM-5.1 `glm_moe_dsa`, DeepSeek-V3.2
+    # Hand-built config takes precedence: some models (e.g. GLM-5.3 `glm_moe_dsa`, DeepSeek-V3.2
     # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
     # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
     # mutate config.max_seq_len already rely on this shared/cached object.)
@@ -701,7 +696,9 @@ def _resolve_config_only(variant_name: str):
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Same hub-cache descent get_or_download_model does: *_HF_MODEL may point at the
+        # repo root, whose config.json lives one level down in snapshots/<sha>/.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -751,7 +748,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     for candidate in candidates:
         if candidate is None:
             continue
-        p = Path(candidate)
+        p = _resolve_hf_snapshot_dir(Path(candidate))
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)

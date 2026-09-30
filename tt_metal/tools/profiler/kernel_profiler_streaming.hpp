@@ -228,10 +228,16 @@ constexpr uint32_t STALL_RESERVE_WORDS = STALL_CLOSE_WORDS;
 constexpr uint32_t RING_USABLE = RING_CAPACITY - STALL_RESERVE_WORDS;
 static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry a stall reserve");
 
+#if defined(PROFILE_INLINE_ENABLED)
+#define PROFILER_INLINE_ATTR inline __attribute__((always_inline))
+#else
+#define PROFILER_INLINE_ATTR __attribute__((noinline))
+#endif
+
 // Written straight into the reserve with no room check: ring_ensure_room() from here would recurse through
 // another stall scope. A stall >= 2^32 cycles saturates its duration rather than taking mark_zone_long, which
 // reserves room; a 3.2 s wait is a wedged relay, not a measurement.
-inline __attribute__((always_inline)) void stall_zone_close(uint32_t start_hi, uint32_t start_lo) {
+PROFILER_INLINE_ATTR void stall_zone_close(uint32_t start_hi, uint32_t start_lo) {
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     const uint32_t lo_d = lo - start_lo;
@@ -308,7 +314,7 @@ __attribute__((noinline)) void mark_zone_long(
 // One 3-word packet per zone with the start the scope object carried. Room is reserved before the end clock
 // is read so a stall elongates the zone it happened inside; otherwise the packet would carry a pre-stall end
 // yet sit after the stall zone. Worst case is a 1-word sticky plus the 3-word packet.
-inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
     ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);  // worst case (ATOMIC + sticky); an S zone simply uses less
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -452,8 +458,8 @@ struct profileScopeLifecycle {
 
 // Tag, timestamp, payload; the length is self-describing (word2), bounded by the 7-bit length field. Same
 // reserve-before-clock-read ordering as mark_zone_close.
-template <uint32_t data_id, typename... Args>
-inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args... trailers) {
+template <typename... Args>
+PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_id, uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
     static_assert(2 * total_data_count <= ppfmt::DATA_SIZE_MASK, "payload overflows PP_DATA's 7-bit length field");
 
@@ -471,8 +477,7 @@ inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args
 }
 
 // PP_EVENT point marker: compile-time event, 2 words, no payload.
-template <uint32_t data_id>
-inline __attribute__((always_inline)) void record_event() {
+PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -494,7 +499,7 @@ struct stackCanaryScope {
     inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     inline __attribute__((always_inline)) ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_event<STACK_CANARY_DEAD_ID>();
+            record_event(STACK_CANARY_DEAD_ID);
         }
     }
 };
@@ -506,6 +511,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 #define DeviceZoneScopedN(name)    \
     TT_ZONE_DEFINE_ID(hash, name); \
@@ -521,13 +527,13 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceTimestampedData(name, data)               \
     {                                                   \
         TT_ZONE_DEFINE_ID(hash, name);                  \
-        kernel_profiler::time_stamped_data<hash>(data); \
+        kernel_profiler::time_stamped_data(hash, data); \
     }
 
-#define DeviceRecordEvent(name)                \
-    {                                          \
-        TT_ZONE_DEFINE_ID(hash, name);         \
-        kernel_profiler::record_event<hash>(); \
+#define DeviceRecordEvent(name)              \
+    {                                        \
+        TT_ZONE_DEFINE_ID(hash, name);       \
+        kernel_profiler::record_event(hash); \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
@@ -596,5 +602,9 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define StartPerfCounters()
 #define StopPerfCounters()
 #define RecordPerfCounters()
+
+#define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 
 #endif

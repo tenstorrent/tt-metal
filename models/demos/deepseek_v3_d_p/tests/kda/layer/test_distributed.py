@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = [
     run_for_blackhole(),
@@ -52,7 +52,7 @@ def _to_sp_input(
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_sp_group_divisor_fallback_matches_reference(
+def test_sp_explicit_grouping_matches_reference(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
@@ -65,7 +65,7 @@ def test_sp_group_divisor_fallback_matches_reference(
         norm_eps=1e-5,
     )
     weights = random_weights(config)
-    # SP2 produces 20 local chunks; configured group size 8 falls back to divisor 5.
+    # Explicit five-chunk groups preserve both SP2 and SP4 geometries.
     sequence = 1280
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(937)).to(
         torch.bfloat16
@@ -74,7 +74,7 @@ def test_sp_group_divisor_fallback_matches_reference(
 
     sp_axis = 1 - tensor_parallel_axis
     program_config = KDAProgramConfig(
-        recurrence=KDARecurrenceProgramConfig(summary_group_chunks=8),
+        recurrence=KDARecurrenceProgramConfig(summary_group_chunks=5),
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
     )
@@ -86,11 +86,12 @@ def test_sp_group_divisor_fallback_matches_reference(
         sp_axis=sp_axis,
         tp_axis=tensor_parallel_axis,
         program_config=program_config,
+        active_seq_len=sequence,
     )
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output_tt, state = layer.forward(hidden_tt, initial_state)
+        output_tt, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
     assert len(output_tt.shape) == 3
 
     actual_output = reconstruct_sp_tp_tensor(
@@ -178,11 +179,14 @@ def test_sp_segmented_prefill_matches_one_shot(
         program_config=KDAProgramConfig(
             recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks)
         ),
+        active_seq_len=sequence,
     )
 
     one_shot_input_state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        one_shot_tt, one_shot_state = layer.forward(_to_sp_input(hidden, mesh_device, sp_axis), one_shot_input_state)
+        one_shot_tt, one_shot_state = layer.forward(
+            _to_sp_input(hidden, mesh_device, sp_axis), one_shot_input_state, make_actual_start(layer.device)
+        )
     one_shot = reconstruct_sp_tp_tensor(
         one_shot_tt,
         mesh_device,
@@ -210,8 +214,22 @@ def test_sp_segmented_prefill_matches_one_shot(
     with ttnn.manage_config("throw_exception_on_fallback", True):
         for split in splits:
             stop = start + split
-            output_tt, chunked_state = layer.forward(
-                _to_sp_input(hidden[:, start:stop], mesh_device, sp_axis), chunked_state
+            chunk_layer = ttKDA(
+                mesh_device,
+                config,
+                weights=layer.weights,
+                tt_ccl=layer.tt_ccl,
+                sp_axis=sp_axis,
+                tp_axis=tensor_parallel_axis,
+                active_seq_len=split,
+                program_config=KDAProgramConfig(
+                    recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks)
+                ),
+            )
+            output_tt, chunked_state = chunk_layer.forward(
+                _to_sp_input(hidden[:, start:stop], mesh_device, sp_axis),
+                chunked_state,
+                make_actual_start(layer.device),
             )
             outputs.append(
                 reconstruct_sp_tp_tensor(
@@ -285,6 +303,7 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
         sp_axis=sp_axis,
         tp_axis=tensor_parallel_axis,
         program_config=KDAProgramConfig(recurrence=KDARecurrenceProgramConfig(summary_group_chunks=1)),
+        active_seq_len=sequence,
     )
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
@@ -293,7 +312,7 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, state)
+            output_tt, state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
         return output_tt, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)

@@ -149,6 +149,7 @@ RESET_PLAN = {
     "light": ["-r"],
     "medium": ["-r", "-glx_reset"],
     "deploy": ["-r", "-glx_reset", "-glx_reset"],
+    "pre_reboot": [],
 }
 
 # tt-smi prints this banner before attempting `-r` on Galaxy units when the CPLD
@@ -212,10 +213,14 @@ PYTESTS = {
 #   light  -> eth link_up
 #   medium -> light + eth bandwidth + GDDR fast-pattern
 #   deploy -> full GDDR patterns + eth bandwidth + didt matmul stress (pytest)
+#   pre_reboot -> none: it collects data before a BMC reboot, and a stress test
+#                 on a unit already headed for a power cycle only disturbs the
+#                 state the triage and QSFP phases are there to record
 TIER_TESTS = {
     "light": ["eth_link_up"],
     "medium": ["gddr_fast", "eth_link_up", "eth_bandwidth"],
     "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"],
+    "pre_reboot": [],
 }
 
 # Reset run between the gtest phase and the triage phase, per tier. Two reasons
@@ -229,10 +234,14 @@ TIER_TESTS = {
 # out of the post-reset snapshot dedupe in run_diag(). Adding revalidation here
 # means reworking that block, which assumes a single batch of snapshot_after_*
 # phases judged by normalize_health_report() on post[-1].
+#
+# pre_reboot runs no tests, so there is nothing for triage to overlap, and a
+# reset would wipe the state it is there to record before the BMC reboot.
 POST_TEST_RESET_PLAN = {
     "light": [],
     "medium": ["-glx_reset"],
     "deploy": ["-glx_reset"],
+    "pre_reboot": [],
 }
 
 # First-step triage tools, run after POST_TEST_RESET_PLAN. They live in
@@ -262,7 +271,14 @@ TIER_TRIAGE = {
     "light": [],
     "medium": ["host_side", "device_side"],
     "deploy": ["host_side", "device_side"],
+    "pre_reboot": ["host_side", "device_side"],
 }
+
+# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
+# count host state accumulated over a boot — correctable AER, kernel-log fault
+# lines — so they WARN on units everything else calls healthy, and one phase
+# WARN is a run WARN. FAIL continues to follow the normal triage gating policy.
+TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_kernel_log"})
 
 # The scripts' home, relative to the repo root.
 TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
@@ -298,11 +314,13 @@ QSFP_TIMEOUT_S = 1200
 
 # Tiers that collect a dump. Same shape as TIER_TRIAGE and for the same reason:
 # light is a ~75 s smoke check and a minutes-long ETH sweep does not belong in
-# it. medium and deploy already pay for the triage phase in the same slot.
+# it. medium, deploy and pre_reboot already pay for the triage phase in the
+# same slot.
 TIER_QSFP_TESTS = {
     "light": False,
     "medium": True,
     "deploy": True,
+    "pre_reboot": True,
 }
 
 # Where the conversion from the dump's records to checks lives. Kept out of this
@@ -1588,6 +1606,9 @@ def print_phase_summary(phase_name: str, phase_dict: dict) -> None:
 
 
 def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: Path) -> None:
+    if not TIER_TESTS[tier]:
+        phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
+        return
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
@@ -1806,11 +1827,21 @@ def normalize_external_check(
 
 
 def normalize_triage_check(payload: dict, gating: bool) -> Check:
-    """One triage-script finding as a Check. See normalize_external_check."""
+    """One triage-script finding as a Check. See normalize_external_check.
+
+    TRIAGE_ADVISORY_WARN checks record their WARN as PASS. Keyed on the status
+    the tool wrote, so an unparseable one still lands on WARN; independent of
+    ``--triage-gating``, which decides what a FAIL does and never gated a WARN.
+    """
+    name = str(payload.get("name") or "")
+    advisory_warn = (
+        str(payload.get("status") or "").upper() == WARN and name.removeprefix("triage_") in TRIAGE_ADVISORY_WARN
+    )
     return normalize_external_check(
         payload,
         prefix="triage_",
         hold_fail_at=None if gating else WARN,
+        hold_warn_at=PASS if advisory_warn else None,
         gating_flag="--triage-gating",
     )
 
@@ -1818,21 +1849,20 @@ def normalize_triage_check(payload: dict, gating: bool) -> Check:
 def normalize_qsfp_check(payload: dict, gating: bool) -> Check:
     """One QSFP-test finding as a Check. See normalize_external_check.
 
-    The phase reports PASS, FAIL or SKIP and never WARN, and until
-    ``--qsfp-gating`` says otherwise it does not report FAIL either: the tool is
-    still being validated against the fleet, and a finding it is not yet trusted
-    to have got right should not be the thing an operator's eye is drawn to.
-    Everything it found is still on the record — the details line is the tool's
-    own, the ``data`` is untouched, and the annotation says what was held — so
-    the fleet data needed to decide whether to turn gating on is collected
-    either way. It is one step, FAIL straight to PASS, so nothing lands on the
-    WARN this phase has undertaken not to raise.
+    Until ``--qsfp-gating`` says otherwise the phase reports only PASS and SKIP:
+    the tool is still being validated against the fleet, and a finding it is not
+    yet trusted to have got right should not be the thing an operator's eye is
+    drawn to. Everything it found is still on the record — the details line is
+    the tool's own, the ``data`` is untouched, and the annotation says what was
+    held — so the fleet data needed to decide whether to turn gating on is
+    collected either way. Both holds lift together; a held FAIL is one step,
+    straight to PASS, so nothing lands on the WARN the phase does not raise.
     """
     return normalize_external_check(
         payload,
         prefix="qsfp_",
         hold_fail_at=None if gating else PASS,
-        hold_warn_at=PASS,
+        hold_warn_at=None if gating else PASS,
         gating_flag="--qsfp-gating",
     )
 
@@ -2469,6 +2499,8 @@ def run_diag(
     t0 = time.time()
     if skip_reset:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details="--skip-reset"))
+    elif not RESET_PLAN[tier]:
+        reset_phase.add(Check(name="reset_loop", status=SKIP, details=f"no pre-test resets for tier '{tier}'"))
     else:
         try:
             tt_smi = resolve_tt_smi(tt_smi_path)

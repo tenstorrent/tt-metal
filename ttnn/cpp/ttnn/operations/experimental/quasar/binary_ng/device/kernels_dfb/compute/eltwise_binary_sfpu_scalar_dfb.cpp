@@ -74,7 +74,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
 
     tile_regs_acquire();
-    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+    // Startup and preprocessing preserve the physical-LHS SrcA format.
     copy_init(dfb_post_lhs_id);
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
@@ -93,6 +93,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
     tile_regs_commit();
 
     tile_regs_wait();
