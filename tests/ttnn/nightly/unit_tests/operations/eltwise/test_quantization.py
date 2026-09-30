@@ -1102,9 +1102,7 @@ def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, 
 def test_quantize_per_channel_scalar_zero_point_saturation(device):
     """Pin the int8 saturation of the fused per-channel quantize path.
 
-    The QUANT LLK rounds through the SFPU's FP32_TO_INT8 stage, so an int32 output holds
-    int8-range values. The saturation is symmetric at [-127, 127] rather than the [-128, 127]
-    of a two's-complement int8, because the rounding stage produces sign-magnitude. The fused
+    The QUANT LLK saturates an int32 output to the int8 range [-128, 127]. The fused
     per-channel path therefore behaves exactly like per-tensor quantize has always done. The
     composite (per-channel tensor zero-point) path narrows with a plain typecast instead and
     does not saturate, so the two disagree once values leave that range. The divergence
@@ -1124,7 +1122,7 @@ def test_quantize_per_channel_scalar_zero_point_saturation(device):
     scale_tt = ttnn.from_torch(scale_vec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     zp_vec_tt = ttnn.from_torch(zp_vec, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    expected = torch.clamp(torch.round(input_tr / scale), -127, 127).to(torch.int32)
+    expected = torch.clamp(torch.round(input_tr / scale), -128, 127).to(torch.int32)
 
     fused_tr = ttnn.to_torch(ttnn.quantize(input_tt, scale_tt, 0, axis=-1)).to(torch.int32)
     assert torch.equal(fused_tr, expected), f"got {fused_tr[0].tolist()} expected {expected[0].tolist()}"
