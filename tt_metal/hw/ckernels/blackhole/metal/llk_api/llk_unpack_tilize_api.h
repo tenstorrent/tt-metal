@@ -6,6 +6,7 @@
 
 #include "sanitizer/api.h"
 #include <cstdint>
+#include "llk_unpack_A_api.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
 
@@ -32,6 +33,9 @@ inline void llk_unpack_tilize_init_impl(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
 
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
+    // The tilize init records its own replay body over the one llk_unpack_A_init recorded for llk_unpack_A_block;
+    // a copy_block after this init needs a copy_init first, as its contract says.
+    llk_unpack_A_block_path_ready = false;
 }
 
 inline void llk_unpack_tilize_impl(
@@ -133,13 +137,39 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index) {
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
     // i.e. input_tile_index % block_c_tiles == 0
-    const std::uint32_t tile_r_dim = get_operand_tile_r_dim(get_operand_id(operand));
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t tile_r_dim = get_operand_tile_r_dim(operand_id);
     const auto block = input_tile_index / block_c_tiles;
     const auto offset = input_tile_index % block_c_tiles;
     input_tile_index = block * (block_c_tiles * tile_r_dim) + offset;
-    for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
-        llk_unpack_tilize(operand, input_tile_index + tile_index);
+    if (block_c_tiles == 0) {
+        return;
     }
+    const std::uint32_t base_address =
+        get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
+
+    // One execute per tile; the state is identical for every tile of the row, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::NarrowTile>(get_operand_narrow_tile(operand_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(input_tile_index),
+        StateDiscard<std::uint32_t>(block_c_tiles)));
+
+    // The row is unpacked from one context acquire; 8-bit and unpack-to-dest formats fall back to one call per tile inside.
+    WAYPOINT("UPTW");
+    _llk_unpack_tilize_block_(
+        base_address,
+        input_tile_index,
+        block_c_tiles,
+        unpack_src_format[operand_id],
+        unpack_dst_format[operand_id],
+        get_operand_face_r_dim(operand_id),
+        get_operand_num_faces(operand_id),
+        get_operand_narrow_tile(operand_id));
+    WAYPOINT("UPTD");
 }
 
 /*************************************************************************
