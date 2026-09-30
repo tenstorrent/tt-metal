@@ -588,6 +588,154 @@
         5879424,
         5936768
       ]
+    },
+    "rows4096-state0-commitNone-seed20260929": {
+      "key": "rows4096-state0-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "12667b8f61ca762221a661ceef8fd425171cd38a00ad25ea16998e6e1b22c41b",
+        "k": "fd0c4265e487bc015b15d1d9b6f955ab967a8da6f0ab2b4b0af7b3b5c6311d26",
+        "v": "638ee7ff966500617e33d607b6b526cf8619bffe5f3a206343d83e1400e3b1bf",
+        "beta": "c3af81c75a7d5d877a5b48519b4573e0e79d44f97e322fa03306e110316e6231",
+        "g": "9cd668b8db956187fbfb3c7d09d74db5297d198d183b519973ec6f6c94e9bfcb",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260929,
+      "rows": 4096,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999993443489075,
+        0.9999983310699463
+      ],
+      "output_sha256": [
+        "d6bcb39cd942fdc5dfc2eb02df7ad53bcc17738abe9471660da9788d33d44292",
+        "e7c657c19c17d2c67e04fd0ead65b7752ffb08c2aba24319d0d3d2014d467878"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state0-commitNone-seed20260930": {
+      "key": "rows4096-state0-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "fd292c3a263c36217c551405a71791480f21ab0a971e4c9c2adf2aee7ff6569f",
+        "k": "fd09efc85f567db157251a0f2de75c9e56535a855256b465f26174c17509f3e5",
+        "v": "e8fa4ce303e253aec96c99f37db7a73fb1603314f87b225e6e2d885c487d4bc8",
+        "beta": "bcd3df2ce815a4180ad8f6a0ca6f73e3b9f0cff14d4669566c8bfd1a3e4dc36c",
+        "g": "4c7934dc19402c642bbe373697abc86d90671d90afdb9e1f43f46a89b2b13083",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260930,
+      "rows": 4096,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999914169311523,
+        0.9999985098838806
+      ],
+      "output_sha256": [
+        "e44429d6ed60a0b3c35b146655a4cc903a6fc136363e60122faa3644877f1998",
+        "61aa80a0f3b6192c553657c95353fc4f4f31266753c1d7fa4ca558539eadef06"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000,
+        14517888
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state1-commitNone-seed20260929": {
+      "key": "rows4096-state1-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "12667b8f61ca762221a661ceef8fd425171cd38a00ad25ea16998e6e1b22c41b",
+        "k": "fd0c4265e487bc015b15d1d9b6f955ab967a8da6f0ab2b4b0af7b3b5c6311d26",
+        "v": "638ee7ff966500617e33d607b6b526cf8619bffe5f3a206343d83e1400e3b1bf",
+        "beta": "c3af81c75a7d5d877a5b48519b4573e0e79d44f97e322fa03306e110316e6231",
+        "g": "9cd668b8db956187fbfb3c7d09d74db5297d198d183b519973ec6f6c94e9bfcb",
+        "initial": "abb8f781babe747dc8d7c9baccf3cf5a4d9dfba45733aaae7b9898e39795e4c3"
+      },
+      "seed": 20260929,
+      "rows": 4096,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999997615814209,
+        0.9999983310699463
+      ],
+      "output_sha256": [
+        "d0e6fa96a8f7da9badfd500bbf4fea2172fc8a8e47fadd1ff5ea7c772f806f41",
+        "e7c657c19c17d2c67e04fd0ead65b7752ffb08c2aba24319d0d3d2014d467878"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state1-commitNone-seed20260930": {
+      "key": "rows4096-state1-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "fd292c3a263c36217c551405a71791480f21ab0a971e4c9c2adf2aee7ff6569f",
+        "k": "fd09efc85f567db157251a0f2de75c9e56535a855256b465f26174c17509f3e5",
+        "v": "e8fa4ce303e253aec96c99f37db7a73fb1603314f87b225e6e2d885c487d4bc8",
+        "beta": "bcd3df2ce815a4180ad8f6a0ca6f73e3b9f0cff14d4669566c8bfd1a3e4dc36c",
+        "g": "4c7934dc19402c642bbe373697abc86d90671d90afdb9e1f43f46a89b2b13083",
+        "initial": "56e73771c5b81efca73b8e058f45041963f1e0bdc583e7b7ac8598aead1fbd66"
+      },
+      "seed": 20260930,
+      "rows": 4096,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999923706054688,
+        0.9999985098838806
+      ],
+      "output_sha256": [
+        "74e4dceebe431d6a1f61fae7182abcdffc477893bdaaa72ca58fd20ab3312c98",
+        "61aa80a0f3b6192c553657c95353fc4f4f31266753c1d7fa4ca558539eadef06"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000,
+        14517888
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
     }
-  }
+  },
+  "additional_source_runs": [
+    {
+      "run_id": "recovery-source-chunk-max4096-01",
+      "scope": "Existing4096upperbound; zero/nonzero state, two seeds, same unchanged .99999 source/reference gate",
+      "case_keys": [
+        "rows4096-state0-commitNone-seed20260929",
+        "rows4096-state0-commitNone-seed20260930",
+        "rows4096-state1-commitNone-seed20260929",
+        "rows4096-state1-commitNone-seed20260930"
+      ],
+      "source_helper_sha256": "018193987cedb01eb1b741287cc4c52ef33d8f4d1e702aec319a9d45f1537795",
+      "source_runner_sha256": "59bbe20dfe20a76b88ceccd88e41095db45509b7616e88fde1e308d47299554e",
+      "source_run_sha256": "ca7379d3011b5a10e0173b214a4cd19f7529e3135c9f180076a3c0fa99e32067",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      },
+      "source_packages": {
+        "torch": "2.11.0+cpu",
+        "transformers": "5.16.1",
+        "vllm": "0.26.0+empty",
+        "pytest": "9.0.3"
+      }
+    }
+  ]
 }
