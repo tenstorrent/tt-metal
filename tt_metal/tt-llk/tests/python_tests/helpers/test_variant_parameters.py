@@ -788,7 +788,8 @@ class VECTOR_MODE(TemplateParameter):
 @dataclass
 class PERF_STAGE(TemplateParameter):
     """How much of a perf kernel's iteration runs. 0 is the frame alone (the data copies, inits and
-    pack the op needs), so that its cost can be subtracted from the stages that add the op's parts."""
+    pack the op needs), so that its cost can be subtracted from the stages that add the op's parts.
+    """
 
     perf_stage: int = 1
 

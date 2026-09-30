@@ -140,7 +140,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_eltwise_mul_scalar_block": "perf_eltwise_mul_scalar_block"},
+        "test_name_aliases": {
+            "perf_eltwise_mul_scalar_block": "perf_eltwise_mul_scalar_block"
+        },
     },
     "perf_eltwise_unary_datacopy": {
         "version": 2,
@@ -543,7 +545,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_pack_block_contiguous": "perf_pack_block_contiguous"},
+        "test_name_aliases": {
+            "perf_pack_block_contiguous": "perf_pack_block_contiguous"
+        },
     },
     "perf_rmsnorm_bcast_scalar_dest_reuse": {
         "version": 1,
@@ -568,7 +572,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_rmsnorm_bcast_scalar_dest_reuse": "perf_rmsnorm_bcast_scalar_dest_reuse"},
+        "test_name_aliases": {
+            "perf_rmsnorm_bcast_scalar_dest_reuse": "perf_rmsnorm_bcast_scalar_dest_reuse"
+        },
     },
     "perf_rope": {
         "version": 1,
@@ -657,7 +663,9 @@ PERF_TEST_SCHEMAS = {
             "zero_tail",
         ],
         "aliases": {},
-        "test_name_aliases": {"perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"},
+        "test_name_aliases": {
+            "perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"
+        },
     },
     "perf_transpose_dest": {
         "version": 4,

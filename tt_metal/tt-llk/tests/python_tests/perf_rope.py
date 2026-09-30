@@ -46,12 +46,26 @@ def test_perf_rope(perf_report, variant):
         InputOutputFormat(BF16, BF16),
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.MATH_ISOLATE],
         templates=[
-            ROPE(fused_cos_sin=fused, tile_h=1, cos_sin_per_row=per_row, has_scale=False, scale_fp32=0, **geometry),
+            ROPE(
+                fused_cos_sin=fused,
+                tile_h=1,
+                cos_sin_per_row=per_row,
+                has_scale=False,
+                scale_fp32=0,
+                **geometry,
+            ),
             PERF_STAGE(stage),
         ],
         runtimes=[TILE_COUNT(tiles), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
-            None, BF16, None, BF16, BF16, tile_count_A=tiles, tile_count_B=1, tile_count_res=tiles
+            None,
+            BF16,
+            None,
+            BF16,
+            BF16,
+            tile_count_A=tiles,
+            tile_count_B=1,
+            tile_count_res=tiles,
         ),
         dest_acc=DestAccumulation.No,
     )

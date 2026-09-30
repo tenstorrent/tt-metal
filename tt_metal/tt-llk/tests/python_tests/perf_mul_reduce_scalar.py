@@ -53,7 +53,12 @@ def test_perf_mul_reduce_scalar(perf_report, variant):
             PerfRunType.PACK_ISOLATE,
         ],
         templates=[MATH_FIDELITY(fidelity)],
-        runtimes=[TILE_COUNT(num_tiles), NUM_FACES_R_DIM(2, 2), NUM_FACES_C_DIM(2, 2), LOOP_FACTOR(64)],
+        runtimes=[
+            TILE_COUNT(num_tiles),
+            NUM_FACES_R_DIM(2, 2),
+            NUM_FACES_C_DIM(2, 2),
+            LOOP_FACTOR(64),
+        ],
         variant_stimuli=StimuliConfig(
             None,
             BF16,

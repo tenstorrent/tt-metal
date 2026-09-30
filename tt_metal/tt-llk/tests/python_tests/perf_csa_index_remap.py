@@ -16,7 +16,13 @@ from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import DEST_INDEX, DEST_SYNC, LOOP_FACTOR, PERF_STAGE, TILE_COUNT
+from helpers.test_variant_parameters import (
+    DEST_INDEX,
+    DEST_SYNC,
+    LOOP_FACTOR,
+    PERF_STAGE,
+    TILE_COUNT,
+)
 from test_csa_index_remap import CSA_REMAP
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]

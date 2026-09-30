@@ -36,11 +36,17 @@ VARIANTS = [
     for acc in (DestAccumulation.No, DestAccumulation.Yes)
     for block in (1, 2, 4, 8)
 ]
-VARIANTS += [(BF16, DestAccumulation.No, block, MathFidelity.LoFi) for block in (1, 4, 8)]
+VARIANTS += [
+    (BF16, DestAccumulation.No, block, MathFidelity.LoFi) for block in (1, 4, 8)
+]
 VARIANTS += [
     (out_fmt, acc, block, fidelity)
     for fidelity in (MathFidelity.HiFi2, MathFidelity.HiFi4)
-    for out_fmt, acc in ((FP32, DestAccumulation.No), (FP32, DestAccumulation.Yes), (BF16, DestAccumulation.No))
+    for out_fmt, acc in (
+        (FP32, DestAccumulation.No),
+        (FP32, DestAccumulation.Yes),
+        (BF16, DestAccumulation.No),
+    )
     for block in (1, 8)
 ]
 

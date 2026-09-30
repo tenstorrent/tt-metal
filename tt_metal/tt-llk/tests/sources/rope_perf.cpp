@@ -11,10 +11,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
@@ -84,19 +84,30 @@ inline void token_math(RUNTIME_PARAMETERS params)
 #endif
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(tile, formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            tile, formats.math, formats.math);
     }
     if constexpr (PERF_STAGE >= 1)
     {
         sfpu::sfpu_rope_dest_setup();
         if constexpr (ROPE_FUSED_COS_SIN)
         {
-            sfpu::sfpu_rope_fused_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE, ROPE_TILE_H, ROPE_COS_SIN_PER_ROW, is_fp32_dest_acc_en>(
-                ROPE_SCALE_FP32);
+            sfpu::sfpu_rope_fused_all_rows<
+                ROPE_HT,
+                ROPE_WT,
+                ROPE_X_BASE,
+                ROPE_X_STRIDE,
+                ROPE_COS_BASE,
+                ROPE_CS_STRIDE,
+                ROPE_HAS_SCALE,
+                ROPE_TILE_H,
+                ROPE_COS_SIN_PER_ROW,
+                is_fp32_dest_acc_en>(ROPE_SCALE_FP32);
         }
         else
         {
-            sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE>(ROPE_SCALE_FP32);
+            sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE>(
+                ROPE_SCALE_FP32);
         }
     }
 }
@@ -111,7 +122,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+            TILE_NUM_FACES, formats.math);
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
         sfpu::sfpu_rope_configure_addrmod();
         PROFILER_SYNC();

@@ -11,10 +11,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
@@ -90,7 +90,11 @@ inline void token_math(RUNTIME_PARAMETERS params)
     if constexpr (PERF_STAGE >= 1)
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            [] { ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, SFPU_FAST_APPROX, SFPU_TYPED_BF16_STORE, SFPU_INPUT_SCALE>(SFPU_UNARY_SCALAR); },
+            []
+            {
+                ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, SFPU_FAST_APPROX, SFPU_TYPED_BF16_STORE, SFPU_INPUT_SCALE>(
+                    SFPU_UNARY_SCALAR);
+            },
             0,
             VECTOR_MODE);
     }
@@ -106,7 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+            TILE_NUM_FACES, formats.math);
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
         ckernel::sfpu::init_add_rsqrt<APPROX_MODE>();
         PROFILER_SYNC();

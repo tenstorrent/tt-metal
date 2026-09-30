@@ -12,10 +12,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 // Globals
@@ -39,7 +39,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, params.TEST_FACE_R_DIM, params.TEST_FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            params.TEST_FACE_R_DIM,
+            params.TEST_FACE_R_DIM,
+            params.num_faces,
+            params.num_faces);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
             0, 0, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces), formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
@@ -111,10 +118,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_block.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#include "experimental/llk_pack_block.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -129,7 +136,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
         _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
-            formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
+            formats.pack_src,
+            formats.pack_dst,
+            params.TEST_FACE_R_DIM,
+            params.in0_tile_c_dim,
+            params.num_faces,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            1 /* num_tiles */);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         reconfigure_packer_l1_acc(params.L1_ACC);
         if constexpr (PACK_BLOCK_CONTIGUOUS)
@@ -148,13 +162,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (PACK_BLOCK_CONTIGUOUS)
                     {
-                        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
+                        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                            0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
                     }
                     else
                     {
                         for (int tile = 0; tile < num_tiles_in_block; ++tile)
                         {
-                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block + tile]));
+                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                tile, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block + tile]));
                         }
                     }
                 }
@@ -169,13 +185,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                     if constexpr (PACK_BLOCK_CONTIGUOUS)
                     {
-                        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
+                        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                            0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
                     }
                     else
                     {
                         for (int tile = 0; tile < num_tiles_in_block; ++tile)
                         {
-                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block + tile]));
+                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                tile, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block + tile]));
                         }
                     }
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

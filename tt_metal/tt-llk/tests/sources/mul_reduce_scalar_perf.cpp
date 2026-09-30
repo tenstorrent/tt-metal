@@ -16,10 +16,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 #include "tensor_shape.h"
 
@@ -29,7 +29,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr DstSync DST_SYNC       = DstSync::SyncHalf;
+static constexpr DstSync DST_SYNC        = DstSync::SyncHalf;
 static constexpr std::uint32_t DST_INDEX = 0;
 
 #ifdef LLK_TRISC_UNPACK
@@ -43,14 +43,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), static_cast<std::uint8_t>(params.num_faces_r_dim_A), static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape.face_r_dim, tensor_shape.face_r_dim, num_faces, num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            tensor_shape.face_r_dim,
+            tensor_shape.face_r_dim,
+            num_faces,
+            num_faces);
         _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
         PROFILER_SYNC();
     }
@@ -119,8 +129,13 @@ inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& t
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
-        _llk_math_eltwise_binary_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-            tensor_shape, i, true /* clear_fp32_dst_acc */);
+        _llk_math_eltwise_binary_<
+            EltwiseBinaryType::ELWMUL,
+            BroadcastType::NONE,
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            MATH_FIDELITY,
+            EltwiseBinaryReuseDestType::NONE>(tensor_shape, i, true /* clear_fp32_dst_acc */);
     }
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false>();
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
@@ -142,10 +157,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t tile_cnt    = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
+    const std::uint32_t tile_cnt            = params.TILE_CNT;
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), static_cast<std::uint8_t>(params.num_faces_r_dim_A), static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     {
         START_PERF_MEASURE("INIT")
@@ -204,9 +222,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(FACE_C_DIM), static_cast<std::uint8_t>(params.num_faces_r_dim_A), static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;

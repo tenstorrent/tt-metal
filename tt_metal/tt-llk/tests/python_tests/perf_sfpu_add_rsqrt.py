@@ -14,7 +14,12 @@ import struct
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType, VectorMode
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    PerfRunType,
+    VectorMode,
+)
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -71,7 +76,14 @@ def test_perf_sfpu_add_rsqrt(perf_report, variant):
         ],
         runtimes=[TILE_COUNT(1), LOOP_FACTOR(128)],
         variant_stimuli=StimuliConfig(
-            None, BF16, None, BF16, BF16, tile_count_A=1, tile_count_B=1, tile_count_res=1
+            None,
+            BF16,
+            None,
+            BF16,
+            BF16,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
         ),
         dest_acc=DestAccumulation.No,
     )

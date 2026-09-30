@@ -11,21 +11,21 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr ckernel::DstSync DST_SYNC                = ckernel::DstSync::SyncHalf;
-static constexpr std::uint32_t MOE_GATE_SCORES_DST_TILE   = 0;
-static constexpr std::uint32_t MOE_GATE_INDICES_DST_TILE  = 1;
-static constexpr std::uint32_t MOE_GATE_BIAS_DST_TILE     = 2;
-static constexpr std::uint32_t MOE_GATE_NUM_INPUT_TILES   = 2;
+static constexpr ckernel::DstSync DST_SYNC               = ckernel::DstSync::SyncHalf;
+static constexpr std::uint32_t MOE_GATE_SCORES_DST_TILE  = 0;
+static constexpr std::uint32_t MOE_GATE_INDICES_DST_TILE = 1;
+static constexpr std::uint32_t MOE_GATE_BIAS_DST_TILE    = 2;
+static constexpr std::uint32_t MOE_GATE_NUM_INPUT_TILES  = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -97,7 +97,14 @@ inline void token_math(RUNTIME_PARAMETERS params)
             DST_SYNC,
             is_fp32_dest_acc_en,
             _generic_moe_gate_topk_,
-            (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT, MOE_GATE_GENERATE_INDICES, false, MOE_GATE_SCORES_INCLUDE_BIAS),
+            (MOE_GATE_NORMALIZE,
+             MOE_GATE_NUM_SELECTED_EXPERTS,
+             MOE_GATE_NUM_TOTAL_EXPERTS,
+             MOE_GATE_ZERO_TAIL,
+             MOE_GATE_FULL_SORT,
+             MOE_GATE_GENERATE_INDICES,
+             false,
+             MOE_GATE_SCORES_INCLUDE_BIAS),
             MOE_GATE_SCORES_DST_TILE,
             VectorMode::RC_custom,
             MOE_GATE_EPS_BITS,
@@ -116,7 +123,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+            TILE_NUM_FACES, formats.math);
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
         ckernel::sfpu::_init_generic_moe_gate_topk_();
         PROFILER_SYNC();

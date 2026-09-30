@@ -29,12 +29,15 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 @dataclass
 class SCALAR_BLOCK_ALIAS(TemplateParameter):
     """False runs the block form; True runs the standard scalar broadcast multiply the
-    compute API aliases next to it (deepseek_mul_tiles_bcast_scalar) on the same buffers."""
+    compute API aliases next to it (deepseek_mul_tiles_bcast_scalar) on the same buffers.
+    """
 
     alias: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SCALAR_BLOCK_ALIAS = {'true' if self.alias else 'false'};"
+        return (
+            f"constexpr bool SCALAR_BLOCK_ALIAS = {'true' if self.alias else 'false'};"
+        )
 
 
 def _scalar_tiles(scalars):
@@ -92,7 +95,14 @@ def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
         src.reshape(len(scalars), -1).float() * scalars.float()[:, None]
     ).flatten()
     config = _block_config(
-        src, scalars, block_size, dst_index, dest_acc, dest_sync, MathFidelity.LoFi, False
+        src,
+        scalars,
+        block_size,
+        dst_index,
+        dest_acc,
+        dest_sync,
+        MathFidelity.LoFi,
+        False,
     )
     result = torch.as_tensor(config.run().result).float().flatten()
     assert torch.equal(
@@ -139,7 +149,9 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
 
     golden = _fidelity_golden(src, scalars, math_fidelity)
     one_phase = _fidelity_golden(src, scalars, MathFidelity.LoFi)
-    assert not torch.equal(golden, one_phase), "the stimuli do not depend on the fidelity"
+    assert not torch.equal(
+        golden, one_phase
+    ), "the stimuli do not depend on the fidelity"
 
     block_cfg = _block_config(
         src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, False

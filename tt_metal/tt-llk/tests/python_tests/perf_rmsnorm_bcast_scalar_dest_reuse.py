@@ -13,11 +13,22 @@ per-call re-init form of the DeepSeek sampling kernel. Unit: one 32x32 tile.
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, MathFidelity, MathOperation, PerfRunType
+from helpers.llk_params import (
+    DestAccumulation,
+    MathFidelity,
+    MathOperation,
+    PerfRunType,
+)
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import LOOP_FACTOR, MATH_FIDELITY, MATH_OP, RMSNORM_DEST_REUSE, TILE_COUNT
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    MATH_FIDELITY,
+    MATH_OP,
+    RMSNORM_DEST_REUSE,
+    TILE_COUNT,
+)
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -40,7 +51,11 @@ def test_perf_rmsnorm_bcast_scalar_dest_reuse(perf_report, variant):
     configuration = PerfConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp",
         InputOutputFormat(BF16, BF16),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
         templates=[
             MATH_OP(mathop=mathop),
             MATH_FIDELITY(fidelity),
@@ -53,7 +68,14 @@ def test_perf_rmsnorm_bcast_scalar_dest_reuse(perf_report, variant):
         ],
         runtimes=[TILE_COUNT(num_tiles), LOOP_FACTOR(128)],
         variant_stimuli=StimuliConfig(
-            None, BF16, None, BF16, BF16, tile_count_A=num_tiles, tile_count_B=1, tile_count_res=num_tiles
+            None,
+            BF16,
+            None,
+            BF16,
+            BF16,
+            tile_count_A=num_tiles,
+            tile_count_B=1,
+            tile_count_res=num_tiles,
         ),
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,

@@ -17,10 +17,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
@@ -61,9 +61,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
+                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
+                    ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
                 _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, tensor_shape, ID_FORMAT, ID_FORMAT);
-                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[1]), ID_FORMAT, ID_FORMAT);
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_A[1]), ID_FORMAT, ID_FORMAT);
                 _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
                     formats.unpack_A_src, formats.unpack_A_dst, params.TILE_SIZE_UNPACK_A);
                 _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
@@ -89,7 +91,8 @@ using namespace ckernel;
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
-constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE = GMG_RELOAD ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
+constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
+    GMG_RELOAD ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
 
 #define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
     SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
@@ -147,8 +150,10 @@ static inline void token_math(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(ID_FORMAT);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(params.num_faces, ID_FORMAT);
-    _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(IDS_TILE, ID_FORMAT, ID_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+        params.num_faces, ID_FORMAT);
+    _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+        IDS_TILE, ID_FORMAT, ID_FORMAT);
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(formats.math);
 
     _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(params.num_faces, ACC_TO_DEST);
@@ -218,7 +223,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     {
         START_PERF_MEASURE("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(ID_FORMAT, ID_FORMAT, params.TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            ID_FORMAT, ID_FORMAT, params.TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, params.num_faces);
         _llk_pack_init_wrapper_<PackMode::Default, false>(ID_FORMAT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();

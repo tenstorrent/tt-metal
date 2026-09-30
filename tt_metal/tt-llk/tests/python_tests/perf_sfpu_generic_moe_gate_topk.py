@@ -28,7 +28,15 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 BF16 = DataFormat.Float16_b
 
 # (selected experts, normalise, stage)
-VARIANTS = [(8, False, 1), (8, True, 1), (16, False, 1), (16, True, 1), (4, True, 1), (12, True, 1), (8, False, 0)]
+VARIANTS = [
+    (8, False, 1),
+    (8, True, 1),
+    (16, False, 1),
+    (16, True, 1),
+    (4, True, 1),
+    (12, True, 1),
+    (8, False, 0),
+]
 
 
 @pytest.mark.perf
@@ -56,7 +64,14 @@ def test_perf_sfpu_generic_moe_gate_topk(perf_report, variant):
         ],
         runtimes=[TILE_COUNT(1), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
-            None, BF16, None, BF16, BF16, tile_count_A=2, tile_count_B=1, tile_count_res=2
+            None,
+            BF16,
+            None,
+            BF16,
+            BF16,
+            tile_count_A=2,
+            tile_count_B=1,
+            tile_count_res=2,
         ),
         dest_acc=DestAccumulation.No,
         unpack_to_dest=False,

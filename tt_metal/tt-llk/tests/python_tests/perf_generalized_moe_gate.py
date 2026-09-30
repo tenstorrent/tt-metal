@@ -42,7 +42,11 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16)
 
 # (grouped, stage, approximate reciprocal)
-VARIANTS = [(grouped, stage, ApproximationMode.No) for grouped in (False, True) for stage in (2, 1, 0)]
+VARIANTS = [
+    (grouped, stage, ApproximationMode.No)
+    for grouped in (False, True)
+    for stage in (2, 1, 0)
+]
 VARIANTS.append((False, 2, ApproximationMode.Yes))
 
 
@@ -57,7 +61,9 @@ def test_perf_generalized_moe_gate(perf_report, variant):
         FORMATS,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.MATH_ISOLATE],
         templates=[
-            GENERALIZED_MOE_GATE(mode=0, grouped=grouped, topk=8, eps=_bits(EPS), scale=_bits(SCALE)),
+            GENERALIZED_MOE_GATE(
+                mode=0, grouped=grouped, topk=8, eps=_bits(EPS), scale=_bits(SCALE)
+            ),
             MATH_OP(mathop=MathOperation.Elwadd),
             MATH_FIDELITY(MathFidelity.HiFi4),
             APPROX_MODE(approx),

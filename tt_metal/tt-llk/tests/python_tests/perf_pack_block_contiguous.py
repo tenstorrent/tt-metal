@@ -12,7 +12,12 @@ of the given dimensions.
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, format_tile_sizes
+from helpers.llk_params import (
+    DestAccumulation,
+    L1Accumulation,
+    PerfRunType,
+    format_tile_sizes,
+)
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig

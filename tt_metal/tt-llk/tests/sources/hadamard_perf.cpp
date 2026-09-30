@@ -11,10 +11,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
-#include "counters.h"
 #include "profiler.h"
 
 std::uint32_t unp_cfg_context          = 0;
@@ -37,7 +37,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, HADAMARD_NUM_FACES, HADAMARD_NUM_FACES);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            HADAMARD_NUM_FACES,
+            HADAMARD_NUM_FACES);
         _llk_unpack_hadamard_h128_init_(L1_ADDRESS(params.buffer_A[HADAMARD_H16_TILE_INDEX]));
         PROFILER_SYNC();
     }
@@ -65,7 +72,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
                 {
                     _llk_unpack_hadamard_h128_(
-                        L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), HADAMARD_H16_TILE_INDEX, tile, params.TILE_SIZE_UNPACK_A, params.TILE_SIZE_UNPACK_B);
+                        L1_ADDRESS(params.buffer_A[0]),
+                        L1_ADDRESS(params.buffer_B[0]),
+                        HADAMARD_H16_TILE_INDEX,
+                        tile,
+                        params.TILE_SIZE_UNPACK_A,
+                        params.TILE_SIZE_UNPACK_B);
                 }
             }
         }
