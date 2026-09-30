@@ -17,6 +17,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -461,8 +462,14 @@ void check_router_shape(const std::vector<RouterEntry>& routers) {
 void expect_region(const json& region, const manifest::L1Region& published) {
     EXPECT_EQ(region.at("address"), published.address);
     EXPECT_EQ(region.at("size"), published.size);
-    EXPECT_EQ(region.at("num_elements"), published.num_elements.value());
-    EXPECT_EQ(region.at("size_per_element"), published.size_per_element.value());
+    EXPECT_EQ(region.contains("num_elements"), published.num_elements.has_value());
+    if (published.num_elements.has_value()) {
+        EXPECT_EQ(region.at("num_elements"), *published.num_elements);
+    }
+    EXPECT_EQ(region.contains("size_per_element"), published.size_per_element.has_value());
+    if (published.size_per_element.has_value()) {
+        EXPECT_EQ(region.at("size_per_element"), *published.size_per_element);
+    }
     EXPECT_EQ(region.at("schema"), published.schema);
     EXPECT_EQ(region.at("host_cleared"), published.host_cleared);
 }
@@ -506,6 +513,139 @@ void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
                 EXPECT_EQ(array.at("address"), *next_address);
             }
             next_address = array.at("address").get<uint32_t>() + array.at("size").get<uint32_t>();
+        }
+    }
+}
+
+void expect_stream(const json& stream, const manifest::StreamRef& published) {
+    EXPECT_EQ(keys_of(stream), (std::set<std::string>{"stream_id", "register", "schema"}));
+    EXPECT_EQ(stream.at("stream_id"), published.stream_id);
+    EXPECT_EQ(stream.at("register"), lower_enum_name(published.reg));
+    EXPECT_EQ(stream.at("schema"), published.schema);
+}
+
+// A stream-backed credit is its register; a counter-backed one is its element of the router's to_sender arrays.
+void expect_credit(const json& credit, const manifest::CreditRef& published, bool uses_counters) {
+    if (const auto* stream = std::get_if<manifest::StreamRef>(&published)) {
+        EXPECT_FALSE(uses_counters);
+        expect_stream(credit, *stream);
+        return;
+    }
+    const auto& array = std::get<manifest::ArrayRef>(published);
+    EXPECT_TRUE(uses_counters);
+    EXPECT_EQ(keys_of(credit), (std::set<std::string>{"array", "index"}));
+    EXPECT_EQ(credit.at("array"), array.array);
+    EXPECT_EQ(credit.at("index"), array.index);
+}
+
+// A sibling producer is the router facing that way on this router's chip and routing plane.
+json expected_producer(const RouterEntry& entry, const std::optional<manifest::SenderChannelProducer>& producer) {
+    if (!producer.has_value()) {
+        return nullptr;
+    }
+    if (std::holds_alternative<manifest::LocalWorker>(*producer)) {
+        return "worker";
+    }
+    const auto direction = std::get<manifest::SiblingRouterRef>(*producer).direction;
+    const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
+    return fmt::format(
+        "{}/{}/{}", mesh_key(entry.node.mesh_id), chip_key(entry.node.chip_id), router_key(direction, plane));
+}
+
+// Each sender channel is what the builder published, over the router's shape. Its credits are on the backing
+// the mesh's credit transport names, a sibling producer is a router in this manifest, and only worker-fed
+// channels have a buffer index semaphore.
+void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& senders = entry.router->at("channels").at("senders");
+        const auto& published = entry.published->channels.senders;
+        const auto& transport = manifest.at("meshes").at(mesh_key(entry.node.mesh_id)).at("credit_transport");
+
+        std::set<std::string> expected_vcs;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            ASSERT_EQ(published.at(vc).size(), entry.published->shape.senders_per_vc[vc]);
+            if (!published[vc].empty()) {
+                expected_vcs.insert(fmt::format("vc{}", vc));
+            }
+        }
+        EXPECT_EQ(keys_of(senders), expected_vcs);
+
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            if (published[vc].empty()) {
+                continue;
+            }
+            const auto vc_key = fmt::format("vc{}", vc);
+            const bool uses_counters = transport.at(vc_key).at("backing") == "l1_counter";
+            ASSERT_EQ(senders.at(vc_key).size(), published[vc].size());
+            for (uint32_t ch = 0; ch < published[vc].size(); ++ch) {
+                SCOPED_TRACE(fmt::format("{}/ch{}", vc_key, ch));
+                const auto& sender = senders.at(vc_key).at(fmt::format("ch{}", ch));
+                const auto& expected = published[vc][ch];
+                EXPECT_EQ(
+                    keys_of(sender),
+                    (std::set<std::string>{
+                        "serviced_by",
+                        "producer",
+                        "is_injection_channel",
+                        "producer_credit_return",
+                        "ring_buffer",
+                        "free_slots",
+                        "credits",
+                        "control_info"}));
+
+                json serviced_by = json::array();
+                for (const auto risc_id : expected.serviced_by) {
+                    serviced_by.push_back(fmt::format("erisc{}", risc_id));
+                }
+                EXPECT_EQ(sender.at("serviced_by"), serviced_by);
+
+                const json producer = expected_producer(entry, expected.producer);
+                EXPECT_EQ(sender.at("producer"), producer);
+                if (producer.is_string() && producer != "worker") {
+                    EXPECT_NE(find_router(manifest, producer.get<std::string>()), nullptr);
+                }
+
+                EXPECT_EQ(sender.at("is_injection_channel"), expected.is_injection_channel);
+                EXPECT_EQ(
+                    sender.at("producer_credit_return"),
+                    json({{"noc", static_cast<uint32_t>(expected.producer_credit_return.noc)},
+                          {"cmd_buf", lower_enum_name(expected.producer_credit_return.cmd_buf)}}));
+
+                const auto& ring = sender.at("ring_buffer");
+                expect_region(ring, expected.ring_buffer);
+                EXPECT_EQ(ring.at("schema"), "packet_ring");
+                EXPECT_EQ(
+                    ring.at("size").get<uint32_t>(),
+                    ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
+
+                expect_stream(sender.at("free_slots"), expected.free_slots);
+                if (!expected.serviced_by.empty()) {
+                    EXPECT_NE(expected.free_slots.stream_id, k_unused_stream_id);
+                }
+
+                const auto& credits = sender.at("credits");
+                const bool acked = vc == 0 && entry.published->shape.vc0_bubble_flow_control;
+                EXPECT_EQ(expected.credits.acked.has_value(), acked);
+                EXPECT_EQ(credits.contains("acked"), acked);
+                if (acked) {
+                    expect_credit(credits.at("acked"), *expected.credits.acked, uses_counters);
+                }
+                expect_credit(credits.at("completed"), expected.credits.completed, uses_counters);
+
+                const auto& control_info = sender.at("control_info");
+                const bool worker_fed = producer == "worker";
+                EXPECT_EQ(expected.control_info.buffer_index_sem.has_value(), worker_fed);
+                EXPECT_EQ(
+                    keys_of(control_info),
+                    worker_fed ? (std::set<std::string>{"connection", "conn_info", "buffer_index_sem"})
+                               : (std::set<std::string>{"connection", "conn_info"}));
+                expect_region(control_info.at("connection"), expected.control_info.connection);
+                expect_region(control_info.at("conn_info"), expected.control_info.conn_info);
+                if (worker_fed) {
+                    expect_region(control_info.at("buffer_index_sem"), *expected.control_info.buffer_index_sem);
+                }
+            }
         }
     }
 }
@@ -555,6 +695,11 @@ TEST(ManifestNames, Spellings) {
 
     EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
     EXPECT_EQ(lower_enum_name(manifest::StreamRegister::REMOTE_SRC), "remote_src");
+
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_CMD_BUF), "wr_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
@@ -589,5 +734,8 @@ TEST_F(Fabric2DManifestFixture, RouterShape) { check_router_shape(routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
