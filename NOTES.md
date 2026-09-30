@@ -48,3 +48,11 @@ Branch ttp/t41-... = t20 tip (1eadde3ce6c) + 63c8860f08e. Pushed.
   rebooted at 20:41, so the driver is gone. Not relaunched: second tray drop on blx03 in ~20 min, one during our job.
 - Next: when `tt-device-mcp status` on blx03 shows no HELD, resubmit once by hand:
   `setsid nohup tmp/t41/drive.sh 2 > tmp/t41/drive.log 2>&1 &`, then continue "Next" above.
+
+## Status 2026-09-30 21:20
+- Both hosts rebooted (g15blx02 21:08, blx03 ~21:06 after broker power cycle; 32/32 chips back, fabric check ok).
+  ~/fasth3/t41 and /var/tmp/fasth3 intact, blx03 job.sh matches branch.
+- Driver relaunched: `tmp/t41/drive.sh 2` (setsid), log tmp/t41/drive.log (old: drive.log.2120). Another project
+  job (923, blx03_ab.sh) was running, and several other tasks are queued for blx03; driver retries every 2 min.
+- On wake: if drive.log has T41_DRIVE_DONE, check job status/run.log on blx03, then do "Next" 1-3.
+  If the driver is gone without T41_DRIVE_DONE (reboot), relaunch it the same way.
