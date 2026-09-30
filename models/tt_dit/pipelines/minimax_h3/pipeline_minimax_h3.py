@@ -1442,8 +1442,19 @@ class MiniMaxH3Pipeline:
         return mode
 
     def _lora_fuses_on_host(self) -> bool:
-        """Does this adapter have to be merged before quantization to have any effect at all?"""
-        return self.lora_path is not None and self.dit_quant_profile is not None
+        """Does this adapter have to be merged before quantization to have any effect at all?
+
+        `MINIMAX_H3_FORCE_HOST_FUSE=1` forces the host path on UNQUANTIZED weights too. It exists
+        for one experiment and is not a serving knob: the DiT dtype and the adapter-application path
+        are otherwise collinear by construction -- setting a quant profile switches both at once --
+        so no control can tell a dtype defect from an adapter-path defect without it. Default off,
+        so nothing changes unless it is set.
+        """
+        if self.lora_path is None:
+            return False
+        if os.environ.get("MINIMAX_H3_FORCE_HOST_FUSE") == "1":
+            return True
+        return self.dit_quant_profile is not None
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
