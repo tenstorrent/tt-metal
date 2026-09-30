@@ -29,7 +29,7 @@
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/softplus.h"
+#include "../../kernels/source_softplus.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "../../kernels/source_reciprocal.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -285,7 +285,7 @@ ALWI void gates_all() {
     add_binary_tile_init();
     add_binary_tile(0, 1, 0);
     softplus_tile_init();
-    softplus_tile(0, F_ONE, F_ONE, F_TWENTY);
+    qwen38_softplus_tile(0, F_ONE, F_ONE, F_TWENTY);
     copy_tile(CB_DTNA, 1, 1);
     mul_binary_tile_init();
     mul_binary_tile(0, 1, 0);

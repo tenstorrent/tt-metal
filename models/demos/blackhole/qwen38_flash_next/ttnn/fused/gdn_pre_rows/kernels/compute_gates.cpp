@@ -30,7 +30,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/softplus.h"
+#include "../../kernels/source_softplus.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "../../kernels/zones.h"
 

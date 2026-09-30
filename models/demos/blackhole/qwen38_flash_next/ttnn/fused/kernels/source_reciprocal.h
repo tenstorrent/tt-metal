@@ -4,7 +4,7 @@
 
 #pragma once
 
-// Samuel Jett's Qwen model at cd9a11771107ea2c27da3303a0556ff7343e4af5 uses the
+// Samuel Jett (sjettTT, sjett@tenstorrent.com)'s Qwen model at cd9a11771107ea2c27da3303a0556ff7343e4af5 uses the
 // former legacy reciprocal by default. Keep that arithmetic local to this model:
 // current upstream's reciprocal has different rounding and owns SFPU constants,
 // LOADMACRO configuration and replay slots. The legacy iteration owns none of them,
@@ -31,11 +31,17 @@ sfpi_inline sfpi::vFloat qwen38_reciprocal_scalar(const sfpi::vFloat in) {
     // Grayskull has hardwired 1.44 and uses it to avoid a load.
     // We use it here for consistency.
     sfpi::vFloat vConstLn2Recip = 1.442695f;
-    sfpi::vFloat two = 2.0f;
-    sfpi::vFloat result = vConstLn2Recip * (val * vConstLn2Recip + two);
+    // The pinned source compiler emits SFPMUL followed by SFPADDI, with a
+    // rounding boundary between them. An ordinary vector addition now contracts
+    // into SFPMAD, changing the real-checkpoint gated norm. Keep the immediate
+    // addition explicit, local to the source-policy reciprocal.
+    auto add_two = [](sfpi::vFloat product) -> sfpi::vFloat {
+        return __builtin_rvtt_sfpaddi(ckernel::instrn_buffer, product.get(), 0x4000, 0, 0, 0);
+    };
+    sfpi::vFloat result = vConstLn2Recip * add_two(val * vConstLn2Recip);
 
     for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++) {
-        result = result * (val * result + two);
+        result = result * add_two(val * result);
     }
 
     sfpi::vInt orig_exp = exexp(in);
