@@ -319,6 +319,29 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
     return sorted(set(out))
 
 
+def ab_switch_text(task: dict) -> str:
+    """A perf pick's switch as the brief names it: tasks.yaml ab.change (the change) and ab.env (the old path)."""
+    ab = task.get("ab") or {}
+    on, off = ab.get("change") or {}, ab.get("env") or {}
+    if not on and not off:
+        return "a named setting or an env var"
+    fmt = lambda e: " ".join(f"{k}={v}" for k, v in e.items())  # noqa: E731
+    return f"change on: {fmt(on) or '(the default)'}; off (the old path): {fmt(off)}"
+
+
+def ab_switch_missing(task: dict, repo: Path, changed: list[str]) -> list[str]:
+    """Switch names of ab.env / ab.change that no changed file (or the task's paths) mentions: the switch would do nothing."""
+    names = set((task.get("ab") or {}).get("env") or {}) | set((task.get("ab") or {}).get("change") or {})
+    files = [repo / p for p in changed if (repo / p).is_file()]
+    for pat in task.get("paths") or []:
+        base = repo / pat
+        files += [f for f in (base.rglob("*.py") if base.is_dir() else [base]) if f.is_file()]
+    text = "".join(
+        f.read_text(errors="replace") for f in dict.fromkeys(files) if f.suffix in (".py", ".cpp", ".hpp", ".h")
+    )
+    return sorted(n for n in names if n not in text)
+
+
 # ---------------------------------------------------------------- tree snapshots
 def dirty(repo: Path) -> dict[str, str]:
     """path -> content hash for every modified or untracked file (deleted files hash to '')."""
@@ -439,6 +462,7 @@ class Orchestrator:
             "details": brief.get("details", ""),
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
+            "ab_switch": ab_switch_text(task),
         }
         can_defer = defer and role == "implement" and OR.deferrable(task)  # never the debugger (it cannot defer)
         vals["defer"] = self.defer_text(task, comp, vals) if can_defer else ""
@@ -858,6 +882,33 @@ class Orchestrator:
         keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs")}
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
+    def ab_code_key(self, task: dict) -> str:
+        """The code a side measures: the committed tree plus the uncommitted changes (the agent's) of the repo."""
+        import hashlib
+
+        def git(*a):
+            return subprocess.run(["git", *a], cwd=self.spec.repo, capture_output=True, text=True).stdout
+
+        return hashlib.sha256(
+            (
+                git("rev-parse", "HEAD^{tree}")
+                + git(
+                    "diff",
+                    "HEAD",
+                    "--",
+                    ".",
+                    ":!*state.json",
+                    ":!*/results/*",
+                    ":!*BREADCRUMBS.md",
+                    ":!*supervision.md",
+                )
+            ).encode()
+        ).hexdigest()[:16]
+
+    def changed_under(self, task: dict) -> list[str]:
+        """Uncommitted files under the task's paths (the change a report measures)."""
+        return sorted(p for p in dirty(self.spec.repo) if allowed(p, list(task.get("paths") or [])))
+
     def ab_record(self, task: dict) -> dict | None:
         rec = self.led.state().get(task["id"], {}).get("ab")
         return rec if isinstance(rec, dict) and rec.get("key") == self.ab_key(task) else None
@@ -919,13 +970,25 @@ class Orchestrator:
         return list(dict.fromkeys(r for r in (m.group(1) if m else "last", names[-1] if names else None) if r in names))
 
     def ab_report(self, task: dict, changed: list[str]) -> dict:
-        """Per config (off = ``ab.env``, the old path; on = the tree as the agent left it), each into its own results
-        dir runs/<run>/ab/<task>/<old|new>/: every frozen test of the gate (all of them, not stopping at the first
-        failure), the ladder at every A/B rung, and one plain profile. Then table.md and the ledger record."""
+        """Per config (off = ``ab.env``, the old path; on = ``ab.change``, the change, both set explicitly: the agent may
+        leave either default in the tree), each into its own results dir runs/<run>/ab/<task>/<old|new>/: every frozen
+        test of the gate (all of them, not stopping at the first failure), the ladder at every A/B rung, and one plain
+        profile. A side already measured for the same code and switch (side.json) is reused, not run again. Then
+        table.md and the ledger record."""
         tid, ab = task["id"], task.get("ab") or {}
         d = self.run_dir / "ab" / tid
         old = {k: str(v) for k, v in (ab.get("env") or {}).items()}
-        rec = {"key": self.ab_key(task), "at": now(), "changed": changed, "env": old, "table": str(d / "table.md")}
+        on = {k: str(v) for k, v in (ab.get("change") or {}).items()}
+        if old and old == on:
+            raise ValueError(f"{tid}: ab.env and ab.change are the same configuration")
+        rec = {
+            "key": self.ab_key(task),
+            "at": now(),
+            "changed": changed,
+            "env": old,
+            "on": on,
+            "table": str(d / "table.md"),
+        }
         rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, note="")
         owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
         # each command of the gate as the gate runs it (gate_command: no precompile pass for a perf step)
@@ -934,14 +997,25 @@ class Orchestrator:
         prof_cmd = next((re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x), None)
         base = gate_env(self.spec, self.led, tid)
         base[accuracy_guard.AB_ENV] = "1"  # the profile guard lets the orchestrator's own profile through
-        for k in list(old) + ["BRINGUP_PROFILE_OPS"]:
+        for k in list(old) + list(on) + ["BRINGUP_PROFILE_OPS"]:
             base.pop(k, None)
-        sides = ([("old", old)] if old else []) + [("new", {})]
+        sides = ([("old", old)] if old else []) + [("new", on)]
         if not owned:
             rec["note"] = "the agent changed nothing under the task's paths (its summary and BREADCRUMBS say why)"
             sides = []
         elif not old:
             rec["note"] = "no `ab` switch in tasks.yaml: the change is measured on only"
+        elif not on:
+            rec[
+                "note"
+            ] = "no `ab.change` in tasks.yaml: 'on' is the tree's default, which the agent may have left on the old path"
+        missing = ab_switch_missing(task, self.spec.repo, owned) if sides else []
+        if missing:
+            rec[
+                "note"
+            ] = f"INVALID: switch {missing} (tasks.yaml ab) appears in none of the task's code, so it would change nothing"
+            sides = []
+        code = self.ab_code_key(task)
 
         def run(side, name, cmd, extra):
             out = d / side / name
@@ -956,6 +1030,19 @@ class Orchestrator:
 
         try:
             for side, env in sides:
+                stamp = {"code": code, "env": env, "rungs": rec["rungs"], "tests": tests, "profile": prof_cmd}
+                prev = d / side / "side.json"
+                if prev.exists() and json.loads(prev.read_text()).get("stamp") == stamp:
+                    kept = json.loads(prev.read_text())
+                    for n, r in kept["tests"].items():
+                        rec["tests"].setdefault(n, {})[side] = r
+                    for n, r in kept["ladder"].items():
+                        rec["ladder"].setdefault(n, {})[side] = r
+                    if kept.get("profile") is not None:
+                        rec["profile"][side] = kept["profile"]
+                    self.echo(f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: reused ({prev})")
+                    continue
+                prev.unlink(missing_ok=True)
                 for i, cmd in enumerate(tests):
                     name = Path(next((w for w in cmd.split() if w.endswith(".py")), f"test{i}")).stem
                     rc, _, text = run(side, name, cmd, env)
@@ -971,8 +1058,33 @@ class Orchestrator:
                         k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
                     ]
                     rec["profile"][side] = dict({k: got.get(k) for k in dict.fromkeys(keys)}, rc=rc)
+                prev.write_text(
+                    json.dumps(
+                        {
+                            "stamp": stamp,
+                            "tests": {n: r[side] for n, r in rec["tests"].items() if side in r},
+                            "ladder": {n: r[side] for n, r in rec["ladder"].items() if side in r},
+                            "profile": rec["profile"].get(side),
+                        },
+                        indent=1,
+                    )
+                )
         except InfraStop as e:
             rec["note"] = f"stopped early: {e.sig} (reset the board; `decide --task {tid} --rerun` measures again)"
+        same = [
+            n
+            for n, r in list(rec["tests"].items()) + list(rec["ladder"].items())
+            if "old" in r
+            and "new" in r
+            and r["old"].get("checks", r["old"]) == r["new"].get("checks", r["new"])
+            and self.ab_metrics(tid, d, "old", n) == self.ab_metrics(tid, d, "new", n)
+        ]
+        measured = any(self.ab_metrics(tid, d, "old", n) for n in same)
+        if measured and len(same) == len(rec["tests"]) + len(rec["ladder"]):
+            rec["note"] = (
+                "INVALID: off and on gave bit-identical metrics on every run, so the switch changed nothing (check"
+                " ab.env / ab.change in tasks.yaml against the code's switch)"
+            )
         rec["gate_on"] = self.gate_on(task, rec, d)
         (d / "table.md").parent.mkdir(parents=True, exist_ok=True)
         (d / "table.md").write_text(self.ab_table(task, rec))
@@ -985,6 +1097,9 @@ class Orchestrator:
         )
         self.echo(f"  [{tid}] A/B report: {rec['table']}")
         return rec
+
+    def ab_metrics(self, tid: str, d: Path, side: str, name: str) -> dict:
+        return {k: v["value"] for k, v in M.load(tid, d / side / name).items()}
 
     def gate_on(self, task: dict, rec: dict, d: Path) -> dict:
         """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics."""
@@ -1199,7 +1314,11 @@ def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
     """The owner's answer to a perf pick's A/B report; ``resume`` then applies it (perf_step)."""
     import getpass
 
-    rec = orch.ab_record(orch.led.task(tid))
+    task = orch.led.task(tid)
+    rec = orch.ab_record(task)
+    if not rec and decision == "rerun" and task.get("step") == "perf":
+        # e.g. a report cut short: measure the change the tree holds, without another agent attempt
+        rec = {"key": orch.ab_key(task), "changed": orch.changed_under(task), "why": "", "at": now()}
     if not rec:
         print(f"{tid}: no A/B report for the current brief and switch (tasks.yaml); nothing to decide")
         return 1
