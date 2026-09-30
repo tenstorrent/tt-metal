@@ -946,6 +946,7 @@ class LTXDistilledPipeline(LTXPipeline):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         _t_init = time.perf_counter()
+        _t_marks = []
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         hw = latent_h * latent_w
         # THREE lengths that COINCIDE for base/i2v/keyframe but SPLIT for reference:
@@ -1038,6 +1039,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # Persist buffers only when traced (baked addresses); untraced uses a transient state so
         # statics rebuild — resolution can differ across generates.
         state = self._trace_state.setdefault(trace_key, LTXTransformerState()) if traced else LTXTransformerState()
+        _t_marks.append(("cond", time.perf_counter()))
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -1054,6 +1056,7 @@ class LTXDistilledPipeline(LTXPipeline):
             ref_latent_frames=ref_latent_frames,
         )
 
+        _t_marks.append(("statics", time.perf_counter()))
         if device_prompts:
             assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
             assert self._prompt_v.value is not None and self._prompt_a.value is not None
@@ -1068,6 +1071,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 self._prompt_a.update(prompt_a, traced)
                 prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
 
+        _t_marks.append(("prompt", time.perf_counter()))
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
         # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
@@ -1122,6 +1126,7 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = audio_lat_real
 
+        _t_marks.append(("noise", time.perf_counter()))
         num_steps = len(sigma_values) - 1
 
         # Device-resident loop: inner_step returns SP-sharded velocity, stepped in place by an
@@ -1152,7 +1157,15 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
-        logger.info(f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms")
+        _t_marks.append(("upload", time.perf_counter()))
+        _t_prev, _t_parts = _t_init, []
+        for _name, _t in _t_marks:
+            _t_parts.append(f"{_name} {(_t - _t_prev) * 1000:.0f}")
+            _t_prev = _t
+        logger.info(
+            f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms "
+            f"[{', '.join(_t_parts)} ms]"
+        )
         for step_idx in range(num_steps):
             _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
