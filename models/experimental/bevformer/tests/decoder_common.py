@@ -25,23 +25,47 @@ CODE_SIZE = 10
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
-# Random part of the sampling offsets, in BEV pixels, on top of mmcv's 1..num_points px
-# grid init, and the spread of the attention logits. Trained offsets spread over several
-# pixels and trained attention is peaked; nn.Linear's default init gives ~0.6 px offsets
-# and a near-uniform softmax, which hides per-point errors.
+# Per-layer bounds for ``layer_metrics``, about twice the worst error measured on device
+# across the cases sharing them (px about 1.5x).
+# bfloat16 error compounds through the reference-point refinement, faster on 200x200, where
+# the same position error covers four times the pixels. The tiny (and 50x100) bounds gate
+# late-layer regressions; base's last layers are a looser smoke bound.
+#   output: PCC of each layer's output.
+#   refine: PCC of each layer's refinement step in logit space, xy and z apart.
+#   px:     mean xy error of the refined points, in BEV pixels.
+THRESHOLDS = {
+    "tiny": dict(
+        output=(0.9997, 0.9992, 0.9983, 0.9967, 0.994, 0.988),
+        refine=(0.9993, 0.998, 0.996, 0.992, 0.988, 0.977),
+        px=(0.03, 0.05, 0.075, 0.11, 0.15, 0.2),
+    ),
+    "base": dict(
+        output=(0.9997, 0.9989, 0.996, 0.986, 0.96, 0.9),
+        refine=(0.9993, 0.9975, 0.992, 0.97, 0.92, 0.84),
+        px=(0.07, 0.13, 0.24, 0.45, 0.7, 1.15),
+    ),
+}
+
+# Random part of the sampling offsets, in BEV pixels, on top of the 1..num_points px grid
+# init, and the spread of the cross- and self-attention logits. Trained offsets spread over
+# several pixels and trained attention is peaked; nn.Linear's default init gives ~0.6 px
+# offsets and near-uniform softmaxes, which hide per-point and per-key errors.
 SAMPLING_OFFSET_STD_PX = 2.0
 ATTENTION_LOGIT_STD = 2.0
+SELF_ATTENTION_LOGIT_STD = 2.0
 
 # Correlation length of the random BEV features, in cells. The encoder's BEV features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in
 # the sampled value, which the refinement feeds back into the next layer's positions. With
-# white noise the reference itself, only rounded to bfloat16, falls to PCC 0.65 by the last
-# layer on the 200x200 grid, so no bound on the TT port would mean anything.
+# white noise the reference run on bfloat16-rounded inputs and weights (fp32 compute) falls
+# to PCC 0.65 against itself by the last layer on the 200x200 grid, so no bound on the TT
+# port would mean anything.
 BEV_FEATURE_CELLS = 4
 
 
 def _init_cross_attention(msda, generator):
-    """mmcv ``CustomMSDeformableAttention.init_weights`` plus trained-like random weights."""
+    """BEVFormer ``CustomMSDeformableAttention.init_weights`` (mmcv's
+    ``MultiScaleDeformableAttention`` init) plus trained-like random weights."""
     heads, levels, points = msda.num_heads, msda.num_levels, msda.num_points
     in_features = msda.sampling_offsets.in_features
 
@@ -68,6 +92,18 @@ def _init_cross_attention(msda, generator):
         proj.bias.zero_()
 
 
+def _init_self_attention(mha, generator):
+    """Q and K spread so the ``q . k / sqrt(head_dim)`` logits have std SELF_ATTENTION_LOGIT_STD.
+
+    For unit-variance inputs a weight of std s gives q, k of std s * sqrt(embed_dims), and
+    the scaled logit's std is std(q) * std(k).
+    """
+    embed_dims = mha.embed_dim
+    std = math.sqrt(SELF_ATTENTION_LOGIT_STD) / math.sqrt(embed_dims)
+    qk_rows = mha.in_proj_weight[: 2 * embed_dims]
+    qk_rows.copy_(torch.randn(qk_rows.shape, generator=generator) * std)
+
+
 def build_reference_decoder(seed=0):
     torch.manual_seed(seed)
     model = DetectionTransformerDecoder(
@@ -82,6 +118,8 @@ def build_reference_decoder(seed=0):
         for module in model.modules():
             if isinstance(module, MSDeformableAttention):
                 _init_cross_attention(module, generator)
+            elif isinstance(module, nn.MultiheadAttention):
+                _init_self_attention(module, generator)
     return model.eval().requires_grad_(False)
 
 
@@ -168,11 +206,23 @@ def layer_metrics(expected, actual, input_reference_points, bev_shape):
     ]
 
 
+# Each ``layer_metrics`` entry: the ``THRESHOLDS`` key bounding it, and whether that bound
+# is a minimum (PCC) or a maximum (error).
+METRIC_BOUNDS = {
+    "output": ("output", "min"),
+    "refine_xy": ("refine", "min"),
+    "refine_z": ("refine", "min"),
+    "px": ("px", "max"),
+}
+
+
 def threshold_failures(metrics, thresholds, layer):
-    """``metrics`` entries out of bounds; PCCs are lower bounds, ``px`` an upper one."""
+    """``metrics`` entries out of bounds. Fails closed: a NaN metric is out of bounds."""
     failures = []
     for key, value in metrics.items():
-        threshold = thresholds[key.split("_")[0]][layer]
-        if (value > threshold) if key == "px" else (value < threshold):
+        bound, kind = METRIC_BOUNDS[key]
+        threshold = thresholds[bound][layer]
+        within = value >= threshold if kind == "min" else value <= threshold
+        if not within:
             failures.append(f"{key} {value:.5f} (threshold {threshold})")
     return failures

@@ -16,12 +16,8 @@ import torch
 import torch.nn as nn
 
 from models.experimental.bevformer.config import DeformableAttentionConfig
+from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-
-# Channels of BEVFormer's 10-value box code (cx, cy, w, l, cz, h, sin, cos, vx, vy) that
-# refine the (x, y, z) reference point.
-REG_XY = slice(0, 2)
-REG_Z = slice(4, 5)
 
 
 def inverse_sigmoid(x, eps=1e-5):
