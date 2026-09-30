@@ -53,8 +53,7 @@ struct CodegenLegPlan {
     std::vector<uint32_t> rep_dims;
     // How many legs run row-major: all of them for a ROW_MAJOR input and on the round trip, none for a
     // TILE input copying tile pages. The round trip runs its outer-axis legs row-major too, between the
-    // one untilize and the one retilize: retilizing first and then copying the padded tile planes
-    // along the outer axis costs more device time than widening the row-major intermediate.
+    // one untilize and the one retilize, since copying padded tile planes moves more bytes.
     size_t row_major_legs = 0;
 };
 

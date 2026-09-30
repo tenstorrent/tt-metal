@@ -341,8 +341,8 @@ def test_repeat_codegen_routing_mixed_placement(device, shape, kwargs, layout):
 
 
 # A row-major leg pages one stick per CB slot, the slot holds the larger of the leg's input and
-# output sticks, and the factory needs at least two slots (plan_rm_cb). A case where even two slots
-# exceed the static L1 window is otherwise fully in codegen scope; without the capacity gate it
+# output sticks, and routing sends a leg to codegen only when two slots fit the static L1 window. A
+# case where they do not is otherwise fully in codegen scope; without the capacity gate it
 # routes to codegen and then throws out of circular-buffer allocation instead of falling back.
 #
 # 131072 bf16 elements is a 256 KiB input stick. A last-dim x3 repeat makes the output stick
@@ -708,9 +708,7 @@ def _sharded(shape, x, y, strategy):
 _H = ttnn.ShardStrategy.HEIGHT
 _W = ttnn.ShardStrategy.WIDTH
 
-# Cases measured faster on codegen than on native (device and wall) that a perf demotion must not catch.
-# The small row-major shapes win on device by ~1.8x and hold only while the auto route adds no host cost
-# over the forced one, so a demotion widened to cover them would surrender that win.
+# Cases codegen serves faster than native, on device and on wall time; a perf demotion must not catch them.
 # Each: (shape, repeat_dims, dtype, layout, input placement, output memory_config or None).
 _CODEGEN_WINS = [
     *[

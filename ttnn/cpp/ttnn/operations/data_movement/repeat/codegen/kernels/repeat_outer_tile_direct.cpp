@@ -33,11 +33,9 @@ void kernel_main() {
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
 
     Noc noc;
+    // The CB is this kernel's private staging slot, never handed to another RISC.
     CircularBuffer cb(cb_id);
-    cb.reserve_back(1);
-    const uint32_t slot = cb.get_write_ptr();
-    cb.push_back(1);
-    const CoreLocalMem<uint32_t> local(slot);
+    const CoreLocalMem<uint32_t> local(cb.get_write_ptr());
 
     const uint32_t end_page = start_page + num_pages;
     for (uint32_t page = start_page; page < end_page; ++page) {

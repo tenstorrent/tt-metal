@@ -203,7 +203,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
         KernelDescriptor reader_desc;
         reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_outer_tile_direct.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_outer_tile_direct.cpp";
         reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_desc.core_ranges = split.all_cores;
         reader_desc.compile_time_args = std::move(reader_ct_args);
@@ -227,8 +227,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
 
     if (!is_row_major) {
-        // TILE-interleaved path: shared pluggable sequencer reader (seq_id=1 == SEQ_REPEAT)
-        // + interleaved writer.
+        // TILE path: the shared sequencer reader walks SEQ_REPEAT's page map into the shared writer.
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
@@ -253,10 +252,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             {"seq_id", kSeqRepeat},
             {"cb_id", 0},
             {"batch", kRepeatBatch},
-            // reader_tile_interleaved_unified.cpp unconditionally reads this named
-            // arg in kernel_main() (not gated by SEQ_ID), falling back to the
-            // TensorAccessorArgs page size when 0. It must be supplied even though
-            // the repeat sequencer never consults it.
+            // Required by the shared reader; 0 keeps the accessor's page size as the source pitch.
             {"src_page_pitch", 0},
         };
         reader_desc.config = ReaderConfigDescriptor{};

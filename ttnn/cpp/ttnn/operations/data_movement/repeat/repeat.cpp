@@ -322,15 +322,14 @@ MemoryConfig resolve_codegen_output_mem_config(
 
 // Decomposes a (possibly multi-dim) repeat into single-dim prim::repeat_codegen legs. Each leg is
 // independent (orthogonal axes), so leg order affects only intermediate sizes, never the result.
-// Intermediate legs are interleaved in the input's buffer type, since a repeated shape does not tile
-// the input's shard spec. Only the final leg writes the requested placement, and only when its pages
+// Intermediate legs are interleaved, in DRAM when the input was unsharded and in the input's buffer
+// type otherwise. Only the final leg writes the requested placement, and only when its pages
 // line up with it; otherwise one placement hop runs at the end.
 ttnn::Tensor repeat_via_codegen(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    // The whole-call gate budgeted L1 against this same plan.
     const auto plan = repeat_codegen::plan_codegen_legs(tensor, repetition_vector, output_mem_config);
     const std::optional<Tensor> final_out = plan.final_in_place ? optional_output_tensor : std::nullopt;
     const size_t num_legs = plan.rep_dims.size();
@@ -341,8 +340,7 @@ ttnn::Tensor repeat_via_codegen(
     }
 
     if (plan.round_trip) {
-        // Not to_layout: for a padded tensor it calls untilize_with_unpadding directly, while
-        // ttnn::untilize routes the same unpadding untilize to its codegen prim where it can.
+        // ttnn::untilize rather than to_layout, which bypasses untilize's codegen route on a padded tensor.
         working = ttnn::untilize(working);
     }
 

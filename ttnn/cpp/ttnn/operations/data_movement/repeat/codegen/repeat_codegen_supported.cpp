@@ -82,7 +82,7 @@ bool tile_geometry_ok(const Tensor& input) {
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
-// Thresholds of the row-hotspot demotion below, measured on Wormhole: a row-major outer-axis leg
+// Thresholds of the row-hotspot demotion below, tuned on Wormhole: a row-major outer-axis leg
 // reading a HEIGHT_SHARDED L1 input in place loses to native once both hold.
 constexpr uint64_t kRowHotspotMinBytesPerShardCore = 64 * 1024;
 constexpr uint64_t kRowHotspotMinReadsPerShardRow = 12;
@@ -120,7 +120,7 @@ bool is_row_hotspot_outer_leg(
            first_leg_repeats * extent.x >= kRowHotspotMinReadsPerShardRow * extent.y;
 }
 
-// Threshold of the few-core last-dim demotion below, measured on Wormhole.
+// Thresholds of the few-core last-dim demotion below, tuned on Wormhole.
 constexpr uint64_t kFewCoreLastDimMinBytesPerShardCore = 32 * 1024;
 constexpr uint32_t kFewCoreLastDimMaxShardCores = 4;
 
@@ -319,8 +319,7 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        // A one-element bfloat16 stick is served: the last-dim reader replicates a 2-byte stick with
-        // halfword stores, and every other leg moves whole aligned pages.
+        // bfloat8_b is block-float and has no row-major page layout.
         if (input.dtype() == DataType::BFLOAT8_B) {
             return false;
         }
