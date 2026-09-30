@@ -33,3 +33,9 @@ The old probe fired because the broker's RUNNING line changed from "HELD" to "ho
 The device is not back: `lspci -d 1e52:` shows 24 of 32 chips; chips 8-15 (one tray) stay off PCIe; bridge-reset
 and glx_reset keep failing (jobs 906-914). Nothing submitted, driver not relaunched.
 New probe: 32 chips on PCIe and no broker job in RUNNING (see result.json retry_when).
+
+## 2026-09-30 21:15 UTC (device back, driver relaunched)
+blx03 broker power-cycled at 21:05 UTC (job 918); all 32 chips back, startup + fabric-check passed (920, 921).
+Relaunched drive37.sh detached on blx03. It waits for project job 922 (another task, blx03_ab.sh) to finish,
+then submits s2reuse0, then s2reuse1. Check: `ssh g14blx03 cat ~/fasth3/t37/jobs ~/fasth3/t37/drive37.log`;
+done when ~/fasth3/t37/DONE exists. Then follow "Next step on resume" above.
