@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ResNet
-from models.experimental.bevformer.tests.backbone_weights import load_backbone_weights, load_fpn_weights
+from models.experimental.bevformer.tests.backbone_weights import init_dummy_backbone_weights, init_dummy_fpn_weights
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 NUM_CAMS = 6
@@ -84,11 +84,11 @@ BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16]
 
 # The references only run forward; without autograd they keep no activations for backward.
 def build_reference_backbone():
-    return load_backbone_weights(ResNet(**RESNET_KWARGS)).requires_grad_(False)
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS)).requires_grad_(False)
 
 
 def build_reference_fpn():
-    return load_fpn_weights(FPN(**FPN_KWARGS)).requires_grad_(False)
+    return init_dummy_fpn_weights(FPN(**FPN_KWARGS)).requires_grad_(False)
 
 
 def tt_resnet_kwargs():
