@@ -40,6 +40,7 @@ def _device_params(fabric_config, payload):
         "fabric_router_config": _router(payload),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "l1_small_size": 2048,
+        "trace_region_size": 64 * 1024 * 1024,  # the traced metadata case captures the op
     }
 
 
