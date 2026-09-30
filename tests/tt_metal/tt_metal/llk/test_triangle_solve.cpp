@@ -28,7 +28,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/arch.hpp>
 
 #include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
@@ -50,6 +49,7 @@ namespace unit_tests::compute::sfpu::triangle_solve {
 constexpr uint32_t kTileDim = 32;
 constexpr uint32_t kTileHW = kTileDim * kTileDim;
 constexpr uint32_t kFp32TileBytes = kTileHW * sizeof(float);
+constexpr uint32_t kDramBankId = 0;  // single-bank DRAM buffers in this test
 constexpr uint32_t kBf16TileBytes = kTileHW * sizeof(uint16_t);
 // The reader pushes one L and one RHS tile per iteration, so the RHS CB must hold at least l_tiles_per_block tiles
 // for the compute kernel's L block wait to complete.
@@ -333,11 +333,12 @@ CaseResult run_case(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         reader_kernel,
         core,
         {static_cast<uint32_t>(l_buffer->address()),
-         0u,
+         kDramBankId,
          static_cast<uint32_t>(rhs_buffer->address()),
-         0u,
+         kDramBankId,
          c.num_tiles});
-    SetRuntimeArgs(program_, writer_kernel, core, {static_cast<uint32_t>(x_buffer->address()), 0u, c.num_tiles});
+    SetRuntimeArgs(
+        program_, writer_kernel, core, {static_cast<uint32_t>(x_buffer->address()), kDramBankId, c.num_tiles});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -358,9 +359,6 @@ CaseResult run_case(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
 void run_cases(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std::vector<TriangleSolveCase>& cases) {
-    if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "triangle_solve_tile is implemented on Blackhole only";
-    }
     for (const auto& c : cases) {
         SCOPED_TRACE(c.name);
         EXPECT_TRUE(run_case(mesh_device, c).pass);

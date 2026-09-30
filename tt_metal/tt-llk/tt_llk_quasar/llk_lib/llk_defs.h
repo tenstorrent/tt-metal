@@ -128,7 +128,6 @@ enum class SfpuType : std::uint32_t
     greater_than_equal_zero,
     cumsum,
     reduce,
-    triangle_solve,
 };
 
 enum class DstSync : std::uint8_t

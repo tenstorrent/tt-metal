@@ -32,22 +32,25 @@ namespace sfpu
 // the Blackhole errata set that needs an explicit NOP).
 //
 // DEST addressing (32-bit accumulation): a 32x32 tile is 64 DEST rows of 16 datums, faces f0..f3 at rows 0, 16, 32,
-// 48. One SFPLOAD/SFPSTORE moves a 4-row x 8-column block; the four blocks of tile rows 4g..4g+3 sit at
-// base + {0, 2, 16, 18} (face 0 / face 1, even / odd column half) with base = (g & 3) * 4 for faces 0/1 and
-// 32 + (g & 3) * 4 for faces 2/3. Rows are solved in groups of four held in LREG0..3: every already-solved column
-// contributes a rank-1 update to the live group, then the group's own triangle is applied. Solved rows are stashed
+// 48. One SFPLOAD/SFPSTORE moves 32 lanes, four rows by eight columns of one face: the even columns at an even
+// address, the odd columns (1, 3, ..., 15) of the same rows at address + 2 (lane mapping
+// col = (lane & 7) * 2 + ((addr & 2) ? 1 : 0)). The four blocks of tile rows 4g..4g+3 sit at base + {0, 2, 16, 18}
+// (face 0 / face 1, even / odd columns) with base = (g & 3) * 4 for faces 0/1 and 32 + (g & 3) * 4 for faces 2/3. Rows are solved in groups of four held in
+// LREG0..3: every already-solved column contributes a rank-1 update to the live group, then the group's own triangle is applied. Solved rows are stashed
 // row-oriented in dst_out, one block slot each, and transposed back in place at the end.
 
 constexpr std::uint32_t TRIANGLE_SOLVE_TILE_DIM        = TILE_R_DIM;
 constexpr std::uint32_t TRIANGLE_SOLVE_FACE_DIM        = FACE_R_DIM;
 constexpr std::uint32_t TRIANGLE_SOLVE_ROWS_PER_GROUP  = 4;
 constexpr std::uint32_t TRIANGLE_SOLVE_GROUPS          = TRIANGLE_SOLVE_TILE_DIM / TRIANGLE_SOLVE_ROWS_PER_GROUP;
+constexpr std::uint32_t TRIANGLE_SOLVE_GROUPS_PER_FACE = TRIANGLE_SOLVE_FACE_DIM / TRIANGLE_SOLVE_ROWS_PER_GROUP;
+constexpr std::uint32_t TRIANGLE_SOLVE_FACES_PER_ROW   = TRIANGLE_SOLVE_TILE_DIM / TRIANGLE_SOLVE_FACE_DIM;
 constexpr std::uint32_t TRIANGLE_SOLVE_FACE_ROWS       = FACE_R_DIM; // DEST rows per face: 16 datums per row
 constexpr std::uint32_t TRIANGLE_SOLVE_FACE_PAIR_ROWS  = 2 * TRIANGLE_SOLVE_FACE_ROWS;
-constexpr std::uint32_t TRIANGLE_SOLVE_ODD_COLUMN_HALF = 2; // SFPLOAD address step to columns 8..15 of a face
-// The four block slots of a row group: face 0 even half, face 0 odd half, face 1 even half, face 1 odd half.
+constexpr std::uint32_t TRIANGLE_SOLVE_ODD_COLUMNS     = 2; // SFPLOAD address step selecting a face's odd columns of the same rows
+// The four block slots of a row group: face 0 even columns, face 0 odd columns, face 1 even columns, face 1 odd columns.
 constexpr std::uint32_t TRIANGLE_SOLVE_BLOCK_OFF[TRIANGLE_SOLVE_ROWS_PER_GROUP] = {
-    0, TRIANGLE_SOLVE_ODD_COLUMN_HALF, TRIANGLE_SOLVE_FACE_ROWS, TRIANGLE_SOLVE_FACE_ROWS + TRIANGLE_SOLVE_ODD_COLUMN_HALF};
+    0, TRIANGLE_SOLVE_ODD_COLUMNS, TRIANGLE_SOLVE_FACE_ROWS, TRIANGLE_SOLVE_FACE_ROWS + TRIANGLE_SOLVE_ODD_COLUMNS};
 // DEST rows one 32x32 tile occupies, from the same shift set_dst_write_addr uses.
 constexpr std::uint32_t TRIANGLE_SOLVE_DEST_TILE_ROWS = 1u << DstTileSizeLog2[DstTileShape::Tile32x32];
 static_assert(TRIANGLE_SOLVE_DEST_TILE_ROWS == 2 * TRIANGLE_SOLVE_FACE_PAIR_ROWS, "the solve's DEST layout assumes four 16-row faces per 32x32 tile");
@@ -68,7 +71,7 @@ using _triangle_solve_l_elem_t_ = std::conditional_t<L_FORMAT == DataFormat::Flo
  */
 inline constexpr std::uint32_t _triangle_solve_elem_(const std::uint32_t row, const std::uint32_t col)
 {
-    const std::uint32_t face = (row / TRIANGLE_SOLVE_FACE_DIM) * 2 + col / TRIANGLE_SOLVE_FACE_DIM;
+    const std::uint32_t face = (row / TRIANGLE_SOLVE_FACE_DIM) * TRIANGLE_SOLVE_FACES_PER_ROW + col / TRIANGLE_SOLVE_FACE_DIM;
     return face * TRIANGLE_SOLVE_FACE_DIM * TRIANGLE_SOLVE_FACE_DIM + (row % TRIANGLE_SOLVE_FACE_DIM) * TRIANGLE_SOLVE_FACE_DIM + col % TRIANGLE_SOLVE_FACE_DIM;
 }
 
@@ -79,7 +82,7 @@ inline constexpr std::uint32_t _triangle_solve_elem_(const std::uint32_t row, co
  */
 inline constexpr std::uint32_t _triangle_solve_group_base_(const std::uint32_t group)
 {
-    return (group % 4) * TRIANGLE_SOLVE_ROWS_PER_GROUP + (group / 4) * TRIANGLE_SOLVE_FACE_PAIR_ROWS;
+    return (group % TRIANGLE_SOLVE_GROUPS_PER_FACE) * TRIANGLE_SOLVE_ROWS_PER_GROUP + (group / TRIANGLE_SOLVE_GROUPS_PER_FACE) * TRIANGLE_SOLVE_FACE_PAIR_ROWS;
 }
 
 /**
@@ -170,20 +173,32 @@ inline void _triangle_solve_apply_prev_col_(volatile tt_l1_ptr _triangle_solve_l
 }
 
 /**
+ * @brief SFPLOAD the four blocks of a row group into LREG0..3.
+ *
+ * @param base: DEST offset of the row group's first block.
+ */
+inline void _triangle_solve_load_blocks_(const std::uint32_t base)
+{
+    TT_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[0]);
+    TT_SFPLOAD(p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[1]);
+    TT_SFPLOAD(p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[2]);
+    TT_SFPLOAD(p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[3]);
+}
+
+/**
  * @brief Load the four rows of a row group into LREG0..3, row-oriented.
  *
- * The transpose before the block loads and the one after them turn the four 4x8 blocks into four 32-lane rows.
+ * SFPTRANSP transposes LREG0..3 and LREG4..7 together. The transpose after the block loads turns the four blocks into
+ * four row-oriented registers; the one before them makes the two permutations of LREG4..7 cancel, so LREG5 and LREG6
+ * survive the call (the loads overwrite LREG0..3 either way).
  *
  * @param base: DEST offset of the row group's first block.
  */
 inline void _triangle_solve_load_group_(const std::uint32_t base)
 {
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    TT_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[0]);
-    TT_SFPLOAD(p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[1]);
-    TT_SFPLOAD(p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[2]);
-    TT_SFPLOAD(p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[3]);
-    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0); // all arguments are unused
+    _triangle_solve_load_blocks_(base);
+    TTI_SFPTRANSP(0, 0, 0, 0); // all arguments are unused
 }
 
 /**
@@ -195,11 +210,8 @@ inline void _triangle_solve_load_group_(const std::uint32_t base)
  */
 inline void _triangle_solve_restore_group_layout_(const std::uint32_t base)
 {
-    TT_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[0]);
-    TT_SFPLOAD(p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[1]);
-    TT_SFPLOAD(p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[2]);
-    TT_SFPLOAD(p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[3]);
-    TTI_SFPTRANSP(0, 0, 0, 0);
+    _triangle_solve_load_blocks_(base);
+    TTI_SFPTRANSP(0, 0, 0, 0); // all arguments are unused
     TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[0]);
     TT_SFPSTORE(p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[1]);
     TT_SFPSTORE(p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, base + TRIANGLE_SOLVE_BLOCK_OFF[2]);
@@ -216,8 +228,9 @@ inline void _triangle_solve_restore_group_layout_(const std::uint32_t base)
  * @param l1_base: L1 byte address of the L tile in standard TILE layout; must stay resident for the whole call.
  * @note DEST is addressed absolutely (tile index * TRIANGLE_SOLVE_DEST_TILE_ROWS): bracket the call with
  *       @ref _llk_math_eltwise_sfpu_start_ at DEST base 0 and @ref _llk_math_eltwise_sfpu_done_, with 32-bit destination
- *       accumulation enabled and ADDR_MOD_7 programmed by @ref _llk_math_eltwise_binary_sfpu_init_. Writes LREG0..4 and
- *       LREG7.
+ *       accumulation enabled and ADDR_MOD_7 programmed by @ref _llk_math_eltwise_binary_sfpu_init_. L is read through the
+ *       RISC's L1 data cache: invalidate it (invalidate_l1_cache) first if the tile may have been rewritten since it was
+ *       last read. Writes LREG0..4 and LREG7.
  */
 template <DataFormat L_FORMAT, bool L_NEGATED>
 inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_t dst_out, const std::uint32_t l1_base)
@@ -282,13 +295,6 @@ inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_
     {
         _triangle_solve_restore_group_layout_(out_base + _triangle_solve_group_base_(group));
     }
-}
-
-/**
- * @brief Init for @ref _triangle_solve_tile_. The solve needs no state beyond the ADDR_MOD_7 of @ref _llk_math_eltwise_binary_sfpu_init_.
- */
-inline void _triangle_solve_init_()
-{
 }
 
 } // namespace sfpu
