@@ -182,8 +182,8 @@ std::unordered_set<CoreCoord> claimed_service_cores(const IDevice* device) {
         return claimed;
     }
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(device)) {
-        for (const IDevice* chip : mesh->get_devices()) {
-            const auto chip_claimed = service_cores.claimed_cores(chip->id());
+        for (auto chip_id : mesh->get_device_ids()) {
+            const auto chip_claimed = service_cores.claimed_cores(chip_id);
             claimed.insert(chip_claimed.begin(), chip_claimed.end());
         }
     } else {

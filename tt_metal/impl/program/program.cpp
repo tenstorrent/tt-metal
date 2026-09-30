@@ -2535,8 +2535,8 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
-                auto chip_claimed = svc.claimed_cores(dev->id());
+            for (auto device_id : mesh->get_device_ids()) {
+                auto chip_claimed = svc.claimed_cores(device_id);
                 claimed.insert(chip_claimed.begin(), chip_claimed.end());
             }
         } else {
