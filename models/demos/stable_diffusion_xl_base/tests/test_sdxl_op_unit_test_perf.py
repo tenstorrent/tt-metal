@@ -172,9 +172,9 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Measured 67847 / 67772 / 67650 ns on the 2026-09-26..28 scheduled wh_n300_civ2 runs. #55698 re-centred this
-    # target to 68875 on 2026-09-25; #56292, three hours later, moved the sharded kernel's rsqrt from the legacy
-    # compat routine to the modern one (fewer SFPU instructions per pass) and took another ~1.6 % off.
+    # #55698 (2026-09-25) migrated the GroupNorm kernels to eltwise_chain and set 68875 from its own measurement;
+    # #56292, three hours later, removed the legacy rsqrt from the sharded kernel (modern routine, fewer SFPU
+    # instructions per pass). Thirteen single-kernel readings since then span 67332-68004 ns, mean 67712.
     expected_duration_ns = 67750
 
     # Log the performance result
