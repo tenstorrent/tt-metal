@@ -86,16 +86,6 @@ inline constexpr std::uint32_t _triangle_solve_group_base_(const std::uint32_t g
 }
 
 /**
- * @brief DEST offset (within a tile) of the block slot where a logical row is stashed row-oriented during the solve.
- *
- * @param row: Tile row, 0..31.
- */
-inline constexpr std::uint32_t _triangle_solve_row_off_(const std::uint32_t row)
-{
-    return _triangle_solve_group_base_(row / TRIANGLE_SOLVE_ROWS_PER_GROUP) + TRIANGLE_SOLVE_BLOCK_OFF[row % TRIANGLE_SOLVE_ROWS_PER_GROUP];
-}
-
-/**
  * @brief SFPLOADI into LREG7 with a compile-time XOR applied to the immediate: TT_SFPLOADI(LREG7, MOD0, imm16 ^ FLIP).
  *
  * The immediate fills the zero low half of the instruction word, so the flip is folded into the constant opcode and the RISC
@@ -113,6 +103,28 @@ inline void _triangle_solve_sfploadi_lreg7_(const std::uint32_t imm16)
     static_assert((OPCODE & TRIANGLE_SOLVE_IMM16_MASK) == 0, "the immediate must fill the zero low half of the SFPLOADI word");
     static_assert(FLIP <= TRIANGLE_SOLVE_IMM16_MASK, "the flip must stay within the 16-bit immediate");
     TT_INSN((OPCODE ^ FLIP) ^ imm16);
+}
+
+/**
+ * @brief TT_SFPLOADI(LREG7, MOD0, bits & TRIANGLE_SOLVE_IMM16_MASK), the word built with one Zbkb `pack` where the ISA has it.
+ *
+ * @tparam MOD0: SFPLOADI mode, one of sfpi::SFPLOADI_MOD0_*
+ * @param bits: Raw 32-bit element; only its low half is used.
+ */
+template <std::uint32_t MOD0>
+inline void _triangle_solve_sfploadi_lreg7_lo_pack_(const std::uint32_t bits)
+{
+    constexpr std::uint32_t OPCODE = TT_OP_SFPLOADI(p_sfpu::LREG7, MOD0, 0);
+    static_assert(MOD0 <= 0xF, "SFPLOADI mod0 is a 4-bit field");
+    static_assert((OPCODE & TRIANGLE_SOLVE_IMM16_MASK) == 0, "the immediate must fill the zero low half of the SFPLOADI word");
+#if defined(__riscv_xttzbkb) || defined(__riscv_zbkb)
+    const std::uint32_t opcode_hi = OPCODE >> 16;
+    std::uint32_t word;
+    __asm__("pack %0, %1, %2" : "=r"(word) : "r"(bits), "r"(opcode_hi));
+    TT_INSN(word);
+#else
+    TT_INSN(OPCODE ^ (bits & TRIANGLE_SOLVE_IMM16_MASK));
+#endif
 }
 
 /**
@@ -134,7 +146,7 @@ inline void _triangle_solve_load_l_(const std::uint32_t bits)
     if constexpr (L_FORMAT == DataFormat::Float32)
     {
         _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_UPPER, SIGN_FLIP>(bits >> 16);
-        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_LOWER>(bits & TRIANGLE_SOLVE_IMM16_MASK);
+        _triangle_solve_sfploadi_lreg7_lo_pack_<sfpi::SFPLOADI_MOD0_LOWER>(bits);
     }
     else
     {
@@ -170,6 +182,30 @@ inline void _triangle_solve_apply_prev_col_(volatile tt_l1_ptr _triangle_solve_l
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b3);
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+}
+
+/**
+ * @brief Rank-1 updates of the live row group (LREG0..3) from `groups` solved groups of columns, in column order.
+ *
+ * @tparam L_FORMAT: Format of the L tile, values = <Float32/Float16_b>
+ * @tparam L_NEGATED: L's strict-lower entries are supplied negated
+ * @param l_blk: &L[row0][col0] of the first group; the groups' columns are contiguous in L1.
+ * @param x_base: DEST offset of the first group's stash blocks, TRIANGLE_SOLVE_ROWS_PER_GROUP apart per group.
+ * @param groups: Number of solved groups to apply.
+ */
+template <DataFormat L_FORMAT, bool L_NEGATED>
+inline void _triangle_solve_apply_prev_groups_(volatile tt_l1_ptr _triangle_solve_l_elem_t_<L_FORMAT>* l_blk, std::uint32_t x_base, const std::uint32_t groups)
+{
+    for (std::uint32_t src = 0; src < groups; src++)
+    {
+#pragma GCC unroll TRIANGLE_SOLVE_ROWS_PER_GROUP
+        for (std::uint32_t k = 0; k < TRIANGLE_SOLVE_ROWS_PER_GROUP; k++)
+        {
+            _triangle_solve_apply_prev_col_<L_FORMAT, L_NEGATED>(l_blk + k, x_base + TRIANGLE_SOLVE_BLOCK_OFF[k]);
+        }
+        l_blk += TRIANGLE_SOLVE_ROWS_PER_GROUP;
+        x_base += TRIANGLE_SOLVE_ROWS_PER_GROUP;
+    }
 }
 
 /**
@@ -240,60 +276,74 @@ inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_
     const std::uint32_t in_base             = dst_in * TRIANGLE_SOLVE_DEST_TILE_ROWS;
     const std::uint32_t out_base            = dst_out * TRIANGLE_SOLVE_DEST_TILE_ROWS;
 
+    // Running bases per row group (DEST block in dst_in / dst_out, &L[row0][0], &L[row0][row0]): a fixed step within a face
+    // row, a fixed jump at the face-row boundary.
+    constexpr std::uint32_t FACE_GROUPS = TRIANGLE_SOLVE_GROUPS_PER_FACE;
+    constexpr std::uint32_t GROUP_ROWS  = TRIANGLE_SOLVE_ROWS_PER_GROUP;
+    constexpr std::uint32_t FACE_DIM    = TRIANGLE_SOLVE_FACE_DIM;
+    static_assert(TRIANGLE_SOLVE_GROUPS == 2 * FACE_GROUPS, "the group walk crosses exactly one face-row boundary");
+    constexpr std::uint32_t BASE_STEP = _triangle_solve_group_base_(1) - _triangle_solve_group_base_(0);
+    constexpr std::uint32_t BASE_JUMP = _triangle_solve_group_base_(FACE_GROUPS) - _triangle_solve_group_base_(FACE_GROUPS - 1);
+    constexpr std::uint32_t ROW0_STEP = _triangle_solve_elem_(GROUP_ROWS, 0) - _triangle_solve_elem_(0, 0);
+    constexpr std::uint32_t ROW0_JUMP = _triangle_solve_elem_(FACE_DIM, 0) - _triangle_solve_elem_(FACE_DIM - GROUP_ROWS, 0);
+    constexpr std::uint32_t DIAG_STEP = _triangle_solve_elem_(GROUP_ROWS, GROUP_ROWS) - _triangle_solve_elem_(0, 0);
+    constexpr std::uint32_t DIAG_JUMP = _triangle_solve_elem_(FACE_DIM, FACE_DIM) - _triangle_solve_elem_(FACE_DIM - GROUP_ROWS, FACE_DIM - GROUP_ROWS);
+    constexpr std::uint32_t FACE1_COL = _triangle_solve_elem_(0, FACE_DIM) - _triangle_solve_elem_(0, 0); // &L[row][16] - &L[row][0]
+
+    std::uint32_t g_in                  = in_base;  // in_base + group_base(group)
+    std::uint32_t g_out                 = out_base; // out_base + group_base(group)
+    volatile tt_l1_ptr l_elem_t* l_row0 = tile;     // &L[row0][0]
+    volatile tt_l1_ptr l_elem_t* l_diag = tile;     // &L[row0][row0]
     for (std::uint32_t group = 0; group < TRIANGLE_SOLVE_GROUPS; group++)
     {
-        _triangle_solve_load_group_(in_base + _triangle_solve_group_base_(group));
+        _triangle_solve_load_group_(g_in);
 
-        // Columns of the previous groups, walked one solved group (four columns) at a time. A group's four columns never
-        // straddle a face boundary, so they are contiguous in L1; the unrolled body makes each stash slot offset a constant.
-        const std::uint32_t row0 = group * TRIANGLE_SOLVE_ROWS_PER_GROUP;
-        for (std::uint32_t src = 0; src < group; src++)
-        {
-            volatile tt_l1_ptr l_elem_t* const l_blk = tile + _triangle_solve_elem_(row0, src * TRIANGLE_SOLVE_ROWS_PER_GROUP);
-            const std::uint32_t x_base               = out_base + _triangle_solve_group_base_(src);
-#pragma GCC unroll TRIANGLE_SOLVE_ROWS_PER_GROUP
-            for (std::uint32_t k = 0; k < TRIANGLE_SOLVE_ROWS_PER_GROUP; k++)
-            {
-                _triangle_solve_apply_prev_col_<L_FORMAT, L_NEGATED>(l_blk + k, x_base + TRIANGLE_SOLVE_BLOCK_OFF[k]);
-            }
-        }
+        // Previous groups' columns: those in the first face start at &L[row0][0], those in the second at &L[row0][16].
+        const std::uint32_t face0_groups = group < FACE_GROUPS ? group : FACE_GROUPS;
+        _triangle_solve_apply_prev_groups_<L_FORMAT, L_NEGATED>(l_row0, out_base, face0_groups);
+        _triangle_solve_apply_prev_groups_<L_FORMAT, L_NEGATED>(l_row0 + FACE1_COL, out_base + _triangle_solve_group_base_(FACE_GROUPS), group - face0_groups);
 
-        // The group's own triangle: row r uses X[row0 + k], k < r, still live in LREG k; each row is stashed once solved.
-        TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + _triangle_solve_row_off_(row0 + 0));
+        // The group's own triangle: row r uses X[row0 + k], k < r, live in LREG k; L[row0 + r][row0 + k] is l_diag[16 r + k].
+        TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, g_out + TRIANGLE_SOLVE_BLOCK_OFF[0]);
         {
-            volatile tt_l1_ptr l_elem_t* const l_row = tile + _triangle_solve_elem_(row0 + 1, row0);
-            _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(l_row[0]);
+            _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(l_diag[1 * FACE_DIM + 0]);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPMAD_MOD1_OFFSET_NONE);
-            TT_SFPSTORE(p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + _triangle_solve_row_off_(row0 + 1));
+            TT_SFPSTORE(p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, g_out + TRIANGLE_SOLVE_BLOCK_OFF[1]);
         }
         {
-            volatile tt_l1_ptr l_elem_t* const l_row = tile + _triangle_solve_elem_(row0 + 2, row0);
-            const std::uint32_t b0                   = l_row[0];
+            const std::uint32_t b0 = l_diag[2 * FACE_DIM + 0];
             _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b0);
-            const std::uint32_t b1 = l_row[1];
+            const std::uint32_t b1 = l_diag[2 * FACE_DIM + 1];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPMAD_MOD1_OFFSET_NONE);
             _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b1);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPMAD_MOD1_OFFSET_NONE);
-            TT_SFPSTORE(p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + _triangle_solve_row_off_(row0 + 2));
+            TT_SFPSTORE(p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, g_out + TRIANGLE_SOLVE_BLOCK_OFF[2]);
         }
         {
-            volatile tt_l1_ptr l_elem_t* const l_row = tile + _triangle_solve_elem_(row0 + 3, row0);
-            const std::uint32_t b0                   = l_row[0];
+            const std::uint32_t b0 = l_diag[3 * FACE_DIM + 0];
             _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b0);
-            const std::uint32_t b1 = l_row[1];
+            const std::uint32_t b1 = l_diag[3 * FACE_DIM + 1];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPMAD_MOD1_OFFSET_NONE);
             _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b1);
-            const std::uint32_t b2 = l_row[2];
+            const std::uint32_t b2 = l_diag[3 * FACE_DIM + 2];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPMAD_MOD1_OFFSET_NONE);
             _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b2);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPMAD_MOD1_OFFSET_NONE);
-            TT_SFPSTORE(p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + _triangle_solve_row_off_(row0 + 3));
+            TT_SFPSTORE(p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, g_out + TRIANGLE_SOLVE_BLOCK_OFF[3]);
         }
+
+        const bool face_row_jump = (group + 1 == FACE_GROUPS);
+        g_in += face_row_jump ? BASE_JUMP : BASE_STEP;
+        g_out += face_row_jump ? BASE_JUMP : BASE_STEP;
+        l_row0 += face_row_jump ? ROW0_JUMP : ROW0_STEP;
+        l_diag += face_row_jump ? DIAG_JUMP : DIAG_STEP;
     }
 
+    std::uint32_t r_out = out_base;
     for (std::uint32_t group = 0; group < TRIANGLE_SOLVE_GROUPS; group++)
     {
-        _triangle_solve_restore_group_layout_(out_base + _triangle_solve_group_base_(group));
+        _triangle_solve_restore_group_layout_(r_out);
+        r_out += (group + 1 == FACE_GROUPS) ? BASE_JUMP : BASE_STEP;
     }
 }
 
