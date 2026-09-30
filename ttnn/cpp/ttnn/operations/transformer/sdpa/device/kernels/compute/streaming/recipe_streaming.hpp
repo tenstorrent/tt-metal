@@ -1121,7 +1121,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 64)
             reconfig_data_format(cur_sum_cb, col_identity_cb);
 #endif
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
