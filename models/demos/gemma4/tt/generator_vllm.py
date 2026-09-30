@@ -1253,10 +1253,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         """Route a lane-step prefill group through prefill_forward_lanes.
 
         The lane coordinator's merged prefill step carries up to one request
-        per lane, so a 2-4 request call can prefill all of them in ONE chunk
-        walk (metal-measured 3.4-3.9x). Eligibility is narrow: distinct owner
-        lanes, equal padded width (guaranteed: one tokens tensor), a shared
-        last 32-token tile, no cached prefixes, host-sampled prefill, and not
+        per lane, so a full-group call can prefill all of them in ONE chunk
+        walk (metal-measured 3.4-3.9x). Eligibility is narrow: one request on
+        EVERY lane (a partial group would need scratch rows whose last tile
+        cannot match and whose KV writes would land in a resident ring block),
+        equal padded width (guaranteed: one tokens tensor), a shared last
+        32-token tile, no cached prefixes, host-sampled prefill, and not
         a warmup call. Returns the per-request host-logits list in call order,
         or None to fall back to the serial path. Opt-in via
         GEMMA4_LANE_PREFILL_ROUTER=1.
@@ -1282,13 +1284,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         B = int(tokens.shape[0])
         lanes = mesh_cfg.lanes
         lane_slots = int(getattr(model, "lane_slots", 0) or 32)
-        if not (2 <= B <= lanes):
+        if B != lanes:
             return None
         plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
         if len({(p - 1) // 32 for p in plens}) != 1:
             return None
         lane_of = [int(s) // lane_slots for s in slots]
-        if len(set(lane_of)) != B:
+        if sorted(lane_of) != list(range(lanes)):
             return None
         if not full_page_tables:
             return None
@@ -1309,13 +1311,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             toks4[ln] = tokens[req]
             plens4[ln] = plens[req]
             tables4[ln, 0] = gpt[int(s)].to(torch.int32)
-        # Absent lanes prefill 32 scratch tokens into the lane scratch block.
-        for ln in range(lanes):
-            if ln not in lane_to_req:
-                plens4[ln] = min(32, S)
 
         # Per-layer tables: the wrapper's remapped rows (ring-slot map aware),
-        # one row per lane; absent lanes use zeros (block 0 scratch).
+        # one row per lane.
         per_layer = []
         for pt in full_page_tables:
             if pt is None or isinstance(pt, ttnn.Tensor):
