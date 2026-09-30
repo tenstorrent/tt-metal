@@ -53,7 +53,9 @@ def test_outer_rejects_scalar_input(device, expect_error):
         ttnn.experimental.quasar.outer(a, b)
 
 
-@pytest.mark.parametrize("scalar", [1.5, float("inf"), 2.0**31], ids=["fractional", "inf", "out_of_range"])
+@pytest.mark.parametrize(
+    "scalar", [1.5, float("inf"), 2.0**31, 2**31], ids=["fractional", "inf", "out_of_range", "uint32_out_of_range"]
+)
 def test_remainder_int32_rejects_inexact_scalar(device, scalar, expect_error):
     x = _to_device(torch.randint(-50, 50, (1, 1, 32, 32), dtype=torch.int32), device, dtype=ttnn.int32)
     with expect_error(RuntimeError, "INT32 input needs a finite integral scalar"):

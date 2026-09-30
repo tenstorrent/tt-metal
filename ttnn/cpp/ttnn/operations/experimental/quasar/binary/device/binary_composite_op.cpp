@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/experimental/quasar/binary/binary.hpp"
@@ -487,6 +488,12 @@ Tensor remainder(
             std::isfinite(value) && std::trunc(value) == value && value >= -2147483648.0f && value < 2147483648.0f,
             "remainder: INT32 input needs a finite integral scalar within the INT32 range, got {}",
             value);
+    }
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<uint32_t>(scalar)) {
+        TT_FATAL(
+            std::get<uint32_t>(scalar) <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()),
+            "remainder: INT32 input needs a finite integral scalar within the INT32 range, got {}",
+            std::get<uint32_t>(scalar));
     }
     // The unary SFPU fast path takes none of these arguments and does not support INT32.
     if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
