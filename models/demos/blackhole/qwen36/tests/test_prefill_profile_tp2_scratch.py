@@ -148,13 +148,42 @@ def _run_one(model, device, page_table, isl, repeats):
 
     ttfts = []
     repeats = int(os.environ.get("PROFILE_REPEATS", repeats))
+    # PROFILE_CHUNK_TIMING=1 (lane L): host timestamps of every execute_trace / synchronize_device inside the timed
+    # requests (pair with QWEN36_PREFILL_OVERLAP=0 for a sync after every chunk replay = per-chunk wall).
+    _ev = []
+    _orig = (ttnn.execute_trace, ttnn.synchronize_device)
+    if os.environ.get("PROFILE_CHUNK_TIMING") == "1":
+
+        def _ex(*a, **k):
+            _ev.append(("x", time.perf_counter()))
+            return _orig[0](*a, **k)
+
+        def _sy(*a, **k):
+            r = _orig[1](*a, **k)
+            _ev.append(("s", time.perf_counter()))
+            return r
+
+        ttnn.execute_trace, ttnn.synchronize_device = _ex, _sy
     signpost("start")
     for _ in range(repeats):
         t0 = time.time()
+        _ev.append(("0", time.perf_counter()))
         logits = _prefill(model, token_ids, page_table, isl)
         ttnn.synchronize_device(device)
         ttfts.append(time.time() - t0)
     signpost("stop")
+    ttnn.execute_trace, ttnn.synchronize_device = _orig
+    if _ev:
+        t_prev, line = None, []
+        for tag, t in _ev:
+            if tag == "0":
+                if line:
+                    print("PROFILE_CHUNKS " + " ".join(line))
+                line, t_prev = [], t
+                continue
+            line.append(f"{tag}{(t - t_prev) * 1e3:.2f}")
+            t_prev = t
+        print("PROFILE_CHUNKS " + " ".join(line))
     n_layers = len(model.layers)
     lg_all = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
     lg_all = lg_all.reshape(-1, model.args.vocab_size).float()
