@@ -96,25 +96,27 @@ def _canonical(values):
     return values
 
 
-def _stable_order(values, indices, descending):
-    """Positions ordered by (value in the sort direction, index ascending)."""
-    key_values = values.to(torch.float64)
-    if descending:
-        key_values = -key_values
-    key = key_values * 1024.0 + indices.to(torch.float64)  # indices < 128, values are bf16: no collisions
-    return torch.argsort(key, stable=True)
+def _stable_order(values, tie_keys, descending):
+    """Positions ordered by the value in the sort direction, equal values by tie_keys ascending: a stable sort by
+    value of the positions taken in tie_keys order (a lexicographic order, whatever the spacing of the values)."""
+    by_key = torch.argsort(tie_keys.to(torch.int64), stable=True)
+    by_value = torch.argsort(values[by_key].to(torch.float32), descending=descending, stable=True)
+    return by_key[by_value]
 
 
-def _golden_second_sort(row_values, descending):
-    """Values and indices of the slab after the insertion step: the first sort's top 32 plus tile 1 again."""
+def _golden_second_sort(row_values, descending, tie_by_position):
+    """Values and indices of the slab after the insertion step: the first sort's top 32 plus tile 1 again. The
+    comparator-stable network breaks ties by the index tile; the rank-stamped network by the position in the slab
+    (the stamps are the local positions, which in the kernels' use equal the index order because every fresh tile
+    comes from later in the row; here tile 1 is the same tile again, so the two orders differ)."""
     values = _canonical(row_values)
     indices = torch.arange(W_VALUES)
-    order = _stable_order(values, indices, descending)
+    order = _stable_order(values, indices, descending)  # first sort: the positions are the indices
     top_values = values[order][:32]
     top_indices = indices[order][:32]
     values2 = torch.cat([top_values, values[32:]])
     indices2 = torch.cat([top_indices, indices[32:]])
-    order2 = _stable_order(values2, indices2, descending)
+    order2 = _stable_order(values2, torch.arange(W_VALUES) if tie_by_position else indices2, descending)
     return values2[order2], indices2[order2]
 
 
@@ -209,7 +211,7 @@ def test_topk_presorted(sort_direction: TopKSortDirection, sort_mode: str, stimu
 
     # The full sort against its golden.
     for row in range(num_rows):
-        expected_values, expected_indices = _golden_second_sort(row_values[row], descending)
+        expected_values, expected_indices = _golden_second_sort(row_values[row], descending, sort_mode == "rank_stamped")
         got_values = full_values[row].to(torch.float32)
         assert torch.equal(got_values, expected_values), f"row {row}: values differ from the golden"
         if sort_mode in ("stable", "rank_stamped"):
