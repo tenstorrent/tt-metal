@@ -240,6 +240,7 @@ def cmd_run(args):
                 log,
                 iterations=args.iterations,
                 jobs=args.jobs,
+                formats=formats,
             )
             if runs is None:
                 notes.append(
@@ -305,6 +306,7 @@ def cmd_run(args):
     cmd = " ".join(["python3", "tt_metal/tt-llk/sfpu_report/cli.py", *sys.argv[1:]])
     summary = {
         "arch": args.arch,
+        "pr_number": args.pr,
         "host": socket.gethostname(),
         "host_board": _board(),
         "run_url": args.run_url,
@@ -330,6 +332,13 @@ def cmd_run(args):
     out.write_text(json.dumps(summary, indent=1, default=str))
     (work / f"report-{args.arch}.md").write_text(report.render([summary]))
     print(f"wrote {out} in {summary['seconds']} s")
+    if args.check:
+        found = report.findings([summary])
+        for f in found:
+            print(f"REGRESSION {f['text']}")
+        if found:
+            sys.exit(1)
+        print("no regressions")
 
 
 def cmd_rerender(args):
@@ -380,7 +389,14 @@ def main(argv=None):
     run.add_argument("--iterations", type=int, default=3)
     run.add_argument("--no-perf", action="store_true", help="accuracy only")
     run.add_argument(
-        "--formats", help="accuracy: only these input formats, e.g. Float16_b,Float32"
+        "--check",
+        action="store_true",
+        help="exit 1 when the report has a regression (a ⚠️): usable as a pass/fail test",
+    )
+    run.add_argument("--pr", help="PR number, for the reproduce commands in the report")
+    run.add_argument(
+        "--formats",
+        help="only these input formats, e.g. Float16_b,Float32 (perf and accuracy)",
     )
     run.add_argument(
         "--simulator",

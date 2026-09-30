@@ -92,7 +92,24 @@ python3 sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json         # rend
 ```
 
 `--base <ref>` sets the baseline (default: the merge-base with `origin/main`), `--work`
-the scratch directory (default `/tmp/llk-sfpu-report`).
+the scratch directory (default `/tmp/llk-sfpu-report`), `--formats Float16_b,Float32`
+narrows perf and accuracy to those input formats, and `--check` makes the run a
+pass/fail test: it exits 1 when the report lists a regression. Every PR comment ends
+with these commands, pinned to the SHAs it measured, so anyone can reproduce a row.
+
+## Reading the report
+
+The top of the comment lists every regression (⚠️), one line each; the tables below
+show only rows that changed, regressions first, and fold everything else into
+`<details>`. A regression is:
+
+- **perf**: slower beyond the LLK perf gate's thresholds (BH 2%, WH 8%, and more than
+  30 cycles per loop), in `MATH_ISOLATE` or `L1_TO_L1`;
+- **accuracy**: a higher max ULP (any rise below 16 steps, or more than 1%), or at
+  least 0.1% of the lanes net worse, or new non-finite results; for comparisons and
+  integer ops, more wrong lanes;
+- **edge case**: a special input whose result changes kind (finite ↔ NaN/inf, sign,
+  zero), or a NaN input that stops returning NaN.
 
 ## How it works
 

@@ -39,14 +39,17 @@ def _latest_csv(side, module):
     return csv if csv.exists() else None
 
 
-def _args(family, ops, schedule):
+def _args(family, ops, schedule, formats=()):
     op_args = [a for op in ops for a in ("--op", op)]
+    # Test ids read "formats:<in>-><out>-...": "formats:<in>-" selects the input format.
+    fmt_args = ["-k", " or ".join(f"formats:{f}-" for f in formats)] if formats else []
     return [
         "-m",
         "perf",
         "--speed-of-light",
         *SCHEDULES[schedule],
         *op_args,
+        *fmt_args,
         MODULES[family],
     ]
 
@@ -54,7 +57,7 @@ def _args(family, ops, schedule):
 _ENV = {"LLK_PERF_RUN_TYPES": ",".join(RUN_TYPES)}
 
 
-def build(side, arch, family, ops, schedule, log, jobs=8):
+def build(side, arch, family, ops, schedule, log, jobs=8, formats=()):
     """Compile the side's variants once; every iteration reuses the ELFs.
 
     Returns the pytest exit code: 5 means no variant matched ``ops``.
@@ -62,20 +65,20 @@ def build(side, arch, family, ops, schedule, log, jobs=8):
     return runner.pytest(
         side,
         arch,
-        ["--compile-producer", "-n", str(jobs), *_args(family, ops, schedule)],
+        ["--compile-producer", "-n", str(jobs), *_args(family, ops, schedule, formats)],
         env=_ENV,
         log=log,
         check=False,  # a variant that does not build is simply not measured
     )
 
 
-def measure(side, arch, family, ops, schedule, out_csv, log):
+def measure(side, arch, family, ops, schedule, out_csv, log, formats=()):
     """One device run of the compiled variants; the raw CSV is copied to ``out_csv``."""
     shutil.rmtree(side.llk / "perf_data", ignore_errors=True)
     runner.pytest(
         side,
         arch,
-        ["--compile-consumer", "-n", "1", *_args(family, ops, schedule)],
+        ["--compile-consumer", "-n", "1", *_args(family, ops, schedule, formats)],
         env=_ENV,
         log=log,
         check=False,  # the variants that ran are in the CSV; the rest are reported missing
@@ -101,19 +104,20 @@ def sweep(
     iterations=3,
     schedules=tuple(SCHEDULES),
     jobs=8,
+    formats=(),
 ):
     """Interleaved runs. Returns ``{schedule: {"base": [csv...], "head": [csv...]}}``."""
     runs = {}
     for schedule in schedules:
         for side in (base, head):
-            if build(side, arch, family, ops, schedule, log, jobs) == 5:
+            if build(side, arch, family, ops, schedule, log, jobs, formats) == 5:
                 return None  # no perf test covers these ops
         runs[schedule] = {"base": [], "head": []}
         for i in range(1, iterations + 1):
             for side in (base, head):
                 csv = out_dir / family / schedule / side.name / f"run_{i}.csv"
                 runs[schedule][side.name].append(
-                    measure(side, arch, family, ops, schedule, csv, log)
+                    measure(side, arch, family, ops, schedule, csv, log, formats)
                 )
     return runs
 

@@ -32,7 +32,7 @@ git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null ||
 
 args=(--arch "$ARCH" --head "$HEAD_SHA" --base "$BASE_SHA" --mode "$MODE"
     --work "${RUNNER_TEMP:-/tmp}/llk-sfpu-report" --jobs "$(nproc)")
-run_args=(--iterations "$ITERATIONS")
+run_args=(--iterations "$ITERATIONS" --pr "$PR_NUMBER")
 [ -n "${OPS:-}" ] && run_args+=(--ops "$OPS")
 [ -n "${RUN_URL:-}" ] && run_args+=(--run-url "$RUN_URL")
 [ -n "${HEAD_MOVED_TO:-}" ] && run_args+=(--head-moved-to "$HEAD_MOVED_TO")

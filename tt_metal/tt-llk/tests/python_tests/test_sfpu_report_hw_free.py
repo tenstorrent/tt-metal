@@ -252,3 +252,29 @@ def test_report_renders_exact_ops():
     assert "a lane is right or wrong" in text
     assert "⚠️ 12" in text
     assert "`(inf, inf)`" in text
+
+
+def test_findings_list_every_regression_once():
+    found = report.findings([_summary()])
+    kinds = sorted(f["kind"] for f in found)
+    # The no-loadmacro twin of the perf row has the same code: listed once.
+    assert kinds == ["accuracy", "edge", "perf"]
+    text = report.render([_summary()])
+    assert "**⚠️ 3 regression(s)**" in text
+    assert "--ops Square --formats Float16_b,Float16 --check" in text
+
+
+def test_a_clean_report_says_so():
+    summary = _summary()
+    summary["perf"] = {}
+    summary["accuracy"] = []
+    assert report.findings([summary]) == []
+    assert "**No regressions.**" in report.render([summary])
+
+
+def test_a_small_drift_is_not_a_regression():
+    rec = _summary()["accuracy"][0]
+    rec["head"] = dict(rec["base"], max=rec["base"]["max"])
+    rec["worse"], rec["better"] = 3, 1  # 2 net of 65,279 lanes
+    rec["specials"] = {"changed": [], "nan_propagates": {"base": True, "head": True}}
+    assert not report._acc_regressed(rec)
