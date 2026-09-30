@@ -52,6 +52,9 @@ for i in $(seq 1 "$LOOP"); do
   tt-smi -glx_reset 2>&1 | tail -3
 
   cd "$TT_METAL_HOME"
+  # A reused log dir must not carry an earlier hang's triage into this iteration.
+  rm -f "$(triage_out "$LOG_DIR" "$i")"
+
   # `tee -a "$LOG"` on the exit line, not a bare echo: the status code has to land
   # INSIDE the per-iteration log, because that is the only thing watch.sh reads. A
   # signal kill (SIGBUS/SIGSEGV) prints no pytest summary line at all, so without

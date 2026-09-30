@@ -199,7 +199,7 @@ while true; do
     printf "  SWAP %3d%%  [%s]  %s / %s GiB\n" "$swap_pct" "$(bar "$swap_pct" 24)" \
       "$(gib $((swap_total - swap_free)))" "$(gib "$swap_total")"
   fi
-  printf '%s\n' "${net_rows[@]}"
+  ((${#net_rows[@]})) && printf '%s\n' "${net_rows[@]}"
   echo "  ─────────────────────────────────────────────────────────────"
   printf "  HUGE 1G  nr=%-4s free=%-4s resv=%-3s surplus=%-3s need=%s/run%s\n" \
     "$hp_nr" "$hp_free" "$hp_resv" "$hp_surp" "$NDEV" "$hp_flag"
