@@ -26,6 +26,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.matmul_tuning import DecodeMatmulTuner
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -265,9 +266,13 @@ class Gemma4Model:
         create_kv_cache=True,
         precision=None,
         bounded_sliding_kv_cache: bool = False,
+        matmul_tuner=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
+        self.matmul_tuner = (
+            matmul_tuner if matmul_tuner is not None else DecodeMatmulTuner.from_env(mesh_device, scope="target")
+        )
         self.mesh_device = mesh_device
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
@@ -516,6 +521,7 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=(bounded_sliding_kv_cache and i != self._spec_unbounded_layer),
+                matmul_tuner=self.matmul_tuner,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache

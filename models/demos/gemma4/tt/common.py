@@ -24,6 +24,7 @@ from models.common.weight_cache import (
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.matmul_tuning import DecodeMatmulTuner
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
@@ -251,6 +252,7 @@ def create_assistant_model(
     max_local_batch_size=1,
     bounded_sliding_kv_cache=None,
     max_seq_len=None,
+    matmul_tuner=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -323,6 +325,9 @@ def create_assistant_model(
             assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
+    if matmul_tuner is None:
+        matmul_tuner = DecodeMatmulTuner.from_env(mesh_device, scope="draft")
+
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
         assistant_args=assistant_args,
@@ -353,5 +358,6 @@ def create_assistant_model(
                 and getattr(target_model, "_spec_unbounded_layer", None) is None
             )
         ),
+        matmul_tuner=matmul_tuner,
     )
     return assistant_args, model
