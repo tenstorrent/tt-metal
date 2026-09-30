@@ -15,6 +15,15 @@ import math
 import ttnn
 
 
+def layer_norm(x, params):
+    """``ttnn.layer_norm`` with the eps of the module ``params`` were preprocessed from.
+
+    ttnn defaults to epsilon=1e-12; ``preprocess_layer_norm_parameters`` records the
+    module's own (1e-5 for nn.LayerNorm).
+    """
+    return ttnn.layer_norm(x, weight=params.weight, bias=params.bias, epsilon=params.eps)
+
+
 class TtnnConv2D:
     """``conv`` carries the conv's geometry and its input's batch, height and width.
 
