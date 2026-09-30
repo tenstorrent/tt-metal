@@ -92,6 +92,16 @@ message PhysicalAsicPosition {
 //     physical_asic_position { tray_id: 3 asic_location: 1 }
 //     physical_asic_position { tray_id: 4 asic_location: 1 }
 //   }
+// Optional board-revision gate on an AsicPinning. Unspecified means the pinning always
+// applies. BH_REV_AB / BH_REV_C apply only on a Blackhole Galaxy of that revision; WH
+// applies only on a Wormhole Galaxy. Gated pins are dropped on other board types.
+enum BoardRevision {
+    BOARD_REVISION_UNSPECIFIED = 0;
+    BH_REV_AB = 1;
+    BH_REV_C = 2;
+    WH = 3;
+}
+
 message AsicPinning {
     // Logical fabric node(s) to pin. Must be non-empty. A given logical node may
     // appear in at most one AsicPinning entry across the whole descriptor.
@@ -100,6 +110,10 @@ message AsicPinning {
     // Physical ASIC position(s) the listed fabric node(s) may be pinned to. Must
     // be non-empty. Any listed node may map to any listed position (all-to-all).
     repeated PhysicalAsicPosition physical_asic_position = 2;
+
+    // When set to BH_REV_AB, BH_REV_C, or WH, this pinning is active only on that board.
+    // Leave unset (UNSPECIFIED) for pins that apply on every machine.
+    optional BoardRevision board_revision = 3;
 }
 
 message MeshGraphDescriptor {
@@ -460,6 +474,7 @@ enum Architecture {
     INVALID_ARCHITECTURE = 0;
     WORMHOLE_B0 = 1;
     BLACKHOLE = 2;
+    QUASAR = 3;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.

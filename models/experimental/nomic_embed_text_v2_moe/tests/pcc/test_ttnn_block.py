@@ -39,6 +39,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     rotary_tables,
     to_device,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -183,7 +184,7 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
         weight=tt_block.norm1_weight,
         bias=tt_block.norm1_bias,
         epsilon=config.layer_norm_epsilon,
-        compute_kernel_config=tt_config.compute_kernel_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
     )
     dropped = from_block_layout(
         ttnn.layer_norm(
@@ -192,7 +193,7 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
             weight=tt_block.norm2_weight,
             bias=tt_block.norm2_bias,
             epsilon=config.layer_norm_epsilon,
-            compute_kernel_config=tt_config.compute_kernel_config,
+            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
         )
     )
 
