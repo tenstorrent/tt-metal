@@ -5,6 +5,7 @@
 import inspect
 import sys
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -92,27 +93,21 @@ def format_grammar_bitmask(
         raise ValueError(f"`grammar_bitmask` batch {grammar_bitmask.shape[0]} exceeds sampler batch {max_batch_size}")
     # endregion
 
-    sanitized = grammar_bitmask.clone()
+    # numpy stays single-threaded here; torch's intra-op pool contends with ttnn's host threads.
+    batch_size = grammar_bitmask.shape[0]
+    formatted = np.full((max_batch_size, padded_vocab_size // 32), -1, dtype=np.int32)
+    formatted[:batch_size] = 0
+    active = formatted[:batch_size, :packed_vocab_size]
+    active[:] = grammar_bitmask.numpy()
     valid_tail_bits = vocab_size % 32
     if valid_tail_bits:
-        valid_tail_mask = (1 << valid_tail_bits) - 1
-        sanitized[:, -1] = (sanitized[:, -1].to(torch.int64) & valid_tail_mask).to(torch.int32)
+        active[:, -1] &= np.int32((1 << valid_tail_bits) - 1)
 
-    empty_rows = torch.nonzero(torch.all(sanitized == 0, dim=1), as_tuple=False).reshape(-1)
-    if empty_rows.numel():
+    empty_rows = np.flatnonzero(~active.any(axis=1))
+    if empty_rows.size:
         raise ValueError(f"`grammar_bitmask` contains rows with no allowed token: " f"`rows={empty_rows.tolist()!r}`")
 
-    padded_packed_vocab_size = padded_vocab_size // 32
-    formatted = torch.full(
-        (max_batch_size, padded_packed_vocab_size),
-        -1,
-        dtype=torch.int32,
-    )
-    batch_size = grammar_bitmask.shape[0]
-    formatted[:batch_size, :] = 0
-    formatted[:batch_size, :packed_vocab_size] = sanitized
-
-    return formatted
+    return torch.from_numpy(formatted)
 
 
 class TTSampling(LightweightModule):
