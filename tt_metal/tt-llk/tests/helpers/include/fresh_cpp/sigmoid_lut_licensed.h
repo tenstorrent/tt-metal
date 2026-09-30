@@ -38,6 +38,19 @@ namespace ckernel::sfpu
 // formation needs no finite-math license and the knob leg pairs CRAQ
 // bit-exactly with the plain leg.
 //
+// SATURATION (laneMS 2026-09-29): the six-range tree's last slot, [4, inf),
+// is an AFFINE RAMP (a * 0x1.214p-8 + 0x1.df4p-2), and the odd part it stands
+// for is bounded: sigmoid(|x|) - 0.5 < 0.5 for every x.  The ramp crosses 0.5
+// at |x| ~= 7.25, so above that it runs away instead of saturating — at
+// |x| = 3.3e38 it returned 1.45e36 where sigmoid is 1.0 (15372 bf16 ULP from
+// the golden for every input in the stratum).  The bound is restated as one
+// min AFTER the dispatch tree, so the tree itself stays the six affine slots
+// the FP16 six-entry LUT selection forms into a single SFPLUTFP32 mod0 7.
+// It only ever binds above |x| = 7.25, where it strictly REDUCES the error
+// (at |x| = 8: 3.4e-4 clamped vs 3.4e-3 un-clamped), so the licensed
+// equal-or-better-than-hand accuracy bar on [-8, 8] is unaffected below the
+// knee and improved above it.
+//
 // (The previous licensed arm — a 4-region poly-leaf tree, laneGI — was
 // accuracy-passing but MEASURED WORSE than the exact body (+570.60 vs
 // +289.78): predicated poly trees lose without LUT formation.  This
@@ -74,6 +87,8 @@ __attribute__((noinline)) void calculate_sigmoid_lut_licensed_cpp()
             s = a * 0x1.a08p-5f + 0x1.28cp-2f;
         }
         v_endif;
+        // sigmoid(|x|) - 0.5 is bounded above by 0.5 (see the header note).
+        s                = sfpi::min(s, 0.5f);
         sfpi::dst_reg[0] = sfpi::copysgn(s, x) + 0.5f;
         sfpi::dst_reg++;
     }

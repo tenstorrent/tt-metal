@@ -143,6 +143,18 @@ def _lanemk_run_fp32_stream(configuration, spec):
         want = n * 4
         if len(res) < want:
             raise RuntimeError(f"chunk@{base}: got {len(res)} result bytes < {want}")
+        # A chunk that is ENTIRELY the clear sentinel means the dispatch wrote no
+        # result at all (clear_result_buffer fills 0xA5). That is a dropped pass,
+        # not data: scored as data it looks like a numeric defect -- one 0xA5 band
+        # was reported as a 6602-ULP "sem out-of-contract" finding for
+        # hardshrink-fresh and did not reproduce. Refuse the chunk so the caller's
+        # retry sees it and a persistent failure is loud. A real 65536-element
+        # chunk of distinct inputs is never uniformly 0xA5A5A5A5 (-2.87e-16).
+        if res[:want] == b"\xa5" * want:
+            raise RuntimeError(
+                f"chunk@{base}: result buffer is entirely the 0xA5 clear sentinel "
+                f"({want} bytes) -- the dispatch produced no output"
+            )
         sha.update(res[:want])
         if _acc is not None:
             _acc.update(base, n, res[:want])
