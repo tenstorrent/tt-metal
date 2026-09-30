@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-template <uint32_t block_ct, uint32_t num_blocks, uint32_t Mt>
+template <uint32_t block_ct, uint32_t Mt>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;

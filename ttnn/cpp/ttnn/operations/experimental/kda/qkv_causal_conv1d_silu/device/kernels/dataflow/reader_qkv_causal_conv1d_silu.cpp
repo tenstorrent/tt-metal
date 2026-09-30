@@ -6,8 +6,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+
+constexpr uint32_t tap_count = 4;
 
 template <uint32_t block_ct, typename Tap0Accessor, typename Tap1Accessor, typename Tap2Accessor, typename Tap3Accessor>
 FORCE_INLINE void load_weight_block(
@@ -19,7 +22,7 @@ FORCE_INLINE void load_weight_block(
     const Tap3Accessor& tap3,
     uint32_t tile_bytes,
     uint32_t ct_start) {
-    weights.reserve_back(4 * block_ct);
+    weights.reserve_back(tap_count * block_ct);
     for (uint32_t ct = 0; ct < block_ct; ++ct) {
         const uint32_t source_ct = ct_start + ct;
         // The weight DFB is laid out as [tap][channel tile].
@@ -32,17 +35,10 @@ FORCE_INLINE void load_weight_block(
             tap3, weights, tile_bytes, {.page_id = source_ct}, {.offset_bytes = (3 * block_ct + ct) * tile_bytes});
     }
     noc.async_read_barrier();
-    weights.push_back(4 * block_ct);
+    weights.push_back(tap_count * block_ct);
 }
 
-template <
-    uint32_t block_ct,
-    uint32_t num_blocks,
-    uint32_t Mt,
-    uint32_t window_tiles,
-    uint32_t sp_rank,
-    uint32_t sp_size,
-    uint32_t local_rows>
+template <uint32_t block_ct, uint32_t Mt, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -53,7 +49,9 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto tap3 = TensorAccessor(tensor::tap3);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer activation(dfb::act_rm);
-    DataflowBuffer window(dfb::act_window);
+    // Private reader scratch: rows [mt * 32 - 3, mt * 32 + 32) of one channel block, read from DRAM once and
+    // then copied locally into the four shifted tap views.
+    Scratchpad<uint16_t> window(scratch::act_window);
     Noc noc;
 
     uint32_t local_split_row = 0;
@@ -69,7 +67,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         initial_from_predecessor = topology.rank != topology.first_rank;
     }
 
-    constexpr uint32_t tap_count = 4;
     constexpr uint32_t history_rows = tap_count - 1;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
@@ -77,16 +74,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t block_offset_scale = tile_width * sizeof(uint16_t);
     const uint32_t tile_bytes = weights.get_entry_size();
 
-    // The window is private reader scratch: rows [mt * 32 - 3, mt * 32 + 32) of one channel block,
-    // read from DRAM once and then copied locally into the four shifted tap views.
-    window.reserve_back(window_tiles);
-    const uint32_t window_base = window.get_write_ptr();
+    const uint32_t window_base = window.get_base_address();
     UnicastEndpoint self;
     const uint32_t self_x = my_x[noc.get_noc_id()];
     const uint32_t self_y = my_y[noc.get_noc_id()];
 
     // Work items are channel-block-major, so consecutive items on a core share tap weights.
-    uint32_t loaded_block = num_blocks;
+    constexpr uint32_t no_block = ~0U;
+    uint32_t loaded_block = no_block;
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
         const uint32_t block = work / Mt;

@@ -7,7 +7,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Qt, uint32_t Kt, uint32_t Vt, uint32_t block_ct, uint32_t num_blocks, uint32_t Mt>
+template <uint32_t Qt, uint32_t Kt, uint32_t Vt, uint32_t block_ct, uint32_t Mt>
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto q = TensorAccessor(tensor::q);
     const auto k = TensorAccessor(tensor::k);

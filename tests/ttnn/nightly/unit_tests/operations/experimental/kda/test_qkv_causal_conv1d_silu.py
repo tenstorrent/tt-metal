@@ -216,6 +216,39 @@ def test_qkv_causal_conv1d_silu_contract(
         ttnn.release_trace(device, trace_id)
 
 
+@pytest.mark.parametrize(
+    ("sequence", "channel_chunk_size"),
+    [
+        # 4 channel blocks x 65 row tiles = 260 work items: cores own several items, and on 110-140 core grids
+        # some own items on both sides of a channel-block boundary.
+        pytest.param(2080, 768, id="items-cross-blocks"),
+        # 6- and 3-tile channel blocks: compute groups two tiles and one tile per destination acquire.
+        pytest.param(64, 192, id="two-tile-groups"),
+        pytest.param(64, 96, id="one-tile-groups"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_work_distribution(
+    zero_actual_start, device: ttnn.Device, sequence: int, channel_chunk_size: int
+) -> None:
+    """Weight reuse across a core's work items and every destination grouping match the reference."""
+    widths = (1024, 1024, 1024)
+    host, device_inputs = qkv_device_inputs(device, sequence=sequence, widths=widths)
+    inputs, history, taps = host
+    input_tt, history_tt, taps_tt = device_inputs
+    outputs = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=zero_actual_start,
+    )
+    for name, golden, output in zip(
+        ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
+    ):
+        assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999)
+
+
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_qkv_causal_conv1d_silu_is_device_deterministic(
     zero_actual_start, device: ttnn.Device, case: _BenchmarkCase

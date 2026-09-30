@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Single-device unit test for the Kimi-K3 KDA QKV causal convolution at Galaxy SP8xTP4 shape.
+"""Single-device perf test for the Kimi-K3 KDA QKV causal convolution at Galaxy SP8xTP4 shape.
 
 Per device: 640 local tokens, TP-local q/k/v widths of 3072 each, production channel chunk 512.
 The op is timed as a traced replay loop and compared against a torch reference. Set
@@ -56,10 +56,9 @@ def _traced_us(device, op) -> tuple[float, tuple[ttnn.Tensor, ...]]:
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
-@pytest.mark.parametrize("actual_start", [0, 672], ids=["start0", "start672"])
-def test_kda_qkv_conv_perf(device, actual_start) -> None:
+def test_kda_qkv_conv_perf(device) -> None:
     (inputs, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=_ROWS, widths=_WIDTHS)
-    actual_start_tt = make_actual_start(device, actual_start)
+    actual_start_tt = make_actual_start(device, 0)
     program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_CHANNEL_CHUNK_SIZE)
 
     def op():
@@ -75,18 +74,18 @@ def test_kda_qkv_conv_perf(device, actual_start) -> None:
         )
 
     elapsed_us, outputs = _traced_us(device, op)
-    logger.info(f"QKV conv M={_ROWS} widths={_WIDTHS} start={actual_start}: {elapsed_us:.1f} us")
+    logger.info(f"QKV conv M={_ROWS} widths={_WIDTHS}: {elapsed_us:.1f} us")
     outputs = [ttnn.to_torch(output) for output in outputs]
-    for name, golden, output in zip("qkv", qkv_reference(inputs, history, taps, _WIDTHS), outputs):
+    for name, golden, output in zip("qkv", qkv_reference(inputs, history, taps, _WIDTHS), outputs, strict=True):
         _, pcc = comp_pcc(golden.float(), output.float())
         assert pcc >= _PCC_THRESHOLD, f"{name} PCC {pcc:.6f} < {_PCC_THRESHOLD}"
 
     golden_path = os.environ.get("KDA_QKV_CONV_GOLDEN")
     if golden_path:
-        path = Path(f"{golden_path}.start{actual_start}.pt")
+        path = Path(golden_path)
         if path.exists():
             saved = torch.load(path)
-            for name, expected, output in zip("qkv", saved, outputs):
+            for name, expected, output in zip("qkv", saved, outputs, strict=True):
                 assert torch.equal(expected, output), f"{name} differs from saved outputs"
             logger.info(f"outputs bit-identical to {path}")
         else:
