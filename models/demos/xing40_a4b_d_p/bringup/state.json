@@ -1478,8 +1478,113 @@
   "status": "PASS"
  },
  "C.moe.experts": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "e7d478e3-509b-4fb6-8f45-d0523f8fb1f1"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.experts.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.experts.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 324.2,
+    "session_id": "e7d478e3-509b-4fb6-8f45-d0523f8fb1f1",
+    "t": "2026-09-30T15:34:15"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 24.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:28:50"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:34:44"
+   }
+  ],
+  "last_run": "2026-09-30T15:34:44",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.experts.log",
+  "metrics": {
+   "auto_experts_L02_big_bias": 4.315376281738281e-05,
+   "auto_experts_L02_big_ratio_max": 1.0078269243240356,
+   "auto_experts_L02_big_ratio_min": 0.9949147701263428,
+   "auto_experts_L02_big_rel": 0.008673597127199173,
+   "auto_experts_L02_big_rel_limit": 0.03,
+   "auto_experts_L02_big_row": 0.0250337403267622,
+   "auto_experts_L02_layer39_bias": 0.00026428699493408203,
+   "auto_experts_L02_layer39_ratio_max": 1.0035802125930786,
+   "auto_experts_L02_layer39_ratio_min": 0.9974105358123779,
+   "auto_experts_L02_layer39_rel": 0.013216863386332989,
+   "auto_experts_L02_layer39_rel_limit": 0.03,
+   "auto_experts_L02_layer39_row": 0.014909325167536736,
+   "auto_experts_L02_mixed_bias": 0.0001277923583984375,
+   "auto_experts_L02_mixed_ratio_max": 1.004589557647705,
+   "auto_experts_L02_mixed_ratio_min": 0.9968289136886597,
+   "auto_experts_L02_mixed_rel": 0.012787560932338238,
+   "auto_experts_L02_mixed_rel_limit": 0.03,
+   "auto_experts_L02_mixed_row": 0.0153804374858737,
+   "auto_experts_L02_small_bias": 0.00010859966278076172,
+   "auto_experts_L02_small_ratio_max": 1.0050524473190308,
+   "auto_experts_L02_small_ratio_min": 0.996235728263855,
+   "auto_experts_L02_small_rel": 0.008207359351217747,
+   "auto_experts_L02_small_rel_limit": 0.03,
+   "auto_experts_L02_small_row": 0.011781360022723675,
+   "auto_experts_L02_vs_cpu_bias": -1.1742115020751953e-05,
+   "auto_experts_L02_vs_cpu_ratio_max": 1.005200982093811,
+   "auto_experts_L02_vs_cpu_ratio_min": 0.9954182505607605,
+   "auto_experts_L02_vs_cpu_rel": 0.008626166731119156,
+   "auto_experts_L02_vs_cpu_rel_limit": 0.013667529099620879,
+   "auto_experts_L02_vs_cpu_row": 0.01551608182489872,
+   "auto_experts_L02_vs_golden_bias": 8.726119995117188e-05,
+   "auto_experts_L02_vs_golden_ratio_max": 1.0071204900741577,
+   "auto_experts_L02_vs_golden_ratio_min": 0.9936259984970093,
+   "auto_experts_L02_vs_golden_rel": 0.008986190892755985,
+   "auto_experts_L02_vs_golden_rel_limit": 0.016167539753951132,
+   "auto_experts_L02_vs_golden_row": 0.015800049528479576,
+   "pcc_experts_L02": 0.9999595796964853
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:34:20",
+  "status": "PASS",
+  "waiting": null
  },
  "C.moe.ffn_collapse": {
   "attempts": 0,
