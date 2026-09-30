@@ -37,3 +37,8 @@ It runs kernel prewarm + dv145, then dv145_c211, dv153, conv145. A reboot kills 
 DRIVE_DONE and no drive26b.sh process exists, check which run.logs passed and resubmit the rest.
 Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log (LTX_TIME_STAGES lines, walltime ledger,
 expect 10 CACHE HITs), mp4 in the same dir; still with ffmpeg -ss 3 -frames:v 1; build the table.
+Task t26 attempt 3 (2026-09-30): drive26b stopped early by mistake. prewarm_and_submit.sh returns as soon as the real
+run is queued (job 640), so the driver read the stale dv145/run.log from 605 and quit. Prewarm itself passed (3291 kernels).
+New driver tmp/drive26c.sh 640 (log tmp/drive26c.log, ends DRIVE_DONE) waits for job 640, then runs dv145_c211, dv153,
+conv145. At 14:52 job 640 was 3rd in the queue behind 634/638/639 (each up to 600s).
+Next: same as above; when DRIVE_DONE, read the run.logs and build the table.
