@@ -112,13 +112,21 @@ void bind_moe_compute(nb::module_& mod) {
           multiple layers are packed into a single DRAM-resident weight tensor.
 
         - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
-          activation function — one of ``ttnn.experimental.MoEActivationFunction``
+          activation function — one of ``ttnn.operations.ccl.MoEActivationFunction``
           ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
 
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
+
+        - ``local_combine`` (default ``False``): Run an independent fused local combine
+          at every mesh coordinate. ``cluster_axis`` must identify a degenerate (size-one)
+          mesh axis, for example axis 0 on a 1x4 expert-parallel mesh. This represents one
+          replicated logical token without fabric dispatch; the caller must reduce the
+          weighted partials across the non-degenerate expert-parallel axis. It must not be
+          used with ``compute_only=True``. Multi-device local combine does not support shared experts;
+          the existing 1x1 fused path retains its shared-expert behavior.
 
         The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
         Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
@@ -164,13 +172,14 @@ void bind_moe_compute(nb::module_& mod) {
         When ``compute_only=False``, the op returns **6** tensors, the sixth being the final
         ``[k, tokens, hidden]`` row-major output. There are three ways it is produced:
 
-        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The fused
-          selective_reduce_combine stage runs locally with no fabric, mux cores, links, topology,
-          or cross-device semaphore.
+        - Local fused mode: set ``local_combine=True`` and select a degenerate mesh axis.
+          The combine runs independently at each coordinate with no fabric, mux cores,
+          links, topology, or cross-device semaphore. The legacy 1x1 call with
+          ``cluster_axis=None`` remains supported without setting ``local_combine``.
         - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` naming a mesh
           axis of extent > 1. The fused combine reduces along that axis using the fabric.
-        - Local output mode: the named ``cluster_axis`` has extent 1 (for example axis 0 of a 1x4
-          expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
+        - Local output mode: ``local_combine=False`` and the named ``cluster_axis`` has extent 1 (for
+          example axis 0 of a 1x4 expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
           combine kernels run: the op's own writer puts each expert's token rows straight into the
           final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
           may be opened without a fabric config); ``topology``, ``num_links``,
@@ -186,7 +195,21 @@ void bind_moe_compute(nb::module_& mod) {
           rows per shard, DRAM or L1; WIDTH_SHARDED, BLOCK_SHARDED and ND sharding are rejected
           (a row would span several pages). Nothing is staged in the combine cores' L1, so the
           matmul-output tensor (slot 4) is not written on this path. That form does not support
-          shared experts.
+          shared experts. It keeps the routing as packed (token, k slot) lists instead of the fused
+          paths' per-token L1 metadata, so one call admits a whole prefill slab (the token count is
+          bounded by the 24-bit token id of an entry, not by the combine staging): slot 1 is a one-page
+          placeholder and slot 2 the packed page (segment start per local expert, then 4-byte
+          ``(k_slot << 24) | token_id`` entries). ``zero_fill_non_owned_rows=False`` (this path only)
+          skips the zero write of the rows this coordinate's experts do not own: for a caller whose
+          buffer is zero at allocation, only ever holds finite expert outputs, and whose reduce
+          multiplies unowned slots by an exact 0. ``enable_a2a_pipeline=False`` preserves the serial
+          streaming order and two feed buffers. True requires ``prefill_rings=0`` and overlaps weight
+          exchange with compute, using three feed buffers and additional scratch space. The caller owns
+          this L1-capacity choice. Replay rings (``prefill_rings=1``, ``2``, or ``3``) are
+          supported only on Blackhole; Wormhole must use the streaming ``prefill_rings=0`` path.
+          ``prefill_rings=1`` (the local output path only) keeps each
+          expert's weight slice resident in the ring cores' L1 for all of the expert's chunks (read
+          from DRAM once per expert instead of once per 32-token chunk); the pages are the same.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and
@@ -194,8 +217,9 @@ void bind_moe_compute(nb::module_& mod) {
         defaults. An empty ``CoreRangeSet`` still counts as a provided ``mux_core_range_set``
         and is rejected in compute-only mode.
 
-        - ``cluster_axis``: ``None`` for ``compute_only=True`` and for single-device fused mode;
-          otherwise the mesh axis along which multi-device fused mode reduces.
+        - ``cluster_axis``: ``None`` for ``compute_only=True`` and legacy 1x1 fused mode;
+          the degenerate local axis for ``local_combine=True``; otherwise the mesh axis
+          along which multi-device fused mode reduces.
         - ``topology`` (optional, default ``None`` ≡ fabric default): Combine fabric
           topology for multi-device fused mode; must be ``None`` for single-device fused
           mode and ``compute_only=True``. Only ``ttnn.Topology.Linear`` and
@@ -269,7 +293,11 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("num_shared_experts_per_device") = nb::none());
+        nb::arg("num_shared_experts_per_device") = nb::none(),
+        nb::arg("local_combine") = false,
+        nb::arg("zero_fill_non_owned_rows") = true,
+        nb::arg("prefill_rings") = nb::none(),
+        nb::arg("enable_a2a_pipeline") = false);
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

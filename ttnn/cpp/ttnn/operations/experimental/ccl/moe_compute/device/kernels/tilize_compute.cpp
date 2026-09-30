@@ -7,6 +7,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "moe_ring_common.h"
 
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row
@@ -77,7 +78,10 @@ void kernel_main() {
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
+    [[maybe_unused]] constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
+    // The staging CB holds chunk_halves slots of one chunk each (the same shard as the ring cores' input halves);
+    // a chunk is tilized into the next slot while the writer gathers and multicasts the previous one.
+    constexpr uint32_t chunk_slot_pages = get_named_compile_time_arg_val("chunk_slot_pages");
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -103,9 +107,14 @@ void kernel_main() {
 
     // Process each chunk
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
-        // Wait for reader to push tokens_per_chunk pages (row-major data)
-        // Reader always reserves/pushes tokens_per_chunk for consistent synchronization
-        cb_tilize_input.wait_front(tokens_per_chunk);
+        // Study zones (MOE_ZONES): this chunk's phases, recorded inside the profiler window only
+        const bool zone_on = moe_ring::zones::in_window(chunk);
+        {
+            // Wait for reader to push tokens_per_chunk pages (row-major data)
+            // Reader always reserves/pushes tokens_per_chunk for consistent synchronization
+            MOE_ZONE_IF(zone_on, "mz_c_wait_in");
+            cb_tilize_input.wait_front(tokens_per_chunk);
+        }
 
         // DEBUG: Print subsets of input (row-major bfloat16)
         // Get CB address directly within UNPACK context (avoids mailbox sync issues with get_tile_address)
@@ -117,11 +126,17 @@ void kernel_main() {
         //     print_row_major_subset<buffer_width>(cb_addr, 0, 4, buffer_width - 8, buffer_width);  // last 4x8
         // }));
 
-        // we reserve the entire CB so that we treat it as single buffered
-        // this is to allow us to gather into it before mcasting to the MM cores
-        cb_tilize_output.reserve_back(shared_cb_num_pages);
+        // one chunk slot: this core's tiles at its start, the other tilize cores' sub-chunks gathered into the rest of
+        // it on the drain, the whole slot multicast from there; the next chunk goes to the next slot
+        {
+            MOE_ZONE_IF(zone_on, "mz_c_reserve_out");
+            cb_tilize_output.reserve_back(chunk_slot_pages);
+        }
 
-        fast_tilize_block(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
+        {
+            MOE_ZONE_IF(zone_on, "mz_c_tilize");
+            fast_tilize_block(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
+        }
 
         // DEBUG: Print first and last tiles of output (tilized format)
         // PACK(({
@@ -130,7 +145,7 @@ void kernel_main() {
         //     // print_tile_rows(tilize_output_cb_id, tiles_per_local_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
         // }));
 
-        cb_tilize_output.push_back(shared_cb_num_pages);
+        cb_tilize_output.push_back(chunk_slot_pages);
 
         // Pop input from reader (tokens_per_chunk pages)
         cb_tilize_input.pop_front(tokens_per_chunk);

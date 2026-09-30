@@ -444,8 +444,17 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true, true, SenderType>(
-            fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        if constexpr (tt::tt_fabric::common::experimental::is_fabric_mux_v2_sender_v<SenderType>) {
+            // FabricMuxV2Sender has no *_blocking send variants: emulate FLUSH_BLOCKING (send, then wait for the
+            // NoC writes to be sent) so the caller may reuse `packet_header` and the payload L1 right away, exactly
+            // as the EDM / V1 mux path below does.
+            perform_payload_send<false, true, SenderType>(
+                fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+            noc_async_writes_flushed();
+        } else {
+            perform_payload_send<true, true, SenderType>(
+                fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        }
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
