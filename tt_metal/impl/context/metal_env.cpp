@@ -228,10 +228,6 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    fabric_tensix_config_ = fabric_tensix_config;
-}
-
 // The fabric config is normally set once, from the FabricConfigDescriptor supplied at MetalEnv construction time.
 // However, for the legacy backward-compatibility path, the DeviceManager may call set_fabric_config a second time
 // to enable minimal fabric (FABRIC_1D) for dispatch when the user has not explicitly configured fabric.
@@ -314,7 +310,7 @@ bool MetalEnvImpl::set_fabric_config(
     }
     this->num_fabric_active_routing_planes_ = new_val;
 
-    this->set_fabric_tensix_config(fabric_tensix_config);
+    this->fabric_tensix_config_ = fabric_tensix_config;
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;

@@ -101,6 +101,11 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
 
+// Both are used as host divisors, so a zero (or, for the override, a non-tile multiple) must be rejected
+// before any division.
+void validate_stride(const std::array<uint32_t, 2>& stride);
+void validate_act_block_h_override(uint32_t act_block_h_override);
+
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
     std::array<uint32_t, 2> kernel_size,

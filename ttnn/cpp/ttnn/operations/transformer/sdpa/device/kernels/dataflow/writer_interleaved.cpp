@@ -40,9 +40,12 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(21) == 1;
+    // Write the heads side by side as [B x 1 x S x NQH*DH] (what nlp_concat_heads produces) instead of [B x NQH x S x
+    // DH].
+    constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
@@ -96,7 +99,9 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    const auto out_tile_shape =
+        out_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * vDHt : vDHt;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -225,7 +230,12 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-            uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            uint32_t out_tile_id;
+            if constexpr (out_concat_heads) {
+                out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
+            } else {
+                out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            }
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
@@ -240,7 +250,8 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     out_subblock_h,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             } else {
                 write_block(
                     noc,
@@ -251,7 +262,8 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             }
         }
     }  // close phase
