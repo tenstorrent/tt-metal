@@ -36,12 +36,13 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
-
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): a datum whose low
+    // byte is zero (e.g. bf16 0x4400 = 512.0) would be flushed to 0 mid-reduction. The flag must hold the
+    // preserve value across this function. It is set once by _llk_math_reduce_init_ for the MAX ROW
+    // specialisation and re-asserted by _llk_math_reduce_ before the pool of each tile (a no-op while the value
+    // is unchanged), not toggled here: setting preserve on entry and the operand default on exit, once per face
+    // row, alternated the value on every call, so the state tracker's skip never hit and each call paid a
+    // STALLWAIT on MATH and SFPU idle plus a config write, four pipeline drains per 32x32 tile.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -70,9 +71,6 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-
-    // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -273,6 +271,13 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
+            // The transpose needs the preserve value of the Src zero flag (see reduce_row_perform_transpose).
+            // _llk_math_reduce_init_ sets it; asserting it here as well keeps the reduction correct when a
+            // reconfig or another op's init between the init and this tile moved the flag. While the value is
+            // already preserve this is a load, a compare and a not taken branch on the RISC, with no Tensix
+            // instruction issued. GMPOOL does not read the flag, so the pool phase runs under preserve as well.
+            math::_configure_preserve_zero_flag_state_();
+
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
             reduce_row_perform_transpose<is_int_fpu_en>();
 
@@ -493,18 +498,33 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
-    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
-    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    // Src zero flag: MAX ROW moves the pooled row through SrcB and adds it back with ELWADD (a reader of the
+    // flag), so it runs the whole op under the preserve value and _llk_math_reduce_uninit_ restores the operand
+    // default; this is the value the transpose asserted per face row before, moved to the init so that the
+    // per-tile assert in _llk_math_reduce_ is a no-op. Every other specialisation takes the operand-driven
+    // default, mirroring _llk_math_matmul_init_ and _llk_math_eltwise_binary_init_, so that a preceding
+    // copy_init that left preserve does not leak into the pool. SCALAR also moves through the source registers
+    // (MOVD2B, MOVB2A) and keeps the default it always had; whether it needs preserve is not settled.
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
+    {
+        math::_configure_preserve_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }
 
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
+ * Returns the Src zero flag to the operand-driven default: @ref _llk_math_reduce_init_ leaves the MAX ROW
+ * specialisation holding the preserve value for the whole op. One config write per op, a no-op for the other
+ * specialisations.
+ *
  * @note Reverses @ref _llk_math_reduce_init_
  */
 inline void _llk_math_reduce_uninit_()
 {
+    math::_configure_default_zero_flag_state_();
 }
