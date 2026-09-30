@@ -17,20 +17,20 @@ regardless, and it is a non-default configuration.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_const` | `4·Ct² + Ct` | same (constants: EYE, LT, SL, SU, ONES_ROW) | `{bh: streams, chunk: streams, C: spans → Ct², K: —, V: —, window: —}` | F | reader | compute | whole program | none — read by index in every stage; NSL and ONES `[C,C]` were removed from the inventory (`I − N` sign handled by `sub`; `Σg` via a one-tile-row `ONES_ROW`) |
+| `cb_const` | `4·Ct² + Ct + 1` | same (constants: EYE, LT, SL, SU `[C,C]`; ONES `[32,C]` all-ones; E_ROW0 one tile, row 0 = 1) | `{bh: streams, chunk: streams, C: spans → Ct², K: —, V: —, window: —}` | F | reader | compute | whole program | none — read by index in every stage. **Implementation:** `+1` page for E_ROW0, the column → full-width replication operand (`g_full = g @ E_ROW0`), because the reader writes the gate tiles' column 0 only (see `cb_gate_in`) |
 | `cb_gather_stage` | `Dg` pages of `gather_stage_tokens·row_span_stride + 64` B | `Dg` windows (double buffer) | `{bh: streams, chunk: streams, C: streams → window, K/V: streams (one d-tile per window), window: spans}` | raw | reader | reader | P | reader-local; cannot share with any compute CB (single-thread scratch). Capacity > one window: double buffering of NoC reads vs re-pack (the measured dominant term) |
 | `cb_scalar_stage` | 1 page of 512 B | 32 staged scalars | `{C: streams (32 tokens), others: —}` | raw | writer | writer | P | writer-local; separate from `cb_gather_stage` because that one belongs to the reader thread |
 | `cb_q_in` | `Ct·Kt` | `Ct·Kt` | `{bh, chunk: streams; C: spans; K: spans; V: —}` | I | reader | compute | P | not with `cb_k_in` (both live through `key_prep_block`); not with E/S reader CBs (differs in format from the f32 ones; same format as `cb_vblock_in` but concurrent with it in P) |
 | `cb_k_in` | `Ct·Kt` | `Ct·Kt` | `{bh, chunk: streams; C: spans; K: spans; V: —}` | I | reader | compute | P | `k` is live until `Pᵀ` in `key_products_block` (needed by `kβ@kᵀ`, `q̃@kᵀ`, `k⊙w`) |
 | `cb_vblock_in` | `Qv = max(Ct,Kt)·Vi` | P: `Ct·Vi`; S: `Kt·Vs` (once per unit); E: `Kt·Vi` | `{bh, chunk: streams; C: spans (P); K: spans (S, E); V: spans → Vi / Vs}` | I | reader | compute | P, S, E | **shares** three disjoint roles (P `v`, S `initial_state`, E `h_i`), one quantum `Qv`; capacity − live set in P/S is the uniform-quantum tail |
-| `cb_gate_in` | `2·Ct` | `2·Ct` (full-width `g`, `β`) | `{bh, chunk: streams; C: spans; K, V: —}` | I | reader | compute | P | live for the whole item (β used by `kβ` and `vβ`, g by three phases) |
-| `cb_vec` | `4·Ct` | `4·Ct` (`decay, γ, w, Γ_full`) | `{C: spans; others: —}` | F | compute | compute | P | concurrent with every P block; `decay` also leaves through `cb_out_egress` (packed twice from DEST, no extra CB) |
+| `cb_gate_in` | `2·Ct` | `2·Ct` (`g`, `β`, **column 0 valid**, rest zero) | `{bh, chunk: streams; C: spans; K, V: —}` | I | reader | compute | P | live for the whole item. **Implementation:** column 0 only (32 scalar stores per tile after a NoC zero) instead of full-width (1024 stores per tile — a whole-tile CPU fill on the reader, the op's bottleneck thread). Every consumer reads column 0 (COL broadcast / matmul column); the one full-width need, `Γ_full`, is rebuilt in compute |
+| `cb_vec` | `2·Ct + 1` | `2·Ct + 1` (`γ, w` column tiles; `Γ_full` one tile) | `{C: spans; others: —}` | F | compute | compute | P | concurrent with every P block. **Implementation:** `decay` has no in-compute consumer, so it is packed only to `cb_out_egress` (its own `LT@g` matmul) and has no slot here (`4Ct` → `2Ct + 1` pages) |
 | `cb_qs` | `Ct·Kt` | `Ct·Kt` (`q̃`) | `{C, K: spans; V: —}` | F | compute | compute | P | not with `cb_kmat_in` (different producer: compute vs reader) — R6 would make it the E source |
 | `cb_kb` | `Da·Ct·Kt` | `Ct·Kt` (`kβ` → `U` in place) | `{C, K: spans}` | F | compute | compute | P | capacity 2× live: in-place `X ← f(X)` needs the new block reserved behind the old (ACCUM_DEPTH, not tunable) |
 | `cb_kw` | `Ct·Kt` | `Ct·Kt` (`k⊙w`, transposed out) | `{C, K: spans}` | F | compute | compute | P | could alias `cb_qs` only after `Q` and `intra` are packed; they are packed before `Pᵀ` — **candidate alias**, not taken because a CB ring cannot hand the same pages to a second role without a pop/reserve cycle that reorders `key_products_block`; recorded here, 32 KB at the largest shape |
 | `cb_L` | `Ct²` | `Ct²` | `{C: spans ×2}` | F | compute | compute | P | live from `decay_mask_block` to `intra` (end of item) |
 | `cb_cc_a` | `Ct²` | `Ct²` (`diag(g)` → `N`) | `{C: spans ×2}` | F | compute | compute | P | `diag(g)` dies at `X`; `N` reuses the same CB (sequential roles, one quantum) |
-| `cb_cc_b` | `Ct²` | `Ct²` (`X`) | `{C: spans ×2}` | F | compute | compute | P | `X` and `diag(g)` are live simultaneously (matmul operands) |
+| `cb_cc_b` | `Ct²` | `Ct²` (`X`; earlier in the item `g_full` `[Ct,1]` in a `Ct²` quantum) | `{C: spans ×2}` | F | compute | compute | P | `X` and `diag(g)` are live simultaneously (matmul operands). **Implementation:** also the `g_full` temporary of `gate_columns_block` (disjoint lifetime; pushed at the CB's one quantum `Ct²`) |
 | `cb_T` | `Da·Ct²` | `Ct²` | `{C: spans ×2}` | F | compute | compute | P | in-place accumulator (`T ← T + T@Pw`) — ACCUM_DEPTH |
 | `cb_pow` | `Da·Ct²` | `Ct²` | `{C: spans ×2}` | F | compute | compute | P | in-place squaring (`Pw ← Pw@Pw`) — ACCUM_DEPTH; concurrent with `cb_T` |
 | `cb_vmat` | `Ct·Vi` | `Ct·Vi` (`vβ`) | `{C: spans; V: spans → Vi; K: —}` | F | compute | compute | P | `v_corr` is packed straight into egress (no CB); cannot share with `cb_vnew_in` (reader-produced) |
@@ -46,6 +46,22 @@ regardless, and it is a non-default configuration.
 | `cb_out_egress` | `De·Qo` | `De` blocks in flight | `{C: spans; K/V: spans (max of Kt·Vs, Ct·Vi); chunk: streams}` | I | compute | writer | P, S, E | one quantum `Qo` for `Tinv→A`, `decay→g_cumsum` (P), `h_i`, `final_state` (S), `o`, `v_new` (E). Separate from `cb_scratch_egress` because the page format differs (I vs F) for bf16 |
 
 Indices 19, 24, 29 are intentionally unused (merged into `cb_vblock_in` and `cb_kmat_in`).
+
+### Implementation notes (ttnn-implementer, Phase 0)
+
+- Quanta as built (`_quanta()` in the descriptor, single source → CT args): `Qv = max(Ct·Vi, Kt·Vs, Kt·Vi)`,
+  `Qf = Ct·max(Kt, Ct, Vi, Vs)` (the S `v_new` role is `Ct·Vs`), `Qo = max(Ct, Ct², Kt·Vs, Ct·Vi)`.
+  Identical to the planner's at every INPUTS shape (`Vs ≤ Vi = Vt`); the extra terms make them safe when the
+  `Vi` solve shrinks below `Vs`.
+- `h[:, 0]` under `with_h0` is copied through by the **reader** (the `initial_state` pages it already holds in
+  `cb_vblock_in`, written to `h` before the push), bit-exact at the input dtype. A compute copy would route
+  the fp32 state through a ~tf32 unpack source register (`test_h0_is_first_state` gates at 1e-5).
+- `UnpackToDestFp32` is **not** set on any CB: `cb_state` is also `in1` of `nkcd@S`, the conflict the design's
+  risk table anticipated. The `Γ·S` carry stays on the SFPU (fp32 DEST) but `S` enters DEST through the
+  unpacker (tf32). Measured inside the fp32 band on every acceptance and golden cell, including
+  `g_scale = 8` and the 32-chunk `g_scale = 0.05` LOOSE case.
+- Footprint closed form below reflects the two `cb_const` / `cb_vec` changes (net −`(2Ct − 2)` f32 pages vs the
+  planner's inventory; `Vi = Vt` still holds at every INPUTS shape).
 
 ## Symbol table
 
@@ -65,8 +81,8 @@ Indices 19, 24, 29 are intentionally unused (merged into `cb_vblock_in` and `cb_
 
 ```
 footprint(Vi, Vs) =
-    F · [ (4Ct² + Ct)                         # cb_const
-        + 4Ct                                 # cb_vec
+    F · [ (4Ct² + Ct + 1)                     # cb_const
+        + 2Ct + 1                             # cb_vec
         + Ct·Kt + Da·Ct·Kt + Ct·Kt            # cb_qs, cb_kb, cb_kw
         + 3Ct² + 2·Da·Ct²                     # cb_L, cb_cc_a, cb_cc_b, cb_T, cb_pow
         + Ct·Vi + Ct² + Ct·Vi                 # cb_vmat, cb_intra_in, cb_vnew_in
@@ -165,3 +181,15 @@ that is not intrinsic is the `NV×` re-read of the scan's shared operands.
 > reads at the LOOSE shape in exchange for an equal NoC payload. It is deferred as the successor
 > R1's stepping stone (all V units reading the shared operand from DRAM) is built for: the scan
 > reader is the only kernel code it changes.
+
+## Measured (Phase 0, Blackhole p300a, 110 worker cores, one fresh-cache `--profile` run each)
+
+| Shape, C, dtype | Cores | Device kernel [µs] | Gather stubbed | Scatter (A, o, v_new) stubbed |
+|---|---|---|---|---|
+| (1,256,32,128,128), 64, fp32 | 110 | 852 | 395 | 756 |
+| (4,128,16,64,64), 32, fp32 | 110 | 361 | 201 | 326 |
+| (1,256,4,128,256), 64, bf16, with_h0 | 48 | 392 | — | — |
+
+The `q,k,v` face-row gather is ~54% of the wall at both measured shapes and the scatter ~10%, confirming the
+Traffic-ranking verdict: the governing term is the per-row transaction count, whose structural fix is R3
+(page-harvest), layered on this R1 build.
