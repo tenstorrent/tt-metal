@@ -41,6 +41,20 @@ MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Ope
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.inputs;
 };
+
+std::vector<tt::tt_metal::TensorTopology> MorehClipGradNormStep3Operation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // The inputs are scaled in place and returned as the outputs. Without this hook the framework relabels every
+    // one of them with the union of all inputs' placements, so a single sharded gradient in the list would turn
+    // each replicated gradient's label into Shard, and anything that gathers by label (checkpointing) would then
+    // concatenate identical replicas. Each gradient's distribution is untouched by the scaling, so it keeps its own.
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(tensor_args.inputs.size());
+    for (const auto& input : tensor_args.inputs) {
+        topologies.push_back(input.tensor_topology());
+    }
+    return topologies;
+}
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3
 
 namespace ttnn::prim {

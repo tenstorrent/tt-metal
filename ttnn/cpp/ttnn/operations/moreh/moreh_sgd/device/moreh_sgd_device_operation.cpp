@@ -90,6 +90,20 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
 
     return ret;
 }
+
+std::vector<tt::tt_metal::TensorTopology> MorehSgdOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    std::vector<std::reference_wrapper<const Tensor>> inputs = {tensor_args.param_in, tensor_args.grad};
+    if (tensor_args.momentum_buffer_in.has_value()) {
+        inputs.emplace_back(*tensor_args.momentum_buffer_in);
+    }
+    // Slot order matches compute_output_specs / create_output_tensors.
+    return preallocated_or_union_output_topologies(
+        std::move(inputs),
+        tensor_args.param_in,
+        compute_output_specs(operation_attributes, tensor_args),
+        {tensor_args.param_out, tensor_args.momentum_buffer_out});
+}
 }  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn::prim {

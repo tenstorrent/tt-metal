@@ -45,6 +45,11 @@ struct MorehDotBackwardOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Preallocated outputs keep their own topology; outputs the op allocates take the union of all inputs. See
+    // ttnn::operations::preallocated_or_union_output_topologies.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_dot_backward

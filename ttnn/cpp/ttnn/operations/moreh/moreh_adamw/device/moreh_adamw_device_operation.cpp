@@ -131,6 +131,21 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
 
     return result;
 }
+
+std::vector<tt::tt_metal::TensorTopology> MorehAdamWDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    std::vector<std::reference_wrapper<const Tensor>> inputs = {
+        tensor_args.param_in, tensor_args.grad, tensor_args.exp_avg_in, tensor_args.exp_avg_sq_in};
+    if (tensor_args.max_exp_avg_sq_in.has_value()) {
+        inputs.emplace_back(*tensor_args.max_exp_avg_sq_in);
+    }
+    // Slot order matches compute_output_specs / create_output_tensors.
+    return preallocated_or_union_output_topologies(
+        std::move(inputs),
+        tensor_args.param_in,
+        compute_output_specs(operation_attributes, tensor_args),
+        {tensor_args.param_out, tensor_args.exp_avg_out, tensor_args.exp_avg_sq_out, tensor_args.max_exp_avg_sq_out});
+}
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
 namespace ttnn::prim {

@@ -85,6 +85,22 @@ MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::crea
     return tensor_args.output_tensors;
 }
 
+std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Every output is caller-owned (compute_output_specs has an entry only for a preallocated slot), so each one
+    // keeps its own topology; the union branch of the helper is only reached for a preallocated output and unused.
+    std::vector<std::reference_wrapper<const std::optional<Tensor>>> preallocated_outputs;
+    preallocated_outputs.reserve(tensor_args.output_tensors.size());
+    for (const auto& output_tensor : tensor_args.output_tensors) {
+        preallocated_outputs.emplace_back(output_tensor);
+    }
+    return preallocated_or_union_output_topologies(
+        {tensor_args.output_grad, tensor_args.input, tensor_args.other},
+        tensor_args.input,
+        compute_output_specs(operation_attributes, tensor_args),
+        preallocated_outputs);
+}
+
 }  // namespace ttnn::operations::moreh::moreh_dot_backward
 
 namespace ttnn::prim {
