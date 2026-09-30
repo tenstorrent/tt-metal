@@ -1,73 +1,113 @@
 name: "LLK bit-exact"
+# TEST ONLY, branch nstamatovic/llk-sfpu-test-ci -- NEVER MERGE.
+# This file stands in for llk-bit-exact.yaml on this branch only, so the LLK SFPU
+# report can be dispatched on real runners before llk-sfpu-report.yaml is on main
+# (workflow_dispatch only finds workflows that exist on the default branch):
+#   gh workflow run llk-bit-exact.yaml --ref nstamatovic/llk-sfpu-test-ci -f pr_number=54080
 
 on:
-  schedule:
-    # Run every night at 3AM UTC
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
-      architecture:
-        description: "Architecture to run bit-exactness tests on"
+      pr_number:
+        description: "PR to measure"
         required: true
+        default: "54080"
+        type: string
+      ops:
+        description: "MathOperation names (blank = auto-detect)"
+        required: false
+        default: ""
+        type: string
+      arch:
+        description: "all, wormhole or blackhole"
+        required: false
         default: all
         type: choice
-        options:
-          - all
-          - wormhole
-          - blackhole
-      bit-exact-runs:
-        description: "Times each variant is executed on device and compared"
+        options: [all, wormhole, blackhole]
+      base:
+        description: "merge-base or main"
         required: false
-        default: "500"
-        type: string
+        default: merge-base
+        type: choice
+        options: [merge-base, main]
+      binary_perf:
+        description: "Also run the new extended binary SFPU perf tests on silicon"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  checks: write
   contents: read
+  pull-requests: read
   packages: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
-    github.ref_protected && github.run_id || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  llk-bit-exact-tests:
-    name: "LLK bit-exact tests"
-    uses: ./.github/workflows/llk-bit-exact-impl.yaml
-    with:
-      # Scheduled runs have no dispatch inputs, so fall back to the defaults.
-      architecture: ${{ inputs.architecture || 'all' }}
-      bit-exact-runs: ${{ inputs.bit-exact-runs || '500' }}
+  sfpu-report:
+    uses: ./.github/workflows/llk-sfpu-report.yaml
     secrets: inherit
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: write
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      ops: ${{ inputs.ops }}
+      arch: ${{ inputs.arch }}
+      base: ${{ inputs.base }}
+      context: '{"hint": "test run from nstamatovic/llk-sfpu-test-ci"}'
 
-  llk-bit-exact-summary:
-    name: "LLK bit-exact summary"
-    if: always()
-    needs:
-      - llk-bit-exact-tests
-    runs-on: ubuntu-slim
-    steps:
-      - name: Check bit-exactness test results
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
+  build-images:
+    if: ${{ inputs.binary_perf }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: write
 
-  report-status:
-    name: "Report status"
-    runs-on: ubuntu-slim
-    if: always()
-    needs: llk-bit-exact-summary
+  binary-perf:
+    if: ${{ inputs.binary_perf }}
+    needs: [build-images]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole
+            runs_on: tt-ubuntu-2204-N150-viommu-stable
+          - arch: blackhole
+            runs_on: tt-ubuntu-2204-P150b-stable
+    name: "extended binary SFPU perf (${{ matrix.arch }})"
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          fetch-depth: 1
-      - name: Report status
-        uses: ./.github/actions/report-failure
+          persist-credentials: false
+      - name: Run the extended binary perf tests on silicon
+        shell: bash
+        working-directory: tt_metal/tt-llk
+        env:
+          CHIP_ARCH: ${{ matrix.arch }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+        run: |
+          set -euo pipefail
+          (cd tests && ./setup_testing_env.sh >/dev/null)
+          cd tests/python_tests
+          start=$(date +%s)
+          pytest -q --override-ini=log_cli=false --compile-producer -n "$(nproc)" -m perf \
+            --speed-of-light perf_eltwise_binary_sfpu.py -k extended
+          pytest -q --override-ini=log_cli=false --compile-consumer -n 1 -m perf --timeout=120 \
+            --speed-of-light perf_eltwise_binary_sfpu.py -k extended
+          echo "extended binary perf on $CHIP_ARCH: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload the perf CSVs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          test_name: "LLK bit-exact tests"
-          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-bit-exact-summary.result }}
+          name: binary-perf-${{ matrix.arch }}
+          path: tt_metal/tt-llk/perf_data/runs/
+          if-no-files-found: warn
