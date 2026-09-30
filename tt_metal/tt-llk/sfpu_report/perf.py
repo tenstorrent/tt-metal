@@ -65,6 +65,7 @@ def build(side, arch, family, ops, schedule, log, jobs=8):
         ["--compile-producer", "-n", str(jobs), *_args(family, ops, schedule)],
         env=_ENV,
         log=log,
+        check=False,  # a variant that does not build is simply not measured
     )
 
 
@@ -77,6 +78,7 @@ def measure(side, arch, family, ops, schedule, out_csv, log):
         ["--compile-consumer", "-n", "1", *_args(family, ops, schedule)],
         env=_ENV,
         log=log,
+        check=False,  # the variants that ran are in the CSV; the rest are reported missing
     )
     csv = _latest_csv(side, MODULES[family])
     if csv is None:

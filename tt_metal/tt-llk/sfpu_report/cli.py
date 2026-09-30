@@ -261,6 +261,16 @@ def cmd_run(args):
             formats=formats,
         )
         acc = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
+        one_sided = [r for r in acc if r.get("missing")]
+        if one_sided:
+            notes.append(
+                "Measured on one side only (the variant did not build or run on the other; "
+                "see run.log): "
+                + ", ".join(
+                    f"`{r['key'][0]} {r['key'][1]} dest_acc={r['key'][4]}`"
+                    for r in one_sided[:8]
+                )
+            )
         measured = {r["key"][0] for r in acc}
         missing = [o for o in acc_ops if o not in measured]
         if missing:
