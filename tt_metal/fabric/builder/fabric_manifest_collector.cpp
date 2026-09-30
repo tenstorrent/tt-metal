@@ -5,7 +5,6 @@
 #include "tt_metal/fabric/builder/fabric_manifest_collector.hpp"
 
 #include <fmt/format.h>
-#include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
@@ -33,7 +32,6 @@ uint32_t get_named_arg(const NamedArgs& args, const std::string& name) {
 manifest::RouterIdentity collect_identity(const RouterLocation& location) {
     return {
         .eth_chan = location.eth_chan,
-        .arch = tt::tt_metal::hal::get_arch(),
     };
 }
 

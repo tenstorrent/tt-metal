@@ -40,7 +40,6 @@ using json = nlohmann::ordered_json;
 
 using manifest::chip_key;
 using manifest::direction_letter;
-using manifest::enum_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
@@ -59,22 +58,15 @@ std::string utc_now_iso8601() {
 // Returns a JSON object with the "run" information for the fabric instance.
 json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
     json run;
-    run["arch"] = enum_name(cluster.arch());
-    run["fabric_config"] = enum_name(control_plane.get_fabric_config());
-    run["fabric_type"] = enum_name(fabric_type);
-    run["reliability_mode"] = enum_name(control_plane.get_fabric_reliability_mode());
-    run["tensix_config"] = enum_name(control_plane.get_fabric_tensix_config());
-    run["udm_mode"] = enum_name(control_plane.get_fabric_udm_mode());
+    run["arch"] = lower_enum_name(cluster.arch());
+    run["fabric_config"] = lower_enum_name(control_plane.get_fabric_config());
+    run["reliability_mode"] = lower_enum_name(control_plane.get_fabric_reliability_mode());
+    run["tensix_config"] = lower_enum_name(control_plane.get_fabric_tensix_config());
+    run["udm_mode"] = lower_enum_name(control_plane.get_fabric_udm_mode());
     run["host_rank"] = *control_plane.get_local_host_rank_id_binding();
     run["mpi_rank"] = *distributed_context->rank();
     run["world_size"] = *distributed_context->size();
-    json local_mesh_ids = json::array();
-    for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        local_mesh_ids.push_back(*mesh_id);
-    }
-    run["local_mesh_ids"] = std::move(local_mesh_ids);
     run["written_at"] = utc_now_iso8601();
     return run;
 }
@@ -82,7 +74,7 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
 // Returns a JSON object with the fabric context block information.
 json make_fabric_context_json(const FabricContext& fabric_context) {
     json block;
-    block["topology"] = enum_name(fabric_context.get_fabric_topology());
+    block["topology"] = lower_enum_name(fabric_context.get_fabric_topology());
     block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
     block["packet_header_size_bytes"] = fabric_context.get_fabric_packet_header_size_bytes();
     block["max_payload_size_bytes"] = fabric_context.get_fabric_max_payload_size_bytes();
@@ -92,8 +84,6 @@ json make_fabric_context_json(const FabricContext& fabric_context) {
     } else {
         block["routing_1d_extension_words"] = fabric_context.get_1d_pkt_hdr_extension_words();
     }
-    block["tensix_enabled"] = fabric_context.is_tensix_enabled();
-    block["bubble_flow_control"] = fabric_context.is_bubble_flow_control_enabled();
     return block;
 }
 
@@ -162,27 +152,18 @@ bool is_wrap_link(
 
 // ============ Router ============
 
-json router_identity_json(
-    const manifest::RouterIdentity& identity, FabricNodeId node, json logical_core, json virtual_core) {
+// The router's mesh and chip are its path, so they are not repeated here.
+json router_identity_json(const manifest::RouterIdentity& identity, json logical_core, json virtual_core) {
     json out;
-    out["mesh_id"] = *node.mesh_id;
-    out["chip_id"] = node.chip_id;
     out["eth_chan"] = identity.eth_chan;
-    out["arch"] = lower_enum_name(identity.arch);
     out["logical_core"] = std::move(logical_core);
     out["virtual_core"] = std::move(virtual_core);
     return out;
 }
 
-json eth_link_json(
-    const manifest::EthLink& link,
-    routing_plane_id_t routing_plane,
-    const std::optional<std::string>& peer,
-    bool cross_host,
-    bool wrap) {
+// Direction and routing plane are the router's key, so they are not repeated here.
+json eth_link_json(const manifest::EthLink& link, const std::optional<std::string>& peer, bool cross_host, bool wrap) {
     json out;
-    out["direction"] = std::string(1, direction_letter(link.direction));
-    out["routing_plane"] = routing_plane;
     out["edge_capability"] = lower_enum_name(link.edge_capability);
     out["peer"] = peer.has_value() ? json(*peer) : json(nullptr);
     out["cross_host"] = cross_host;
@@ -202,8 +183,7 @@ json router_shape_json(const manifest::RouterShape& shape) {
     return out;
 }
 
-// A collected router with what ControlPlane and the cluster know about it: routing plane, peer, cross-host,
-// wrap and cores.
+// A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
 json make_router_json(
     const manifest::Router& router,
     const ControlPlane& control_plane,
@@ -228,12 +208,10 @@ json make_router_json(
     json out;
     out["identity"] = router_identity_json(
         router.identity,
-        node,
         json::array({logical_core.x, logical_core.y}),
         json::array({virtual_core.x, virtual_core.y}));
     out["link"] = eth_link_json(
         router.link,
-        control_plane.get_routing_plane_id(node, chan),
         peer_path,
         control_plane.is_cross_host_eth_link(physical_chip_id, chan),
         is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));

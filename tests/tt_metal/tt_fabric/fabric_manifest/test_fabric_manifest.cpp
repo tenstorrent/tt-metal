@@ -18,7 +18,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/hal.hpp>
+#include <umd/device/types/arch.hpp>
 
 #include "fabric_fixture.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -42,7 +42,6 @@ const FabricBuilderContext& builder_context() { return control_plane().get_fabri
 // ============ Helpers ============
 
 using manifest::chip_key;
-using manifest::enum_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
@@ -163,12 +162,30 @@ void check_top_level(const json& manifest, const std::filesystem::path& manifest
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
 
     const auto& run = manifest.at("run");
-    EXPECT_EQ(run.at("fabric_config"), enum_name(fabric_config));
-    EXPECT_EQ(run.at("arch"), enum_name(tt::tt_metal::MetalContext::instance().get_cluster().arch()));
+    EXPECT_EQ(
+        keys_of(run),
+        (std::set<std::string>{
+            "arch",
+            "fabric_config",
+            "reliability_mode",
+            "tensix_config",
+            "udm_mode",
+            "host_rank",
+            "mpi_rank",
+            "world_size",
+            "written_at"}));
+    EXPECT_EQ(run.at("fabric_config"), lower_enum_name(fabric_config));
+    EXPECT_EQ(run.at("arch"), lower_enum_name(tt::tt_metal::MetalContext::instance().get_cluster().arch()));
     EXPECT_FALSE(run.at("written_at").get<std::string>().empty());
 
     const auto& fabric_context = control_plane().get_fabric_context();
     const auto& block = manifest.at("fabric_context");
+    std::set<std::string> context_keys{
+        "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes", "channel_buffer_size_bytes"};
+    context_keys.insert(
+        fabric_context.is_2D_routing_enabled() ? "routing_2d_route_buffer_size" : "routing_1d_extension_words");
+    EXPECT_EQ(keys_of(block), context_keys);
+    EXPECT_EQ(block.at("topology"), lower_enum_name(fabric_context.get_fabric_topology()));
     EXPECT_EQ(block.at("is_2d_routing"), fabric_context.is_2D_routing_enabled());
     EXPECT_EQ(block.at("channel_buffer_size_bytes"), fabric_context.get_fabric_channel_buffer_size_bytes());
     EXPECT_EQ(block.at("packet_header_size_bytes"), fabric_context.get_fabric_packet_header_size_bytes());
@@ -263,16 +280,14 @@ void check_routers_match_active_channels(const json& manifest) {
     }
 }
 
-// Identity names the router's node, channel, architecture and cores.
+// Identity names the router's channel and cores. Its mesh and chip are the path.
 void check_router_identity(const std::vector<RouterEntry>& routers) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& identity = entry.router->at("identity");
-        EXPECT_EQ(identity.at("mesh_id"), *entry.node.mesh_id);
-        EXPECT_EQ(identity.at("chip_id"), entry.node.chip_id);
+        EXPECT_EQ(keys_of(identity), (std::set<std::string>{"eth_chan", "logical_core", "virtual_core"}));
         EXPECT_EQ(identity.at("eth_chan"), entry.eth_chan);
-        EXPECT_EQ(identity.at("arch"), lower_enum_name(tt::tt_metal::hal::get_arch()));
 
         const auto logical_core =
             cluster.get_soc_desc(entry.physical_chip_id).get_eth_core_for_channel(entry.eth_chan, CoordSystem::LOGICAL);
@@ -283,15 +298,16 @@ void check_router_identity(const std::vector<RouterEntry>& routers) {
     }
 }
 
-// Link agrees with ControlPlane (direction and plane, which the key names; cross-host; peer) and with what the
-// builder published (edge capability, dispatch link).
+// Link agrees with ControlPlane (cross-host, peer) and with what the builder published (edge capability,
+// dispatch link). Direction and plane are the key, which RoutersMatchActiveChannels checks.
 void check_router_link(const std::vector<RouterEntry>& routers) {
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& link = entry.router->at("link");
         const auto& published = entry.published->link;
-        EXPECT_EQ(link.at("direction"), entry.key.substr(0, 1));
-        EXPECT_EQ(link.at("routing_plane"), control_plane().get_routing_plane_id(entry.node, entry.eth_chan));
+        EXPECT_EQ(
+            keys_of(link),
+            (std::set<std::string>{"edge_capability", "peer", "cross_host", "wrap", "dispatch_link"}));
         EXPECT_EQ(link.at("edge_capability"), lower_enum_name(published.edge_capability));
         EXPECT_EQ(link.at("dispatch_link"), published.dispatch_link);
         EXPECT_EQ(
@@ -315,14 +331,16 @@ void check_peers_are_symmetric(const json& manifest, const std::vector<RouterEnt
         if (link.at("peer").is_null()) {
             continue;
         }
-        SCOPED_TRACE(fmt::format("{} -> {}", entry.path, link.at("peer").get<std::string>()));
-        const json* peer = find_router(manifest, link.at("peer").get<std::string>());
+        const auto peer_path = link.at("peer").get<std::string>();
+        SCOPED_TRACE(fmt::format("{} -> {}", entry.path, peer_path));
+        // Both ends are on the same routing plane: the keys differ only in direction, e.g. E1 and W1.
+        EXPECT_EQ(peer_path.substr(peer_path.rfind('/') + 2), entry.key.substr(1));
+        const json* peer = find_router(manifest, peer_path);
         if (peer == nullptr) {
             continue;  // The peer is in another host's manifest.
         }
         const auto& peer_link = peer->at("link");
         EXPECT_EQ(peer_link.at("peer"), entry.path);
-        EXPECT_EQ(peer_link.at("routing_plane"), link.at("routing_plane"));
         EXPECT_EQ(peer_link.at("edge_capability"), link.at("edge_capability"));
         EXPECT_EQ(peer_link.at("cross_host"), link.at("cross_host"));
         EXPECT_EQ(peer_link.at("wrap"), link.at("wrap"));
@@ -335,6 +353,15 @@ void check_router_shape(const std::vector<RouterEntry>& routers) {
         SCOPED_TRACE(entry.path);
         const auto& shape = entry.router->at("shape");
         const auto& published = entry.published->shape;
+        EXPECT_EQ(
+            keys_of(shape),
+            (std::set<std::string>{
+                "num_vcs",
+                "senders_per_vc",
+                "receivers_per_vc",
+                "num_active_eriscs",
+                "channel_trimming_overrides_applied",
+                "vc0_bubble_flow_control"}));
         EXPECT_EQ(shape.at("num_vcs"), published.num_vcs);
         EXPECT_EQ(shape.at("senders_per_vc"), json(published.senders_per_vc));
         EXPECT_EQ(shape.at("receivers_per_vc"), json(published.receivers_per_vc));
@@ -371,8 +398,8 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(tt::ARCH::WORMHOLE_B0), "wormhole_b0");
     EXPECT_EQ(lower_enum_name(tt::ARCH::BLACKHOLE), "blackhole");
 
-    EXPECT_EQ(enum_name(FabricConfig::FABRIC_1D), "FABRIC_1D");
-    EXPECT_EQ(enum_name(FabricConfig::FABRIC_2D), "FABRIC_2D");
+    EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_1D), "fabric_1d");
+    EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_2D), "fabric_2d");
 }
 
 TEST_F(Manifest1DFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }

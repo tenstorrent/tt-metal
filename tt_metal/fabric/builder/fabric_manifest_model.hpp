@@ -14,7 +14,6 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
@@ -109,7 +108,6 @@ struct NocForwardConfig {
 // High level information about a particular router.
 struct RouterIdentity {
     uint32_t eth_chan = 0;
-    tt::ARCH arch = tt::ARCH::Invalid;
 };
 
 // Ethernet link information about a particular router.
