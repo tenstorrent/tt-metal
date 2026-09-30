@@ -10,8 +10,8 @@
 //   - the tile loop is per-thread. Thread t of N drains the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives consumer thread t.
 //   - for a borrowed output it writes back only the tail rings' results.
-// The output is interleaved and written over the NoC, or a borrowed L1 shard (DST_SHARDED) that the
-// compute packs in place: the factory borrows all operands or none.
+// The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
+// slice of an L1-interleaved tensor, which the compute packs in place. The factory borrows all or none.
 //
 // The writer's cascade is the milder case -- an output is never broadcast, so its strides are always
 // dense and only the sharded-row wrap (dst_shard_width) of a NoC-written sharded output is lost, which
@@ -31,8 +31,8 @@
 
 void kernel_main() {
 #if DST_SHARDED
-    // Borrowed output: the compute packs the borrowed part into the resident L1 shard, so there is nothing to
-    // write for it, as on WH and BH. Its credits stay posted, which is safe: each launch resets the tile
+    // Borrowed output: the compute packs the borrowed part into the resident L1 shard or slice, so there is
+    // nothing to write for it, as on WH and BH. Its credits stay posted, which is safe: each launch resets the tile
     // counters, and the firmware waits for the packs. Do not call finish() on it: nothing acks, so it hangs.
 #if TAIL_TILES
     // Copy the real tail results into the shard just past the borrowed part, and drop the padding.

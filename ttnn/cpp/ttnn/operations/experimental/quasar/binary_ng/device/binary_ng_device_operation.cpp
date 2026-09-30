@@ -458,7 +458,8 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // A sharded operand is admitted only as an L1-sharded tiled layout (height/block/width) that carries a
 // shard spec: the factories need the spec to borrow or place, and a sharded DRAM tensor or a non-tiled
-// sharded layout is not handled. An interleaved operand always passes (the NoC-read path).
+// sharded layout is not handled. An interleaved operand always passes; the factory borrows it as an
+// L1-interleaved slice or reads it over the NoC.
 bool sharded_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
     if (!mc.is_sharded()) {
         return true;
