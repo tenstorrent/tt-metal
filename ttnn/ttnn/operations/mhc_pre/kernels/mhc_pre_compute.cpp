@@ -1101,6 +1101,11 @@ void kernel_main() {
             // per-block compute phase must not start only after the last X tile): mix partial = X_blk @ W_slice
             // -> cb_partial [mix rows] ----
             if constexpr (x_grid_split) {
+                if constexpr (w_pieces == 1) {
+                    // bf16 W feeds the matmul unsplit: nothing else waited for it (the fp32-W grid split does).
+                    // Cumulative wait, never popped (resident); a no-op after block 0.
+                    cb_wait_front(cb_weight, core_k_tiles);
+                }
                 project_block_split(extent, core_k_tiles, sb_h);
             } else if constexpr (w_pieces > 1) {
                 if constexpr (w_presplit) {

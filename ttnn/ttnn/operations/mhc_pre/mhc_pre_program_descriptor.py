@@ -53,6 +53,7 @@ CB_GRID = 21  # fp32 X only: per token row-tile grid rounding constants (+ the W
 CB_MAX_SCALER = 22  # fp32 X only: reduce scaler for <MAX, REDUCE_SCALAR> (1.0)
 CB_W_OWN_READY = 23  # W column all-gather token (no payload): reader -> compute "own W share landed"
 CB_W_OWN_SPLIT = 24  # W column all-gather token (no payload): compute -> reader "own W share split"
+CB_W_SHARE_LANDED = 25  # token (no payload): reader -> writer "this core's W column share landed" (W_SHARE_ON_READER)
 TOKEN_PAGE_BYTES = 32
 NUM_CB_SLOTS = 64
 UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_COEF_KEEP)
@@ -90,7 +91,7 @@ GROUP_CORES_CAP = 32  # flat-root gather cap (cb_gathered grows with group_cores
 X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of the combine round trip)
 # Each X block is read as one NoC burst but published to the compute in this many K-ordered chunks (one NoC
 # transaction id each), so the projection runs under the rest of the burst instead of after it (Refinement 4).
-# 1 = one publish per block (the pre-Refinement-4 behaviour); at most 15 (NoC transaction ids).
+# 1 = one publish per block (the pre-Refinement-4 behaviour); at most 14 (NoC transaction ids; 15 is the W column share's).
 X_STREAM_CHUNKS = 4
 # Chunks of one X block in flight at once (Refinement 4). With every chunk issued up front the banks serve all
 # cores' requests interleaved and even chunk 0 lands only at the end of the burst; a bounded look-ahead keeps
@@ -148,19 +149,40 @@ W_BCAST = True
 # NoC placement (noc_placement): the reader's X stream rides READER_NOC; the writer (W fill, both multicasts,
 # partial / y / post / comb stores) rides the other one.
 READER_NOC = ttnn.NOC.NOC_0
-# Groups whose first logical core-row is < READER_NOC_FLIP_ROWS swap the two NoCs (reader on the other NoC,
-# writer on READER_NOC). With every reader on NoC0 the X burst starves the top core rows (their DRAM responses
-# share the most south links: measured 26 us vs 8 us for the bottom row at 640x1792), and those rows set the
-# wall. 0 = no row flipped.
-READER_NOC_FLIP_ROWS = 0
+# Groups whose first logical core-row is < the flip row count swap the two NoCs (reader on the other NoC, writer on
+# READER_NOC). With every reader on NoC0 the X burst starves the top core rows (their DRAM responses share the most
+# south links: measured 26 us vs 8 us for the bottom row at 640x1792; 1280x4096: top rows' X lands at ~120 us vs
+# ~95 us at the bottom), and those rows set the wall. Flip row count = round(READER_NOC_FLIP_FRACTION * grid_y)
+# (Refinement 5; measured on BH 11x10 with the W share on the reader, bf16 / fp32 X, device us, flip 0 -> 4 rows:
+# 1280x4096 174.3 -> 148.5 / 393.8 -> 380.9, 640x1792 46.6 -> 44.1 / 130.7 -> 122.4, 640x7168 174.4 -> 145.1 /
+# 457.6 -> 411.8, 2048x5120 323.4 -> 314.3 / 722.0 -> 717.5; 2 and 3 rows in between, 5 rows starves NoC1).
+# READER_NOC_FLIP_ROWS (int) overrides the derived count; 0 = no row flipped.
+READER_NOC_FLIP_FRACTION = 0.4
+READER_NOC_FLIP_ROWS = None
+# W column share on the reader (Refinement 5): with the W column all-gather (W_ROLE_SPREAD) the reader, not the
+# writer, reads this core's W share from DRAM -- issued ahead of its X burst (own NoC transaction id), so it rides
+# the NoC this row's X reads use (the uncongested one for that row, whatever READER_NOC_FLIP_ROWS says), and hands
+# it to the writer (token CB_W_SHARE_LANDED) for the split / multicast. On the writer's NoC a share read queued
+# behind the other rows' X burst (measured 56-60 us at 1280x4096 on flipped rows, vs 7-13 us), and every
+# projection waits for the whole column's all-gather. False = the writer reads its share (the Refinement 4 path).
+W_SHARE_ON_READER = True
+# ... and land it (barrier) before the first X read is issued: all rows' shares then cross the NoCs / banks with no
+# X traffic (the all-gather waits for the slowest row), at the cost of starting X a few us later.
+W_SHARE_BEFORE_X = False
 
 
 def _other_noc(noc):
     return ttnn.NOC.NOC_1 if noc == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
 
 
-def _reader_noc_of(group_y0):
-    return _other_noc(READER_NOC) if group_y0 < READER_NOC_FLIP_ROWS else READER_NOC
+def _flip_rows(grid_y):
+    if READER_NOC_FLIP_ROWS is not None:
+        return READER_NOC_FLIP_ROWS
+    return int(round(READER_NOC_FLIP_FRACTION * grid_y))
+
+
+def _reader_noc_of(group_y0, grid_y):
+    return _other_noc(READER_NOC) if group_y0 < _flip_rows(grid_y) else READER_NOC
 
 
 # Stream-column tiles moved off rank 0 when rank 0 owns every Sinkhorn row (one token tile-row per group): the
@@ -270,6 +292,7 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
         (CB_W_OWN_READY, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
         (CB_W_OWN_SPLIT, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
+        (CB_W_SHARE_LANDED, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
     ]
     if xp == 1:
         table += [(CB_MIX_RUN, 1, fT, f32)]  # running fp32 mix between the streamed K chunk windows
@@ -484,7 +507,7 @@ def create_program_descriptor(
     # ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle, sender = row 0 ----
     # Kernel sets: the groups sharing one (reader NoC, writer NoC) placement get their own reader / writer
     # descriptors (the NoC is a kernel-config property; the multicast wires depend on it too).
-    reader_nocs = sorted({_reader_noc_of(gy0) for _, _, gy0 in groups}, key=lambda c: c.value)
+    reader_nocs = sorted({_reader_noc_of(gy0, plan.grid_y) for _, _, gy0 in groups}, key=lambda c: c.value)
 
     w_mcast = {}  # reader NoC of the kernel set -> Mcast1D (same rectangle and semaphore; senders may ride either NoC)
     active_rows = len(groups) // plan.groups_x
@@ -510,7 +533,7 @@ def create_program_descriptor(
     mcast_ct = {}  # reader NoC of the kernel set -> the group-mcast CT wire (identical within a set)
     if G > 1:
         for g, gx0, gy0 in groups:
-            rnoc = _reader_noc_of(gy0)
+            rnoc = _reader_noc_of(gy0, plan.grid_y)
             mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
             rect = ttnn.CoreRangeSet(
                 [
@@ -539,9 +562,13 @@ def create_program_descriptor(
         int(x_pieces(x_tensor.dtype) > 1),
         X_STREAM_CHUNKS,
         X_STREAM_INFLIGHT,
+        CB_WEIGHT,
+        CB_W_SHARE_LANDED,
+        int(W_SHARE_BEFORE_X),
     ]
-    assert len(reader_ct) == 10  # TensorAccessorArgs base in the reader
+    assert len(reader_ct) == 13  # TensorAccessorArgs base in the reader
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
+    reader_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
 
     compute_ct = [
         CB_X_RESIDENT,
@@ -610,8 +637,10 @@ def create_program_descriptor(
         CB_W_OWN_READY,
         CB_W_OWN_SPLIT,
         int(w_presplit),
+        CB_W_SHARE_LANDED,
+        0,  # CT 21 unused
     ]
-    assert len(writer_ct) == 20  # MCAST_CT_BASE in the writer
+    assert len(writer_ct) == 22  # MCAST_CT_BASE in the writer
     writer_tail_ct = []
     writer_tail_ct += ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args()
     writer_tail_ct += ttnn.TensorAccessorArgs(post_tensor).get_compile_time_args()
@@ -639,7 +668,7 @@ def create_program_descriptor(
     writer_rt = {rnoc: ttnn.RuntimeArgs() for rnoc in reader_nocs}
     compute_rt = ttnn.RuntimeArgs()
     for g, gx0, gy0 in groups:
-        rnoc = _reader_noc_of(gy0)
+        rnoc = _reader_noc_of(gy0, plan.grid_y)
         ctt = plan.core_token_tiles[g]
         ts = plan.t_start[g]
         num_blocks = math.ceil(ctt / bt)
@@ -651,16 +680,20 @@ def create_program_descriptor(
                 cc = plan.core_c_tiles[rank]
                 cs = plan.c_start[rank]
                 own = [0, 0]
+                share_on_reader = 0
                 if not w_mcast:
-                    w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0], [0, 0, 0, 0]
+                    w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0, 0], [0, 0, 0, 0]
                 else:
                     # Column share: row y of the column reads / splits / multicasts W tiles [own0, own1).
                     sizes, starts = _split(n * cc, active_rows)
                     own = [starts[y], starts[y] + sizes[y]]
                     events = sum(1 for sz in sizes if sz > 0) - (1 if sizes[y] > 0 else 0)
-                    w_rt = [W_ROLE_SPREAD] + own + [events]
+                    share_on_reader = int(W_SHARE_ON_READER)
+                    w_rt = [W_ROLE_SPREAD] + own + [events, share_on_reader]
                     w_mc_rt = list(w_mcast[rnoc].runtime_args(ttnn.CoreCoord(x, y)))
-                reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks]
+                reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks] + (
+                    [w_tensor.buffer_address(), share_on_reader] + own
+                )
                 mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
                 writer_rt[rnoc][x][y] = (
                     [
@@ -686,7 +719,9 @@ def create_program_descriptor(
 
     dm_kernels = []
     for rnoc in reader_nocs:
-        set_cores = ttnn.CoreRangeSet([r for (_, _, gy0), r in zip(groups, ranges) if _reader_noc_of(gy0) == rnoc])
+        set_cores = ttnn.CoreRangeSet(
+            [r for (_, _, gy0), r in zip(groups, ranges) if _reader_noc_of(gy0, plan.grid_y) == rnoc]
+        )
         dm_kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "mhc_pre_reader.cpp"),

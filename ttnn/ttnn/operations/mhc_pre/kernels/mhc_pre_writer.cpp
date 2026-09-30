@@ -45,8 +45,8 @@
 
 using namespace dataflow_kernel_lib;
 
-constexpr uint32_t MCAST_CT_BASE = 20;
-constexpr uint32_t MCAST_RT_BASE = 17;
+constexpr uint32_t MCAST_CT_BASE = 22;
+constexpr uint32_t MCAST_RT_BASE = 18;
 constexpr uint32_t W_ROLE_DRAM = 0;
 constexpr uint32_t W_ROLE_SPREAD = 1;
 
@@ -71,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t cb_w_own_ready = get_compile_time_arg_val(17);  // token: writer -> compute, share landed
     constexpr uint32_t cb_w_own_split = get_compile_time_arg_val(18);  // token: compute -> writer, share split
     constexpr bool w_presplit = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t cb_w_share_landed = get_compile_time_arg_val(20);  // token: reader -> writer, share landed
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto w_mc = McastArgs<mc.next_compile_time_args_offset(), mc.next_runtime_args_offset()>();
     constexpr auto y_args = TensorAccessorArgs<w_mc.next_compile_time_args_offset()>();
@@ -96,6 +97,7 @@ void kernel_main() {
     const uint32_t own_p0 = get_arg_val<uint32_t>(14);  // W_ROLE_SPREAD: this core's share [own_p0, own_p1)
     const uint32_t own_p1 = get_arg_val<uint32_t>(15);
     const uint32_t w_events = get_arg_val<uint32_t>(16);  // shares multicast to this core by the other rows
+    const bool w_share_on_reader = get_arg_val<uint32_t>(17) != 0;  // the reader reads [own_p0, own_p1)
 
     using mhc_layout::rc_index;
     using mhc_layout::slot_index;
@@ -154,8 +156,13 @@ void kernel_main() {
     cb_reserve_back(cb_weight, core_k_tiles);
     const uint32_t w_base = get_write_ptr(cb_weight);
     if (w_role == W_ROLE_SPREAD) {
-        read_w_tiles(w_base, own_p0, own_p1);
-        noc_async_read_barrier();
+        if (w_share_on_reader) {  // the reader read this core's share (on its NoC, ahead of its X burst)
+            cb_wait_front(cb_w_share_landed, 1);
+            cb_pop_front(cb_w_share_landed, 1);
+        } else {
+            read_w_tiles(w_base, own_p0, own_p1);
+            noc_async_read_barrier();
+        }
         if constexpr (w_presplit) {
             cb_reserve_back(cb_w_own_ready, 1);
             cb_push_back(cb_w_own_ready, 1);

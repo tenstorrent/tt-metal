@@ -47,3 +47,33 @@ def test_mhc_pre_block_knobs(device, monkeypatch, x_shape, bt_cap, depth):
     assert plan.x_block_depth == depth
     y, post, comb = mhc_pre(tx, tw, tb, scale=scale)
     _check(y, post, comb, x, w, b, scale, ttnn.float32)
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        dict(READER_NOC_FLIP_ROWS=0),  # every reader on READER_NOC (no flipped rows)
+        dict(W_SHARE_ON_READER=False),  # the writer reads its W column share (Refinement 4 path)
+        dict(READER_NOC_FLIP_ROWS=0, W_SHARE_ON_READER=False),
+    ],
+    ids=["noflip", "wwriter", "noflip_wwriter"],
+)
+@pytest.mark.parametrize(
+    "x_dtype, w_dtype",
+    [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)],
+    ids=["xf32_wbf16", "xbf16_wf32"],
+)
+def test_mhc_pre_noc_placement_knobs(device, monkeypatch, knobs, x_dtype, w_dtype):
+    """Non-default NoC-placement / W-share branches (Refinement 5). They shift when W lands relative to X, which
+    exposed a missing resident-W wait on the fp32-X / bf16-W path; two seeds alternate so stale L1 from the
+    previous call cannot mask a race."""
+    for name, value in knobs.items():
+        monkeypatch.setattr(pd, name, value)
+    x_shape = (1, 1, 640, 4 * 1792)
+    for seed in (7, 8):
+        x, w, b, scale = make_inputs(x_shape, seed=seed)
+        if w_dtype == ttnn.bfloat16:
+            w = w.to(torch.bfloat16).to(torch.float32)  # the reference sees the W the device holds
+        tx, tw, tb = to_dev(x, device, x_dtype), to_dev(w, device, w_dtype), to_dev(b, device, ttnn.float32)
+        y, post, comb = mhc_pre(tx, tw, tb, scale=scale)
+        _check(y, post, comb, x, w, b, scale, x_dtype)

@@ -21,6 +21,7 @@ _KEY = "DEVICE KERNEL DURATION [ns]"
 _DTYPES = {"xbf16": ttnn.bfloat16, "xf32": ttnn.float32}
 _SEL_DT = os.environ.get("MHC_PRE_PERF_DTYPES", "xbf16,xf32").split(",")
 _SEL_SH = os.environ.get("MHC_PRE_PERF_SHAPES")
+_REPEAT = int(os.environ.get("MHC_PRE_PERF_REPEAT", 1))  # calls per setting (the median is printed too)
 _SHAPES = [s for s in SHAPES if _SEL_SH is None or f"{s[-2]}x{s[-1] // 4}" in _SEL_SH.split(",")]
 
 
@@ -53,17 +54,20 @@ def test_mhc_pre_perf_inproc(device, monkeypatch):
                     tw = ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
                     tb = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
                     _read_ns(device)  # drain anything earlier
-                    y, post, comb = mhc_pre(
-                        tx,
-                        tw,
-                        tb,
-                        scale=(1.0, 1.0, 1.0),
-                        sinkhorn_iters=int(os.environ.get("MHC_PRE_SINKHORN_ITERS", 20)),
-                    )
-                    ttnn.synchronize_device(device)
-                    ns = _read_ns(device)
+                    ns = []
+                    for _ in range(_REPEAT):
+                        y, post, comb = mhc_pre(
+                            tx,
+                            tw,
+                            tb,
+                            scale=(1.0, 1.0, 1.0),
+                            sinkhorn_iters=int(os.environ.get("MHC_PRE_SINKHORN_ITERS", 20)),
+                        )
+                        ttnn.synchronize_device(device)
+                        ns += _read_ns(device)
                     for t in (y, post, comb):
                         assert torch.isfinite(ttnn.to_torch(t)).all()
                 rows.append((f"{x_shape[-2]}x{x_shape[-1] // 4}", dt_name, knob, ns))
     for r in rows:
-        print("PERF", *r[:3], " ".join(f"{v / 1000:.1f}us" for v in r[3]))
+        med = sorted(r[3])[len(r[3]) // 2] / 1000 if r[3] else float("nan")
+        print("PERF", *r[:3], f"median {med:.1f}us |", " ".join(f"{v / 1000:.1f}" for v in r[3]))
