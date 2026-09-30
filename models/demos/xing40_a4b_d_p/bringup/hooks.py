@@ -10,8 +10,18 @@ See models/demos/common/bringup/reference/interface.py and testing/harness.py fo
 """
 
 
+import torch
+
+
 def reference(spec, layers=None, dtype=None):
-    raise NotImplementedError("reference step: write models/demos/xing40_a4b_d_p/reference/ and return it here")
+    """The standalone chunked CPU reference (reference/xing_ref.py): mHC 4-stream residual, dense causal MLA with a
+    latent cache, DeepSeek-style MoE. All requested layers stay resident (40 layers: 122 GB in fp32). The HF oracle
+    is the stock loader (trust_remote_code); its [B, S, 4, H] layer output flattens to the reference's [S * 4, H]
+    block output, so check_hf needs no hf_model / hf_layers hook."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.xing40_a4b_d_p.reference.xing_ref import XingReference
+
+    return XingReference(hf_path(spec), layers=layers, dtype=dtype or torch.float32)
 
 
 def device_component(mesh, spec, layer, step):
