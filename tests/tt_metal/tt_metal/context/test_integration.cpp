@@ -332,14 +332,14 @@ void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
     }
 
     // Create mock mesh device with 1 chip on the silicon arch
-    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1).value()});
+    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1)});
     auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
     auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
     auto mock_mesh_device_1 = mock_env_1.create_mesh_device(mock_mesh_device_config_1);
     log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
 
     // Create mock mesh device with 2 chips on the silicon arch
-    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2).value()});
+    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2)});
     auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
     auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
     auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
@@ -378,7 +378,7 @@ void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
     }
 
     // Create mock mesh device with 1 chip on the silicon arch
-    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1).value()});
+    MetalEnv mock_env_1({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 1)});
     auto mock_mesh_shape_1 = mock_env_1.get_system_mesh().shape();
     auto mock_mesh_device_config_1 = distributed::MeshDeviceConfig(mock_mesh_shape_1);
     std::shared_ptr<distributed::MeshDevice> mock_mesh_device_1 =
@@ -386,7 +386,7 @@ void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
     log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_1->shape().dims());
 
     // Create mock mesh device with 2 chips on the silicon arch
-    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2).value()});
+    MetalEnv mock_env_2({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(silicon_arch, 2)});
     auto mock_mesh_shape_2 = mock_env_2.get_system_mesh().shape();
     auto mock_mesh_device_config_2 = distributed::MeshDeviceConfig(mock_mesh_shape_2);
     auto mock_mesh_device_2 = mock_env_2.create_mesh_device(mock_mesh_device_config_2);
@@ -476,7 +476,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
     ContextId context_id;
     {
         MetalEnv mock_env_bh_1(
-            {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
+            {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
 
         auto mesh_config_mock = distributed::MeshDeviceConfig(distributed::MeshShape(1));
         auto mock_device = mock_env_bh_1.create_mesh_device(mesh_config_mock);
@@ -527,8 +527,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
 // SubDevice construction must not reach any MetalContext; it is validated against the device it is applied to.
 TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
-    MetalEnv mock_env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
 
     const SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {1, 1}))});
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
@@ -551,8 +550,7 @@ TEST(MetalContextIntegrationTest, MockDeviceSubDevice) {
 
 // Quasar's HAL registers DISPATCH but leaves the lower DRAM slot as an unregistered placeholder.
 TEST(MetalContextIntegrationTest, MockQuasarSubDeviceRejectsPlaceholderCoreType) {
-    MetalEnv mock_env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::QUASAR, 1).value()});
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::QUASAR, 1)});
     auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
     const SubDevice tensix_sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
@@ -567,8 +565,7 @@ TEST(MetalContextIntegrationTest, MockQuasarSubDeviceRejectsPlaceholderCoreType)
 }
 
 TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
-    MetalEnv mock_env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()});
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
 
     const std::array<ChipId, 2> device_ids{0, 1};
     auto meshes = mock_env.create_unit_meshes(device_ids, {.l1_small_size = 1 << 15});
@@ -589,8 +586,7 @@ TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
 
 // Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
 TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen) {
-    MetalEnv mock_env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()});
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
     // Querying the system mesh first makes the env own one context shared by every create_* call.
     mock_env.get_system_mesh();
 
@@ -600,8 +596,7 @@ TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen)
 
 // A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.
 TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
-    MetalEnv mock_env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
     auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
     const auto context_id = mesh_device->impl().get_context_id();
 
@@ -617,10 +612,8 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
 // A Metal 2.0 program built on one MeshDevice must not compile on a MeshDevice from a different
 // MetalEnv.
 TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
-    MetalEnv env_a(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
-    MetalEnv env_b(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()});
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
 
     auto mesh_a = env_a.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
     auto mesh_b = env_b.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
@@ -685,8 +678,7 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
     if (pid == 0) {
         close(pipe_fd[1]);
 
-        MetalEnv mock_env(
-            {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()});
+        MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
 
         if (!MetalEnvAccessor(mock_env).impl().get_rtoptions().get_mock_enabled()) {
             _exit(1);
@@ -807,8 +799,7 @@ TEST(MetalContextIntegrationTest, ForkWithDisjointDevices) {
 }
 
 TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
-    MetalEnv env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8).value()});
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8)});
     auto mesh_shape = env.get_system_mesh().shape();
     auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
     auto mesh_device = env.create_mesh_device(mesh_device_config);
@@ -829,7 +820,7 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
 
 TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
     MetalEnv env({
-        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2).value(),
+        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2),
         .fabric =
             {
                 .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
@@ -846,8 +837,7 @@ TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
 }
 
 TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
-    MetalEnv env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2).value()});
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
     auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(device, nullptr);
 
