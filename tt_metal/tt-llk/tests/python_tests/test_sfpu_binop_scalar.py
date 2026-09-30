@@ -47,6 +47,9 @@ def _bits(value: float) -> int:
 # one kernel parameter. Presubmit drives the ops at a single representative scalar and the
 # remaining values run nightly.
 _PRESUBMIT_SCALAR = 2.0
+
+#: The approximation mode this kernel compiles, and so the one its contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
 _NIGHTLY_SCALARS = tuple(s for s in _SCALARS if s != _PRESUBMIT_SCALAR)
 
@@ -109,7 +112,7 @@ def _run_sfpu_binop_scalar(
         templates=[
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -145,9 +148,9 @@ def _run_sfpu_binop_scalar(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
-        # Fixed: this kernel compiles APPROX_MODE(ApproximationMode.No), and an unset
-        # query dimension would not match a row keyed on it.
-        approx_mode=ApproximationMode.No,
+        # The mode the kernel compiled: an unset query dimension would not match a row
+        # keyed on it.
+        approx_mode=_APPROX_MODE,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
