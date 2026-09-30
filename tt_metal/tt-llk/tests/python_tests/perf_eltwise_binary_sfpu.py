@@ -1096,6 +1096,8 @@ _PAIRED_GENERATED = {
     "hardsigmoid_bw": "backward_complete",
     "hardswish_bw": "backward_complete",
     "hardtanh_bw": "backward_where_factor",
+    "log_sigmoid_bw": "backward_complete",
+    "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
 }
 

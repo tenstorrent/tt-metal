@@ -952,6 +952,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_tile_init();";
             case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "hardsigmoid_bw_tt_poly_bf16_tile_init();";
             case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "hardswish_bw_tt_poly_bf16_tile_init();";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "log_sigmoid_bw_tt_poly_bf16_tile_init();";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "softplus_bw_tt_poly_bf16_tile_init();";
             default: return nullptr;
         }
     };
@@ -1271,6 +1273,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_gradient";
             case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "hardsigmoid_bw_tt_poly_bf16_gradient";
             case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "hardswish_bw_tt_poly_bf16_gradient";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "log_sigmoid_bw_tt_poly_bf16_gradient";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "softplus_bw_tt_poly_bf16_gradient";
             default: return nullptr;
         }
     };
@@ -1331,6 +1335,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     break;
                 case unary::UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW:
                     compute_kernel_defines["TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE"] = "1";
+                    break;
+                case unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW:
+                    compute_kernel_defines["TT_POLY_BACKWARD_LOG_SIGMOID_BW_INCLUDE"] = "1";
+                    break;
+                case unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW:
+                    compute_kernel_defines["TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE"] = "1";
                     break;
                 default: break;
             }
