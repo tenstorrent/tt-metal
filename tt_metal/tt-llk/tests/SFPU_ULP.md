@@ -67,7 +67,10 @@ drive it, and the unary functional driver takes only the tolerance arm of a cont
 so those rows are a record of a sampled measurement until #57520 sweeps a strided
 `Float32` input. Binary and ternary rows are different: they were measured over the
 binary and ternary drivers' own sweeps, and those drivers gate on the whole contract,
-`Float32` included.
+`Float32` included. So do the unary signbit, isinf/isnan and threshold sweeps, whose
+hand-built stimuli are what the predicates' rows were measured on (`MEASURED_ON_SWEEP`
+in `test_sfpu_accuracy_budget.py`); those ops have no registered domain, so the
+exhaustive sweep never drives them.
 
 On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`) packed to `Float16`
 needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only: asked for
