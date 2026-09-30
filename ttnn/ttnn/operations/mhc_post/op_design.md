@@ -36,7 +36,7 @@ Public entry points (exact): `mhc_post(input_tensor, residual, post, comb, *, co
 
 - `INPUT_TAGGERS = {"alignment": tag_alignment}`; `tag_alignment(inputs, axes)` receives `(F_shape, X_shape, post_shape, comb_shape)` and returns `"tile_aligned"` iff `F_shape[-2] % 32 == 0`, else `"h_non_aligned"`.
 - `EXCLUSIONS = []` in Phase 0.
-- `validate()` is the entry point's first line: build the axes dict (config resolved through `default_compute_kernel_config()` when None), apply the tagger, raise `UnsupportedAxisValue` per axis outside SUPPORTED (this refuses `fp32_dest_acc_en=False`), then `ExcludedCell` per EXCLUSIONS. It does NOT check INVALID.
+- `validate()` is the entry point's first line: build the axes dict (config resolved through `default_compute_kernel_config()` when None), apply the tagger, raise `UnsupportedAxisValue` per axis outside SUPPORTED, with the axis name in the message (this refuses `fp32_dest_acc_en=False`; the acceptance test matches on "fp32_dest_acc_en"), then `ExcludedCell` per EXCLUSIONS. It does NOT check INVALID.
 - Shape-contract checks (after the registry gate) raise `ValueError`: rank 2–4 for all four; leading dims (`shape[:-1]`) identical across F, X, post, comb; `C % 32 == 0`; `X.shape[-1] == n*C`; `comb.shape[-1] == n*n`; `1 <= n <= 5` (mechanism cap, below); post / comb float32 TILE; all four DRAM interleaved, TILE.
 - Structural impossibilities (candidate INVALID entries): none.
 
