@@ -217,3 +217,26 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: pcc_router_L02 0.999496; vs cpu overlap 0.99939, matched 0.99756, rel 1.2e-4; vs golden overlap 0.99841,
   rel 0.0018; layer39 / mixed overlap 0.99963 / 0.99976.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_router.py`
+
+## C.moe.experts implement (run1, attempt 1)
+- New `tt/experts.py:TtExperts` + `build_experts(mesh, loader, cfg, layer, max_chunk)`, adapted from
+  `hy4_preview_d_p/tt/experts.py:TtHy4Experts`: masked_bincount -> `ttnn.bringup.offset_cumsum` (axis 0) ->
+  `ttnn.bringup.dispatch` (dispatch_group_size 4, cluster_axis 0, Topology.Linear on the FABRIC_2D mesh) ->
+  `ttnn.bringup.unified_routed_expert_moe` (8 local experts, `RoutedExpertActivation.Silu`, high_precision, HiFi4 +
+  fp32 dest, bfp8 weights, ROW_MAJOR bf16 x) -> `ttnn.bringup.combine` (axis 0, init_zeros) -> post_combine_reduce
+  (dispatch table masks the other column's experts) -> typecast fp32 -> `reduce_scatter(dim 3, cluster_axis 1)` ->
+  [1, 1, S/4, 1792] fp32 column split. Column c = group c = experts 32c..32c+31, chip (r, c) holds 32c + 8r .. +7.
+- The forks needed no change for a dispatch group of 4 chips (only groups of 1 and 2 were used before).
+- Capacity factor 4 (= top-k); per-expert cap and dispatch/combine sizes from `compute_constants`; max_seq_len =
+  `hooks._max_chunk` (8192, the s16384 rung). Dispatch / combine modules are cached per (rows per chip, mesh).
+- Weights: `LazyExpertWeights` reads gate / up / down one expert at a time (bf16 in checkpoint), bfp8 tensorbin cache
+  under `generated/xing40_a4b_d_p/tt_cache/experts` (first run builds it).
+- Gotcha: post_combine_reduce already returns TILE, so `ttnn.to_layout(red, TILE)` shares its buffer; freeing `red`
+  broke the next typecast (known issue proposed).
+- hooks: `_EXPERTS_STEPS`, `_experts_host_fn` (dense routing -> host topk -> idx uint16 / wts fp32 row-split, like the
+  router's outputs; column-split read-back), `DEVICE_STEPS["moe"] = {router, experts}`.
+- Gate: pcc_experts_L02 0.999960; vs cpu rel 0.0086 (limit 0.0137), worst row 0.0155, ratio [0.9954, 1.0052]; vs golden
+  0.0090; layer39 0.0132 / mixed 0.0128 / small 0.0082 / big 0.0087 (limit 0.03). `XING_EXPERTS_MODE=loop`: pcc
+  0.999962, vs cpu rel 0.0084, same accuracy.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py`
+  (`XING_EXPERTS_MODE=loop` for the per-expert path).
