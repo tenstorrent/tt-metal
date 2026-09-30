@@ -48,7 +48,7 @@ from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
-from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
+from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -60,7 +60,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
-from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
+from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -77,11 +77,13 @@ _PACKERS = {
     DataFormat.Float32: pack_fp32,
     DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
     DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
+    DataFormat.Bfp2_b: lambda tensor: bytes(pack_bfp2_b(tensor)),
 }
 
 _BFP_UNPACKERS = {
     DataFormat.Bfp8_b: unpack_bfp8_b,
     DataFormat.Bfp4_b: unpack_bfp4_b,
+    DataFormat.Bfp2_b: unpack_bfp2_b,
 }
 
 
@@ -342,3 +344,21 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
     )
+
+
+# Bfp2_b in1 on the plain path: the compressed sibling computes Bfp2_b tiles through its own per-format tile descriptor,
+# the plain path configures the unpacker once from the operand format. The 2-bit tile is 320 bytes (256 of mantissas,
+# 64 of exponents); the golden folds the same bytes back through unpack_bfp2_b.
+BFP2_CASES = [
+    pytest.param(8, 4, 4, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M8-k4-ct4-bfp2"),
+    pytest.param(8, 4, 8, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M8-k4-ct8-bfp2"),
+    pytest.param(8, 2, 1, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M8-k2-ct1-bfp2"),
+    pytest.param(1, 2, 2, InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b), id="M1-k2-ct2-bfp2"),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", BFP2_CASES)
+def test_custom_mm_bfp2_in1(formats, M, kt, ct):
+    """Bfp2_b weights on the plain (uncompressed) custom_mm path."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
