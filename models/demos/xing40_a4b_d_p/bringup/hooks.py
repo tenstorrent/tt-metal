@@ -26,7 +26,7 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual"},
+    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -35,6 +35,8 @@ _HC_STEPS = {"attn_hc", "ffn_hc"}
 _COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
 # Distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm): column-split [S, H] in -> column-split [S, H] out.
 _NORM_STEPS = {"attn_norm"}
+# ffn_norm: same norm, then all_gather over axis 1 -> row-split [S, H], replicated over axis 1.
+_GATHERED_NORM_STEPS = {"ffn_norm"}
 # q_a stem (tt/q_a.py:TtQa): column-split [S, H] in -> K-split q_a_proj -> all_reduce axis 1 -> q_a_layernorm ->
 # row-split q_resid [S, 768], replicated over axis 1.
 _QA_STEPS = {"q_a"}
@@ -104,6 +106,24 @@ def _norm_host_fn(mesh, module):
         xd = col_split_to_device(mesh, x)
         od = module(xd)
         out = col_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _gathered_norm_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, H] fp32 (harness boundary: column-split in, the row-split output
+    replicated over axis 1 read back from column 0)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = col_split_to_device(mesh, x)
+        od = module(xd)
+        out = row_split_to_host(mesh, od).float()
         ttnn.deallocate(xd)
         ttnn.deallocate(od)
         return out
@@ -218,6 +238,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.norm import build_norm
 
         return _norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, step))
+    if step in _GATHERED_NORM_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.norm import build_norm
+
+        return _gathered_norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, step))
     if step in _QA_STEPS:
         from models.demos.xing40_a4b_d_p.tt.q_a import build_q_a
 
