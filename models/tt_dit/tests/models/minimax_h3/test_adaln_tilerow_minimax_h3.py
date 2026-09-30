@@ -89,7 +89,7 @@ def test_packed_fl2va_layout(sp_factor):
 
 def test_too_many_mixed_tiles_raises():
     indices = torch.arange(4 * TILE) % 2  # every tile mixed
-    with pytest.raises(
+    with pytest.raises(  # allow-pytest.raises: the message is the knob's contract
         ValueError, match="MINIMAX_H3_ADALN_MIXED_TILES"
-    ):  # allow-pytest.raises: the message is the knob's contract
+    ):
         tilerow_remap(indices, num_rows=2, sp_factor=1, max_mixed_tiles=3)
