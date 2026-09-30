@@ -42,3 +42,9 @@ run is queued (job 640), so the driver read the stale dv145/run.log from 605 and
 New driver tmp/drive26c.sh 640 (log tmp/drive26c.log, ends DRIVE_DONE) waits for job 640, then runs dv145_c211, dv153,
 conv145. At 14:52 job 640 was 3rd in the queue behind 634/638/639 (each up to 600s).
 Next: same as above; when DRIVE_DONE, read the run.logs and build the table.
+Task t26 attempt 4 (2026-09-30 15:43): job 640 (dv145) was killed by the broker at 175s when chips left PCIe (box rebooted ~15:23).
+Before that it confirmed the fix: every model loaded from /var/tmp/t10-dit-cache-ltx25 (transformer load-cache 62s vs ~7.5 min convert, VAE/upsampler/audio 0-3s).
+Both caches survived the reboot on /var/tmp. New resumable driver tmp/drive26d.sh (log tmp/drive26d.log, ends DRIVE_DONE)
+skips labels whose run.log already shows " passed". dv145 = job 671 (queued behind 643/651/656).
+If the driver dies (reboot): rerun `nohup bash tmp/drive26d.sh >> tmp/drive26d.log 2>&1 &` in the t10 worktree.
+Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log (LTX_TIME_STAGES lines), mp4 in the same dir; still with ffmpeg -ss 3 -frames:v 1; build the table.
