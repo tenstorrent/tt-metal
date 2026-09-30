@@ -2942,6 +2942,387 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.3": {
+  "ab": {
+   "at": "2026-09-30T23:04:10",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/xing40_a4b_d_p/bringup/hooks.py",
+    "models/demos/xing40_a4b_d_p/tt/experts.py"
+   ],
+   "decided": "2026-09-30T23:27:12",
+   "decision": "reject",
+   "env": {
+    "XING_EXPERTS_FIDELITY": "hifi4"
+   },
+   "gate_on": {
+    "failing": [
+     "test_c_moe_experts: exit code 1",
+     "test_swap_moe_11_experts: exit code 1",
+     "test_swap_moe_14_ffn_residual: exit code 1",
+     "FAIL     device_ms_experts = 242.85 (need < 235)"
+    ],
+    "ok": false
+   },
+   "key": "26d4aecf63f2f31d",
+   "ladder": {
+    "last": {
+     "new": {
+      "final hidden PCC": 0.9983904010380418,
+      "logits PCC (tail)": 0.9987596435057785,
+      "min layer": "L26",
+      "min layer PCC": 0.9923011193653307,
+      "rc": 0,
+      "top1": 0.9742857217788696,
+      "top5": 1.0
+     },
+     "old": {
+      "final hidden PCC": 0.9985236609769742,
+      "logits PCC (tail)": 0.9988397761519138,
+      "min layer": "L26",
+      "min layer PCC": 0.9928128074786391,
+      "rc": 0,
+      "top1": 0.977142870426178,
+      "top5": 1.0
+     }
+    },
+    "s56320": {
+     "new": {
+      "final hidden PCC": 0.9983019113720182,
+      "logits PCC (tail)": 0.9989206230606832,
+      "min layer": "L26",
+      "min layer PCC": 0.9915380886751423,
+      "rc": 0,
+      "top1": 0.9685714244842529,
+      "top5": 1.0
+     },
+     "old": {
+      "final hidden PCC": 0.9984073433228765,
+      "logits PCC (tail)": 0.9987879508099647,
+      "min layer": "L26",
+      "min layer PCC": 0.9920468959481173,
+      "rc": 0,
+      "top1": 0.9714285731315613,
+      "top5": 1.0
+     }
+    }
+   },
+   "note": "owner 23:30: -1.2% e2e for -0.3pt top1 and a -1.36% bias",
+   "on": {
+    "XING_EXPERTS_FIDELITY": "hifi2"
+   },
+   "profile": {
+    "new": {
+     "device_ms_experts": 242.85,
+     "device_ms_total": 1158.01,
+     "pcc_chunk_out": 0.9989733830166256,
+     "rc": 0
+    },
+    "old": {
+     "device_ms_experts": 256.62,
+     "device_ms_total": 1171.93,
+     "pcc_chunk_out": 0.999063832993988,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s56320"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md",
+   "tests": {
+    "test_c_moe_experts": {
+     "new": {
+      "checks": [
+       "FAIL pcc_experts_L02: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL auto_experts_L02_vs_cpu: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0136675 (rel 1.00000 > 0.01367; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0161675 (rel 1.00000 > 0.01617; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_layer39: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_mixed: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_small: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_big: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_vs_cpu: rel=0.0167674 row=0.0253368 ratio_min=0.977155 ratio_max=0.994691 bias=-0.0136182 rel_limit=0.0136675 (rel 0.01677 > 0.01367; row norm ratio [0.97716, 0.99469] outside 1 +- 0.0150; median row norm ratio off by -0.01362 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=0.0169449 row=0.0267309 ratio_min=0.975406 ratio_max=0.994536 bias=-0.0134388 rel_limit=0.0161675 (rel 0.01694 > 0.01617; row norm ratio [0.97541, 0.99454] outside 1 +- 0.0150; median row norm ratio off by -0.01344 (limit 0.0040))",
+       "FAIL auto_experts_L02_small: rel=0.0162137 row=0.0285502 ratio_min=0.973308 ratio_max=0.993443 bias=-0.0134467 rel_limit=0.03 (row norm ratio [0.97331, 0.99344] outside 1 +- 0.0225)"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_experts_L02: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL auto_experts_L02_vs_cpu: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0136675 (rel 1.00000 > 0.01367; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0161675 (rel 1.00000 > 0.01617; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_layer39: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_mixed: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_small: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_big: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)"
+      ],
+      "rc": 0
+     }
+    },
+    "test_swap_moe_11_experts": {
+     "new": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 0
+     }
+    },
+    "test_swap_moe_14_ffn_residual": {
+     "new": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 0
+     }
+    }
+   },
+   "why": "apply P.3 or not? A/B table at /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md; the gate with the change on would FAIL; then: python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject --spec /localdev/dnijemcevic/tt-metal/models/demos/xing40_a4b_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "66d7554101eee57c65eac0abf53763be7a5a1b4a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "5a78b481-ea56-4ff3-a2a7-00264ff8ee83"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "perf",
+    "seconds": 2787.2,
+    "session_id": "af1582b8-6015-4664-b72d-987d933ab847",
+    "t": "2026-09-30T22:11:12"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "e8b24f612750d71730fd0f1c55fc6cf2332cfe22",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "perf",
+    "seconds": 65.2,
+    "session_id": "8201873f-ecb4-4ec8-86ca-a5bc2d452dfa",
+    "t": "2026-09-30T22:17:14"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "66d7554101eee57c65eac0abf53763be7a5a1b4a",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 172.0,
+    "session_id": "5a78b481-ea56-4ff3-a2a7-00264ff8ee83",
+    "t": "2026-09-30T22:42:07"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "duration_s": 22.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T21:24:44"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T22:13:55"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T22:15:10"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T22:16:08"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T22:39:14"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T23:04:09"
+   },
+   {
+    "status": "REJECTED",
+    "t": "2026-09-30T23:27:12"
+   }
+  ],
+  "last_run": "2026-09-30T22:16:08",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.3.log",
+  "metrics": {
+   "auto_experts_L02_big_bias": -0.013473331928253174,
+   "auto_experts_L02_big_ratio_max": 0.9957666397094727,
+   "auto_experts_L02_big_ratio_min": 0.9781865477561951,
+   "auto_experts_L02_big_rel": 0.016627760604023933,
+   "auto_experts_L02_big_rel_limit": 0.03,
+   "auto_experts_L02_big_row": 0.029645221307873726,
+   "auto_experts_L02_layer39_bias": -0.013698995113372803,
+   "auto_experts_L02_layer39_ratio_max": 0.990509569644928,
+   "auto_experts_L02_layer39_ratio_min": 0.9825817346572876,
+   "auto_experts_L02_layer39_rel": 0.019893087446689606,
+   "auto_experts_L02_layer39_rel_limit": 0.03,
+   "auto_experts_L02_layer39_row": 0.022482289001345634,
+   "auto_experts_L02_mixed_bias": -0.013825178146362305,
+   "auto_experts_L02_mixed_ratio_max": 0.9936501383781433,
+   "auto_experts_L02_mixed_ratio_min": 0.9818549156188965,
+   "auto_experts_L02_mixed_rel": 0.01962699554860592,
+   "auto_experts_L02_mixed_rel_limit": 0.03,
+   "auto_experts_L02_mixed_row": 0.02328389696776867,
+   "auto_experts_L02_small_bias": -0.013446688652038574,
+   "auto_experts_L02_small_ratio_max": 0.9934426546096802,
+   "auto_experts_L02_small_ratio_min": 0.9733082056045532,
+   "auto_experts_L02_small_rel": 0.016213709488511086,
+   "auto_experts_L02_small_rel_limit": 0.03,
+   "auto_experts_L02_small_row": 0.028550153598189354,
+   "auto_experts_L02_vs_cpu_bias": -0.013618171215057373,
+   "auto_experts_L02_vs_cpu_ratio_max": 0.9946907758712769,
+   "auto_experts_L02_vs_cpu_ratio_min": 0.9771551489830017,
+   "auto_experts_L02_vs_cpu_rel": 0.016767436638474464,
+   "auto_experts_L02_vs_cpu_rel_limit": 0.013667529099620879,
+   "auto_experts_L02_vs_cpu_row": 0.025336764752864838,
+   "auto_experts_L02_vs_golden_bias": -0.013438820838928223,
+   "auto_experts_L02_vs_golden_ratio_max": 0.9945361018180847,
+   "auto_experts_L02_vs_golden_ratio_min": 0.9754064083099365,
+   "auto_experts_L02_vs_golden_rel": 0.01694491319358349,
+   "auto_experts_L02_vs_golden_rel_limit": 0.016167539753951132,
+   "auto_experts_L02_vs_golden_row": 0.026730896905064583,
+   "pcc_experts_L02": 0.9999500499735821
+  },
+  "rc": 1,
+  "reason": [
+   "rejected by the owner on the A/B report /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md; reverted 2 files (old path)"
+  ],
+  "role": "perf",
+  "started": "2026-09-30T22:15:45",
+  "status": "REJECTED",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 3.7,
