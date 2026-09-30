@@ -294,7 +294,13 @@ def _make_sequence_plan(
     # A strided example binds the existing shard directly; gaps are not a FIFO stream.
     if row_stride:
         input_policy = _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP
-    resident = bool(row_stride) or policy in ("no_wait", "wait_upfront")
+    # COL bulk packets are column-group-major; the row-major shard can only be read in place.
+    elif dim == "col" and policy == "bulk":
+        input_policy = _PLANNER.ReduceInputPolicy.WAIT_UPFRONT_NO_POP
+    resident = input_policy in (
+        _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
+        _PLANNER.ReduceInputPolicy.WAIT_UPFRONT_NO_POP,
+    )
     block = _PLANNER.ReduceBlockSpec(
         logical_h,
         logical_w,
