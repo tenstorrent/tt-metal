@@ -196,18 +196,36 @@ void check_credit_transport_args(
     }
 }
 
+// ERISC `risc_id`'s `name` argument must equal `expected`, the builder value the manifest records.
+void check_risc_named_arg(
+    const std::vector<NamedArgs>& named_ct_args_per_risc, size_t risc_id, const std::string& name, uint32_t expected) {
+    const uint32_t actual = get_named_arg(named_ct_args_per_risc.at(risc_id), name);
+    TT_FATAL(
+        actual == expected,
+        "Fabric manifest: ERISC{} {} is {}, but the builder has {}",
+        risc_id,
+        name,
+        actual,
+        expected);
+}
+
 // Every RISC's `name` argument must equal `expected`, the builder value the manifest records.
 void check_named_arg(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name, uint32_t expected) {
     for (size_t risc_id = 0; risc_id < named_ct_args_per_risc.size(); ++risc_id) {
-        const uint32_t actual = get_named_arg(named_ct_args_per_risc[risc_id], name);
-        TT_FATAL(
-            actual == expected,
-            "Fabric manifest: ERISC{} {} is {}, but the builder has {}",
-            risc_id,
-            name,
-            actual,
-            expected);
+        check_risc_named_arg(named_ct_args_per_risc, risc_id, name, expected);
     }
+}
+
+// A value the builder decides only while emitting compile-time arguments, so it is read back from them. Every
+// RISC must receive the same value.
+uint32_t emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
+    const uint32_t value = get_named_arg(named_ct_args_per_risc.front(), name);
+    check_named_arg(named_ct_args_per_risc, name, value);
+    return value;
+}
+
+bool emitted_flag(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
+    return emitted_value(named_ct_args_per_risc, name) != 0;
 }
 
 manifest::L1Region l1_region(
@@ -443,14 +461,6 @@ manifest::SenderChannel collect_sender_channel(const ChannelCollectionContext& c
     return sender;
 }
 
-// A flag the builder decides only while emitting compile-time arguments, so it is read back from them. Every
-// RISC must receive the same value.
-bool emitted_flag(const ChannelCollectionContext& ctx, const std::string& name) {
-    const uint32_t value = get_named_arg(ctx.named_ct_args_per_risc.front(), name);
-    check_named_arg(ctx.named_ct_args_per_risc, name, value);
-    return value != 0;
-}
-
 // A builder config value that the kernel also receives under `name`, which must match it on every RISC.
 uint32_t emitted_config(const ChannelCollectionContext& ctx, const std::string& name, size_t value) {
     check_named_arg(ctx.named_ct_args_per_risc, name, static_cast<uint32_t>(value));
@@ -469,10 +479,12 @@ manifest::ReceiverChannel collect_receiver_channel(
             return erisc_builder.is_receiver_channel_serviced(risc_id, c);
         });
 
-    receiver.forwarding_disabled = emitted_flag(ctx, fmt::format("DISABLE_RX_CH{}_FORWARDING", c));
+    receiver.forwarding_disabled =
+        emitted_flag(ctx.named_ct_args_per_risc, fmt::format("DISABLE_RX_CH{}_FORWARDING", c));
     // Only 2D kernels read the ingress flags; 1D kernels treat every channel as not ingress.
     receiver.intermesh_ingress =
-        ctx.is_2d_routing && emitted_flag(ctx, fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", c));
+        ctx.is_2d_routing &&
+        emitted_flag(ctx.named_ct_args_per_risc, fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", c));
 
     receiver.forward_noc = {
         .noc = static_cast<tt::tt_metal::NOC>(emitted_config(
@@ -656,6 +668,125 @@ manifest::Channels collect_channels(
     return channels;
 }
 
+// A lifecycle word the kernel receives at the `name` argument.
+manifest::L1Region lifecycle_word(
+    const std::vector<NamedArgs>& named_ct_args_per_risc,
+    const std::string& name,
+    size_t address,
+    std::string schema,
+    const std::vector<size_t>& addresses_to_clear) {
+    check_named_arg(named_ct_args_per_risc, name, static_cast<uint32_t>(address));
+    return l1_region(address, FabricEriscDatamoverConfig::field_size, std::move(schema), addresses_to_clear);
+}
+
+// A scratch stream register the kernel receives at the `name` argument and reads as REMOTE_SRC.
+manifest::StreamRef scratch_stream(
+    const std::vector<NamedArgs>& named_ct_args_per_risc,
+    const std::string& name,
+    uint32_t stream_id,
+    std::string schema) {
+    check_named_arg(named_ct_args_per_risc, name, stream_id);
+    return {.stream_id = stream_id, .reg = manifest::StreamRegister::REMOTE_SRC, .schema = std::move(schema)};
+}
+
+manifest::RouterKernelParams collect_kernel_params(
+    const FabricEriscDatamoverBuilder& erisc_builder, const std::vector<NamedArgs>& named_ct_args_per_risc) {
+    const auto mode = erisc_builder.firmware_context_switch_type;
+    const auto interval = static_cast<uint32_t>(erisc_builder.firmware_context_switch_interval);
+    check_named_arg(
+        named_ct_args_per_risc,
+        "WAIT_FOR_HOST_SIGNAL",
+        static_cast<uint32_t>(erisc_builder.wait_for_host_signal));
+    check_named_arg(
+        named_ct_args_per_risc,
+        "IDLE_CONTEXT_SWITCHING",
+        static_cast<uint32_t>(mode == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE));
+    check_named_arg(named_ct_args_per_risc, "SWITCH_INTERVAL", interval);
+    return {
+        .wait_for_host_signal = erisc_builder.wait_for_host_signal,
+        .context_switch = {.mode = mode, .interval = interval},
+        .handshake_context_switch_timeout =
+            emitted_value(named_ct_args_per_risc, "DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT"),
+        .txq_spin_wait =
+            {
+                .send_data = emitted_flag(named_ct_args_per_risc, "ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA"),
+                .completion_ack =
+                    emitted_flag(named_ct_args_per_risc, "ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK"),
+            },
+        .txq_accept_ahead = emitted_value(named_ct_args_per_risc, "DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD"),
+        .risc_cpu_data_cache = emitted_flag(named_ct_args_per_risc, "ENABLE_RISC_CPU_DATA_CACHE"),
+    };
+}
+
+manifest::Lifecycle collect_lifecycle(
+    const FabricEriscDatamoverBuilder& erisc_builder, const std::vector<NamedArgs>& named_ct_args_per_risc) {
+    const auto& config = erisc_builder.config;
+    const auto& args = named_ct_args_per_risc;
+    const auto addresses_to_clear = builder_context().get_fabric_router_addresses_to_clear();
+
+    manifest::Lifecycle lifecycle{
+        .edm_status = lifecycle_word(
+            args, "EDM_STATUS_PTR_ADDR", config.edm_status_address, "enum:EDMStatus", addresses_to_clear),
+        .termination_signal = lifecycle_word(
+            args,
+            "TERMINATION_SIGNAL_ADDR",
+            config.termination_signal_address,
+            "enum:TerminationSignal",
+            addresses_to_clear),
+        .local_sync =
+            lifecycle_word(args, "EDM_LOCAL_SYNC_PTR_ADDR", config.edm_local_sync_address, "u32", addresses_to_clear),
+        .local_tensix_sync = lifecycle_word(
+            args, "EDM_LOCAL_TENSIX_SYNC_PTR_ADDR", config.edm_local_tensix_sync_address, "u32", addresses_to_clear),
+    };
+
+    // TODO: size it as handshake_info_t (32 bytes) once #58355 reserves that much; the kernel's struct runs past
+    // this 16-byte reservation today.
+    check_named_arg(args, "HANDSHAKE_ADDR", static_cast<uint32_t>(erisc_builder.get_handshake_address()));
+    lifecycle.handshake = {
+        .region = l1_region(
+            erisc_builder.get_handshake_address(),
+            FabricEriscDatamoverConfig::eth_channel_sync_size,
+            "struct:handshake_info_t",
+            addresses_to_clear),
+        .role = emitted_flag(args, "IS_HANDSHAKE_SENDER") ? manifest::HandshakeRole::SENDER
+                                                          : manifest::HandshakeRole::RECEIVER,
+    };
+
+    // The kernel only syncs its ERISCs over these registers when it runs two.
+    if (args.size() > 1) {
+        lifecycle.erisc_sync = scratch_stream(
+            args,
+            "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID",
+            StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id,
+            "u32");
+        lifecycle.retrain_sync = scratch_stream(
+            args,
+            "ETH_RETRAIN_LINK_SYNC_STREAM_ID",
+            StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id,
+            "enum:CoordinatedEriscContextSwitchState");
+    }
+
+    for (size_t risc_id = 0; risc_id < args.size(); ++risc_id) {
+        const auto& risc = config.risc_configs.at(risc_id);
+        const manifest::EriscFeatures features{
+            .handshake_enabled = risc.enable_handshake(),
+            .context_switch_enabled = risc.enable_context_switch(),
+            .interrupts_enabled = risc.enable_interrupts(),
+            .teardown_check_iterations =
+                static_cast<uint32_t>(risc.iterations_between_ctx_switch_and_teardown_checks()),
+        };
+        check_risc_named_arg(args, risc_id, "ENABLE_ETHERNET_HANDSHAKE", features.handshake_enabled);
+        check_risc_named_arg(args, risc_id, "ENABLE_CONTEXT_SWITCH", features.context_switch_enabled);
+        check_risc_named_arg(args, risc_id, "ENABLE_INTERRUPTS", features.interrupts_enabled);
+        check_risc_named_arg(
+            args, risc_id, "ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS", features.teardown_check_iterations);
+        lifecycle.erisc_features.push_back(features);
+    }
+
+    lifecycle.kernel_params = collect_kernel_params(erisc_builder, args);
+    return lifecycle;
+}
+
 }  // namespace
 
 // Build a manifest Router using information from fabric builder.
@@ -680,6 +811,7 @@ manifest::Router collect_manifest_router(
         .shape = std::move(shape),
         .credit_counters = collect_credit_counters(erisc_builder, named_ct_args_per_risc),
         .channels = std::move(channels),
+        .lifecycle = collect_lifecycle(erisc_builder, named_ct_args_per_risc),
     };
 }
 
