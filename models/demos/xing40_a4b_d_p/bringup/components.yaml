@@ -1,0 +1,239 @@
+# Xing4.0-29B-A4B (40 layers) on the 4x2 mesh (FABRIC_2D): every block step mapped to TTNN. Reasoning in plan.md.
+# Layout: SP=4 over mesh rows (axis 0: chip (r, c) holds chunk rows [r S/4, (r+1) S/4), 1280 of 5120) x TP=2 over mesh
+# columns (axis 1: hidden columns [1792c, 1792(c+1)) of every stream, heads 16c .. 16c + 15, intermediates), the
+# Kimi K2.7 layout of deepseek_v3_d_p (ttMLA dense chunked path: ring_mla over axis 0; TtMoe 2D dispatch over axis 0,
+# one dispatch group per column). The 4 mHC streams stay [S/4, 4 x 1792] fp32 per chip (split by row and column).
+# Xing modules go in models/demos/xing40_a4b_d_p/tt: they copy or wrap deepseek_v3_d_p / hy4_preview_d_p /
+# glm53_flash_d_p code (read-only here); op changes go through ttnn/ttnn/bringup forks. Every matmul HiFi4 + fp32 acc
+# (owner rule), ring_mla included; no bfp4. No step is CPU or OPGEN: each has a TTNN op or composition.
+# The moe entries reuse the dense ones (YAML merge) where the step is the same code on a different layer.
+components:
+- &attn_hc
+  block_type: dense
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: 'ttnn.matmul (streams [S/4, 4 x 1792] fp32 x this column''s fn^T slice [7168, 24] fp32, HiFi4 + fp32 acc) + ttnn.multiply / ttnn.sum
+    (partial sum of squares) -> ttnn.concat into one [S/4, 32] fp32 tile row -> ttnn.all_reduce(cluster_axis=1) -> ttnn.rsqrt(sum / 14336 +
+    1e-6) x mixes -> x scale + base -> pre = ttnn.sigmoid, post = 2 ttnn.sigmoid, comb: ttnn.clamp [-30, 30] -> minus row max -> ttnn.exp ->
+    20 x (row / (sum + 1e-6), column / (sum + 1e-6)) via ttnn.bringup.mhc_split_sinkhorn (fork of ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn
+    with an opt-in Xing mode) or the same loop composed from ttnn.sum / ttnn.add / ttnn.divide on [S/4, 4, 4]'
+  reuse: models/demos/hy4_preview_d_p/tt/ihc.py:TtHcGates (column-split partial mixes + one [S/2, 32] all_reduce), models/demos/glm53_flash_d_p/tt/mhc.py:TtHcWeights
+    (DeepSeek _project / build_consts / mhc_split_sinkhorn), models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py
+  searched: &hc_searched
+  - 'repo_map Proposed: iHC / hyper-connection gates on a 2D mesh (hy4 tt/ihc.py:TtHcGates), mHC residual as one matmul (glm53 tt/residual.py), xing_ref.py:hc_weights'
+  - 'known_issues: mhc_split_sinkhorn is not Xing4.0''s Sinkhorn (logit cap 80 without lower clamp, row softmax + eps first, iters - 1 pairs, pre + eps);
+    whole-output PCC hides mHC coefficient bugs (check per part + column sums)'
+  - 'grep mhc_split_sinkhorn: ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn (glm53 tt/mhc.py, deepseek_v3_d_p tt/mhc/tt_mhc.py
+    call it); ttnn/ttnn/bringup/INDEX.md has no fork of it yet'
+  notes: '[S, 24] fp32 = pre 4 | post 4 | comb 16 (row-major comb[i, j]). The fn columns are permuted on the host to the per-chip stream-column order
+    (stream n, hidden 1792c ..) and split by mesh column (plan.yaml shard_cols). RMS commutes past the linear (per-row scalar), so the only collective
+    is the [S/4, 32] fp32 all_reduce over axis 1 (160 KB at 1280 rows); the Sinkhorn then runs redundantly on both chips of a row (tiny). The
+    stock fused Sinkhorn differs from Xing''s (known issue), so the implement task forks it (ttnn.bringup.mhc_split_sinkhorn, Xing mode behind an
+    option: clamp [-30, 30], exp(x - rowmax), iters x (row, col), no pre eps) or composes the loop; the fork is preferred (20 iterations x 2 hc x 40
+    layers composed is ~10k small ops per chunk). Test per part (pre / post / comb rel L2 and max abs, comb column sums == 1).'
+- &attn_collapse
+  block_type: dense
+  step: attn_collapse
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 stream column blocks, 1792 wide) + ttnn.slice (4 pre columns of attn_hc) -> ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/hy4_preview_d_p/tt/ihc.py:TtHcPre, models/demos/glm53_flash_d_p/tt/collapse.py:TtHcCollapse
+  searched: *hc_searched
+  notes: attn_in [S/4, 1792] per chip = sum_n pre_n x stream_n, fp32 accumulate; the column split carries through (no collective).
+- &attn_norm
+  block_type: dense
+  step: attn_norm
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm_pre_all_gather -> all_gather of the [S/4, 32] stats over axis 1 -> ttnn.rms_norm_post_all_gather (weight split by column, eps 1e-6,
+    HiFi4 + fp32 acc)
+  reuse: models/demos/hy4_preview_d_p/tt/norm.py:TtDistributedRmsNorm (from models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py)
+  searched: &norm_searched
+  - 'repo_map Proposed: Distributed RMSNorm on a column-split 2D-mesh input (hy4 tt/norm.py:TtDistributedRmsNorm)'
+  - 'ttnn/ttnn/bringup/INDEX.md: rms_norm_ttnn (ttnn.bringup.rms_norm) needs the whole hidden on the chip'
+  notes: 'input_layernorm, w * rms(x), eps 1e-6. Output stays column-split [S/4, 1792] bf16: q_a_proj and kv_a_proj_with_mqa take a K-split input
+    (Kimi / ttMLA layout). Alternative if the distributed norm misbehaves: all_gather attn_in over axis 1 and ttnn.bringup.rms_norm (TtGatheredRmsNorm).'
+- &q_a
+  block_type: dense
+  step: q_a
+  tag: COMPOSED
+  ttnn: ttnn.linear (K-split q_a_proj^T [1792, 768] per chip, bf16 weight, fp32 out, HiFi4 + fp32 acc) -> ttnn.all_reduce(cluster_axis=1) (or
+    reduce_scatter_minimal_async + high_bw_all_gather) -> ttnn.bringup.rms_norm (q_a_layernorm, eps 1e-6, fp32 in -> bf16)
+  reuse: models/demos/hy4_preview_d_p/tt/q_a.py:TtQa, models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA._q_a_latent
+  searched:
+  - 'repo_map Proposed: Latent projection + norm on a K-split 2D-mesh input (hy4 tt/q_a.py:TtQa)'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py: _q_a_latent (the q_a stem)'
+  notes: q_resid [S/4, 768] per chip, replicated over the 2 columns of a row. all_reduce payload [1280, 768] fp32 = 3.9 MB at chunk 5120.
+- &attention
+  block_type: dense
+  step: attention
+  tag: COMPOSED
+  ttnn: 'kv: ttnn.linear (K-split kv_a_proj_with_mqa^T [1792, 576], fp32 out) -> ttnn.all_reduce(cluster_axis=1) -> ttnn.bringup.rms_norm on the
+    512 latent (kv_a_layernorm, eps 1e-6) + ttnn.experimental.deepseek_prefill.rotary_embedding_indexed on k_rope 64 (block-cyclic YaRN cos / sin,
+    kv_actual_global = chunk start, cluster_axis 0) -> ttnn.concat [S/4, 576] -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (block-cyclic
+    latent cache, local offset start / 4). q: ttnn.linear (q_b_proj split by head, 16 heads) -> ttnn.experimental.nlp_create_q_heads_split (q_nope
+    128 | q_rope 64) -> rotary_embedding_indexed on q_rope -> ttnn.linear (q_nope x wkv_b1 [16, 128, 512], batched) -> ttnn.concat [16, S/4, 576].
+    attention: ttnn.transformer.ring_mla (cluster_axis 0, Linear topology on FABRIC_2D, head_dim_v 512, scale 192^-0.5 x mscale^2, logical_n =
+    start + chunk, HiFi4 + fp32 dest) -> ttnn.linear (x wkv_b2 [16, 512, 128]) -> ttnn.experimental.nlp_concat_heads [S/4, 2048] -> ttnn.linear (o_proj
+    row-parallel [2048, 3584]) -> ttnn.reduce_scatter (dim -1, cluster_axis 1) -> [S/4, 1792]'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA (_kv_stem, _q_stem, _update_kv_cache, _chunked_attn / _dense_chunked_attn, _o_proj_epilogue;
+    RotarySetup.get_rope_tensors_indexed in tt/mla/rope.py), models/demos/hy4_preview_d_p/tt/attention.py:TtHy4Attention (ttMLA's ops without its fixed
+    CCL buffers, _Geometry.load / read for the block-cyclic cache at the harness boundary)
+  searched:
+  - 'repo_map: Chunked causal attention (tt_transformers, ernie45 chunked SDPA); Proposed: Sparse MLA on a 2x2 mesh (deepseek_v3_d_p tt/mla/mla.py:ttMLA),
+    gated sparse MLA (hy4 tt/attention.py), dense MLA CPU reference (xing_ref.py)'
+  - 'deepseek_v3_d_p tt/mla/mla.py: the dense (non-DSA) chunked path is _chunked_attn -> ttnn.transformer.ring_mla (Kimi K2.7, 16 heads per chip at TP 4,
+    is_balanced False asserted, cache TP-replicated); tests/test_mla.py chunked scenarios (deep-50k+5k) run on fabric2d-2x2 / 2x4 and torus 8x4'
+  - 'ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp: ring_mla, flash_mla_prefill, chunked_flash_mla_prefill; tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
+    (ring_mla FABRIC_2D full-mesh case)'
+  - 'ttnn/ttnn/bringup/INDEX.md sdpa fork: non-MLA narrow V and sparse_sdpa high_precision; no ring_mla change'
+  notes: 'Dense causal MLA, 32 heads -> 16 per chip, no sinks, no gate, no indexer. The latent cache is block-cyclic over the 4 rows with period = the
+    chunk (row r holds [k chunk + r chunk/4, +chunk/4) of every chunk k), replicated over the 2 columns (both compute the same all-reduced kv and write
+    their own copy); ring_mla gathers the prefix around axis 0 into one shared [1, 1, max_seq, 576] scratch (at the last 56k chunk each chip receives
+    3 x 14080 x 576 bf16 = 49 MB per layer) and runs causal flash attention for its 1280 query rows. Absorbed form (q_nope W_UK, out W_UV) instead of the
+    reference''s kv_b re-expansion: same math. RoPE interleaved (rope_interleave): ttMLA''s tables pair (2i, 2i+1), YaRN factor 64, pure rotation
+    (cos / sin amplitude 1), mscale^2 in the softmax scale (0.14468). HiFi4 + fp32 dest (owner rule; ttMLA uses HiFi2): the ring_mla L1 fit at HiFi4 is
+    the first thing to check (smaller q / k chunks if it does not fit). ttMLA''s matmul configs are keyed on Kimi''s 640 local rows; at 1280 / 512 / 2048
+    rows the defaults are used. Fallback if ring_mla fails on 4 rows of FABRIC_2D: all_gather the cache prefix over axis 0 (hy4 _gather_kvpe_prefix) +
+    ttnn.transformer.chunked_flash_mla_prefill locally. The stateful boundary kv_latent is read back through the block-cyclic geometry (natural order).'
+- &attn_residual
+  block_type: dense
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice + ttnn.concat (streams + y stacked per 32-token tile, [1, S/128, 5 x 32, 1792]) -> block-diagonal Mix [1, S/128, 4 x 32, 5 x 32] from
+    hc (post | comb, load-time 0/1 selector matmul + diagonal mask) -> one batched ttnn.matmul (HiFi4 + fp32 dest) -> ttnn.reshape; or 4 x (ttnn.multiply
+    + 4 x ttnn.addcmul) fp32
+  reuse: models/demos/glm53_flash_d_p/tt/residual.py:TtHcResidual (_matmul_mix; GLM mixes with comb^T, Xing with comb, so the selector is transposed),
+    models/demos/hy4_preview_d_p/tt/ihc.py:TtHcPost (per-chip column-split streams)
+  searched: *hc_searched
+  notes: 'h_mid stream i = post_i y + sum_j comb[i, j] in_j (xing_ref.hc_residual, HF matmul(comb, residual): not comb^T). Every chip mixes its own
+    rows and hidden columns: y (attn_out) arrives column-split from the o_proj reduce_scatter, so there is no collective. Streams stay fp32.'
+- &ffn_hc
+  <<: *attn_hc
+  step: ffn_hc
+  notes: As attn_hc with ffn_hc.* weights, on h_mid.
+- &ffn_collapse
+  <<: *attn_collapse
+  step: ffn_collapse
+  notes: ffn_in [S/4, 1792] per chip = sum_n pre_n x h_mid stream n (pre from ffn_hc). No collective.
+- &ffn_norm
+  block_type: dense
+  step: ffn_norm
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm_pre_all_gather -> all_gather of the [S/4, 32] stats over axis 1 -> ttnn.rms_norm_post_all_gather (post_attention_layernorm split
+    by column, eps 1e-6, HiFi4 + fp32 acc, bf16 out) -> ttnn.all_gather (dim -1, cluster_axis 1) -> [S/4, 3584] bf16
+  reuse: models/demos/hy4_preview_d_p/tt/norm.py:TtDistributedRmsNorm; the gather is TtMoe.forward's all_gather over axis 1 (deepseek_v3_d_p/tt/moe/tt_moe.py)
+    and TtPrefillBlock._dense_ffn_path
+  searched: *norm_searched
+  notes: The FFN (router, dispatch, dense MLP, shared expert) needs each token's full hidden, so the normed bf16 output is gathered over the 2 columns
+    here once (4.6 MB received per chip at 1280 rows) and shared by every FFN consumer; the output is replicated within a row.
+- block_type: dense
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear (gate / up column-parallel [3584, 4608] per chip, bf16, HiFi4 + fp32 acc) -> ttnn.silu x ttnn.multiply (fp32) -> ttnn.linear (down
+    row-parallel [4608, 3584]) -> ttnn.reduce_scatter (dim -1, cluster_axis 1, fp32) -> [S/4, 1792]
+  reuse: models/demos/hy4_preview_d_p/tt/mlp.py:TtDenseMLP, models/demos/deepseek_v3_d_p/tt/tt_ffn.py:TtFfn
+  searched: &mlp_searched
+  - 'repo_map: MoE, tensor parallel (gemma4 shared_mlp.py); Proposed rows: hy4 tt/mlp.py (TP=2 over columns), glm53 tt/mlp.py (TP=4)'
+  - 'deepseek_v3_d_p tt/moe/tt_shared_expert.py:TtSharedExpert / tt_ffn.py:TtFfn (column-parallel gate / up, row-parallel down, reduce_scatter axis 1)'
+  notes: Dense SwiGLU 9216 (layers 0-1), intermediate 4608c .. 4608c + 4607 on column c. reduce_scatter payload [1280, 3584] fp32 (18 MB) at chunk 5120.
+- &ffn_residual
+  <<: *attn_residual
+  step: ffn_residual
+  notes: out stream i = post_i mlp_out + sum_j comb[i, j] h_mid_j (post / comb from ffn_hc); mlp_out arrives column-split from the FFN's reduce_scatter.
+- <<: *attn_hc
+  block_type: moe
+- <<: *attn_collapse
+  block_type: moe
+- <<: *attn_norm
+  block_type: moe
+- <<: *q_a
+  block_type: moe
+- <<: *attention
+  block_type: moe
+- <<: *attn_residual
+  block_type: moe
+- <<: *ffn_hc
+  block_type: moe
+- <<: *ffn_collapse
+  block_type: moe
+- <<: *ffn_norm
+  block_type: moe
+- block_type: moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 x, gate.weight^T [3584, 64] fp32, HiFi4 + fp32 acc) -> ttnn.sigmoid -> ttnn.add (e_score_correction_bias) -> ttnn.topk (k 4 of
+    64) -> ttnn.gather (unbiased scores) -> ttnn.sum / ttnn.divide (+ 1e-20) x 2.0 -> uint16 indices + bf16 weights for dispatch (and the dense [S, 64]
+    routing matrix for the harness boundary via a scatter / selector matmul)
+  reuse: models/demos/glm53_flash_d_p/tt/router.py:TtRouter (route_scale folded into the renorm), models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter
+  searched:
+  - 'repo_map Proposed: noaux_tc router rows (deepseek_v3_d_p tt_moe_gate_prefill.py with moe_grouped_topk; mimo / glm53 TtRouter fp32 linear -> sigmoid
+    -> bias -> ttnn.topk -> gather / renorm)'
+  - 'known_issues: moe_grouped_topk sorts TF32 keys (near-tie selection flips), so the plain fp32 ttnn.topk path is used; n_group 1 means no group step'
+  notes: Replicated weights; both chips of a row compute the same routing for the row's S/4 tokens from the gathered ffn_norm (no collective). Test with
+    top-4 index overlap and weight rel L2, not PCC.
+- block_type: moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount -> ttnn.bringup.offset_cumsum (histograms over axis 0, dispatch group of 4) -> ttnn.bringup.dispatch
+    (cluster_axis 0, 2 dispatch groups = columns, FABRIC_2D) -> ttnn.bringup.unified_routed_expert_moe (8 local experts, SwiGLU Silu, high_precision,
+    HiFi4 + fp32 dest, bfp8 weights, ROW_MAJOR bf16 x) -> ttnn.bringup.combine (axis 0) -> ttnn.experimental.deepseek_prefill.post_combine_reduce (weighted
+    sum of the in-group experts, fp32) -> ttnn.reduce_scatter (dim -1, cluster_axis 1, fp32) -> [S/4, 1792]
+  reuse: models/demos/hy4_preview_d_p/tt/experts.py:TtHy4Experts (2D EP pipeline, column-split output; activation Silu instead of ClampedSiluGlu),
+    models/demos/glm53_flash_d_p/tt/experts.py:TtExperts, models/demos/deepseek_v3_d_p/tt/moe/init_helpers.py:ExpertMapping / compute_constants
+  searched:
+  - 'repo_map: MoE, expert parallel (deepseek_v3_d_p tt/moe); Proposed: Collectives and MoE dispatch on a 2D mesh (2x2), fork tests for a dispatch group
+    of several devices, fused routed experts at a chosen fidelity with bf16 activations'
+  - 'ttnn/ttnn/bringup/INDEX.md: dispatch / combine / offset_cumsum / unified_routed_expert_ffn forks (used by mimo 2x2, hy4, glm53 with groups of 2)'
+  - 'deepseek_v3_d_p tt/moe/README.md: the 4x2 example (2 dispatch groups of 4 chips, one per column, dispatch along rows)'
+  notes: 'EP=8: column c is dispatch group c with experts 32c .. 32c + 31, chip (r, c) holds 32c + 8r .. +7 (ExpertMapping col-major table). Each chip
+    dispatches its row''s S/4 tokens up and down its column to the chips holding their in-group experts; a token whose 4 experts are all in the other
+    group sends nothing here. Dispatch buffer capacity factor 4 (worst case: a token''s 4 experts on one chip): (4 x 1280 x 4 + 7 x 32) rows x 3584 bf16
+    = 148 MB at chunk 5120. After combine + weighted sum each column holds the partial output of its 32 experts; the reduce_scatter over axis 1 adds the
+    two groups and returns the column split. The forks are tested with groups of 1 and 2; a group of 4 is the source ops'' native case (DeepSeek
+    groups of 8) and gets a fork test case at O.1. Fallback: HY4-style loop (extract -> ttnn.linear SwiGLU -> insert), same accuracy.'
+- block_type: moe
+  step: shared_expert
+  tag: COMPOSED
+  ttnn: ttnn.linear (gate / up column-parallel [3584, 512] per chip, bf16, HiFi4 + fp32 acc) -> ttnn.silu x ttnn.multiply -> ttnn.linear (down row-parallel
+    [512, 3584]) -> ttnn.reduce_scatter (dim -1, cluster_axis 1, fp32) -> [S/4, 1792]
+  reuse: models/demos/hy4_preview_d_p/tt/mlp.py:TtDenseMLP (shared expert instance), models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py:TtSharedExpert
+  searched: *mlp_searched
+  notes: SwiGLU 1024, intermediate 512c .. 512c + 511 on column c. Its reduce_scatter can later be fused with the experts' one (add the partials first),
+    a perf item; the step boundary keeps them separate for the swap tests.
+- block_type: moe
+  step: moe_add
+  tag: NATIVE
+  ttnn: ttnn.add (experts_out + shared_out, both [S/4, 1792] column-split)
+  reuse: models/demos/glm53_flash_d_p/tt/moe_add.py:TtMoeAdd, models/demos/hy4_preview_d_p/tt/mlp.py:TtMoeCombine
+  notes: Local, no collective.
+- <<: *ffn_residual
+  block_type: moe
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.embedding (column-split bf16 table [131072, 1792] per chip; this row's S/4 ids) -> ttnn.typecast fp32 -> ttnn.repeat / ttnn.concat to 4 streams
+    [S/4, 4 x 1792]
+  reuse: models/demos/hy4_preview_d_p/tt/model.py:TtHy4Embedding (column-split table, stream broadcast), models/demos/glm53_flash_d_p/tt/model.py:TtEmbedding
+  searched:
+  - 'repo_map Proposed: all-device model with an mHC multi-stream residual (glm53 tt/model.py:TtEmbedding broadcasts to the streams)'
+  - 'known_issues: masking the engine''s pad id when the vocab is not a power of two (Xing''s 131072 is a power of two; the id clamp stays as in hy4)'
+  notes: The engine's uint32 ids are already split by row ([4, 1, chunk/4] over axis 0), so no gather; each chip embeds straight into its hidden columns.
+- block_type: model
+  step: final_norm
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 stream blocks) -> ttnn.add x 3 -> ttnn.multiply 0.25 (plain mean, fp32) -> distributed RMSNorm (ttnn.rms_norm_pre_all_gather ->
+    stats all_gather over axis 1 -> ttnn.rms_norm_post_all_gather, norm.weight split by column, eps 1e-6)
+  reuse: models/demos/hy4_preview_d_p/tt/model.py:TtHy4FinalNorm, models/demos/glm53_flash_d_p/tt/model.py:TtFinalNorm (fp32 stream mean + rms_norm)
+  searched:
+  - 'xing_ref.py:forward_chunk (hc_mean = plain mean of the 4 streams, then norm; no hc_head)'
+  - 'repo_map Proposed: glm53 TtFinalNorm, hy4 distributed norm'
+  notes: hc_mean and final_norm stay [S/4, 1792] per chip (row and column split).
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.slice (last tokens of this row) -> ttnn.all_gather (dim -1, axis 1, the full hidden) -> ttnn.all_gather (dim -2, axis 0) + ttnn.slice (the
+    chunk's last valid tokens) -> ttnn.linear (vocab-sharded lm_head, 16384 rows per chip, bf16, HiFi4 + fp32 acc) -> ttnn.all_gather (dim -1, axis 1)
+    + ttnn.all_gather (dim -1, axis 0)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt (LM head over the 2x2 mesh), models/demos/deepseek_v3_d_p/tt/tt_lm_head.py:TtLMHead
+  searched:
+  - 'repo_map Proposed: Collectives and MoE dispatch on a 2D mesh (2x2)'
+  notes: Untied LM head, logits only for the last tokens of a chunk (tiny collectives). Vocab 131072 / 8 = 16384 rows per chip.
