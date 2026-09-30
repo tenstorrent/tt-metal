@@ -1052,6 +1052,13 @@ tasks:
     kind: attention
     layer: 2
     stateful: true
+  frozen:
+    at: '2026-09-30T15:04:12'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py: 020c9480a4941e8eac408de9e9c3b8acda0a8445025e4425139219aa86db475d
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.05
   title: 'moe block with steps 1-5 on device (last: attention)'
   step: implement
