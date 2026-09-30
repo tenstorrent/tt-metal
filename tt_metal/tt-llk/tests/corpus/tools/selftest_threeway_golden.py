@@ -42,6 +42,90 @@ def check(name, cond, detail=""):
         FAILED.append(name)
 
 
+F32MAX = float(np.finfo(np.float32).max)
+
+
+def _bf16(xs_f32):
+    """fp32 numpy -> bfloat16 torch, KEEPING each NaN's sign bit.
+
+    A bare `.to(torch.bfloat16)` canonicalizes every NaN to 0xFFFF, i.e. a NEGATIVE
+    NaN, which is not what Dest holds and not what the device is fed. Every oracle
+    call in this file that needs a bf16 operand goes through here.
+    """
+    import torch
+
+    from helpers.golden_generators import cast_preserving_nan_sign
+
+    return cast_preserving_nan_sign(
+        torch.from_numpy(np.asarray(xs_f32, dtype=np.float32)), torch.bfloat16
+    )
+
+
+def _explain(mine, ref, nan_source, atol, rtol):
+    """Classify every mine-vs-oracle difference. Returns (ok, parts, masks).
+
+    Exactly three explanations are admissible, and a diff that is none of them FAILS:
+
+      (a) SUB-TOLERANCE ROUNDING. The oracle rounds through the bf16 DST dtype while
+          this module carries fp64, so the two can land on adjacent bf16 codes.
+          Admissible only inside the row's own accuracy contract.
+      (b) MATCHED INFINITY, same sign.
+      (c) CONVERTED-NaN INFINITY SIGN. Two infinities of opposite sign where the
+          golden's PRE-CONVERSION value was NaN. See numeric_comparison's
+          CONVERTED-NaN INFINITY SIGN POLICY: the sign bit a packer-converted NaN
+          carries is not a numeric quantity and is not determined by any host math
+          library. A computed overflow produces an infinity directly, so it is never
+          admitted and a wrong overflow sign is still a failure.
+
+    The predecessor's fourth class, ORACLE fp32 OVERFLOW, is deliberately gone: the
+    in-repo oracle now evaluates in fp64 (see UnarySFPUGolden._torch_unary), so the
+    class must be EMPTY. It is still computed, and a nonzero count now FAILS.
+    """
+    g = ref.astype(np.float64)
+    m = mine.astype(np.float64)
+    xn = np.asarray(nan_source, dtype=bool)
+    fin = np.isfinite(g) & np.isfinite(m)
+    rounding = fin & (np.abs(m - g) <= (atol + rtol * np.abs(g)))
+    matched_inf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+    nan_sign = np.isinf(g) & np.isinf(m) & ~matched_inf & xn
+    nan_pair = np.isnan(g) & np.isnan(m)
+    stale_ovf = (
+        np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX)
+        & (np.signbit(g) == np.signbit(m))
+    )
+    explained = rounding | matched_inf | nan_sign | nan_pair
+    ok = bool(np.all(explained)) and not bool(stale_ovf.any())
+    parts = []
+    if rounding.any():
+        worst = float(np.max(np.abs(m[rounding] - g[rounding])))
+        parts.append(
+            f"{int(rounding.sum())} sub-tolerance bf16-vs-fp64 rounding "
+            f"(worst |d|={worst:.3e} <= {atol}+{rtol}|g|)"
+        )
+    if matched_inf.any():
+        parts.append(f"{int(matched_inf.sum())} matched infinity")
+    if nan_sign.any():
+        parts.append(
+            f"{int(nan_sign.sum())} opposite-signed infinity from a CONVERTED NaN "
+            "(nan_inf_sign_policy)"
+        )
+    if nan_pair.any():
+        parts.append(f"{int(nan_pair.sum())} matched NaN")
+    if stale_ovf.any():
+        parts.append(
+            f"{int(stale_ovf.sum())} ORACLE fp32 OVERFLOW -- this class must be EMPTY "
+            f"now that _torch_unary evaluates in fp64; e.g. mine={float(m[stale_ovf][0])!r} "
+            f"oracle={float(g[stale_ovf][0])!r}"
+        )
+    bad = ~explained
+    if bad.any():
+        parts.append(
+            f"{int(bad.sum())} UNEXPLAINED, e.g. mine={float(m[bad][0])!r} "
+            f"oracle={float(g[bad][0])!r} (nan_source={bool(xn[bad][0])})"
+        )
+    return ok, "; ".join(parts) or "identical"
+
+
 def _edge_tile():
     """1024 fp32 patterns spanning specials, denormals, both signs, domain edges."""
     specials = [
@@ -171,7 +255,7 @@ def case_faithful():
     u = _edge_tile()
     for op, mathop in op_to_mathop.items():
         spec = tg.get_spec(op)
-        hp = spec.math(tg.bf16_truncate(u))
+        hp = spec.evaluate(tg.bf16_truncate(u))
         mine = tg.format_golden_f32_noacc(hp)
         # Faithfulness is asserted where the function is DEFINED. Two exclusions,
         # both pointwise and both because neither oracle is computing the
@@ -336,7 +420,8 @@ def _bf16_faithful_one(op, mathop_name, u16):
     mathop = getattr(MathOperation, mathop_name)
     spec = tg.get_spec(op)
     xs = tg._bf16_bits_to_f32(u16.astype(np.uint32))
-    mine = tg.format_golden_f32_noacc(spec.math(xs))
+    mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
+    mine = tg.format_golden_f32_noacc(mine_hp)
     ref = _scalar_golden_bf16(mathop, u16)
 
     graded = np.ones(u16.shape, dtype=bool)
@@ -357,60 +442,10 @@ def _bf16_faithful_one(op, mathop_name, u16):
     tail = f"; {n_ungraded}/{u16.size} undefined (out-of-domain or pole) not graded"
     if d.size == 0:
         return True, f"{n_graded}/{n_graded} bit-identical over the WHOLE bf16 space{tail}"
-    # Where they differ, exactly two explanations are admissible, and a diff that
-    # is neither is a FAIL.
-    #
-    #   (a) SUB-TOLERANCE ROUNDING. The oracle evaluates in the bf16 DST dtype
-    #       (torch.tensor(x, dtype=Float16_b)) while this module deliberately uses
-    #       fp64 true math, so the two can land on adjacent bf16 codes. Admissible
-    #       only when |mine - oracle| is inside the row's own accuracy contract.
-    #
-    #   (b) ORACLE fp32 OVERFLOW. UnarySFPUGolden._torch_unary evaluates in
-    #       torch.float32, so torch.special.i1(89.0) comes back +inf although the
-    #       true value 1.89e37 is comfortably inside fp32's range. The fp64 golden
-    #       is then STRICTLY more faithful than the oracle, and this is recorded
-    #       rather than tolerated: it means the harness's own i0/i1 row cannot see
-    #       a device defect at those inputs, because its reference is already inf.
-    #       Admissible only when the fp64 value is finite AND representable in
-    #       fp32 AND the oracle's value is an infinity of the same sign.
-    g = ref[d].astype(np.float64)
-    m = mine[d].astype(np.float64)
-    finite = np.isfinite(g) & np.isfinite(m)
-    F32MAX = float(np.finfo(np.float32).max)
-    oracle_overflow = (
-        np.isinf(g)
-        & np.isfinite(m)
-        & (np.abs(m) <= F32MAX)
-        & (np.signbit(g) == np.signbit(m))
+    ok, parts = _explain(
+        mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol
     )
-    rounding = finite & (
-        np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g))
-    )
-    matched_inf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
-    explained = rounding | oracle_overflow | matched_inf
-    ok = bool(np.all(explained))
-    parts = []
-    if rounding.any():
-        worst = float(np.max(np.abs(m[rounding] - g[rounding])))
-        parts.append(
-            f"{int(rounding.sum())} sub-tolerance bf16-vs-fp64 rounding "
-            f"(worst |d|={worst:.3e} <= {spec.atol}+{spec.rtol}|g|)"
-        )
-    if oracle_overflow.any():
-        xo = xs[d][oracle_overflow]
-        parts.append(
-            f"{int(oracle_overflow.sum())} where the ORACLE overflowed fp32 to "
-            f"+-inf but the true value is finite and fp32-representable "
-            f"(|x| in [{float(np.min(np.abs(xo)))!r},{float(np.max(np.abs(xo)))!r}]) "
-            "-- the fp64 golden here is strictly better than the in-repo oracle"
-        )
-    if not ok:
-        bad = ~explained
-        parts.append(
-            f"{int(bad.sum())} UNEXPLAINED, e.g. x={float(xs[d][bad][0])!r} "
-            f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
-        )
-    return ok, f"{d.size}/{n_graded} differ: " + "; ".join(parts) + tail
+    return ok, f"{d.size}/{n_graded} differ: " + parts + tail
 
 
 def case_faithful_bf16(ops=None, n=None):
@@ -491,7 +526,7 @@ def case_faithful_blaze():
 
     u16 = np.arange(65536, dtype=np.uint32)
     xs = tg._bf16_bits_to_f32(u16)
-    xt = torch.from_numpy(xs.astype(np.float32)).to(torch.bfloat16)
+    xt = _bf16(xs)
     dummy_b = torch.zeros(1024, dtype=torch.bfloat16)
 
     oracles = {}
@@ -524,11 +559,12 @@ def case_faithful_blaze():
             check(f"faithful-blaze[{op}]", False, "no spec/oracle")
             continue
         try:
-            ref_hp = fn(xt, dummy_b)
-            ref = tg.format_golden_f32_noacc(
-                np.asarray(ref_hp.to(torch.float32).numpy(), dtype=np.float64)
+            ref_hp = np.asarray(
+                fn(xt, dummy_b).to(torch.float32).numpy(), dtype=np.float64
             )
-            mine = tg.format_golden_f32_noacc(spec.math(xs))
+            ref = tg.format_golden_f32_noacc(ref_hp)
+            mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
+            mine = tg.format_golden_f32_noacc(mine_hp)
         except Exception as e:
             check(f"faithful-blaze[{op}]", False, f"raised: {type(e).__name__}: {e}")
             continue
@@ -540,30 +576,15 @@ def case_faithful_blaze():
         if d.size == 0:
             check(f"faithful-blaze[{op}]", True, "65536/65536 bit-identical to the row's own golden")
             continue
-        g = ref[d].astype(np.float64)
-        m = mine[d].astype(np.float64)
-        fin = np.isfinite(g) & np.isfinite(m)
-        matched_inf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
-        # The test-file closures evaluate in fp32; this module uses fp64. Admit a
-        # diff only inside the row's own contract, and admit an fp32-overflow-only
-        # diff the same way case 1c does.
-        F32MAX = float(np.finfo(np.float32).max)
-        ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
-        tol = spec.atol + spec.rtol * np.abs(g)
-        near = fin & (np.abs(m - g) <= np.maximum(tol, 0.0))
-        ok = bool(np.all(near | ovf | matched_inf))
-        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
-        bad = ~(near | ovf | matched_inf)
-        note = (
-            f"{d.size}/65536 differ: {int(near.sum())} inside the row's own contract "
-            f"(worst |d|={worst:.3e} <= {spec.atol}+{spec.rtol}|g|), "
-            f"{int(ovf.sum())} oracle fp32 overflow"
+        # The test-file closures evaluate in fp32; this module uses fp64. Admit a diff
+        # only through the shared explainer -- the row's own contract, a matched
+        # infinity, or the NaN-operand infinity-sign policy.
+        ok, parts = _explain(
+            mine[d], ref[d],
+            np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
+            spec.atol, spec.rtol,
         )
-        if not ok:
-            note += (
-                f", {int(bad.sum())} UNEXPLAINED e.g. x={float(xs[d][bad][0])!r} "
-                f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
-            )
+        note = f"{d.size}/65536 differ: " + parts
         check(f"faithful-blaze[{op}]", ok, note)
 
 
@@ -582,7 +603,7 @@ def case_faithful_vehicles():
 
     u16 = np.arange(65536, dtype=np.uint32)
     xs = tg._bf16_bits_to_f32(u16)
-    xt = torch.from_numpy(xs.astype(np.float32)).to(torch.bfloat16)
+    xt = _bf16(xs)
 
     cases = {
         # The node id pins scale bits 16256 = 0x3F80 = bf16 1.0.
@@ -599,10 +620,10 @@ def case_faithful_vehicles():
     for op, make in cases.items():
         spec = tg.get_spec(op)
         try:
-            ref = tg.format_golden_f32_noacc(
-                np.asarray(make().to(torch.float32).numpy(), dtype=np.float64)
-            )
-            mine = tg.format_golden_f32_noacc(spec.math(xs))
+            ref_hp = np.asarray(make().to(torch.float32).numpy(), dtype=np.float64)
+            ref = tg.format_golden_f32_noacc(ref_hp)
+            mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
+            mine = tg.format_golden_f32_noacc(mine_hp)
         except Exception as e:
             check(f"faithful-vehicle[{op}]", False, f"raised: {type(e).__name__}: {e}")
             continue
@@ -612,19 +633,11 @@ def case_faithful_vehicles():
         if d.size == 0:
             check(f"faithful-vehicle[{op}]", True, "65536/65536 bit-identical to the in-repo golden class")
             continue
-        g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
-        fin = np.isfinite(g) & np.isfinite(m)
-        minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
-        F32MAX = float(np.finfo(np.float32).max)
-        ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
-        near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
-        ok = bool(np.all(near | ovf | minf))
-        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
-        check(
-            f"faithful-vehicle[{op}]", ok,
-            f"{d.size}/65536 differ: {int(near.sum())} inside contract "
-            f"(worst |d|={worst:.3e}), {int(ovf.sum())} oracle fp32 overflow",
+        ok, parts = _explain(
+            mine[d], ref[d], np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
+            spec.atol, spec.rtol,
         )
+        check(f"faithful-vehicle[{op}]", ok, f"{d.size}/65536 differ: " + parts)
 
 
 # ── case 1f: the dest_acc=Yes rows, at their own precision ───────────────────
@@ -659,24 +672,18 @@ def case_faithful_destacc():
             .numpy()
             .astype(np.float32)
         )
-        mine = tg.format_golden_f32_acc(spec.math(xs))
+        mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
+        mine = tg.format_golden_f32_acc(mine_hp)
         mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
         mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
         d = np.where(mb != rb)[0]
         if d.size == 0:
             check(f"faithful-destacc[{op}]", True, "65536/65536 bit-identical at fp32 DEST")
             continue
-        g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
-        fin = np.isfinite(g) & np.isfinite(m)
-        nan_pair = np.isnan(g) & np.isnan(m)
-        minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
-        near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
-        ok = bool(np.all(near | nan_pair | minf))
-        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
-        check(
-            f"faithful-destacc[{op}]", ok,
-            f"{d.size}/65536 differ, all inside contract (worst |d|={worst:.3e})",
+        ok, parts = _explain(
+            mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol
         )
+        check(f"faithful-destacc[{op}]", ok, f"{d.size}/65536 differ: " + parts)
 
     # The arithmetic behind SIGMOID_SUBNORMAL_NOTE, asserted rather than asserted-in-prose:
     # widening Dest cannot rescue the value, because fp32 and bf16 share a min NORMAL.
@@ -899,7 +906,7 @@ def case_binary_registry():
     oracle = BinarySFPUGolden()
     exp16 = np.arange(65536, dtype=np.uint32)
     b_vals = tg._bf16_bits_to_f32(exp16)
-    bt = torch.from_numpy(b_vals.astype(np.float32)).to(torch.bfloat16)
+    bt = _bf16(b_vals)
 
     for op in sorted(reg):
         spec = reg[op]
@@ -908,7 +915,7 @@ def case_binary_registry():
         worst_note, ok_all, total_diff, total_n = "", True, 0, 0
         for base_bits in _BINARY_BASES:
             a_vals = tg._bf16_bits_to_f32(np.full(65536, base_bits, dtype=np.uint32))
-            at = torch.from_numpy(a_vals.astype(np.float32)).to(torch.bfloat16)
+            at = _bf16(a_vals)
             try:
                 # The oracle's binary methods are scalar; apply elementwise.
                 ref_hp = np.array(
@@ -920,27 +927,25 @@ def case_binary_registry():
                 worst_note = f"oracle raised at base 0x{base_bits:04x}: {type(e).__name__}: {e}"
                 break
             ref = tg.format_golden_f32_noacc(ref_hp)
-            mine = tg.format_golden_f32_noacc(spec.math(a_vals.astype(np.float64), b_vals.astype(np.float64)))
+            mine_hp = np.asarray(
+                spec.math(a_vals.astype(np.float64), b_vals.astype(np.float64)),
+                dtype=np.float64,
+            )
+            mine = tg.format_golden_f32_noacc(mine_hp)
             mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
             mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
             d = np.where(mb != rb)[0]
             total_n += 65536
             total_diff += d.size
             if d.size:
-                g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
-                fin = np.isfinite(g) & np.isfinite(m)
-                minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
-                F32MAX = float(np.finfo(np.float32).max)
-                ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
-                near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
-                bad = ~(near | ovf | minf)
-                if bad.any():
+                ok, parts = _explain(
+                    mine[d], ref[d],
+                    np.isnan(mine_hp[d]) | np.isnan(ref_hp[d]),
+                    spec.atol, spec.rtol,
+                )
+                if not ok:
                     ok_all = False
-                    worst_note = (
-                        f"base 0x{base_bits:04x}: {int(bad.sum())} UNEXPLAINED, e.g. "
-                        f"a={float(a_vals[d][bad][0])!r} b={float(b_vals[d][bad][0])!r} "
-                        f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
-                    )
+                    worst_note = f"base 0x{base_bits:04x}: {parts}"
                     break
         note = worst_note or (
             f"{total_n - total_diff}/{total_n} bit-identical across "
@@ -1018,6 +1023,245 @@ def case_binarypow():
     )
 
 
+# ── case 7: the six modelling contracts, each pinned at its own witness ──────
+# One check per fix, each asserting the NEW value and the OLD one's absence, so a
+# regression cannot pass by quietly reverting the model.
+def case_modelling_contracts():
+    print("case 7: the six oracle modelling contracts")
+    import math
+
+    import torch
+
+    u16 = np.arange(65536, dtype=np.uint32)
+    xs = tg._bf16_bits_to_f32(u16)
+    sub = (np.abs(xs.astype(np.float64)) < tg.BF16_TINY) & (xs != 0)
+    nan = np.isnan(xs)
+
+    # (1) INPUT FTZ. The steep-at-zero ops must answer as if the operand were +-0,
+    #     and the flush must be visible in the golden for the exact populations the
+    #     exhaustive silicon leg attributed to it.
+    expect_ftz = {
+        # op: (device answer at the witness, witness bf16 pattern)
+        "sqrt-fresh": (0.0, 0x8001),      # sqrt(-9.18e-41): NaN->+inf before, 0 now
+        "log-fresh": (-math.inf, 0x0001),  # log(9.18e-41): -92.0 before, -inf now
+        "ceil-fresh": (0.0, 0x0001),       # ceil(tiny+): 1.0 before, 0 now
+    }
+    for op, (dev, patt) in expect_ftz.items():
+        spec = tg.get_spec(op)
+        x = tg._bf16_bits_to_f32(np.array([patt], dtype=np.uint32))
+        new = float(tg.format_golden_f32_noacc(spec.evaluate(x))[0])
+        old = float(tg.format_golden_f32_noacc(spec.math(x))[0])
+        check(
+            f"input-ftz[{op}]",
+            new == dev and old != dev,
+            f"x={float(x[0])!r}: golden {old!r} -> {new!r}, device {dev!r}",
+        )
+    # ...and it must NOT be applied to a compare-only body. sign is the discriminator:
+    # ckernel_sfpu_sign.h tests `v == 0.0F` exactly, so a subnormal is not zero to it.
+    for op, patt, want in (
+        ("sign", 0x0001, 1.0),
+        ("sign", 0x8001, -1.0),
+        ("heaviside", 0x0001, 1.0),
+        ("heaviside", 0x8001, 0.0),
+    ):
+        spec = tg.get_spec(op)
+        if spec is None:
+            continue
+        x = tg._bf16_bits_to_f32(np.array([patt], dtype=np.uint32))
+        got = float(tg.format_golden_f32_noacc(spec.evaluate(x))[0])
+        check(
+            f"input-ftz-exempt[{op}@0x{patt:04x}]",
+            got == want and op in tg.INPUT_FTZ_EXEMPT,
+            f"compare-only body: golden {got!r} (flushing would give "
+            f"{float(tg.format_golden_f32_noacc(spec.math(tg.input_ftz(x)))[0])!r})",
+        )
+    # and the flush must never be applied to a normal operand
+    normal = ~sub & np.isfinite(xs)
+    check(
+        "input-ftz-touches-only-subnormals",
+        bool(np.array_equal(tg.input_ftz(xs)[normal], xs[normal])),
+        f"{int(np.count_nonzero(normal))} normal/zero/inf inputs unchanged",
+    )
+
+    # (2) NaN -> SIGN-PRESERVED inf, on the pure-move row.
+    ident = tg.get_spec("copydest-fresh")
+    gi = tg.format_golden_f32_noacc(ident.evaluate(xs))
+    check(
+        "nan-inf-sign[copydest-fresh]",
+        bool(np.all(np.isneginf(gi[nan & np.signbit(xs)])))
+        and bool(np.all(np.isposinf(gi[nan & ~np.signbit(xs)]))),
+        "127 negative NaNs -> -inf (device -inf), 127 positive NaNs -> +inf",
+    )
+    gn = tg.format_golden_f32_noacc(tg.get_spec("negative").evaluate(xs))
+    check(
+        "nan-inf-sign[negative-flips]",
+        bool(np.all(np.isneginf(gn[nan & ~np.signbit(xs)]))),
+        "SFPU negation flips a NaN's sign bit, so a POSITIVE NaN packs to -inf",
+    )
+    ga = tg.format_golden_f32_noacc(tg.get_spec("abs").evaluate(xs))
+    check(
+        "nan-inf-sign[abs-is-SFPABS]",
+        bool(np.all(np.isneginf(ga[nan & np.signbit(xs)])))
+        and float(ga[u16 == 0xFF80][0]) == math.inf,
+        "SFPABS float mod leaves a negative NaN alone but DOES clear -inf",
+    )
+
+    # (3) min/max under the SFPU sign-magnitude order, and the 127-vs-254 split that
+    #     rules out both NaN propagation and IEEE minNum/maxNum.
+    C = np.float32(tg.UNARY_MAX_MIN_VALUE)
+    dmax = tg.format_golden_f32_noacc(tg.sfpu_max(xs, C))
+    dmin = tg.format_golden_f32_noacc(tg.sfpu_min(xs, C))
+    # The recorded silicon facts. Two are witness values; two are the absence of a
+    # miss against a golden that was +inf at every NaN.
+    recorded = {
+        ("max", 0x7F81): math.inf,   # not among the 127 misses vs a +inf golden
+        ("max", 0xFF81): 0.0,        # recorded graded_witness_dev
+        ("min", 0x7F81): 0.0,        # recorded graded_witness_dev
+    }
+    # min(-NaN, 0.0) is the model's PREDICTION (-inf); the record cannot distinguish
+    # it from 0.0, because both miss a +inf golden. It is what the silicon re-run of
+    # unarymaxmin-min is for.
+    def old_pipeline(hp):
+        y = tg._round_bf16_as_f32(hp).astype(np.float32)
+        y = np.where(np.isnan(y), np.float32(np.inf), y)
+        return np.where(
+            np.abs(y.astype(np.float64)) < tg.BF16_TINY, np.float32(0.0), y
+        ).astype(np.float32)
+
+    candidates = {
+        "sign-magnitude": (tg.sfpu_max(xs, C), tg.sfpu_min(xs, C)),
+        "NaN-propagating": (
+            np.maximum(xs.astype(np.float64), float(C)),
+            np.minimum(xs.astype(np.float64), float(C)),
+        ),
+        "IEEE minNum/maxNum": (
+            np.where(nan, float(C), xs.astype(np.float64)),
+            np.where(nan, float(C), xs.astype(np.float64)),
+        ),
+    }
+    verdicts = {}
+    for name, (hmax, hmin) in candidates.items():
+        gmax = tg.format_golden_f32_noacc(hmax)
+        gmin = tg.format_golden_f32_noacc(hmin)
+        agrees = all(
+            float({"max": gmax, "min": gmin}[side][u16 == patt][0]) == want
+            or (math.isinf(want) and float({"max": gmax, "min": gmin}[side][u16 == patt][0]) == want)
+            for (side, patt), want in recorded.items()
+        )
+        verdicts[name] = agrees
+    check(
+        "minmax-order-discriminates",
+        verdicts["sign-magnitude"]
+        and not verdicts["NaN-propagating"]
+        and not verdicts["IEEE minNum/maxNum"],
+        "of the three candidate models only the sign-magnitude order reproduces all "
+        f"three recorded device values {verdicts}",
+    )
+    # and the recorded miss counts against the OLD golden (propagating + hardcoded
+    # +inf) must come back at 127 / 254, which is how the rows were reported.
+    _, w_max = tg.numeric_comparison(
+        old_pipeline(np.maximum(xs.astype(np.float64), float(C)))[nan],
+        tg.format_golden_f32_noacc(tg.sfpu_max(xs, C))[nan], 0.05, 0.05)
+    _, w_min = tg.numeric_comparison(
+        old_pipeline(np.minimum(xs.astype(np.float64), float(C)))[nan],
+        tg.format_golden_f32_noacc(tg.sfpu_min(xs, C))[nan], 0.05, 0.05)
+    check(
+        "minmax-old-golden-miss-counts",
+        (int(np.count_nonzero(~w_max)), int(np.count_nonzero(~w_min))) == (127, 254),
+        f"old golden vs the modelled device: max {int(np.count_nonzero(~w_max))} / "
+        f"min {int(np.count_nonzero(~w_min))} (recorded 127 / 254)",
+    )
+
+    # (4) gelu(-inf) is the limit 0, not the 0*inf NaN.
+    for op in ("gelu", "gelu-fresh", "gelu-fitted", "gelu-licensed"):
+        spec = tg.get_spec(op)
+        if spec is None:
+            continue
+        v = float(
+            tg.format_golden_f32_noacc(
+                spec.evaluate(tg._bf16_bits_to_f32(np.array([0xFF80], dtype=np.uint32)))
+            )[0]
+        )
+        check(f"gelu-neg-inf-limit[{op}]", v == 0.0, f"golden at -inf = {v!r} (device 0.0)")
+
+    # (5) i0/i1 can SEE a defect in [89, 91.5] -- the fp64 golden is finite there,
+    #     the fp32 oracle was +inf, and the bisected overflow constants come back.
+    from helpers.golden_generators import UnarySFPUGolden
+    from helpers.format_config import DataFormat
+    from helpers.llk_params import DestAccumulation, MathOperation
+
+    band = np.array([89.0, 89.5, 90.0, 90.5, 91.0, 91.5], dtype=np.float32)
+    for op, mathop, order in (("i1", MathOperation.I1, 1), ("i0", MathOperation.I0, 0)):
+        spec = tg.get_spec(op)
+        g = tg.format_golden_f32_noacc(spec.evaluate(band))
+        scalar = (
+            UnarySFPUGolden()(
+                mathop,
+                torch.from_numpy(np.tile(band, 1024 // band.size).astype(np.float32)),
+                DataFormat.Float16_b,
+                DestAccumulation.No,
+                DataFormat.Float16_b,
+                (32, 32),
+                iterations=None,
+                skip_tilize=True,
+            )
+            .detach()
+            .float()
+            .numpy()[: band.size]
+        )
+        finite_both = bool(np.all(np.isfinite(g))) and bool(np.all(np.isfinite(scalar)))
+        # an overflowing kernel must now FAIL; it used to PASS against a +inf golden
+        _, w_inf = tg.numeric_comparison(
+            g, np.full(band.size, np.inf, dtype=np.float32), 0.05, 0.05
+        )
+        _, w_ok = tg.numeric_comparison(g, g, 0.05, 0.05)
+        check(
+            f"i-band-visible[{op}]",
+            finite_both and not bool(np.any(w_inf)) and bool(np.all(w_ok)),
+            f"[89,91.5]: golden finite {list(np.round(g.astype(np.float64), 0))[:1]}..., "
+            "an +inf device answer now scores 65535 (it used to be ULP 0)",
+        )
+    f32max = float(np.finfo(np.float32).max)
+    for name, fn, const in (
+        ("I0", torch.special.i0, 91.9007646),
+        ("I1", torch.special.i1, 91.9021397),
+    ):
+        v = fn(torch.tensor(const, dtype=torch.float64)).item()
+        check(
+            f"bisected-overflow[{name}]",
+            math.isfinite(v) and v <= f32max and v > 0.5 * f32max,
+            f"{name}({const!r}) = {v:.9e} <= FLT_MAX {f32max:.9e} -- the kernel clamp "
+            "sits at the golden's own FLT_MAX crossing, inside the bf16 gap (91.5, 92)",
+        )
+
+    # (6) lgamma is graded against the STAGE contract, and the device value is exact.
+    lg = tg.get_spec("lgamma")
+    for x, dev, exact in ((-5.03125, 4.84375, True), (-0.9375, -0.02490234375, False)):
+        xa = np.array([x], dtype=np.float32)
+        new = float(tg.format_golden_f32_noacc(lg.evaluate(xa))[0])
+        _, w = tg.numeric_comparison(np.array([new]), np.array([dev]), lg.atol, lg.rtol)
+        check(
+            f"lgamma-stage[{x}]",
+            bool(w[0]) and (new == dev if exact else True),
+            f"stage golden {new!r} vs device {dev!r} (bit-exact={new == dev}); the "
+            f"composite golden was {float(torch.lgamma(torch.tensor(x, dtype=torch.float64)).item())!r}",
+        )
+    check(
+        "lgamma-has-no-poles",
+        "lgamma" not in tg.GAMMA_POLE_OPS
+        and bool(
+            np.all(
+                np.isfinite(
+                    tg.format_golden_f32_noacc(
+                        lg.evaluate(np.array([0.0, -1.0, -2.0, -7.0], dtype=np.float32))
+                    )
+                )
+            )
+        ),
+        "the stage argument (x<0.5)?1-x:x is always >= 0.5, so nothing is excluded",
+    )
+
+
 def main():
     print("laneMR three-way golden selftest")
     case_faithful()
@@ -1032,6 +1276,7 @@ def main():
     case_domain()
     case_binary_registry()
     case_binarypow()
+    case_modelling_contracts()
     print()
     if FAILED:
         print(f"FAILED: {FAILED}")

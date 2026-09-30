@@ -109,6 +109,140 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def cast_preserving_nan_sign(src: torch.Tensor, torch_dtype) -> torch.Tensor:
+    """Cast to a narrower float dtype, keeping each NaN's SIGN BIT.
+
+    torch's bfloat16 / float16 casts CANONICALIZE every NaN to the all-ones pattern,
+    i.e. a NEGATIVE NaN. Dest does not: the 16-bit pattern the SFPU stores is the
+    pattern the packer then converts, sign bit included, which is why the pure-move
+    row copydest-fresh returns +inf for the bf16 pattern 0x7f81 and -inf for 0xff81.
+    Once convert_nan_to_inf became sign-preserving, a torch cast anywhere in the
+    pipeline would have turned every NaN into -inf, so the casts go through here.
+    """
+    out = src.to(torch_dtype)
+    if torch_dtype not in (torch.bfloat16, torch.float16):
+        return out
+    nan = torch.isnan(src)
+    if not bool(nan.any()):
+        return out
+    neg = torch.signbit(src)
+    bits = out.contiguous().view(torch.int16)
+    sign = torch.where(neg, torch.full_like(bits, -0x8000), torch.zeros_like(bits))
+    fixed = (bits & 0x7FFF) | sign
+    return torch.where(nan, fixed, bits).view(torch_dtype)
+
+
+# Bodies that never put the operand through the FP ALU, so the INPUT flush cannot
+# reach them. The flush lives in the FMA, not in SFPLOAD: the bit-precise in-repo
+# model flushes a denormal mantissa inside the FMA
+# (tt-llk/tests/corpus/tools/formal_equiv.py:392-403) while its SFPLOAD/SFPSTORE
+# applies denormals_as_zeros only on the STORE side, which is _apply_ftz's job.
+#
+# sign is the op that proves the scope is real: ckernel_sfpu_sign.h is
+# v_if (v < 0) -1 / v_elseif (_sfpu_is_fp16_zero_(v)) 0 / else 1, and
+# _sfpu_is_fp16_zero_ is an exact `v == 0.0F` (ckernel_sfpu_is_fp16_zero.h), so a
+# subnormal is not zero to it and sign(9.18e-41) is 1.0 on silicon. heaviside is the
+# same shape (three compares). For every other name here the distinction is
+# unobservable once the output flush applies; they are listed so the scope is stated.
+_NO_INPUT_FTZ_METHODS = frozenset(
+    {
+        "_sign",
+        "_signbit",
+        "_heaviside",
+        "_abs",
+        "_abs_int32",
+        "_neg",
+        "_identity",
+        "_fill",
+        "_unary_max",
+        "_unary_min",
+        "_unary_max_int32",
+        "_unary_min_int32",
+        "_relu",
+        "_relu_max",
+        "_threshold",
+        "_hardtanh",
+        "_clamp",
+        "_logical_not",
+        "_isinf",
+        "_isposinf",
+        "_isneginf",
+        "_isnan",
+        "_isfinite",
+        "_equal_zero",
+        "_not_equal_zero",
+        "_less_than_zero",
+        "_greater_than_zero",
+        "_less_than_equal_zero",
+        "_greater_than_equal_zero",
+    }
+)
+
+
+def _apply_input_ftz(operand, data_format: DataFormat):
+    """Flush subnormal-magnitude OPERANDS to a same-signed zero, matching hardware.
+
+    The mirror image of _apply_ftz, at the same format-keyed threshold, applied on the
+    way IN. See the call site in UnarySFPUGolden.__call__ for the silicon evidence.
+    """
+    if not isinstance(operand, torch.Tensor) or data_format.is_integer():
+        return operand
+    if not operand.dtype.is_floating_point:
+        return operand
+    threshold = _FTZ_THRESHOLD.get(data_format, 1e-37)
+    wide = operand.float()
+    flushed = torch.where(
+        (wide.abs() < threshold) & (wide != 0),
+        torch.copysign(torch.zeros_like(wide), wide),
+        wide,
+    )
+    return flushed.to(operand.dtype)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The SFPU's float COMPARE is a sign-magnitude total order, and min/max inherit it.
+#
+# An SFPU vFloat compare is not an IEEE comparison: it ranks operands by their
+# sign-magnitude bit pattern, which puts a NaN BEYOND the infinity of its own sign.
+# So min/max are neither NaN-propagating (what torch.maximum/minimum do) nor IEEE-754
+# minNum/maxNum (which return the non-NaN operand whatever its sign). They return the
+# operand that wins that order: a NaN wins on the positive side and loses on the
+# negative side.
+#
+# Four independent exhaustive rows agree with this and with nothing else, and it is
+# the MISS COUNTS that discriminate -- 127 versus 254 of the 254 NaN patterns:
+#
+#   unarymaxmin-max  max(x, 0.0)  127 misses, witness x = -NaN, device 0.0
+#                                 (x = +NaN returned +inf and MATCHED the old golden)
+#   unarymaxmin-min  min(x, 0.0)  254 misses, witness x = +NaN, device 0.0
+#   minmax-max       max(a, b)    127 per base stratum, witness b = -NaN, device = a
+#   minmax-min       min(a, b)    254 per base stratum, witness b = +NaN, device = a
+#
+# minNum/maxNum predicts 254 for all four; NaN propagation predicts 127 for all four.
+# The observed 127/254/127/254 split is exactly the sign-magnitude order.
+# ─────────────────────────────────────────────────────────────────────────────
+def _sfpu_order_rank(t: torch.Tensor) -> torch.Tensor:
+    """Monotone integer rank of a float tensor under the SFPU's compare order."""
+    bits = t.float().contiguous().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+    neg = (bits & 0x80000000) != 0
+    return torch.where(neg, (~bits) & 0xFFFFFFFF, bits | 0x80000000)
+
+
+def _sfpu_order_rank_scalar(x: float) -> int:
+    import struct
+
+    bits = struct.unpack("<I", struct.pack("<f", x))[0]
+    return (~bits) & 0xFFFFFFFF if bits & 0x80000000 else bits | 0x80000000
+
+
+def _sfpu_order_max(x: float, y: float) -> float:
+    return x if _sfpu_order_rank_scalar(x) >= _sfpu_order_rank_scalar(y) else y
+
+
+def _sfpu_order_min(x: float, y: float) -> float:
+    return x if _sfpu_order_rank_scalar(x) <= _sfpu_order_rank_scalar(y) else y
+
+
 def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.Tensor:
     """Apply integer saturation during format conversion.
 
@@ -217,19 +351,31 @@ def check_bfp2_b(operand: list) -> list:
 
 
 def convert_nan_to_inf(operand):
-    """Replace every NaN with +inf, preserving the input type.
+    """Replace every NaN with a SIGN-PRESERVED infinity, preserving the input type.
+
+    The packer does not synthesize a +inf: it converts the NaN that is in Dest and
+    the sign bit rides through. `copydest-fresh` settles this with no arithmetic in
+    the way -- it is a pure identity move, and over the whole 65536-pattern bf16
+    space its only graded misses were the 127 NEGATIVE-NaN patterns, where silicon
+    returns -inf and the old golden said +inf. `negative` is the row that proves the
+    sign is read from the VALUE and not forced positive: it misses at exactly the 127
+    POSITIVE-NaN patterns, because SFPU negation flips a NaN's sign bit too.
 
     Accepts a torch.Tensor or a plain list of floats and returns the same
     type so that downstream code (e.g. `result.to(...)`) does not break
     when the caller passes a tensor.
+
+    Callers must convert BEFORE any cast that canonicalizes NaN: torch's bfloat16
+    cast rewrites every NaN to 0xFFFF (a negative NaN), which would make every NaN
+    -inf. UnarySFPUGolden.__call__ already converts while the values are fp32.
     """
     if isinstance(operand, torch.Tensor):
         return torch.where(
             torch.isnan(operand),
-            torch.full_like(operand, float("inf")),
+            torch.copysign(torch.full_like(operand, float("inf")), operand),
             operand,
         )
-    return [math.inf if math.isnan(x) else x for x in operand]
+    return [math.copysign(math.inf, x) if math.isnan(x) else x for x in operand]
 
 
 def convert_inf_to_value(operand, inf_value: float):
@@ -2368,7 +2514,32 @@ class UnarySFPUGolden:
                 # truncate to float16_b
                 operand1 = (operand1.view(torch.int32) & 0xFFFF0000).view(torch.float32)
 
-        tensor = to_tensor(operand1, dst_format)
+        # INPUT flush-to-zero. The SFPU datapath flushes a subnormal OPERAND to a
+        # same-signed zero before it computes, so the golden must not evaluate the op
+        # at the exact subnormal: doing so grades the device against a value it never
+        # saw. Applied at the same format-keyed threshold as the result FTZ (see
+        # _FTZ_THRESHOLD / _apply_ftz), because it is the same flush, and AFTER the
+        # dst-format truncation above so the operand is the bit pattern Dest holds.
+        #
+        # Silicon, over all 65536 bf16 patterns: sqrt and rsqrt-fresh miss at 127/127
+        # of the negative subnormals (sqrt(-9.18e-41) is NaN -> +inf to the old
+        # oracle and 0.0 on device, because sqrt(-0.0) = -0.0); log misses at all 254
+        # (-92.0 vs -inf); ceil-fresh at the 127 positive ones (1.0 vs 0.0); recip at
+        # 95, which is the 96 positive subnormal codes whose reciprocal is finite in
+        # bf16, less the single boundary code that rounds the same either way.
+        if self.ops[operation].__name__ not in _NO_INPUT_FTZ_METHODS:
+            operand1 = _apply_input_ftz(operand1, dst_format)
+
+        # cast_preserving_nan_sign, not to_tensor: a torch bf16/fp16 cast would
+        # canonicalize every NaN to a NEGATIVE NaN before the op ever runs, and the
+        # sign is now load-bearing (convert_nan_to_inf preserves it).
+        tensor = (
+            cast_preserving_nan_sign(
+                operand1.clone().detach(), format_dict[dst_format]
+            )
+            if isinstance(operand1, torch.Tensor)
+            else to_tensor(operand1, dst_format)
+        )
 
         if iterations is None or iterations * TILE_SIZE > tensor.numel():
             iterations = tensor.numel() // TILE_SIZE
@@ -2421,7 +2592,7 @@ class UnarySFPUGolden:
         result[
             ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
             + TILE_SIZE * iterations
-        ] = op_tensor.to(op_dtype)
+        ] = cast_preserving_nan_sign(op_tensor, op_dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()
@@ -2508,17 +2679,39 @@ class UnarySFPUGolden:
             return math.nan
 
     def _torch_unary(self, x, torch_fn) -> float:
-        """Apply torch_fn to scalar x in fp32, then enforce the
-        format-aware NaN rule: convert +/-inf to NaN when the dest is
-        A-exponent (Float16).
+        """Apply torch_fn to scalar x in fp64, NARROW to the fp32 an SFPU register
+        holds, then enforce the format-aware NaN rule: convert +/-inf to NaN when the
+        dest is A-exponent (Float16).
+
+        The evaluation dtype is fp64 and the narrowing is a separate, later step,
+        because evaluating in fp32 makes the ORACLE overflow before the device does:
+        torch.special.i1(89.0) is +inf in fp32 and 1.890530e37 in fp64, a value
+        comfortably inside fp32's range. A reference that is already +inf cannot see
+        a kernel defect anywhere above it, so this oracle structurally could not fail
+        an i0/i1 row for |x| in [89, 91.5] -- exactly the band where a real i1 defect
+        lived (symmetric_clamp(x, 88.5) collapsing every larger |x| onto i1(88.5)).
+        I0 reaches FLT_MAX at 91.9007646 and I1 at 91.9021397, so the whole interval
+        is finite and fp32-representable and must be graded.
+
+        Narrowing AFTER the evaluation keeps the format contract exactly as strict as
+        before for a genuine overflow -- fp64 -> fp32 of a value above FLT_MAX is
+        still +/-inf -- while removing the spurious one.
         """
-        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        wide = torch_fn(torch.tensor(x, dtype=torch.float64))
+        result = wide.to(torch.float32).item()
         if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
         return result
 
     # Operation methods
     def _abs(self, x):
+        # SFPABS, float mod, is NOT mathematical abs at a NaN: the bit-precise in-repo
+        # model (tt-llk/tests/corpus/tools/formal_equiv.py:1299-1309) clears the sign
+        # bit only for encodings <= 0xFF800000, so a NEGATIVE NaN passes through
+        # unchanged and then packs to -inf. The kernel is a single SFPABS
+        # (ckernel_sfpu_abs.h:20-22 -> sfpi::abs, sfpi 7.69.0 sfpi_lib.h:280-282).
+        if math.isnan(x):
+            return x
         return abs(x)
 
     def _add1(self, x):
@@ -2978,6 +3171,13 @@ class UnarySFPUGolden:
         return x
 
     def _gelu(self, x):
+        # gelu(x) = x*Phi(x) evaluates to (-inf)*0 = NaN at x = -inf in any finite
+        # precision, but the LIMIT is 0 and 0 is what the device returns. All four
+        # corpus gelu rows report the same graded witness, bf16 pattern 0xff80 = -inf,
+        # device 0.0 against golden +inf, and for the fitted arm it is the ONLY graded
+        # miss over all 65536 patterns.
+        if not isinstance(x, torch.Tensor) and math.isinf(x) and x < 0:
+            return 0.0
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -2988,6 +3188,10 @@ class UnarySFPUGolden:
     def _gelu_tanh(self, x):
         # Matches calculate_gelu_tanh: the tanh approximation of GELU,
         # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+        # Same -inf limit as _gelu: 0.5*(-inf)*(1 + tanh(-inf)) = -inf*0 = NaN in
+        # arithmetic, 0 as a limit, 0 on the device.
+        if not isinstance(x, torch.Tensor) and math.isinf(x) and x < 0:
+            return 0.0
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
@@ -3114,8 +3318,20 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: t * torch.clamp(0.5 * t + 1.0, 0.0, 1.0))
 
     def _lgamma(self, x):
-        # Single-tile Stirling kernel is accurate for x >= ~0.5 (domain-restricted).
-        return self._torch_unary(x, torch.lgamma)
+        # STAGE contract, not composite semantics. MathOperation.Lgamma dispatches
+        # calculate_lgamma_stirling, which is stage 1 of a three-tile composite and
+        # returns the DOCUMENTED intermediate lgamma(z) with z = (x < 0.5) ? 1-x : x.
+        # That is stated at tt_metal/hw/inc/api/compute/eltwise_unary/lgamma.h:24,
+        # repeated in the closing comment of the function itself, and completed by
+        # lgamma_adjusted_tile in
+        # ttnn/cpp/.../unary/device/kernels/compute/lgamma_kernel.cpp. Grading the
+        # stage against lgamma(x) on the negative axis grades it against a contract it
+        # never made: the device returns bf16(lgamma(1-x)) EXACTLY at x = -5.03125
+        # (4.84375) and inside tolerance at x = -0.9375 (-0.024902 vs -0.025146).
+        # No LLK node exercises the reflection correction, so that path has no
+        # coverage either way -- recorded, not hidden.
+        z = 1.0 - x if x < 0.5 else x
+        return self._torch_unary(z, torch.lgamma)
 
     def _digamma(self, x):
         # digamma = d/dx ln(gamma(x)); kernel LUT is fit on [0.01, 102].
@@ -3183,10 +3399,10 @@ class UnarySFPUGolden:
         return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
-        return max(x, self._UNARY_MAX_MIN_VALUE)
+        return _sfpu_order_max(x, self._UNARY_MAX_MIN_VALUE)
 
     def _unary_min(self, x):
-        return min(x, self._UNARY_MAX_MIN_VALUE)
+        return _sfpu_order_min(x, self._UNARY_MAX_MIN_VALUE)
 
     def _polygamma(self, x):
         return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
@@ -3799,12 +4015,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return float(t1 != t2)
 
     def _max(self, t1, t2):
+        # SFPU compare order, not torch.maximum -- see _sfpu_order_rank.
         wide = self._wide_dtype(t1)
-        return torch.maximum(t1.to(wide), t2.to(wide)).to(t1.dtype)
+        a, b = t1.to(wide), t2.to(wide)
+        keep_a = _sfpu_order_rank(a) >= _sfpu_order_rank(b)
+        return torch.where(keep_a, a, b).to(t1.dtype)
 
     def _min(self, t1, t2):
         wide = self._wide_dtype(t1)
-        return torch.minimum(t1.to(wide), t2.to(wide)).to(t1.dtype)
+        a, b = t1.to(wide), t2.to(wide)
+        keep_a = _sfpu_order_rank(a) <= _sfpu_order_rank(b)
+        return torch.where(keep_a, a, b).to(t1.dtype)
 
     def _fmod(self, t1, t2):
         # fmod(a, b) = a - trunc(a/b) * b (result takes the sign of a). Computed in

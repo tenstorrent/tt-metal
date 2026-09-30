@@ -93,7 +93,11 @@ def bf16_bitdistance(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
 
 
 def numeric_comparison(
-    golden: np.ndarray, device: np.ndarray, atol: float, rtol: float
+    golden: np.ndarray,
+    device: np.ndarray,
+    atol: float,
+    rtol: float,
+    nan_source: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return policy-defined bf16 ULP and within-tolerance masks.
 
@@ -102,12 +106,42 @@ def numeric_comparison(
     assigned ULP 0 because their payload/lattice distance is not a meaningful
     numeric error. Every other pair involving a non-finite value is rejected
     and assigned the maximum bf16 sentinel distance, 65535.
+
+    CONVERTED-NaN INFINITY SIGN POLICY. `nan_source` marks the elements whose golden
+    infinity is a PACKER CONVERSION OF A NaN rather than a computed overflow -- i.e.
+    the pre-conversion high-precision value was NaN. There, two infinities of
+    OPPOSITE sign are also accepted.
+
+    This module already declares a NaN's payload and sign to be not a numeric
+    quantity (see both_nan above, and the signed-zero policy). convert_nan_to_inf
+    preserves that sign bit, so what the device reports is whichever sign bit the
+    instruction sequence happened to leave in Dest -- and that is not determined by
+    any host math library either. numpy's fp64 (-inf)*0, torch's fp32 (-inf)*0 and
+    the SFPU all produce a NaN and none of them agrees with the others about its
+    sign: silu(-inf) is -inf to numpy, +inf to torch, and +inf on silicon, over all
+    65536 patterns of a row that is otherwise CLEAN. Grading that bit would fabricate
+    a defect for ~35 ops and certify nothing, so it is declared here, once, rather
+    than excused per op.
+
+    What this does NOT relax, deliberately:
+      * a COMPUTED OVERFLOW. An overflow produces an infinity directly, so
+        `nan_source` is false there and expm1cw returning -inf where +inf is correct
+        at x = 3.3e38 is still a defect.
+      * a golden that is a determinate FINITE value. gelu(-inf) is 0 by the limit
+        (see _gelu_exact), not NaN, so the policy never reaches it.
+      * NaN NON-PROPAGATION. A device that returns an ordinary FINITE value where
+        the golden says NaN is still out of tolerance -- that is the interesting half
+        of the NaN question, and CorrectnessAccumulator counts it separately.
     """
     g = np.asarray(golden, dtype=np.float32).astype(np.float64)
     d = np.asarray(device, dtype=np.float32).astype(np.float64)
     both_finite = np.isfinite(g) & np.isfinite(d)
     both_nan = np.isnan(g) & np.isnan(d)
     both_inf = np.isinf(g) & np.isinf(d) & (np.signbit(g) == np.signbit(d))
+    if nan_source is not None:
+        both_inf = both_inf | (
+            np.isinf(g) & np.isinf(d) & np.asarray(nan_source, dtype=bool)
+        )
     with np.errstate(all="ignore"):
         close = both_finite & (np.abs(d - g) <= (atol + rtol * np.abs(g)))
     matching_special = both_nan | both_inf
@@ -282,26 +316,155 @@ BF16_TINY = 2.0**-126  # FTZ threshold for Float16_b / Float32 (finfo.tiny)
 
 
 def input_ftz(x: np.ndarray) -> np.ndarray:
-    """The operand with subnormals flushed to a same-signed zero.
+    """The operand the SFPU actually computes on: subnormals flushed to a signed zero.
 
-    Neither ``UnarySFPUGolden`` nor this module models INPUT flush-to-zero: both
-    apply FTZ to the RESULT (``_apply_ftz`` / ``format_golden_f32_noacc``) and
-    evaluate the op at the exact subnormal operand. bf16 and fp32 share an 8-bit
-    exponent field, so a subnormal bf16 in a 16-bit Dest is a subnormal fp32 to
-    SFPLOAD, and SFPU arithmetic flushes it -- the value the kernel actually
-    computes on is +-0.
+    INPUT flush-to-zero is part of the hardware's contract and both oracles now model
+    it. bf16 and fp32 share an 8-bit exponent field, so a subnormal bf16 in a 16-bit
+    Dest is a subnormal fp32 to SFPLOAD, and the SFPU datapath flushes it -- the value
+    the kernel computes on is +-0, never 9.18e-41. A golden that evaluates the op at
+    the exact subnormal grades the device against a value it never saw.
 
-    Ordinary stimuli never produce a subnormal, so the gap is invisible until a
-    band enumerates all 65536 bf16 patterns: there it makes every domained op look
-    like it fails at exactly the 127 negative subnormals (sqrt(-1e-41) is +inf to
-    both oracles and 0.0 on silicon, and the SILICON is right). This is used to
-    ATTRIBUTE such a miss, never to hide one: a device answer is only explained if
-    it matches the golden at the flushed operand.
+    Ordinary stimuli never produce a subnormal, so the gap was invisible until a band
+    enumerated all 65536 bf16 patterns. There it makes every steep-at-zero op look
+    broken at the subnormals, and the SILICON is right every time:
+
+      sqrt / sqrt-fresh   127/127 graded misses, at the 127 NEGATIVE subnormals:
+                          sqrt(-9.18e-41) is NaN -> +inf to the old golden and 0.0 on
+                          silicon, because sqrt(-0.0) is -0.0.
+      rsqrt-fresh         127/127.
+      log / log-fresh     254 of 510, at all 254 subnormals: log(9.18e-41) = -92.0 to
+                          the old golden, -inf on silicon, because log(+0) = -inf.
+      ceil-fresh          127 of 254, at the 127 POSITIVE subnormals: ceil of a tiny
+                          positive is 1.0 to the old golden and 0.0 on silicon.
+      recip / recip-ilv2  95, and the count is the proof: 1/x overflows bf16 for the
+                          small subnormals (both oracles then say +inf and agree), and
+                          is finite only for x >= 1/FLT_MAX = 2^-128.25, i.e. the 96
+                          largest of the 127 positive subnormal codes. 95 of those 96
+                          miss; the 96th is the boundary code where the flushed and
+                          unflushed answers round to the same bf16.
+
+    ``CorrectnessAccumulator`` keeps ``n_out_ftz_explained`` as the FALSIFICATION probe
+    for this model rather than as an excuse for a miss: it now counts the residual
+    out-of-tolerance patterns at a subnormal operand that the UNFLUSHED golden would
+    have explained. A nonzero count is evidence against input FTZ for that op, not a
+    licence.
+
+    SCOPE, and it is not universal. The flush lives in the FP ALU, not in SFPLOAD: the
+    bit-precise in-repo model flushes a denormal MANTISSA inside the FMA
+    (corpus/tools/formal_equiv.py:392-403, ``m = B.ite(B.eq(e, c(0)), c(0), m)``),
+    while its SFPLOAD/SFPSTORE applies ``denormals_as_zeros`` only on the STORE side,
+    which is the OUTPUT FTZ ``format_golden_*`` already models. A body that never puts
+    the operand through the FP ALU therefore does NOT flush it, and INPUT_FTZ_EXEMPT
+    names those bodies.
     """
     xf = np.asarray(x, dtype=np.float32)
     sub = (np.abs(xf.astype(np.float64)) < BF16_TINY) & (xf != 0)
     return np.where(sub, np.copysign(np.float32(0.0), xf), xf).astype(np.float32)
 
+
+# Bodies that never put the operand through the FP ALU, so the input flush cannot
+# reach them. Verified at source, one by one, not assumed:
+#
+#   sign       ckernel_sfpu_sign.h:  v_if (v < 0) -1 / v_elseif (_sfpu_is_fp16_zero_(v))
+#              0 / else 1, and _sfpu_is_fp16_zero_ is an exact `v == 0.0F`
+#              (ckernel_sfpu_is_fp16_zero.h) -- a subnormal is NOT zero to it, so
+#              sign(9.18e-41) is 1.0 on silicon and flushing would make the golden
+#              say 0.0. This is the op that proves the model is not universal.
+#   heaviside  ckernel_sfpu_heaviside.h: v_if (v < 0) 0 / v_elseif (v > 0) 1 / else s.
+#              Three compares, no arithmetic; heaviside(9.18e-41) is 1.0, not 0.5.
+#   abs        SFPABS; negative: a sign XOR; identity/copydest: a move.
+#   min / max  SFPSWAP (a sign-magnitude compare, see below), and hardtanh / clamp /
+#              relu / threshold, which are min/max and selects over the raw operand.
+#   fill       ignores the operand entirely.
+#   the predicates (signbit, isinf/isnan/isfinite, the comparisons, logical_not) and
+#              the integer bodies, which are bit tests.
+#
+# For every one of these except sign and heaviside the distinction is unobservable
+# anyway: op(subnormal) and op(+-0) round to the same bf16 once the OUTPUT flush
+# applies. They are listed all the same, so the scope is a statement rather than an
+# accident.
+INPUT_FTZ_EXEMPT = frozenset(
+    {
+        "sign",
+        "signbit",
+        "heaviside",
+        "heaviside-fresh",
+        "abs",
+        "absint32",
+        "negative",
+        "identity",
+        "copydest-fresh",
+        "fill",
+        "fill-fresh",
+        "unarymaxmin-max",
+        "unarymaxmin-min",
+        "relu",
+        "threshold",
+        "threshold-fresh",
+        "threshold-fitted",
+        "hardtanh",
+        "hardtanh-fresh",
+        "clamp",
+        "clamp-fresh",
+        "logicalnot",
+        "isinfisnan",
+        "unarycomp",
+        "unarycomp-fresh",
+        "comp",
+        "eqz-fresh",
+        "bitwisenot",
+        "unaryshift",
+        "unaryshift-fresh",
+    }
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The SFPU's float COMPARE is a sign-magnitude total order, and min/max inherit it.
+#
+# An SFPU vFloat compare is not an IEEE comparison: it ranks operands by their
+# sign-magnitude bit pattern, which places a NaN BEYOND the infinity of its own
+# sign. So max/min are neither NaN-propagating (what torch does) nor IEEE-754
+# minNum/maxNum (return the non-NaN operand). They return whichever operand wins
+# that order, and a NaN wins on the positive side and loses on the negative side.
+#
+# Four independent exhaustive rows agree with this and with nothing else, and the
+# MISS COUNTS are what discriminate -- 127 versus 254 out of the 254 NaN patterns:
+#
+#   unarymaxmin-max  max(x, 0.0)   127 misses, witness x = -NaN, device 0.0
+#                                  (x = +NaN gave +inf and MATCHED the old golden)
+#   unarymaxmin-min  min(x, 0.0)   254 misses, witness x = +NaN, device 0.0
+#   minmax-max       max(a, b)     127 per base stratum, witness b = -NaN, device = a
+#   minmax-min       min(a, b)     254 per base stratum, witness b = +NaN, device = a
+#
+# minNum/maxNum would give 254 for all four. NaN propagation would give 127 for all
+# four. The observed 127/254/127/254 split is exactly the sign-magnitude order.
+# ─────────────────────────────────────────────────────────────────────────────
+def _sign_magnitude_rank(x: np.ndarray) -> np.ndarray:
+    """Monotone integer rank of an fp32 value under the SFPU's compare order."""
+    b = np.asarray(x, dtype=np.float32).view(np.uint32).astype(np.uint64)
+    neg = (b & np.uint64(0x80000000)) != 0
+    return np.where(
+        neg, (~b) & np.uint64(0xFFFFFFFF), b | np.uint64(0x80000000)
+    ).astype(np.int64)
+
+
+def sfpu_max(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """max under the SFPU compare order (fp64 out, NaN ranked beyond its own inf)."""
+    af = np.asarray(a, dtype=np.float32)
+    bf = np.broadcast_to(np.asarray(b, dtype=np.float32), af.shape)
+    return np.where(
+        _sign_magnitude_rank(af) >= _sign_magnitude_rank(bf), af, bf
+    ).astype(np.float64)
+
+
+def sfpu_min(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """min under the SFPU compare order (fp64 out, NaN ranked beyond its own inf)."""
+    af = np.asarray(a, dtype=np.float32)
+    bf = np.broadcast_to(np.asarray(b, dtype=np.float32), af.shape)
+    return np.where(
+        _sign_magnitude_rank(af) <= _sign_magnitude_rank(bf), af, bf
+    ).astype(np.float64)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Vectorized true-math op bodies. Each takes an fp32 numpy array (the value the SFPU
@@ -330,7 +493,16 @@ def _erfinv(x):
 
 def _gelu_exact(x):
     # GeluAppx golden == exact (erf) gelu, matching UnarySFPUGolden._gelu.
-    return _np(torch.nn.functional.gelu(_t(x)))
+    #
+    # gelu(x) = x*Phi(x) evaluates to (-inf)*0 = NaN at x = -inf in any finite
+    # precision, but the LIMIT is 0 and 0 is what the device returns. All four gelu
+    # rows (gelu, gelu-fresh, gelu-fitted, gelu-licensed) report the same graded
+    # witness 0x0000ff80 -- the -inf bf16 pattern, class neg_inf_input -- with
+    # device 0.0 against golden +inf, and for gelu-fitted that is its ONLY graded
+    # miss. The device is right; the golden was reading a 0*inf artefact.
+    y = _np(torch.nn.functional.gelu(_t(x)))
+    xf = np.asarray(x, dtype=np.float64)
+    return np.where(np.isinf(xf) & (xf < 0), 0.0, y)
 
 
 def _sigmoid(x):
@@ -483,7 +655,20 @@ def _digamma(x):
 
 
 def _lgamma(x):
-    return _np(torch.lgamma(_t(x)))
+    # STAGE semantics, not composite semantics. calculate_lgamma_stirling is stage 1
+    # of a three-tile composite and returns the DOCUMENTED intermediate
+    # lgamma(z), z = (x < 0.5) ? 1-x : x. That is stated at
+    # tt_metal/hw/inc/api/compute/eltwise_unary/lgamma.h:24, repeated in the closing
+    # comment of the function itself, and completed by lgamma_adjusted_tile in
+    # ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/lgamma_kernel.cpp.
+    # The LLK node (test_sfpu_unary.py MathOperation.Lgamma) calls ONLY the stage, so
+    # grading it against lgamma(x) on the negative axis grades it against a contract
+    # it never made. Note this function has NO poles: for x >= 0.5 lgamma(x) is
+    # finite, and for x < 0.5 the argument z = 1-x > 0.5 is too -- so the whole real
+    # line is graded, which is STRICTER than the old pole-excluding treatment.
+    xf = np.asarray(x, dtype=np.float64)
+    z = np.where(xf < 0.5, 1.0 - xf, xf)
+    return _np(torch.lgamma(_t(z)))
 
 
 def _polygamma(x):
@@ -499,7 +684,16 @@ def _polygamma(x):
 # exactly the population the device leg covers.
 # ─────────────────────────────────────────────────────────────────────────────
 def _abs(x):
-    return np.abs(np.asarray(x, dtype=np.float64))
+    # SFPABS, float mod, is NOT mathematical abs at a NaN. The bit-precise in-repo
+    # model (corpus/tools/formal_equiv.py:1299-1309) clears the sign bit only for
+    # encodings <= 0xFF800000, so the 127 NEGATIVE-NaN patterns 0xFF800001..0xFFFFFFFF
+    # pass through UNCHANGED (-inf itself, 0xFF800000, IS cleared to +inf). The kernel
+    # is one SFPABS (tt_llk_blackhole/.../ckernel_sfpu_abs.h:20-22 -> sfpi::abs ->
+    # __builtin_rvtt_sfpabs with SFPABS_MOD1_FLOAT, sfpi 7.69.0 sfpi_lib.h:280-282),
+    # so the negative NaN reaches the packer with its sign intact and packs to -inf.
+    # np.abs clears it; that difference is the whole of this row's 127 graded misses.
+    xf = np.asarray(x, dtype=np.float64)
+    return np.where(np.isnan(xf), xf, np.abs(xf))
 
 
 def _neg(x):
@@ -583,11 +777,13 @@ def _relu_max(x):
 
 
 def _unary_max(x):
-    return np.maximum(np.asarray(x, dtype=np.float64), UNARY_MAX_MIN_VALUE)
+    # UnarySFPUGolden._unary_max: max(x, UNARY_MAX_MIN_VALUE) under the SFPU compare
+    # order, not np.maximum -- see sfpu_max.
+    return sfpu_max(x, np.float32(UNARY_MAX_MIN_VALUE))
 
 
 def _unary_min(x):
-    return np.minimum(np.asarray(x, dtype=np.float64), UNARY_MAX_MIN_VALUE)
+    return sfpu_min(x, np.float32(UNARY_MAX_MIN_VALUE))
 
 
 def _fill(x):
@@ -715,11 +911,29 @@ def format_golden_f32_acc(hp: np.ndarray) -> np.ndarray:
 def format_golden_f32_noacc(hp: np.ndarray) -> np.ndarray:
     """hp (fp64 true math) -> the fp32-container reference the device should output.
 
-    bf16-round -> NaN->+inf (dst=Float16_b, data=Float32 falls in __call__'s default
-    convert_nan_to_inf case) -> FTZ below 2^-126. Returns fp32.
+    bf16-round -> NaN->SIGN-PRESERVED inf (dst=Float16_b, data=Float32 falls in
+    __call__'s default convert_nan_to_inf case) -> FTZ below 2^-126. Returns fp32.
+
+    NaN->inf PRESERVES THE SIGN BIT. The packer does not synthesize a +inf; it
+    converts the NaN that is in Dest and the sign bit rides through. `copydest-fresh`
+    settles this with no arithmetic in the way: it is a pure identity move, and at all
+    127 negative-NaN bf16 patterns the device returns -inf where the old golden said
+    +inf -- 127 of 127 of its graded misses, and nothing else in that row can account
+    for them.
+
+    The sign is read from `hp`, NOT from the rounded value, because torch's bfloat16
+    cast CANONICALIZES every NaN to 0xFFFF (a negative NaN): reading the sign after
+    rounding would turn every NaN into -inf, including a positive one. `negative` is
+    the row that would catch that mistake -- it misses at exactly the 127 POSITIVE NaN
+    patterns, because SFPU negation flips a NaN's sign bit too.
     """
+    hp64 = np.asarray(hp, dtype=np.float64)
     y = _round_bf16_as_f32(hp).astype(np.float32)
-    y = np.where(np.isnan(y), np.float32(np.inf), y)  # convert_nan_to_inf: NaN -> +inf
+    nan = np.isnan(hp64) | np.isnan(y)
+    # convert_nan_to_inf, sign-preserving: copysign reads the NaN's own sign bit.
+    y = np.where(
+        nan, np.copysign(np.float64(np.inf), hp64), y.astype(np.float64)
+    ).astype(np.float32)
     y = np.where(np.abs(y.astype(np.float64)) < BF16_TINY, np.float32(0.0), y)  # FTZ
     return y.astype(np.float32)
 
@@ -740,6 +954,17 @@ class GoldenSpec:
     note: str = ""
     checkable: bool = True
     dst_acc: bool = False  # True => 32-bit DEST + fp32 output (format_golden_f32_acc)
+
+    def evaluate(self, x: np.ndarray) -> np.ndarray:
+        """The op at the operand the SFPU actually receives: input-FTZ then math.
+
+        Every caller must go through this rather than `spec.math` directly, or it
+        grades the device against a subnormal the datapath never had. See input_ftz,
+        and INPUT_FTZ_EXEMPT for the compare-only bodies the flush cannot reach.
+        """
+        if self.op in INPUT_FTZ_EXEMPT:
+            return self.math(np.asarray(x, dtype=np.float32))
+        return self.math(input_ftz(x))
 
 
 # Divergent priority ops (the correctness question actually matters for these).
@@ -869,7 +1094,9 @@ _CORPUS_UNARY = [
     GoldenSpec(
         "lgamma",
         _lgamma,
-        note="torch.lgamma; all non-pole reals; poles at the non-positive integers",
+        note="STAGE contract lgamma(z), z=(x<0.5)?1-x:x (lgamma.h:24) -- the LLK node "
+        "is calculate_lgamma_stirling, stage 1 of the 3-tile composite; finite on all "
+        "reals, so no pole exclusion",
     ),
     GoldenSpec(
         "polygamma",
@@ -1397,12 +1624,16 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
 # Excluded POINTWISE, deliberately. Excluding the negative half-line instead would
 # license digamma(-1.5) = +0.703157, an ordinary defined value where the kernel
 # returns -10.2929 -- a sign flip, and a real defect.
+# `lgamma` is deliberately NOT here. The LLK node is the Stirling STAGE, whose
+# argument is z = (x < 0.5) ? 1-x : x and is therefore always >= 0.5: the stage
+# function is finite on the whole real line and has no pole to exclude. Excluding the
+# non-positive integers for it would license the kernel at x = -1, -2, -3, ... where
+# it has a perfectly ordinary answer. See _lgamma.
 GAMMA_POLE_OPS = frozenset(
     {
         "digamma",
         "digamma-fresh",
         "digamma-fitted",
-        "lgamma",
         "polygamma",
         "polygamma-fitted",
     }
@@ -1576,6 +1807,9 @@ class CorrectnessAccumulator:
     # ...and by the kernel not PROPAGATING NaN at all (it returns an ordinary
     # value where both oracles say NaN). Distinct from the sign question.
     n_out_nan_nonprop: int = 0
+    # Patterns where the NAN-OPERAND INFINITY SIGN POLICY was the reason a pair of
+    # opposite-signed infinities was accepted. Reported so the policy is never silent.
+    n_nan_inf_sign_policy: int = 0
     n_in_claim: int = 0
     n_out_in_claim: int = 0
     max_ulp_in_claim: float = 0.0
@@ -1609,7 +1843,12 @@ class CorrectnessAccumulator:
             xin = _bf16_bits_to_f32(u32 & np.uint32(0xFFFF))
         else:
             xin = bf16_truncate(u32)  # what the SFPU actually sees
-        hp = self.spec.math(xin)  # fp64 true math
+        # INPUT FTZ. The SFPU never receives a subnormal operand, so the golden must
+        # not evaluate at one. `xin` stays the delivered bf16 pattern (the input
+        # CLASSIFICATION is about what was delivered); `xop` is what the datapath
+        # computes on. See input_ftz for the per-op silicon evidence.
+        xop = xin if self.spec.op in INPUT_FTZ_EXEMPT else input_ftz(xin)
+        hp = self.spec.evaluate(xin)  # fp64 true math at the operand the SFPU sees
         fmt = format_golden_f32_acc if self.spec.dst_acc else format_golden_f32_noacc
         golden = fmt(hp)  # fp32-container reference
         if self.out_bytes == 2:
@@ -1623,7 +1862,21 @@ class CorrectnessAccumulator:
                 np.float32
             )
 
-        ulp, within = numeric_comparison(golden, dev, self.spec.atol, self.spec.rtol)
+        # The golden infinities that are CONVERTED NaNs, not computed overflows.
+        nan_src = np.isnan(np.asarray(hp, dtype=np.float64))
+        ulp, within = numeric_comparison(
+            golden, dev, self.spec.atol, self.spec.rtol, nan_source=nan_src
+        )
+        gd = golden.astype(np.float64)
+        dd = dev.astype(np.float64)
+        self.n_nan_inf_sign_policy += int(
+            np.count_nonzero(
+                nan_src
+                & np.isinf(gd)
+                & np.isinf(dd)
+                & (np.signbit(gd) != np.signbit(dd))
+            )
+        )
         classes = unary_input_classes(xin, self.spec.domain)
         _fold_class_ulps(self.class_ulp, ulp, classes)
         out = ~within
@@ -1647,33 +1900,41 @@ class CorrectnessAccumulator:
             if graded[gi] and ulp[gi] > self.max_ulp_graded:
                 self.max_ulp_graded = float(ulp[gi])
                 self.max_ulp_graded_input = int(u32[gi])
-        # Attribute the misses that input FTZ explains, before anything else reads
-        # the counts. Only subnormal operands can be affected, so this is cheap.
+        # FALSIFICATION probe for the input-FTZ model, not an excuse for a miss. The
+        # golden above already evaluates at the flushed operand; this counts the
+        # RESIDUAL out-of-tolerance patterns at a subnormal operand that the UNFLUSHED
+        # golden would have explained instead. Nonzero means this op does NOT flush its
+        # input and the model is wrong for it. Only subnormal operands can be affected,
+        # so this is cheap.
         sub_in = (np.abs(xin.astype(np.float64)) < BF16_TINY) & (xin != 0)
         if np.any(out & sub_in):
             idx = np.flatnonzero(out & sub_in)
-            ftz_golden = fmt(self.spec.math(input_ftz(xin[idx])))
-            _, ftz_within = numeric_comparison(
-                ftz_golden, dev[idx], self.spec.atol, self.spec.rtol
+            raw_golden = fmt(self.spec.math(xin[idx]))  # deliberately UNflushed
+            _, raw_within = numeric_comparison(
+                raw_golden, dev[idx], self.spec.atol, self.spec.rtol
             )
-            self.n_out_ftz_explained += int(np.count_nonzero(ftz_within))
+            self.n_out_ftz_explained += int(np.count_nonzero(raw_within))
 
-        # NaN accounting, both halves, before anything reads the counts.
+        # RESIDUAL NaN accounting. format_golden_f32_noacc now converts a NaN to a
+        # SIGN-PRESERVED infinity, and the min/max bodies now model the SFPU's
+        # sign-magnitude total order, so both of these count what is LEFT.
         #
-        # (a) SIGN. The golden's convert_nan_to_inf hardcodes +inf, but the packer
-        #     preserves the NaN's sign bit: the identity row copydest-fresh returns
-        #     -inf for a negative NaN, and it does nothing but copy, so nothing else
-        #     can account for it. Explained = the device matches the golden with
-        #     NaN mapped to a SAME-SIGNED infinity.
-        # (b) NON-PROPAGATION. tanh(nan) -> 1.0, threshold(nan) -> 10.0,
-        #     max(nan, 0) -> 0.0: the kernel returns an ordinary value where the
-        #     golden says NaN. For min/max that IS IEEE-754 minNum/maxNum, which
-        #     torch's min/max do not follow; for the others it is a kernel
-        #     semantics question this records rather than settles.
+        # (a) OPERAND-SIGN residual. The golden's NaN carries the sign its own math
+        #     produced (identity keeps it, negation flips it, np.abs CLEARS it). This
+        #     counts the misses a golden that instead forced the OPERAND's sign would
+        #     have explained. It is nonzero exactly where the kernel fails to
+        #     canonicalize a NaN that the mathematical function does canonicalize --
+        #     `abs`, where the device returns -inf for a negative NaN although |x| can
+        #     never be negative. That is a kernel deviation, recorded here, NOT
+        #     licensed: the golden stays strict.
+        # (b) NON-PROPAGATION. tanh(nan) -> 1.0, threshold(nan) -> 10.0: the kernel
+        #     returns an ordinary value where the golden says NaN. A kernel semantics
+        #     question this records rather than settles. min/max are no longer counted
+        #     here, because their NaN behaviour is now MODELLED rather than attributed.
         nan_in = np.isnan(xin.astype(np.float64))
         if np.any(out & nan_in):
             idx = np.flatnonzero(out & nan_in)
-            hp_n = np.asarray(self.spec.math(xin[idx]), dtype=np.float64)
+            hp_n = np.asarray(self.spec.evaluate(xin[idx]), dtype=np.float64)
             signed = np.where(
                 np.isnan(hp_n), np.copysign(np.inf, xin[idx].astype(np.float64)), hp_n
             )
@@ -1738,7 +1999,7 @@ class CorrectnessAccumulator:
 
         # tanhderiv: also track distance to the TRUE sech^2 (reporting the licensed gap)
         if self.spec.op == "tanhderivlut-fresh":
-            true_hp = _tanh_derivative_true(xin)
+            true_hp = _tanh_derivative_true(xop)
             true_g = format_golden_f32_noacc(true_hp)
             ulp_true = bf16_bitdistance(true_g, dev)
             if ulp_true.size:
@@ -1767,6 +2028,7 @@ class CorrectnessAccumulator:
             f"n_out_ftz_explained={self.n_out_ftz_explained},"
             f"n_out_nan_sign_explained={self.n_out_nan_sign_explained},"
             f"n_out_nan_nonprop={self.n_out_nan_nonprop},"
+            f"n_nan_inf_sign_policy={self.n_nan_inf_sign_policy},"
             f"max_ulp_graded={self.max_ulp_graded:.0f},"
             f"max_ulp_graded_input=0x{max(self.max_ulp_graded_input,0):08x},"
             f"graded_witness=0x{max(self.graded_witness_u32,0):08x},"
@@ -1780,6 +2042,7 @@ class CorrectnessAccumulator:
             f"claim_witness_golden={self.claim_witness_golden!r},"
             f"atol={self.spec.atol},rtol={self.spec.rtol},"
             "zero_sign_policy=tolerance_equal_not_bitexact,"
+            "nan_inf_sign_policy=not_a_numeric_quantity_for_a_converted_nan,"
             f"class_ulp={format_class_ulp(self.class_ulp)}{extra}"
         )
 
@@ -1852,11 +2115,12 @@ def _b_atan2(a, b):
 
 
 def _b_max(a, b):
-    return np.maximum(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+    # SFPU compare order, not np.maximum -- see sfpu_max.
+    return sfpu_max(a, b)
 
 
 def _b_min(a, b):
-    return np.minimum(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+    return sfpu_min(a, b)
 
 
 def _b_isclose(a, b):
@@ -2029,13 +2293,21 @@ class BinaryPowAccumulator:
     def op(self) -> str:
         return self.spec.op if self.spec is not None else "binarypow"
 
-    def _golden(self, base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
-        if self.spec is None:
-            return binary_pow_golden_bf16(base16, exp16)
+    def _golden_hp(self, base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
+        """The PRE-conversion high-precision golden, so a caller can tell a converted
+        NaN from a computed overflow (see numeric_comparison)."""
         a = _bf16_bits_to_f32(base16).astype(np.float64)
         b = _bf16_bits_to_f32(exp16).astype(np.float64)
         with np.errstate(all="ignore"):
-            hp = self.spec.math(a, b)
+            if self.spec is None:
+                return np.asarray(a**b, dtype=np.float64)
+            return np.asarray(self.spec.math(a, b), dtype=np.float64)
+
+    def _golden(self, base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
+        if self.spec is None:
+            return binary_pow_golden_bf16(base16, exp16)
+        with np.errstate(all="ignore"):
+            hp = self._golden_hp(base16, exp16)
         return format_golden_f32_noacc(hp).astype(np.float32)
 
     def _update(self, dispatch_start: int, pairs: int, res: bytes) -> None:
@@ -2056,9 +2328,15 @@ class BinaryPowAccumulator:
                 )
             dev = _bf16_bits_to_f32(dev16.astype(np.uint32)).astype(np.float32)
 
-            ulp, within = numeric_comparison(golden, dev, self.atol, self.rtol)
             base_values = _bf16_bits_to_f32(base_arr)
             exp_values = _bf16_bits_to_f32(exp16.astype(np.uint32))
+            # A converted NaN's infinity has a non-numeric sign; see numeric_comparison.
+            nan_src = np.isnan(
+                np.asarray(self._golden_hp(base_arr, exp16), dtype=np.float64)
+            )
+            ulp, within = numeric_comparison(
+                golden, dev, self.atol, self.rtol, nan_source=nan_src
+            )
             _fold_class_ulps(
                 self.class_ulp,
                 ulp,
@@ -2097,5 +2375,6 @@ class BinaryPowAccumulator:
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"atol={self.atol},rtol={self.rtol},"
             "zero_sign_policy=tolerance_equal_not_bitexact,"
+            "nan_inf_sign_policy=not_a_numeric_quantity_for_a_converted_nan,"
             f"class_ulp={format_class_ulp(self.class_ulp)}"
         )
