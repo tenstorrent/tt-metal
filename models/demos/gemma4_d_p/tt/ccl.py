@@ -122,9 +122,12 @@ class CCLManager:
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Return persistent ring-attention receive storage.
 
-        Sliding layers select one of five K/V buffer pairs by layer index modulo 5.
-        Dense attention uses full cache capacity; sliding attention uses halo size.
-        Heads are sharded across TP columns and replicated across CP rows.
+        Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
+        capacity for dense attention and the halo size for sliding attention.
+        ``n_kv_local`` is the per-device head count; allocation uses
+        ``n_kv_local * tp_degree`` heads, sharded across TP columns and replicated
+        across CP rows. The op overwrites valid entries and masks invalid ones,
+        so the scratch buffer needs no re-zeroing.
         """
         mesh_config = self.mesh_config
         n_kv_global = n_kv_local * mesh_config.tp_degree
