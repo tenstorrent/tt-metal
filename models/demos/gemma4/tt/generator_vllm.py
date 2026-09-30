@@ -1201,6 +1201,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return merged_tokens, merged_log_probs
         return merged_output
 
+    def _g4_router_reject(self, reason):
+        logger.info("Gemma4 vLLM: lane router ineligible -- {}", reason)
+        return None
+
     def _try_lane_parallel_prefill(self, kwargs, full_page_tables, raw_page_tables_per_layer=None, enable_trace=True):
         """Split a merged prefill step into lane-parallel groups.
 
@@ -1230,28 +1234,33 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         slots = kwargs.get("empty_slots")
         prompt_lens = kwargs.get("prompt_lens")
         if tokens is None or slots is None or prompt_lens is None:
-            return None
+            return self._g4_router_reject(
+                f"missing kwargs: tokens={tokens is not None} slots={slots is not None} plens={prompt_lens is not None}"
+            )
         if kwargs.get("model_id_warmup") is not None or kwargs.get("warmup_prefill"):
-            return None
+            return self._g4_router_reject("warmup call")
         if kwargs.get("sampling_params") is not None:
-            return None
+            return self._g4_router_reject("device sampling_params present")
         if any(k in kwargs for k in ("pixel_values", "images", "image_embeds")):
-            return None
+            return self._g4_router_reject("multimodal kwargs")
         start_pos = kwargs.get("start_pos")
         if start_pos is not None and any(int(p) > 0 for p in torch.as_tensor(start_pos).reshape(-1)):
-            return None
+            return self._g4_router_reject("cached prefix (start_pos > 0)")
         B = int(tokens.shape[0])
         lanes = mesh_cfg.lanes
         lane_slots = int(getattr(model, "lane_slots", 0) or 32)
         if B < lanes:
-            return None
+            return self._g4_router_reject(f"B={B} < lanes={lanes}")
         if not full_page_tables:
-            return None
+            return self._g4_router_reject("no per-layer page tables")
         g_idxs = [i for i, lt in enumerate(model.hf_config.layer_types) if lt == "full_attention"]
         if not g_idxs or full_page_tables[g_idxs[0]] is None:
-            return None
-        if any(pt is None or isinstance(pt, ttnn.Tensor) for pt in full_page_tables):
-            return None
+            return self._g4_router_reject("no full-attention table")
+        bad_pt = [i for i, pt in enumerate(full_page_tables) if pt is None or isinstance(pt, ttnn.Tensor)]
+        if bad_pt:
+            return self._g4_router_reject(
+                f"non-host per-layer tables at layers {bad_pt[:6]} (of {len(full_page_tables)})"
+            )
 
         plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
         lane_of = [int(s) // lane_slots for s in slots]
@@ -1265,7 +1274,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             groups.append(group)
             r += 1
         if not groups:
-            return None
+            return self._g4_router_reject(
+                f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
+                f"buckets={[len(b) for b in buckets]} head_tiles={[(plens[b[0]] - 1) // 32 for b in buckets if b]}"
+            )
         routed = {q for g in groups for q in g}
         remainder = [q for q in range(B) if q not in routed]
 
