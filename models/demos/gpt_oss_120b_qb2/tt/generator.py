@@ -809,9 +809,7 @@ class Generator:
         self.trace_evidence.full_logits_readbacks += 1
         self.trace_evidence.validation_full_logit_synchronizations += 1
         host_output = self._inner.read_decode_output(result)
-        logits, _ = self.process_decode_output_host(
-            host_output, batch_size_per_model=(tokens.shape[0],), is_tokens=False
-        )
+        logits, _ = self.process_decode_output_host(host_output, is_tokens=False)
         return logits[:, 0, :]
 
     def _sampling_has_active_request_seed(self) -> bool:
@@ -925,7 +923,6 @@ class Generator:
         host_output,
         *,
         is_tokens: bool = False,
-        batch_size_per_model=None,
     ):
         """Format an already-submitted decode read without issuing device work."""
 
@@ -933,22 +930,7 @@ class Generator:
             if not is_tokens:
                 raise RuntimeError("minimal sampled-token output cannot be processed as logits")
             return torch.cat([ttnn.to_torch(shard).reshape(-1) for shard in host_output.shards], dim=0).to(torch.int64)
-        if batch_size_per_model is None:
-            return self._inner.process_decode_output_host(host_output, is_tokens=is_tokens)
-        # The plugin snapshots this submission's padded width before a later
-        # bucket activation can change model state. This model has one DP rank.
-        if is_tokens or len(batch_size_per_model) != 1:
-            raise ValueError("Explicit output widths require one GPT-OSS host-logits rank")
-        width = int(batch_size_per_model[0])
-        if not 1 <= width <= self.model_args.max_batch_size:
-            raise ValueError(f"Invalid submitted decode width {width}")
-        output = host_output[0]
-        if isinstance(output, tuple):
-            output, log_probs = output
-            if log_probs is not None:
-                raise ValueError("Host-logits decode must not return device sampling logprobs")
-        logits = self.model.process_output_decode(output, width, S=1, is_tokens=False)
-        return logits, torch.ones_like(logits)
+        return self._inner.process_decode_output_host(host_output, is_tokens=is_tokens)
 
     def warmup_model_prefill(self, *, kv_cache, enable_trace: bool, can_sample_on_device: bool):
         """Delegate vLLM's prefill warmup to the canonical generator."""

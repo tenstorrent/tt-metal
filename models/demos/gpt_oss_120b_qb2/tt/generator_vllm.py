@@ -204,7 +204,6 @@ class TTGptOssForCausalLM:
         "supports_prefix_caching": PREFIX_CACHING_ENABLED,
         "supports_sliding_window_prefix_caching": PREFIX_CACHING_ENABLED,
         "supports_async_decode": True,
-        "supports_decode_output_batch_size": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
         "supports_batched_prefill": True,
@@ -1070,15 +1069,6 @@ class TTGptOssForCausalLM:
 
     def process_decode_output_host(self, host_output, is_tokens=False):
         return self._require_generator().process_decode_output_host(host_output, is_tokens=is_tokens)
-
-    def process_decode_output_host_for_batch(self, host_output, *, batch_size_per_model, is_tokens=False):
-        """Format one submission with its immutable per-DP decode widths."""
-
-        return self._require_generator().process_decode_output_host(
-            host_output,
-            is_tokens=is_tokens,
-            batch_size_per_model=batch_size_per_model,
-        )
 
     def release_persistent_capture(self):
         """Persist final serving evidence and release traces before mesh close."""

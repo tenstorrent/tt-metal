@@ -4,28 +4,41 @@
 """Host contracts; no checkpoint load, TT tensor allocation, or mesh access."""
 
 import json
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.gpt_oss.tt.model import Model as GptOssModel
 from models.demos.gpt_oss_120b_qb2.tt.generator import Generator, TraceEvidence
 from models.demos.gpt_oss_120b_qb2.tt.generator_vllm import TTGptOssForCausalLM
 from models.demos.gpt_oss_120b_qb2.tt.model import decode_trace_buckets
+from models.tt_transformers.tt.generator import Generator as SharedGenerator
+
+
+def host_logits_inner():
+    model = SimpleNamespace(
+        n_layers=1,
+        vocab_size=128,
+        mesh_config=SimpleNamespace(get_config=lambda mode: SimpleNamespace(tp=1)),
+        concat_device_output=lambda output: output,
+    )
+    model.process_output_decode = MethodType(GptOssModel.process_output_decode, model)
+    inner = SimpleNamespace(model=[model], model_args=[SimpleNamespace(max_batch_size=32)], data_parallel=1)
+    inner.process_decode_output_host = MethodType(SharedGenerator.process_decode_output_host, inner)
+    return inner
 
 
 @pytest.mark.parametrize("widths", [(1, 32), (32, 1), (4, 8)])
-def test_host_logits_use_submission_width_without_mutating_model_args(widths):
+def test_host_logits_preserve_tensor_rows_without_mutating_model_args(widths):
     generator = object.__new__(Generator)
+    generator._inner = host_logits_inner()
     generator.model_args = SimpleNamespace(max_batch_size=32)
-    generator.model = SimpleNamespace(
-        process_output_decode=lambda output, batch, **kwargs: output.reshape(batch, 1, -1)
-    )
     for width in widths:
-        flattened = torch.arange(width * 128)
-        logits, _ = generator.process_decode_output_host([(flattened, None)], batch_size_per_model=(width,))
+        output = torch.arange(width * 128).reshape(1, 1, width, 128)
+        logits, _ = generator.process_decode_output_host([(output, None)])
         assert logits.shape == (width, 1, 128)
         assert logits[-1, 0, -1] == width * 128 - 1
         assert generator.model_args.max_batch_size == 32
@@ -47,13 +60,12 @@ def test_teardown_calls_canonical_idempotent_release_once():
 def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_device, force_host_tokens):
     generator = object.__new__(Generator)
     generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)
-    generator.model = SimpleNamespace(
-        n_layers=1, process_output_decode=lambda output, batch, **kwargs: output.reshape(batch, 1, -1)
-    )
+    generator._inner = host_logits_inner()
+    generator.model = generator._inner.model[0]
     device_output = object()
-    generator._inner = SimpleNamespace(
-        decode_forward=Mock(return_value=device_output),
-        read_decode_output=Mock(return_value=[(torch.arange(width * 128), None)]),
+    generator._inner.decode_forward = Mock(return_value=device_output)
+    generator._inner.read_decode_output = Mock(
+        return_value=[(torch.arange(width * 128).reshape(1, 1, width, 128), None)]
     )
     generator.trace_evidence = TraceEvidence()
     generator._record_decode_staging = Mock()
