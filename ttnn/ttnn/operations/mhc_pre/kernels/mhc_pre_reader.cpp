@@ -6,9 +6,10 @@
 //
 // load_resident_constants (once): reduce scalers (SUM / REDUCE_ROW, 1.0; fp32 X also MAX / REDUCE_SCALAR).
 // load_x_block (per block): block_token_tiles x core_k_tiles X tiles of this rank's stream-column slice,
-//   L1 slot (t, c, i) = t*core_k_tiles + c*n + i. One NoC burst per block, published in x_stream_chunks
-//   slot-ordered chunks: chunk j's reads carry transaction id j + 1, and chunk j is pushed as soon as its
-//   own reads landed (the compute's projection waits per K tile, so it runs under the rest of the burst).
+//   L1 slot (t, c, i) = t*core_k_tiles + c*n + i. Read in x_stream_chunks slot-ordered chunks with at most
+//   x_stream_inflight chunks outstanding: chunk j's reads carry transaction id j + 1, and chunk j is pushed as
+//   soon as its own reads landed (the compute's projection + sum x^2 wait per K chunk, so they run under the
+//   rest of the burst).
 //   The CB is always pushed by the NOMINAL block size (block_token_tiles * core_k_tiles_max; the last chunk
 //   carries the padding) so the FIFO never wraps inside a block, whatever this rank's core_k_tiles or the
 //   ragged last block's extent.
@@ -17,7 +18,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_x_resident = get_compile_time_arg_val(0);
@@ -77,10 +77,7 @@ void kernel_main() {
         };
         uint32_t pushed = 0;
         auto publish_chunk = [&](uint32_t j) {
-            {
-                DeviceZoneScopedN("R-chunk");
-                noc_async_read_barrier_with_trid(1 + j);
-            }
+            noc_async_read_barrier_with_trid(1 + j);
             // the last chunk carries the nominal-size padding
             const uint32_t end = (j + 1) * chunk_pages < real_pages ? (j + 1) * chunk_pages : x_block_pages;
             cb_push_back(cb_x_resident, end - pushed);
@@ -111,7 +108,6 @@ void kernel_main() {
             prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_SCALAR>(1.0f);
     }
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        DeviceZoneScopedN("R-x");
         load_x_block(block_idx);
     }
 }

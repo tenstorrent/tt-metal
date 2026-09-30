@@ -42,7 +42,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "mhc_pre_layout.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -155,11 +154,8 @@ void kernel_main() {
     cb_reserve_back(cb_weight, core_k_tiles);
     const uint32_t w_base = get_write_ptr(cb_weight);
     if (w_role == W_ROLE_SPREAD) {
-        {
-            DeviceZoneScopedN("W-own");
-            read_w_tiles(w_base, own_p0, own_p1);
-            noc_async_read_barrier();
-        }
+        read_w_tiles(w_base, own_p0, own_p1);
+        noc_async_read_barrier();
         if constexpr (w_presplit) {
             cb_reserve_back(cb_w_own_ready, 1);
             cb_push_back(cb_w_own_ready, 1);
@@ -169,17 +165,14 @@ void kernel_main() {
             // send returned (source guard) and every other share landed (Counter): no L1 region is ever
             // written by two agents at once.
             if constexpr (w_presplit) {
-                DeviceZoneScopedN("W-splitwait");
                 cb_wait_front(cb_w_own_split, 1);
                 cb_pop_front(cb_w_own_split, 1);
             }
             if (own_p1 > own_p0) {
-                DeviceZoneScopedN("W-wsend");
                 auto w_sender = w_mc.sender(noc);
                 const uint32_t a = w_base + own_p0 * w_tile_bytes;
                 w_sender.send(a, a, (own_p1 - own_p0) * w_tile_bytes);
             }
-            DeviceZoneScopedN("W-wrecv");
             auto w_receiver = w_mc.receiver(noc);
             for (uint32_t e = 0; e < w_events; ++e) {
                 w_receiver.receive();  // Counter: one event per other row's share, lands in place
@@ -188,10 +181,7 @@ void kernel_main() {
         cb_push_back(cb_weight, core_k_tiles);
         // The bias is only needed at the first coefficients phase; its (tiny) DRAM read queues behind the X
         // burst at the bank, so it must not sit in front of the W exchange.
-        {
-            DeviceZoneScopedN("W-bias");
-            load_bias();
-        }
+        load_bias();
     } else {
         for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
             const uint32_t p1 = (p0 + w_chunk_tiles) < core_k_tiles ? (p0 + w_chunk_tiles) : core_k_tiles;
@@ -222,12 +212,8 @@ void kernel_main() {
             (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
 
         // ---- send_partial_block ----
+        cb_wait_front(cb_partial, 2 * extent);
         {
-            DeviceZoneScopedN("W-pwait");
-            cb_wait_front(cb_partial, 2 * extent);
-        }
-        {
-            DeviceZoneScopedN("W-send");
             {
                 // cb_partial holds [mix rows | sumsq rows] (the compute projects first); the slot keeps
                 // [mix x block_token_tiles | sumsq x block_token_tiles] (one write when the block is full).
@@ -252,7 +238,6 @@ void kernel_main() {
         // root's write pointer IS every receiver's landing address; the root's own copy rides the multicast
         // loopback (src cb_combined != dst cb_coef_in). Receivers reserve before they ack (PRE_HANDSHAKE).
         {
-            DeviceZoneScopedN("W-gather");
             cb_reserve_back(cb_coef_in, slot_tiles);
             const uint32_t s_dst = get_write_ptr(cb_coef_in);
             if (rank == 0) {
@@ -273,8 +258,6 @@ void kernel_main() {
             }
             cb_push_back(cb_coef_in, slot_tiles);
         }
-
-        DeviceZoneScopedN("W-ystore");
 
         // ---- store_y_block ----
         for (uint32_t t = 0; t < extent; ++t) {

@@ -39,6 +39,7 @@ CB_PARTIAL = 5
 CB_GATHERED = 6
 CB_COMBINED = 7
 CB_COEF_IN = 8
+CB_COEF_KEEP = 9  # owned rows: the coefficient-major tile after the Sinkhorn (reloaded for the pre tiles)
 CB_COMB_COEF = 11
 CB_PRE_COLS = 12
 CB_Y_OUT = 13
@@ -54,7 +55,7 @@ CB_W_OWN_READY = 23  # W column all-gather token (no payload): reader -> compute
 CB_W_OWN_SPLIT = 24  # W column all-gather token (no payload): compute -> reader "own W share split"
 TOKEN_PAGE_BYTES = 32
 NUM_CB_SLOTS = 64
-UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN)
+UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_COEF_KEEP)
 
 
 def w_pieces(w_dtype):
@@ -162,12 +163,12 @@ def _reader_noc_of(group_y0):
 
 # Stream-column tiles moved off rank 0 when rank 0 owns every Sinkhorn row (one token tile-row per group): the
 # owner's tail is its projection / sum x^2 / y-mix + the Sinkhorn, every other rank's only the former
-# (Refinement 4). Sized ~ Sinkhorn time / per-C-tile tail time (~6.7 us / ~0.7 us x (G-1)/G), both independent
-# of C. Measured (BH, bf16 X, device ns): 640x1792 48.3 -> 45.7 us, 640x7168 157.6 -> 155.7 us. Note: the stream
-# stride C/32 is a multiple of the DRAM bank count for these shapes, so a rank's reads walk banks
-# (c_start + c) mod banks; discounts that make two ranks' c_start collide mod banks measured slower (2: 50.2 us).
-# 0 = even split.
-OWNER_C_DISCOUNT = 6
+# (Refinement 4). Sized ~ Sinkhorn time / per-C-tile tail time x (G-1)/G (~6.5 us / ~0.7 us x 4/5 ~ 7), both
+# independent of C. Measured (BH, bf16 X, device ns, with the fused owned block): 640x1792 46.8 (even) -> 44.6
+# us, 640x7168 157.1 -> 151.9 us. Note: the stream stride C/32 is a multiple of the DRAM bank count for these
+# shapes, so a rank's reads walk banks (c_start + c) mod banks; discounts that make two ranks' c_start collide
+# mod banks measure slower (640x1792: 4 -> 48.7, 8 -> 45.4 us). 0 = even split.
+OWNER_C_DISCOUNT = 7
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
 W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
 
@@ -254,17 +255,22 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_WEIGHT, kmax, w_tile, w_dtype, w_alias),
         (CB_BIAS_COEF, 1, fT, f32),
         (CB_REDUCE_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
-        (CB_SQ_ACC, bt if xp > 1 else 1, fT, f32),
+        # fp32 X: one exact sum x^2 tile per row; bf16 X: one partial per (row, K chunk) (streamed with the
+        # fp32-W projection; a bf16 W keeps one whole-row window, using the first page)
+        (CB_SQ_ACC, bt if xp > 1 else bt * X_STREAM_CHUNKS, fT, f32),
         (CB_PARTIAL, 2 * bt, fT, f32),
         (CB_GATHERED, G * 2 * bt, fT, f32),
         (CB_COMBINED, 2 * bt, fT, f32),
         (CB_COEF_IN, 2 * bt, fT, f32),  # landed S block [mix x bt | sum(x^2) x bt] (group multicast)
         (CB_COMB_COEF, 2 * bt, fT, f32),  # owned rows: [post, comb] row-major output tiles
+        (CB_COEF_KEEP, 1, fT, f32),  # owned row: coefficient-major tile, packed then reloaded in place
         (CB_PRE_COLS, n * bt, fT, f32),
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
         (CB_W_OWN_READY, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
         (CB_W_OWN_SPLIT, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
     ]
+    if xp == 1:
+        table += [(CB_MIX_RUN, 1, fT, f32)]  # running fp32 mix between the streamed K chunk windows
     if xp > 1:
         table += [
             (CB_X_PIECES, X_PIECE_DEPTH * xp * X_CHUNK_K_TILES * sb_rows, BF16_TILE_BYTES, ttnn.bfloat16),
@@ -545,8 +551,8 @@ def create_program_descriptor(
         CB_GATHERED,
         CB_COMBINED,
         CB_COEF_IN,
-        0,  # CT 9 / 10 unused (formerly the writer-scattered coefficient CBs)
-        0,
+        CB_COEF_KEEP,
+        0,  # CT 10 unused (formerly a writer-scattered coefficient CB)
         CB_COMB_COEF,
         CB_PRE_COLS,
         CB_Y_OUT,
@@ -577,6 +583,7 @@ def create_program_descriptor(
         CB_W_OWN_READY,
         CB_W_OWN_SPLIT,
         int(w_presplit),
+        X_STREAM_CHUNKS,
     ]
 
     writer_ct = [
@@ -707,7 +714,8 @@ def create_program_descriptor(
     fp32_cbs = UNPACK_TO_DEST_FP32_CBS + ((CB_WEIGHT,) if w_pieces(w_tensor.dtype) > 1 else ())
     # fp32 X: the FPU y-mix keeps reading CB_X_RESIDENT; the exact split / sum x^2 read the
     # alias CB_X_FP32 straight into DEST. CB_MIX_RUN is reloaded exactly between K chunks.
-    fp32_cbs += (CB_X_FP32, CB_MIX_RUN, CB_GRID, CB_MAX_SCALAR) if x_pieces(x_tensor.dtype) > 1 else ()
+    fp32_cbs += (CB_X_FP32, CB_GRID, CB_MAX_SCALAR) if x_pieces(x_tensor.dtype) > 1 else ()
+    fp32_cbs += (CB_MIX_RUN,)  # reloaded exactly between K chunk windows (both X paths)
     for idx in fp32_cbs:
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_cfg.unpack_to_dest_mode = modes
