@@ -2103,3 +2103,42 @@ class SFPU_MASK_PLACEMENT(TemplateParameter):
                 f"constexpr bool MASK_POSINF = {'true' if self.mask_posinf else 'false'};",
             ]
         )
+
+
+# The misc SFPU perf kernel (sources/sfpu_misc_perf.cpp). The operation names map to the
+# SFPU_MISC_OPERATION values the kernel dispatches on; keep the two in step.
+SFPU_MISC_OPERATIONS = {
+    "rand": 0,
+    "dropout": 1,
+    "mask": 2,
+    "copy_dest_values": 3,
+    "reshuffle_rows": 4,
+    "softcap": 5,
+    "situ_glu": 6,
+    "clamped_silu_glu": 7,
+    "mask_int": 8,
+}
+
+
+@dataclass
+class SFPU_MISC_OP(TemplateParameter):
+    """Select the body of sources/sfpu_misc_perf.cpp at compile time.
+
+    ``misc_param`` is per op: the rand scale form (0 folds the normalisation into the scale, 1
+    takes the per-row multiply), the reshuffle_rows index pattern (0 identity, 1 reversed,
+    2 every second row skipped); unused otherwise. ``misc_init_per_tile`` re-runs the op's
+    init before every tile, the way the ttnn unary kernel does.
+    """
+
+    misc_mathop: str = "rand"
+    misc_param: int = 0
+    misc_init_per_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t SFPU_MISC_OPERATION = {SFPU_MISC_OPERATIONS[self.misc_mathop]};",
+                f"constexpr std::uint32_t SFPU_MISC_PARAM = {self.misc_param};",
+                f"constexpr bool SFPU_MISC_INIT_PER_TILE = {'true' if self.misc_init_per_tile else 'false'};",
+            ]
+        )
