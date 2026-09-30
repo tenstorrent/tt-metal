@@ -111,6 +111,15 @@ def _split_complex_outputs(golden_outputs, outputs):
     return golden_outputs, output_components
 
 
+def _widen_unsigned_for_indexing(tensor):
+    """Return unsigned 16/32/64-bit tensors as int64 so boolean masks can index them."""
+
+    import torch
+
+    unsigned_dtypes = {getattr(torch, name) for name in ("uint16", "uint32", "uint64") if hasattr(torch, name)}
+    return tensor.to(torch.int64) if tensor.dtype in unsigned_dtypes else tensor
+
+
 def compare_tensors_using_pcc(
     python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison, output_path=()
 ):
@@ -180,8 +189,9 @@ def compare_tensors_using_pcc(
                 f"Golden comparison mask shape {tuple(comparison_config.mask.shape)} cannot be broadcast "
                 f"to output shape {tuple(golden_output.shape)}"
             ) from error
-        comparison_golden = golden_output[comparison_mask]
-        comparison_output = torch_output[comparison_mask]
+        # Boolean indexing is not implemented for torch.uint16/uint32/uint64 tensors.
+        comparison_golden = _widen_unsigned_for_indexing(golden_output)[comparison_mask]
+        comparison_output = _widen_unsigned_for_indexing(torch_output)[comparison_mask]
 
     flattened_golden = comparison_golden.reshape(-1)
     flattened_output = comparison_output.reshape(-1)

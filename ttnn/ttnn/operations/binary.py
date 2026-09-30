@@ -815,7 +815,7 @@ def _golden_function(a, b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.bias_gelu, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.bias_gelu_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.bias_gelu_, golden_function=_make_inplace_golden_function(_golden_function))
 
 
 def _golden_function_squared_difference(

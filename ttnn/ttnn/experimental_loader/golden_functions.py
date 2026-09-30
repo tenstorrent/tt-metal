@@ -93,6 +93,13 @@ def _golden_function(in0, in1, math_op, dim, *args, **kwargs):
     import torch
 
     if dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+        # The device broadcasts only the first column (W), row (H) or element (HW) of in1's tile,
+        # even when in1 spans a full tile along the broadcast dimension.
+        if dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW}:
+            in1 = in1[..., :1]
+        if dim in {ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+            in1 = in1[..., :1, :]
+
         # Perform the operation
         if math_op == ttnn.BcastOpMath.ADD:
             res = in0 + in1

@@ -212,11 +212,23 @@ def _golden_function_ema(input_tensor, alpha, *_, **__):
 ttnn.attach_golden_function(ttnn.ema, golden_function=_golden_function_ema)
 
 
+def _hw_statistic_golden(torch_statistic, input_tensor):
+    """Evaluate a biased height-width statistic in float32, keeping the reduced axes as size 1."""
+
+    # A single-plane statistic is one value, so PCC is undefined and the default allclose tolerance is
+    # finer than one bfloat16 ULP; padding leaks would still shift the value by far more than a few ULP.
+    output_tensor = torch_statistic(input_tensor.float(), dim=(-2, -1), keepdim=True, correction=0).to(
+        input_tensor.dtype
+    )
+    return ttnn.decorators.set_golden_comparison_config(
+        output_tensor, method="ulp", scope="degenerate", ulp_threshold=4
+    )
+
+
 def _golden_function_var_hw(input_tensor, *_, **__):
     import torch
 
-    # Biased variance (correction=0) over the H and W dims, keeping the reduced axes as size 1.
-    return torch.var(input_tensor, dim=(-2, -1), keepdim=True, correction=0)
+    return _hw_statistic_golden(torch.var, input_tensor)
 
 
 ttnn.attach_golden_function(ttnn.var_hw, golden_function=_golden_function_var_hw)
@@ -225,7 +237,7 @@ ttnn.attach_golden_function(ttnn.var_hw, golden_function=_golden_function_var_hw
 def _golden_function_std_hw(input_tensor, *_, **__):
     import torch
 
-    return torch.std(input_tensor, dim=(-2, -1), keepdim=True, correction=0)
+    return _hw_statistic_golden(torch.std, input_tensor)
 
 
 ttnn.attach_golden_function(ttnn.std_hw, golden_function=_golden_function_std_hw)

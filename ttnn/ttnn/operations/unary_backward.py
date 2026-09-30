@@ -251,8 +251,8 @@ ttnn.attach_golden_function(ttnn.rpow_bw, golden_function=_golden_function_rpow_
 
 ttnn.attach_golden_function(
     ttnn.logiteps_bw,
-    golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "logit", grad, input, eps=alpha, *args, **kwargs
+    golden_function=lambda grad, input, eps=0.0, *args, **kwargs: _golden_function_unary_backward_with_float(
+        "logit", grad, input, eps=eps, *args, **kwargs
     ),
 )
 
