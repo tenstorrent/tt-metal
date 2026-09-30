@@ -190,7 +190,10 @@ def test_pipeline_distilled(
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
-        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+        output_filename = os.environ.get(
+            "OUTPUT_PATH",
+            os.path.join(os.environ.get("LTX_OUT_DIR", ""), f"ltx_av_fast_{width}x{height}_{number}.mp4"),
+        )
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
         logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
@@ -200,6 +203,7 @@ def test_pipeline_distilled(
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
             return
 
+        t_gen = time.perf_counter()
         pipeline.generate(
             prompt,
             output_path=output_filename,
@@ -210,6 +214,9 @@ def test_pipeline_distilled(
             seed=seed,
             fps=fps,
         )
+        # Wall of the whole generate() call, export included: the gap to the stage-table total is
+        # host overhead the per-stage timers do not see.
+        logger.info(f"E2E_WALL_S gen#{number}: {time.perf_counter() - t_gen:.3f}")
         logger.info(f"Saved video to: {output_filename}")
         print_ltx_timing_table(
             pipeline,
@@ -400,6 +407,13 @@ def test_pipeline_distilled(
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
                 run(prompt=prompt, number=extra + 2, seed=seed)
+            # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
+            # the timed gens because the dump forces the slower float readback instead of the yuv path.
+            ref_frames = os.environ.get("LTX_REF_FRAMES")
+            if ref_frames:
+                os.environ["LTX_DUMP_FRAMES"] = ref_frames
+                run(prompt=prompt, number=99, seed=seed)
+                del os.environ["LTX_DUMP_FRAMES"]
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
