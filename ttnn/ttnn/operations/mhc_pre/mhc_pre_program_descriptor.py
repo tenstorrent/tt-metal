@@ -106,6 +106,12 @@ W_GRID_BITS = 6
 # Piece products kept: x_q @ W_p for q + p <= this (x order [x0, x1_hi, x1_mid], W order [W0, W1]); the
 # dropped x1_mid @ W1 is ~2^-(X+W+9) of the mix.
 PRODUCT_ORDER_MAX = 2
+# Products with q + p >= this (x1_mid @ W0, x1_hi @ W1: <= ~2^-(X_GRID_BITS+2) of the mix) run at
+# X_LO_FIDELITY; > PRODUCT_ORDER_MAX disables. Measured (640x7168 fp32 / T64 large-logit z rms): HiFi3 is
+# lossless (3.7e-5, same as HiFi4), HiFi2 4.2e-5, LoFi 8.5e-5 (too lossy); the perf difference is within
+# noise (the matmul is not the binding stage), so HiFi3 is a live knob with no measured win yet.
+PRODUCT_LO_ORDER = 2
+X_LO_FIDELITY = ttnn.MathFidelity.HiFi3
 DEST_TILES_FP32 = 4  # DEST_AUTO_LIMIT at fp32_dest_acc_en, half sync: bound on the projection sub-block height
 L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
 # Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
@@ -435,6 +441,8 @@ def create_program_descriptor(
         X_GRID_BITS,
         W_GRID_BITS,
         PRODUCT_ORDER_MAX,
+        PRODUCT_LO_ORDER,
+        X_LO_FIDELITY.value,
     ]
 
     writer_ct = [

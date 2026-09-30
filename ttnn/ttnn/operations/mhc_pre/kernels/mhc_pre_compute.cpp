@@ -15,7 +15,21 @@
 //   ymix_block          eltwise_chain Mul x_i * bcast_col(pre_i), DEST-accumulated over i -> cb_y_out
 //   sinkhorn_block      custom SFPU block op on the owned rows              -> cb_comb_coef
 //
+// fp32 X (x_pieces == 3, Refinement 2; compile-time gated, the bf16-X path is unchanged):
+//   w_grid_split_block  ONCE: max|W| -> grid; W -> [W0 on a 2^-W_GRID_BITS grid, W - W0] (bf16, in place)
+//   x_stats_block       per token row-tile: exact SFPU lane-wise sum x^2 -> cb_sq_acc (reduced as before) and
+//                        its max -> reduce<MAX, REDUCE_SCALAR> -> the row-tile's x grid (cb_grid)
+//   project_block_split per K chunk: x_split_window (x -> [x0 on grid, x1_hi, x1_mid], bf16) + ONE DEST window:
+//                        exact fp32 reload of the running mix, sum_{q+p<=2} x_q @ W_p on top -> cb_mix_run /
+//                        cb_partial. x0 @ W0 is exact in-tile (on-grid products); the rest is 2^-4 smaller.
+//
 // Raw-LLK deviations (helper considered and rejected; see op_design.md "Helpers considered and rejected"):
+//   * project_block_split (fp32 X): matmul_block cannot take a per-chunk exact reload + several (in0, in1)
+//     piece pairs into one DEST window; realized over matmul_tiles like project_block_pieces.
+//   * x_split_window / w_grid_split_block / stats_pass: copy_tile (UnpackToDestFp32) -> custom SFPI -> packs
+//     of several DEST tiles per input tile (the chain has one pack terminal per element).
+//   * grid_block: unary_bcast<SCALAR> (no chain element broadcasts one CB tile into DEST); the max itself
+//     is the reduce helper.
 //   * project_block_pieces (fp32 W): matmul_block cannot accumulate two in1 operands (W_hi, W_lo) into one
 //     DEST window — a second call would pack and FPU-reload the fp32 partial (tf32 truncation). Realized
 //     as a thin block op over matmul_tiles: per output sub-block, all K x pieces products accumulate in
@@ -97,6 +111,8 @@ constexpr uint32_t cb_max_scaler = get_compile_time_arg_val(32);
 constexpr uint32_t x_grid_bits = get_compile_time_arg_val(33);        // x0 = k * 2^(E - bits), |k| <= 2^bits
 constexpr uint32_t w_grid_bits = get_compile_time_arg_val(34);        // W0 likewise (x_grid_bits + w_grid_bits <= 10)
 constexpr uint32_t product_order_max = get_compile_time_arg_val(35);  // keep piece products with q + p <= this
+constexpr uint32_t product_lo_order = get_compile_time_arg_val(36);   // products with q + p >= this at x_lo_fidelity
+constexpr auto x_lo_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(37));
 constexpr uint32_t x_window_pages = x_pieces * x_chunk_k_tiles * x_piece_rows;  // nominal push per window
 constexpr bool x_grid_split = x_pieces > 1;
 // fp32 X + fp32 W: the W hi/lo split is replaced by the W grid split (same 2 bf16 pieces, same alias).
@@ -166,30 +182,29 @@ void w_split_hi_lo() {
 // The x0 @ W0 product (the whole leading part of the mix) is then exact; the remainder products are
 // 2^-bits smaller, and so is their in-tile rounding noise.
 
-sfpi_inline vFloat trunc_bf16(vFloat v) { return as<vFloat>(as<vUInt>(v) & vUInt(0xFFFF0000)); }
-
-sfpi_inline vFloat rne_bf16(vFloat v) {
-    vUInt u = as<vUInt>(v);
-    vUInt lsb = (u << 15) >> 31;
-    u = u + 0x7FFF;
-    u = u + lsb;
-    return as<vFloat>(u & vUInt(0xFFFF0000));
-}
-
 // v0 = (v + c) - c with c = 1.5 * 2^23 * g: the add lands on a float whose ulp is g (|v| < 2^22 g).
 sfpi_inline vFloat round_to_grid(vFloat v, vFloat c) {
     vFloat t = v + c;
     return t - c;
 }
 
-// DEST tile 0: bcast max bound m (every lane) -> rounding constant c = 1.5 * 2^(E - BITS + 23), E = exp(m) + 1.
-template <int BITS>
+// DEST tile 0: bcast bound m (every lane) -> rounding constant c = 1.5 * 2^(E - BITS + 23) with |v| < 2^E.
+// SQ_BOUND: m = max over lanes of a lane-wise sum of squares, so |v| <= sqrt(m) < 2^ceil((e2 + 1) / 2)
+// (e2 = unbiased exponent of m); in biased terms E + 127 = ((eb2 + 3) >> 1) + 63. Otherwise m = max|v|:
+// E = exp(m) + 1.
+template <int BITS, bool SQ_BOUND>
 void grid_constant() {
 #pragma GCC unroll 4
     for (int k = 0; k < TILE_SLOTS; ++k) {
         vFloat m = dst_reg[k];
         vInt e = as<vInt>(as<vUInt>(m) >> 23);  // m >= 0: biased exponent
-        e = e + (24 - BITS);
+        if constexpr (SQ_BOUND) {
+            e = e + 3;
+            e = as<vInt>(as<vUInt>(e) >> 1);
+            e = e + (86 - BITS);  // (E + 127) + (23 - BITS)
+        } else {
+            e = e + (24 - BITS);
+        }
         v_if(e < 1) { e = 1; }
         v_endif;
         v_if(e > 254) { e = 254; }
@@ -199,63 +214,58 @@ void grid_constant() {
     }
 }
 
-// x split, DEST tile 0 = fp32 x, tile 3 = c -> tiles 0..2 = [x0, x1_hi = trunc(x - x0), x1_mid = rne(rest)].
+// x split, DEST tile 0 = fp32 x, tile 3 = c -> tiles 0..2 = [x0, x1_hi = trunc(x - x0), x1_mid = the rest].
+// x1_mid (<= 2^-(bits+8) |x|) is left in fp32: the bf16 pack's conversion error on it is ~2^-(bits+16) |x|.
 void x_split_grid() {
+    vUInt hi_mask = 0xFFFF0000;
+    vFloat c = dst_reg[3 * TILE_SLOTS];  // uniform over the tile (scalar broadcast)
 #pragma GCC unroll 4
     for (int k = 0; k < TILE_SLOTS; ++k) {
         vFloat v = dst_reg[k];
-        vFloat c = dst_reg[3 * TILE_SLOTS + k];
         vFloat v0 = round_to_grid(v, c);
         vFloat r = v - v0;
-        vFloat rh = trunc_bf16(r);
+        vFloat rh = as<vFloat>(as<vUInt>(r) & hi_mask);
         dst_reg[k] = v0;
         dst_reg[TILE_SLOTS + k] = rh;
-        dst_reg[2 * TILE_SLOTS + k] = rne_bf16(r - rh);
+        dst_reg[2 * TILE_SLOTS + k] = r - rh;
     }
 }
 
-// W split, DEST tile 0 = fp32 W, tile 3 = c -> tiles 0, 1 = [W0, rne(W - W0)].
+// W split, DEST tile 0 = fp32 W, tile 3 = c -> tiles 0, 1 = [W0, W - W0]. W - W0 is left in fp32: the bf16
+// pack converts it (its conversion error, on the <= 2^-(bits+1) |W| remainder, is below the target).
 void w_split_grid() {
+    vFloat c = dst_reg[3 * TILE_SLOTS];  // uniform over the tile (scalar broadcast)
 #pragma GCC unroll 4
     for (int k = 0; k < TILE_SLOTS; ++k) {
         vFloat v = dst_reg[k];
-        vFloat c = dst_reg[3 * TILE_SLOTS + k];
         vFloat v0 = round_to_grid(v, c);
         dst_reg[k] = v0;
-        dst_reg[TILE_SLOTS + k] = rne_bf16(v - v0);
+        dst_reg[TILE_SLOTS + k] = v - v0;
     }
 }
 
-// Lane-wise statistics over COUNT source tiles at DEST tiles SRC0.. : with SQ, tile 0 (+)= sum v^2 (exact
-// fp32 SFPU), and tile MAXT = max(tile MAXT, |v|). FIRST initialises the accumulators.
+// Lane-wise statistic over COUNT source tiles at DEST tiles 1.. into DEST tile 0: SQ -> sum v^2 (exact fp32
+// SFPU MADs), else max|v|. FIRST initialises the accumulator.
 template <int COUNT, bool FIRST, bool SQ>
 void stats_accumulate() {
-    constexpr int MAXT = SQ ? 1 : 0;
-    constexpr int SRC0 = MAXT + 1;
-#pragma GCC unroll 2
+#pragma GCC unroll 4
     for (int k = 0; k < TILE_SLOTS; ++k) {
-        vFloat mx = 0.0f;
         vFloat acc = 0.0f;
         if constexpr (!FIRST) {
-            mx = dst_reg[MAXT * TILE_SLOTS + k];
-            if constexpr (SQ) {
-                acc = dst_reg[k];
-            }
+            acc = dst_reg[k];
         }
 #pragma GCC unroll 8
         for (int j = 0; j < COUNT; ++j) {
-            vFloat v = dst_reg[TILE_SLOTS * (SRC0 + j) + k];
+            vFloat v = dst_reg[TILE_SLOTS * (1 + j) + k];
             if constexpr (SQ) {
                 acc = acc + v * v;
+            } else {
+                vFloat a = sfpi::abs(v);
+                v_if(a > acc) { acc = a; }
+                v_endif;
             }
-            vFloat a = sfpi::abs(v);
-            v_if(a > mx) { mx = a; }
-            v_endif;
         }
-        if constexpr (SQ) {
-            dst_reg[k] = acc;
-        }
-        dst_reg[MAXT * TILE_SLOTS + k] = mx;
+        dst_reg[k] = acc;
     }
 }
 
@@ -516,12 +526,12 @@ ALWI void stats_dispatch(uint32_t count, bool first) {
 }
 #endif
 
-// stats_pass: one DEST window over `count` fp32 tiles of `cb_src` (UnpackToDestFp32) starting at page `base`.
-// SQ: tile 0 = lane-wise sum v^2 (exact fp32) -> cb_sq_acc. Always: lane-wise max|v| -> cb_max_lanes.
+// stats_pass: one DEST window over `count` fp32 tiles of `cb_src` (UnpackToDestFp32) starting at page `base`,
+// lane-wise into DEST tile 0. SQ: sum v^2 (exact fp32) -> cb_sq_acc AND cb_max_lanes (the grid bound is
+// sqrt(max of it): no per-element compare). Else: max|v| -> cb_max_lanes.
 template <uint32_t cb_src, bool SQ>
 ALWI void stats_pass(uint32_t base, uint32_t count) {
-    constexpr uint32_t first_src = SQ ? 2 : 1;
-    constexpr uint32_t per_round = compute_kernel_lib::DEST_AUTO_LIMIT - first_src;
+    constexpr uint32_t per_round = compute_kernel_lib::DEST_AUTO_LIMIT - 1;
     static_assert(per_round >= 1 && per_round <= 7, "stats dispatch covers 1..7 tiles per round");
     if constexpr (SQ) {
         cb_reserve_back(cb_sq_acc, 1);
@@ -535,7 +545,7 @@ ALWI void stats_pass(uint32_t base, uint32_t count) {
     for (uint32_t k0 = 0; k0 < count; k0 += per_round) {
         const uint32_t nt = (count - k0) < per_round ? (count - k0) : per_round;
         for (uint32_t j = 0; j < nt; ++j) {
-            copy_tile(cb_src, base + k0 + j, first_src + j);
+            copy_tile(cb_src, base + k0 + j, 1 + j);
         }
         MATH((stats_dispatch<per_round, SQ>(nt, k0 == 0)));
     }
@@ -544,7 +554,7 @@ ALWI void stats_pass(uint32_t base, uint32_t count) {
     if constexpr (SQ) {
         pack_tile(0, cb_sq_acc);
     }
-    pack_tile(SQ ? 1 : 0, cb_max_lanes);
+    pack_tile(0, cb_max_lanes);
     tile_regs_release();
     if constexpr (SQ) {
         cb_push_back(cb_sq_acc, 1);
@@ -555,7 +565,7 @@ ALWI void stats_pass(uint32_t base, uint32_t count) {
 // grid_block: cb_max_lanes -> reduce<MAX, REDUCE_SCALAR> (m = max|v| over the tile, at element (0, 0)) ->
 // scalar-broadcast into DEST -> SFPU rounding constant for a BITS-bit grid -> one cb_grid page.
 // Raw LLK: unary_bcast<SCALAR> (no chain element broadcasts a single CB tile into DEST).
-template <int BITS>
+template <int BITS, bool SQ_BOUND>
 ALWI void grid_block() {
     compute_kernel_lib::reduce<
         PoolType::MAX,
@@ -574,7 +584,7 @@ ALWI void grid_block() {
     custom_sfpu_init();
     tile_regs_acquire();
     unary_bcast<BroadcastType::SCALAR>(cb_max_scalar, 0, 0);
-    MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::grid_constant<BITS>, 0, VectorMode::None)));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::grid_constant<BITS, SQ_BOUND>, 0, VectorMode::None)));
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_grid);
@@ -586,12 +596,13 @@ ALWI void grid_block() {
 
 // w_grid_split_block (once, fp32 X + fp32 W): global max|W| of the resident slice -> W grid, then each fp32
 // W tile k is rewritten in place (aliased cb_weight_split, pages 2k / 2k+1) into [W0(k), rne(W - W0)(k)].
-// The max needs the whole slice, so this does not pipeline with the W read (fp32 streams are not the perf
-// focus; the bf16-X path keeps the chunk-pipelined hi/lo split).
+// One grid for the whole slice: a per-W-chunk grid (which would pipeline with the chunked W read) measured
+// slower (640x7168 fp32: 613 vs 585 us) — the extra reduce / broadcast / init phases per chunk cost more
+// than the W read they would hide.
 ALWI void w_grid_split_block(uint32_t core_k_tiles) {
     cb_wait_front(cb_weight, core_k_tiles);
     stats_pass<cb_weight, false>(0, core_k_tiles);
-    grid_block<static_cast<int>(w_grid_bits)>();
+    grid_block<static_cast<int>(w_grid_bits), false>();
     cb_wait_front(cb_grid, 1);
     cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
     reconfig_data_format_srca(cb_weight);
@@ -620,7 +631,7 @@ ALWI void w_grid_split_block(uint32_t core_k_tiles) {
 ALWI void x_stats_block(uint32_t extent, uint32_t core_k_tiles) {
     for (uint32_t t = 0; t < extent; ++t) {
         stats_pass<cb_x_fp32, true>(t * core_k_tiles, core_k_tiles);
-        grid_block<static_cast<int>(x_grid_bits)>();
+        grid_block<static_cast<int>(x_grid_bits), true>();
     }
     cb_wait_front(cb_grid, extent);
 }
@@ -684,12 +695,32 @@ ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t s
             }
             reconfig_data_format(cb_w_matmul, cb_x_pieces);  // matmul: srca = in1, srcb = in0
             matmul_init(cb_x_pieces, cb_w_matmul);
+            // products of order q + p < product_lo_order at MATH_FIDELITY; the (much smaller) higher-order ones
+            // at x_lo_fidelity (math re-init only, same DEST window)
             for (uint32_t kk = 0; kk < kc; ++kk) {
                 for (uint32_t r = 0; r < sb_h; ++r) {
                     for (uint32_t q = 0; q < x_pieces; ++q) {
                         const uint32_t x_idx = (r * kc + kk) * x_pieces + q;
-                        for (uint32_t p = 0; p < w_pieces && q + p <= product_order_max; ++p) {
+                        for (uint32_t p = 0; p < w_pieces && q + p < product_lo_order; ++p) {
                             matmul_tiles(cb_x_pieces, cb_w_matmul, x_idx, (k0 + kk) * w_pieces + p, r);
+                        }
+                    }
+                }
+            }
+            if constexpr (product_lo_order <= product_order_max) {
+                MATH((llk_math_matmul_init<x_lo_fidelity, MM_THROTTLE>(cb_x_pieces, cb_w_matmul)));
+                for (uint32_t kk = 0; kk < kc; ++kk) {
+                    for (uint32_t r = 0; r < sb_h; ++r) {
+                        for (uint32_t q = 0; q < x_pieces; ++q) {
+                            const uint32_t x_idx = (r * kc + kk) * x_pieces + q;
+                            for (uint32_t p = 0; p < w_pieces && q + p <= product_order_max; ++p) {
+                                if (q + p < product_lo_order) {
+                                    continue;
+                                }
+                                UNPACK(
+                                    (llk_unpack_AB_matmul(cb_x_pieces, cb_w_matmul, x_idx, (k0 + kk) * w_pieces + p)));
+                                MATH((llk_math_matmul<x_lo_fidelity, MM_THROTTLE>(r)));
+                            }
                         }
                     }
                 }

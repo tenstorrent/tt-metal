@@ -116,7 +116,7 @@ Fix (a) with an exact **bf16 hi/lo split of the resident W**:
   - The doubled matmul cost ~6 µs. Fixed by running the W_lo products at `W_LO_FIDELITY = LoFi`.
 - This op is still DRAM-bound on the W re-read; that is Refinement 3.
 
-### [ ] Refinement 2 — fp32-stream projection precision (large Sinkhorn logits)
+### [x] Refinement 2 — fp32-stream projection precision (large Sinkhorn logits)
 
 **Goal**: move `eval/golden_tests/mhc_pre/test_regression.py::test_large_sinkhorn_logits[T64_nC4096]`
 (fp32 X, fp32 W, a_res = 30) from `supported_fail` to passing.
@@ -156,6 +156,24 @@ Lever: exact fp32 → bf16 splits of X in the fp32-stream path.
   depth chains.
 - `verify_supported` shows 0 `supported_fail` and 0 drift.
 - No regression on the bf16 cells (bit-identical bf16 outputs are expected, because the path is gated).
+
+**Outcome**: landed.
+- `test_large_sinkhorn_logits[T64_nC4096]` passes: worst row 0.0672204, against reference 0.0672202 and limit
+  0.0672702. The post-logit rms error went from 2.9e-4 to 3.45e-5.
+- The bf16 pieces alone were insufficient. The FPU's in-tile dot product rounds to ~11 bits below its largest
+  product. So the fp32-X path uses an exact-grid split:
+  - x0 and W0 lie on power-of-two grids, so x0·W0 sums exactly in-tile;
+  - bf16 remainder pieces make up the rest;
+  - Σx² is computed exactly on the SFPU.
+- The path is compile-time gated. bf16 640×7168 stays at 270.2 µs.
+- fp32 640×7168 went from 378 µs to 567 µs. That path is now compute-bound: split SFPU ~60 µs, one-time W split
+  ~47 µs, and 5 HiFi products.
+- Next I would try either:
+  - sharing the W split across groups (it rides on Refinement 3's W broadcast: one split per W slice instead of
+    one per group), or
+  - a DEST full-sync fp32-X variant that splits 2 x tiles per window.
+
+  I did neither here, because fp32 is not the perf focus and both are out of this heading's scope.
 
 ### [ ] Refinement 3 — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast)
 

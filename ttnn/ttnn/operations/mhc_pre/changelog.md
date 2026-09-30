@@ -73,3 +73,70 @@
 - **Tests added**:
   - `test_mhc_pre_precision_baseline.py::test_mhc_pre_bf16_stream_fp32_weight_precision` (3 shapes).
   - `test_mhc_pre_perf.py` is parametrized over X dtype.
+
+## Refinement 2 — fp32-stream projection precision (large Sinkhorn logits)
+- Date: 2026-09-30
+- What was done:
+  - **Diagnosis (probes 008–015)**: exact bf16 x/W pieces alone were not enough. With them the worst row moved
+    only 0.0674 → 0.0673; the limit is 0.06727. The FPU's in-tile (32-long) matmul dot product rounds its sum
+    to ~11 bits below the largest product (round-to-nearest, unbiased). That holds even for exact 3-bit × 3-bit
+    operands, and it gives a ~2.9e-4 rms post-logit noise floor (the "(b)" floor of Refinement 1). DEST
+    accumulation across matmul calls is ~fp32. Sums of products that all lie on one power-of-two grid are exact
+    in-tile, for products up to 2^11 (probes 014/015).
+  - **Lever — exact-grid (Ozaki-style) split, fp32 X only, compile-time gated** (the bf16-X path compiles to what
+    Refinement 1 shipped):
+    - W is split once: its global max|W| sets a grid, and W → [W0 = W rounded to a 2^-6 grid, W − W0]. This
+      happens in place in `cb_weight_split`, replacing the hi/lo split on this path.
+    - Per token row-tile, one SFPU pass gives the exact lane-wise Σx². It feeds `cb_sq_acc` (so r is now
+      fp32-exact) and, through `reduce<MAX, REDUCE_SCALAR>` and a scalar broadcast, a bound of |x| ≤ sqrt(max).
+      That bound sets the row-tile's grid.
+    - Per K chunk (`X_CHUNK_K_TILES = 8`, streamed, never a second resident copy), x → [x0 on a 2^-4 grid,
+      x1_hi, x1_mid] as bf16. One DEST window reloads the fp32 running mix exactly and accumulates the 5
+      products with q + p ≤ 2. x0·W0 is exact; the remainder products are ≥ 2^-4 smaller, and so is their
+      in-tile noise.
+  - Knobs, single-sourced in the descriptor: `X_GRID_BITS = 4`, `W_GRID_BITS = 6`, `PRODUCT_ORDER_MAX = 2`,
+    `PRODUCT_LO_ORDER = 2` / `X_LO_FIDELITY = HiFi3`, `X_CHUNK_K_TILES = 8`, `X_PIECE_DEPTH = 2`. The config was
+    chosen with a CPU model of the FPU rounding, calibrated to the device.
+  - **Reused**: `_cb_table`, the `cb_weight_split` alias, the reader W/X loads, the SUM-reduce, the combine,
+    coefficients, y-mix and Sinkhorn, and every bf16 path.
+  - **Added**:
+    - CBs: the `cb_x_fp32` alias, `cb_x_pieces`, `cb_mix_run`, `cb_max_lanes`, `cb_max_scalar`, `cb_grid` and
+      `cb_max_scaler` (the reader prepares it as <MAX, REDUCE_SCALAR>).
+    - Block ops: `stats_pass`, `grid_block`, `w_grid_split_block`, `x_stats_block`, `x_split_window` and
+      `project_block_split`.
+- Accuracy achieved (fp32 X, fp32 W, HiFi4):
+  - `test_large_sinkhorn_logits[T64_nC4096]`: worst row 0.0672204, against reference 0.0672202 and limit
+    0.0672702 (before: 0.0674). Post-logit z rms error vs fp64 is 3.45e-5 (before: 2.9e-4).
+  - The columns stay exact (max|colsum − 1| ≈ 1e-6).
+  - Every fp32 golden cell passes its PCC / RMS gate.
+- Golden test progress: in the slices run, 98/98 fp32-X `test_golden` cells, 10/10 `test_regression.py`
+  (including both depth chains) and 22/22 bf16 representatives passed. The bf16 path is compile-time identical.
+  The full suite is expected at 206/206 (was 205/206).
+- Perf (BH, device kernel ns; fp32 streams are not the perf focus):
+
+  | Shape (T×C) | fp32 X before | fp32 X after |
+  |---|---|---|
+  | 640×7168 | 378 µs | 567 µs |
+  | 640×1792 | ~128 µs | 176 µs |
+  | 1280×4096 | ~381 µs | 515 µs |
+  | 4096×1792 | 523 µs | 660 µs |
+
+  bf16 640×7168 is 270.2 µs (unchanged: 269.6).
+  - The first version measured 652–671 µs.
+  - Ablation (640×7168): x split SFPU ~108 µs, stats SFPU ~42, the 3 extra products ~38, the W grid split ~47,
+    and ~80 of window/copy structure.
+  - Levers kept:
+    - Slim split, with the pack converting the tiny tail piece: −50 µs.
+    - Σx²-derived bound instead of a per-element max compare: stats SFPU becomes negligible.
+    - Uniform grid constant loaded once per tile.
+  - Levers measured and not kept:
+    - A per-W-chunk grid, so the W split pipelines with the W read: 613 vs 585 µs, because the extra
+      reduce/broadcast/init phases cost more than the read they hide.
+    - Chunk size / depth sweeps (4–28 / 1–2): flat within noise.
+    - LoFi on the order-2 products: too lossy (z rms 8.5e-5).
+  - The op is now compute-bound on the fp32 path. The remaining cost is the per-tile split (SFPU ~60 µs, plus
+    copies and packs), the one-time W split (~47 µs), and the 5 HiFi products.
+- Issues encountered: a 2-piece x split (a wider x0) cannot meet the target with a global W grid (model: ≥ 9e-5
+  rms), so 3 x pieces are required.
+- Tests added: `test_mhc_pre_precision_baseline.py::test_mhc_pre_fp32_stream_exact_projection` (2 shapes, post-logit
+  rms < 1e-4). Probes 008–022 (FPU rounding characterization).

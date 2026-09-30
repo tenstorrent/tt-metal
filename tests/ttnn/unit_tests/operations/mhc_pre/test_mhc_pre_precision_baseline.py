@@ -129,3 +129,27 @@ def test_mhc_pre_bf16_stream_fp32_weight_precision(device, x_shape):
         print(f"\nPRECISION bf16X/fp32W {x_shape} {name:4s} rel_rms={m['rel_rms']:.3e} max_abs={m['max_abs']:.3e}")
         if name != "y":
             assert m["rel_rms"] < 5e-4, f"{name}: rel_rms {m['rel_rms']}"
+
+
+# Refinement 2: fp32 streams use the exact-grid split, so the mix is ~fp32-accurate. The post logits
+# z = mix * r + b (recovered from post = 2 sigmoid(z)) must match the fp64 reference to well below the
+# ~2.9e-4 rms the FPU's tf32 read + in-tile rounding leaves (measured 3.5e-5 on T64 nC4096 a_res=30); a
+# 1e-4 rms noise level is what the large-Sinkhorn-logit worst-row gate tolerates (CPU noise sweep).
+FP32_EXACT_SHAPES = [(1, 1, 64, 4096), (1, 1, 640, 7168)]
+
+
+@pytest.mark.parametrize("x_shape", FP32_EXACT_SHAPES, ids=lambda s: "X" + "x".join(map(str, s)))
+def test_mhc_pre_fp32_stream_exact_projection(device, x_shape):
+    nc = x_shape[-1]
+    x, w, b, scale = make_inputs(
+        x_shape, (nc, 24), dtype=ttnn.float32, weight_dtype=ttnn.float32, seed=42, logit_scale=30.0
+    )
+    dev = lambda t: ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    _, post_d, _ = mhc_pre(dev(x), dev(w), dev(b), scale=scale, compute_kernel_config=make_compute_config())
+    p = ttnn.to_torch(post_d).double().reshape(-1, 4)
+    X = x.double().reshape(-1, nc)
+    r = torch.rsqrt(X.square().mean(-1, keepdim=True) + 1e-6)
+    z_ref = (X @ w.double())[:, 4:8] * r + b.double().reshape(-1)[4:8]
+    z_dev = torch.log((p / 2) / (1 - p / 2))
+    z_rms = (z_dev - z_ref).pow(2).mean().sqrt().item()
+    assert z_rms < 1e-4, f"fp32-stream post-logit rms error {z_rms:.3e} (exact-grid split expected ~3.5e-5)"
