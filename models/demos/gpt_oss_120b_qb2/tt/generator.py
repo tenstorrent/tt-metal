@@ -735,6 +735,8 @@ class Generator:
             # forcing is the one case where the caller's token is authoritative.
             # Mark these fixed slots as freshly supplied so its reset path copies
             # the host token/position rather than silently continuing free-run.
+            if not hasattr(self._inner, "_slots_prefilled_since_decode"):
+                self._inner._slots_prefilled_since_decode = set()
             self._inner._slots_prefilled_since_decode.update(range(tokens.shape[0]))
         if reuse_fixed_sampling:
             result = self._inner.decode_forward(

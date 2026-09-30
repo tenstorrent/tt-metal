@@ -43,7 +43,8 @@ def test_teardown_calls_canonical_idempotent_release_once():
 
 @pytest.mark.parametrize("width", [1, 4, 8, 32])
 @pytest.mark.parametrize("read_from_device", [False, True])
-def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_device):
+@pytest.mark.parametrize("force_host_tokens", [False, True])
+def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_device, force_host_tokens):
     generator = object.__new__(Generator)
     generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)
     generator.model = SimpleNamespace(
@@ -63,8 +64,11 @@ def test_synchronous_host_decode_preserves_full_vocabulary(width, read_from_devi
         kv_cache=[object()],
         enable_trace=False,
         sampling_mode="host",
+        force_host_tokens=force_host_tokens,
         read_from_device=read_from_device,
     )
+    if force_host_tokens:
+        assert generator._inner._slots_prefilled_since_decode == set(range(width))
     assert generator._inner.decode_forward.call_args.kwargs["read_from_device"] is False
     if read_from_device:
         generator._inner.read_decode_output.assert_called_once_with(device_output)
