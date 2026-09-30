@@ -990,6 +990,17 @@ def build_generate_rank_bindings_mpi_cmd(
     if mpi_args:
         cmd.extend(mpi_args)
 
+    # Mirror tt-run's default binding policy (see the ``--bind-to none`` block in the main launch path).
+    # Without an explicit binding directive, OpenMPI binds each rank to a single core. Phase 1 is
+    # compute-heavy: the placement solve runs on one rank while the other ranks busy-spin in MPI waiting
+    # for it. With per-core binding those spinning ranks get pinned onto the same cores as the solver rank
+    # on core-limited runners (e.g. CI's cpu_medium), serializing them and slowing the solve ~5-6x. This
+    # is why the SC36 sweep's Phase-1 producer took ~17 min on CI but tt-run (which already adds
+    # --bind-to none) did not. Let the OS load-balance ranks across all cores instead. Skip only when the
+    # caller already chose a binding policy.
+    if not mpi_args_specify_bind_to(mpi_args):
+        cmd.extend(["--bind-to", "none"])
+
     use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
     mgd_arg = (
         ["--mesh-graph-descriptor-mapping", str(mgd_path.resolve())]
