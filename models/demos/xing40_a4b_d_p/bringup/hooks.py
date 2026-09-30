@@ -26,7 +26,7 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm"},
+    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm", "mlp"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -44,6 +44,9 @@ _QA_STEPS = {"q_a"}
 _ATTENTION_STEPS = {"attention"}
 # mHC residual mix (tt/residual.py:TtHcResidual): (streams, hc, y column-split) -> streams, no weights, no CCL.
 _RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
+# Dense SwiGLU (tt/mlp.py:TtDenseMLP): row-split ffn_norm [S, H] (replicated over axis 1) in -> gate / up
+# column-parallel, down row-parallel -> reduce_scatter axis 1 -> column-split mlp_out [S, H] fp32.
+_MLP_STEPS = {"mlp"}
 
 
 def _loader(spec):
@@ -172,6 +175,24 @@ def _residual_host_fn(mesh, module, hidden):
     return fn
 
 
+def _mlp_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H]) -> mlp_out host [S, H] fp32 (harness boundary: row-split bf16 in, replicated
+    over axis 1; column-split out)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_host, row_split_to_device
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x, dtype=ttnn.bfloat16)
+        od = module(xd)
+        out = col_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
 class _AttentionHostFn:
     """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 768]) -> attn_out host [S, H] fp32.
 
@@ -242,6 +263,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.norm import build_norm
 
         return _gathered_norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, step))
+    if step in _MLP_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.mlp import build_mlp
+
+        return _mlp_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
     if step in _QA_STEPS:
         from models.demos.xing40_a4b_d_p.tt.q_a import build_q_a
 
