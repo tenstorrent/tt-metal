@@ -11,6 +11,7 @@ CSV format, one per candidate. `summarize.py base.csv sweep.csv --base-mode oob 
 the default against the best candidate per case.
 
   python sweep_configs.py --out generated/matmul_oob/wh_sweep.csv --tiers issues --filter i40845
+  python sweep_configs.py --out generated/matmul_oob/wh_sweep.csv --cases-csv generated/matmul_oob/<run>/validation/suite.csv
 """
 
 import argparse
@@ -24,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import run_suite  # noqa: E402  (sets the profiler env vars before ttnn is imported)
 from run_suite import FIELDS, CaseRun, case_fields, git_rev  # noqa: E402
-from suite import TIERS, get_cases  # noqa: E402
+from suite import TIERS, cases_from_csv, get_cases  # noqa: E402
 
 import ttnn  # noqa: E402
 
@@ -329,6 +330,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default="generated/matmul_oob/sweep.csv")
     parser.add_argument("--tiers", nargs="+", choices=list(TIERS), default=None)
+    parser.add_argument("--cases-csv", default=None, help="take the cases from an earlier results CSV instead")
     parser.add_argument("--filter", default=None, help="regex on case name")
     parser.add_argument("--exclude-tags", nargs="*", default=[])
     parser.add_argument("--max-per-family", type=int, default=6)
@@ -343,7 +345,7 @@ def main():
     )
     args = parser.parse_args()
 
-    cases = get_cases(args.tiers)
+    cases = cases_from_csv(args.cases_csv) if args.cases_csv else get_cases(args.tiers)
     if args.filter:
         cases = [c for c in cases if re.search(args.filter, c.name)]
     if args.exclude_tags:
