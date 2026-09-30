@@ -11,6 +11,10 @@
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
 #include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"  // kreq + ctrl records
+
+namespace kreq = sparse_sdpa_msa::kreq;
+namespace ctrl = sparse_sdpa_msa::ctrl;
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -27,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t k_half = get_compile_time_arg_val(9);  // writer gathers [0, half)
     constexpr uint32_t v_half = get_compile_time_arg_val(10);
 
-    // CB ids match the factory's reader compile-arg block.
+    // CB ids match the factory's reader compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
     constexpr uint32_t cb_q_rm = get_compile_time_arg_val(11);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(12);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(13);
@@ -52,8 +56,24 @@ void kernel_main() {
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(26);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(27);
 
+    // Per-core K/V block cache: KV_CACHE_SLOTS resident blocks (0 = off, the streamed path below). The reader
+    // owns the slots and hands compute the slot to read over cb_slot, so a re-selected block costs no DRAM read.
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_slot = get_compile_time_arg_val(31);
+    // cb_slot depth = blocks the reader may run ahead of compute, so a miss's DRAM read overlaps the previous
+    // block's math.
+    constexpr uint32_t KV_CACHE_SLOT_DEPTH = get_compile_time_arg_val(32);
+    // Slots compute may still be reading once reserve_back(cb_slot) returns; the busy scan is compiled out at depth 1.
+    constexpr uint32_t KV_CACHE_INFLIGHT = KV_CACHE_SLOT_DEPTH > 1 ? KV_CACHE_SLOT_DEPTH - 1 : 1;
+    // The victim search skips the in-flight slots, so it terminates only if some slot is never in flight.
+    static_assert(
+        KV_CACHE_SLOTS == 0 || KV_CACHE_SLOT_DEPTH == 1 || KV_CACHE_INFLIGHT < KV_CACHE_SLOTS,
+        "cb_slot depth must leave at least one slot outside the in-flight set");
+
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<28, 0>();
+    constexpr auto q_args = TensorAccessorArgs<sparse_sdpa_msa::READER_CT_ARGS, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
@@ -85,8 +105,10 @@ void kernel_main() {
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
+    // A CB handle is free to construct, so every build names all of them and uses only its own.
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_in), v_cb(cb_v_in), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
     experimental::CB kreq_cb(cb_kreq), kack_cb(cb_kack);
+    experimental::CB slot_cb(cb_slot), k_cache_cb(cb_k_cache), v_cache_cb(cb_v_cache);
     const auto q = TensorAccessor(q_args, q_addr);
     const auto k = TensorAccessor(k_args, k_addr);
     const auto v = TensorAccessor(v_args, v_addr);
@@ -96,6 +118,54 @@ void kernel_main() {
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
+
+    // Block-cache residency: slot s holds logical block kv_cache_bid[s] (sentinel = empty); misses fill the
+    // slots round-robin. The cache CBs are reserved whole and never pushed, so slot addresses stay fixed. Any
+    // slot assignment is correct -- the cache only changes where the bytes come from -- so the policy is free.
+    // Sizes of 1 are placeholders (no zero-length arrays) for builds that never touch them.
+    [[maybe_unused]] uint32_t kv_cache_bid[KV_CACHE_SLOTS > 0 ? KV_CACHE_SLOTS : 1];
+    [[maybe_unused]] uint32_t kv_rr_next = 0;                  // round-robin cursor: the next victim candidate
+    [[maybe_unused]] uint32_t kv_inflight[KV_CACHE_INFLIGHT];  // slots handed to compute in the last depth-1 blocks
+    [[maybe_unused]] uint32_t kv_inflight_pos = 0;
+    if constexpr (KV_CACHE_SLOTS > 0) {
+        k_cache_cb.reserve_back(KV_CACHE_SLOTS * k_tiles_per_block);
+        v_cache_cb.reserve_back(KV_CACHE_SLOTS * v_tiles_per_block);
+        for (uint32_t s = 0; s < KV_CACHE_SLOTS; ++s) {
+            kv_cache_bid[s] = sentinel;
+        }
+        for (uint32_t i = 0; i < KV_CACHE_INFLIGHT; ++i) {
+            kv_inflight[i] = sentinel;
+        }
+    }
+
+    // One gather request to the writer (cb_kreq page layout: sparse_sdpa_msa::kreq).
+    auto post_kreq = [&](uint32_t block_id, uint32_t flags, uint32_t slot) {
+        kreq_cb.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+        rq[kreq::BLOCK_ID] = block_id;
+        rq[kreq::FLAGS] = flags;
+        rq[kreq::SLOT] = slot;
+        kreq_cb.push_back(1);
+    };
+    // Upper K/V tile halves of one block into L1 at byte offsets k_dst/v_dst of the destination CBs, then wait for
+    // the writer's lower halves, so the whole block is resident when this returns.
+    auto gather_upper_halves = [&](uint32_t k_tile0,
+                                   uint32_t v_tile0,
+                                   experimental::CB& k_dst_cb,
+                                   experimental::CB& v_dst_cb,
+                                   uint32_t k_dst,
+                                   uint32_t v_dst) {
+        sparse_sdpa_msa::TridRing ring{noc};  // K/V upper halves share one ring.
+        for (uint32_t i = k_half; i < k_tiles_per_block; ++i) {
+            ring.read(k, k_dst_cb, k_tile_bytes, k_tile0 + i, k_dst + i * k_tile_bytes);
+        }
+        for (uint32_t i = v_half; i < v_tiles_per_block; ++i) {
+            ring.read(v, v_dst_cb, v_tile_bytes, v_tile0 + i, v_dst + i * v_tile_bytes);
+        }
+        ring.drain();           // this NoC's upper halves landed
+        kack_cb.wait_front(1);  // writer's lower halves landed in the same L1
+        kack_cb.pop_front(1);
+    };
 
     uint32_t tok = work_start;
     uint32_t kv_group = 0;
@@ -167,10 +237,10 @@ void kernel_main() {
         ctrl_cb.reserve_back(1);
         {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
-            cp[0] = n_active;
-            cp[1] = diag_chunk;     // chunk index of the diagonal block (sentinel = none -> no token mask)
-            cp[2] = boundary_tile;  // key-tiles >= this are fully masked in the diagonal block
-            cp[3] = boundary_col;   // partial-column boundary within boundary_tile (0 -> none)
+            cp[ctrl::ACTIVE_BLOCKS] = n_active;
+            cp[ctrl::DIAG_CHUNK] = diag_chunk;
+            cp[ctrl::BOUNDARY_TILE] = boundary_tile;
+            cp[ctrl::BOUNDARY_COL] = boundary_col;
         }
         ctrl_cb.push_back(1);
 
@@ -189,7 +259,6 @@ void kernel_main() {
             // Producer contract requires at least one valid block and no sentinels in the active prefix.
             ASSERT(block_id != sentinel);
 
-            // Reader reserves the whole block; writer fills the lower half, reader fills the upper half.
             // Block-cyclic cache: remap the logical block id to its physical block before addressing (invP).
             // Addressing only — the sentinel search and the diagonal-block causal match stay on the logical id.
             // Identity for a natural-order cache (block_cyclic false).
@@ -202,30 +271,69 @@ void kernel_main() {
                 k_tile0 += kv_group * k_group_tile_stride;
                 v_tile0 += kv_group * v_group_tile_stride;
             }
-            k_cb.reserve_back(k_tiles_per_block);
-            v_cb.reserve_back(v_tiles_per_block);
-
-            kreq_cb.reserve_back(1);
-            {
-                volatile tt_l1_ptr uint32_t* rq =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
-                rq[0] = block_id;
-                rq[1] = (chunk == n_active - 1);  // writer ends its gather phase for the token on the last block
+            const uint32_t last_flag = (chunk == n_active - 1) ? kreq::LAST : 0u;
+            if constexpr (KV_CACHE_SLOTS > 0) {
+                // Serve the block from its resident slot; a miss fills a victim slot the way the streamed path
+                // fills cb_k_in/cb_v_in (this NoC the upper tile halves, the writer's NoC the lower ones).
+                uint32_t slot = KV_CACHE_SLOTS;  // out of range = not resident
+                for (uint32_t s = 0; s < KV_CACHE_SLOTS; ++s) {
+                    if (kv_cache_bid[s] == block_id) {
+                        slot = s;
+                        break;
+                    }
+                }
+                // Reserve before choosing a victim: once this returns compute holds at most depth-1 slot records,
+                // so kv_inflight is exactly the set of slots it may still be reading.
+                slot_cb.reserve_back(1);
+                const bool miss = slot == KV_CACHE_SLOTS;
+                if (miss) {
+                    // Round-robin victim that skips the in-flight slots (terminates: INFLIGHT < SLOTS).
+                    for (;;) {
+                        const uint32_t cand = kv_rr_next;
+                        kv_rr_next = (kv_rr_next + 1 == KV_CACHE_SLOTS) ? 0 : kv_rr_next + 1;
+                        bool busy = false;
+                        if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
+                            for (uint32_t i = 0; i < KV_CACHE_INFLIGHT; ++i) {
+                                busy |= (kv_inflight[i] == cand);
+                            }
+                        }
+                        if (!busy) {
+                            slot = cand;
+                            break;
+                        }
+                    }
+                }
+                // The writer hears about every miss (it fills the lower halves) and about the token's last block
+                // (it then drains the output); hits in between stay silent.
+                if (miss || last_flag) {
+                    post_kreq(block_id, last_flag | (miss ? kreq::FETCH : 0u), slot);
+                }
+                if (miss) {
+                    gather_upper_halves(
+                        k_tile0,
+                        v_tile0,
+                        k_cache_cb,
+                        v_cache_cb,
+                        slot * k_tiles_per_block * k_tile_bytes,
+                        slot * v_tiles_per_block * v_tile_bytes);
+                    kv_cache_bid[slot] = block_id;
+                }
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_cb.get_write_ptr()) = slot;
+                slot_cb.push_back(1);
+                if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
+                    kv_inflight[kv_inflight_pos] = slot;
+                    kv_inflight_pos = (kv_inflight_pos + 1 == KV_CACHE_INFLIGHT) ? 0 : kv_inflight_pos + 1;
+                }
+            } else {
+                // Streamed path: the reader reserves the whole block, the writer fills the lower half and the
+                // reader the upper half; compute pops it after the chunk.
+                k_cb.reserve_back(k_tiles_per_block);
+                v_cb.reserve_back(v_tiles_per_block);
+                post_kreq(block_id, kreq::FETCH | last_flag, 0);
+                gather_upper_halves(k_tile0, v_tile0, k_cb, v_cb, 0, 0);
+                k_cb.push_back(k_tiles_per_block);
+                v_cb.push_back(v_tiles_per_block);
             }
-            kreq_cb.push_back(1);
-
-            sparse_sdpa_msa::TridRing ring{noc};  // K/V upper halves share one ring.
-            for (uint32_t i = k_half; i < k_tiles_per_block; ++i) {
-                ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, i * k_tile_bytes);
-            }
-            for (uint32_t i = v_half; i < v_tiles_per_block; ++i) {
-                ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, i * v_tile_bytes);
-            }
-            ring.drain();           // this NoC's upper halves landed
-            kack_cb.wait_front(1);  // writer's lower halves landed in the same L1
-            kack_cb.pop_front(1);
-            k_cb.push_back(k_tiles_per_block);
-            v_cb.push_back(v_tiles_per_block);
         }
 
         ++tok;
@@ -233,6 +341,12 @@ void kernel_main() {
             if (tok == S) {
                 tok = 0;
                 ++kv_group;
+                // A block id names different tiles in every KV group, so residency cannot carry across groups.
+                if constexpr (KV_CACHE_SLOTS > 0) {
+                    for (uint32_t s = 0; s < KV_CACHE_SLOTS; ++s) {
+                        kv_cache_bid[s] = sentinel;
+                    }
+                }
             }
         }
     }
