@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase A (prep) reader: constants (eye, tril, ones) once, then per-chunk q,k,v,g,beta.
+// Phase A (prep) reader: constants (eye, tril, ones, masks) once, then per-chunk q,k,v,g,beta.
 // No initial state — the prep phase is state-independent. Device 2.0 API.
+// The reads of one item, and at kickoff the constants as well, are issued as one flight behind a single
+// read barrier: the compute cannot start an item before q and k have landed, and at kickoff every
+// producer of the fused program reads at once, so each extra barrier is a contended round trip.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -74,27 +77,22 @@ void kernel_main() {
 
     Noc noc;
 
-    auto read_into = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n, uint32_t tb) {
+    // Reserve `n` tiles of a CB and post their reads; no barrier, no push. The caller ends a flight with
+    // `noc.async_read_barrier()` and pushes every CB it reserved.
+    auto issue = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n, uint32_t tb) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(n);
         for (uint32_t t = 0; t < n; t++) {
             noc.async_read(acc, cb, tb, {.page_id = base + t}, {.offset_bytes = t * tb});
         }
-        noc.async_read_barrier();
-        cb.push_back(n);
     };
-
-    // constants (once)
-    read_into(eye_acc, cb_eye, 0, cc, tb_f);
-    read_into(tril_acc, cb_tril, 0, cc, tb_f);
-    read_into(ones_acc, cb_ones, 0, cc, tb_f);
-    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    auto publish = [](uint32_t cb_id, uint32_t n) { CircularBuffer(cb_id).push_back(n); };
 
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
     // cb_v in the SAME row-major order the head-major read produces (CB idx rt*Vt+ct) — so the
     // compute sees byte-identical tiles regardless of source layout. Requires pad==0 (T=NC*Ct*32).
-    auto read_v_flat = [&](uint32_t hc) {
+    auto issue_v_flat = [&](uint32_t hc) {
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
         const uint32_t hv = bh % HV;
@@ -109,14 +107,12 @@ void kernel_main() {
                 noc.async_read(v_acc, cbv, tb_io, {.page_id = page}, {.offset_bytes = (rt * Vt + ct) * tb_io});
             }
         }
-        noc.async_read_barrier();
-        cbv.push_back(cv);
     };
 
     // Flat-q/k token-major read: work-item is value-head hv; its key-head is hk = hv / G (GQA group
     // size G = HV/Hk). Fetch [Ct,Kt] for (hk, chunk c) from the flat [B,T,Hk*K] grid (row stride Hk*Kt,
     // col offset hk*Kt), packed row-major into `cb` — identical layout to the head-major read.
-    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+    auto issue_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
         const uint32_t G = HV / Hk;
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
@@ -133,25 +129,53 @@ void kernel_main() {
                 noc.async_read(acc, cb, tb_io, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_io});
             }
         }
-        noc.async_read_barrier();
-        cb.push_back(ck);
     };
 
-    for (uint32_t i = 0; i < wi_count; i++) {
-        const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
+    // One item's inputs, q and k first (the norm consumes them first), as one flight.
+    auto issue_item = [&](uint32_t hc) {
         if constexpr (QK_FLAT) {
-            read_qk_flat(q_acc, cb_q, hc);
-            read_qk_flat(k_acc, cb_k, hc);
+            issue_qk_flat(q_acc, cb_q, hc);
+            issue_qk_flat(k_acc, cb_k, hc);
         } else {
-            read_into(q_acc, cb_q, hc * ck, ck, tb_io);
-            read_into(k_acc, cb_k, hc * ck, ck, tb_io);
+            issue(q_acc, cb_q, hc * ck, ck, tb_io);
+            issue(k_acc, cb_k, hc * ck, ck, tb_io);
         }
         if constexpr (V_FLAT) {
-            read_v_flat(hc);
+            issue_v_flat(hc);
         } else {
-            read_into(v_acc, cb_v, hc * cv, cv, tb_io);
+            issue(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
-        read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        issue(g_acc, cb_g, hc * Ct, Ct, tb_f);
+        issue(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+    };
+    auto publish_item = [&]() {
+        publish(cb_q, ck);
+        publish(cb_k, ck);
+        publish(cb_v, cv);
+        publish(cb_g, Ct);
+        publish(cb_beta, Ct);
+    };
+
+    // Kickoff: the first item's inputs and the constants in one flight.
+    if (wi_count > 0) {
+        issue_item(wi_start);
+    }
+    issue(eye_acc, cb_eye, 0, cc, tb_f);
+    issue(tril_acc, cb_tril, 0, cc, tb_f);
+    issue(ones_acc, cb_ones, 0, cc, tb_f);
+    issue(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    noc.async_read_barrier();
+    if (wi_count > 0) {
+        publish_item();
+    }
+    publish(cb_eye, cc);
+    publish(cb_tril, cc);
+    publish(cb_ones, cc);
+    publish(cb_mask, 3);
+
+    for (uint32_t i = 1; i < wi_count; i++) {
+        issue_item(wi_start + i * wi_stride);  // flat (head, chunk) index
+        noc.async_read_barrier();
+        publish_item();
     }
 }
