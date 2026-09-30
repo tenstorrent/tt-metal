@@ -177,6 +177,11 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
      report that describes the behaviour rather than naming the file or function ("fast exp ignores ITERATIONS").
      **Before filing anything, also search for it by behaviour** (the op and the symptom), by hand or with GitHub's
      search; that is how the last duplicates of a large run were found.
+   - **Re-rate severity with one rubric:** a hunter picks high / medium / low on its own judgement, and verification
+     checks whether a bug is real, not how bad it is, so unrated severities are not comparable across findings.
+     `engine/severity.py --run <run> prepare --to-dir <dir>`, then `engine/severity-wave.js` with the args it prints,
+     then `severity.py persist <output>`, then `consolidate.py`. Each rating is a disposition severity override with a
+     one-line reason (the hunter's rating stays visible as `severity_audit`). File from the rated severities.
    - **Write the suggested fixes:** `engine/fixes.py --run <run> prepare --to-dir <dir>`, then `engine/fix-wave.js`
      with the args it prints, then `fixes.py persist <output>`, then `consolidate.py`. Each open finding and each
      merged site gets a fix grounded in the current code, from the verifiers' write-ups, with a `Test:` line. A
@@ -284,8 +289,8 @@ whatever file a batch holds, and it needs the deep reads, not the pack.
 3. **Verify:** `engine/recheck.py --run <run> queue --to-dir <items> --max 330` (three verifiers each; 330 leads is the
    1000-agent cap), then `engine/recheck-wave.js` with the args it prints, then `recheck.py persist`. Repeat until
    nothing is queued. For hundreds of leads run each wave unattended with `engine/run_workflow_headless.py`.
-4. **Consolidate, dedup and file-check** exactly as in step 6 of *Running an audit*, then re-rate the placeholder
-   severities with `engine/severity-wave.js` (record them as disposition severity overrides) and write the fixes.
+4. **Consolidate, dedup, file-check, re-rate severity and write the fixes** exactly as in step 6 of *Running an
+   audit*. The re-rating matters most here: every lead enters with a placeholder medium.
 The first sweep, over the tt-metal and tt-llk deep reads (927 unfixed-sibling entries), verified 776 leads: 536 were
 confirmed, and 388 of them were new after dedup and the filed check.
 

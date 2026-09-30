@@ -1352,6 +1352,61 @@ def test_exec_tier_matches_a_stem_literally(tmp_path):
     ]
 
 
+def test_severity_rerating_round_trip_overrides_the_hunters_rating(rundir, tmp_path):
+    write(
+        str(rundir / "verdicts" / "A-0000.json"),
+        {"findings": [finding("a.cpp", 3, "high"), finding("b.cpp", 5, "low")]},
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    assert code == 0 and json.loads(out.splitlines()[0])["n"] == 1, out + err
+    items = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    assert sorted(i["key"] for i in items) == ["a.cpp:3", "b.cpp:5"]
+    write(
+        str(tmp_path / "out.json"),
+        {
+            "result": {
+                "ratings": [
+                    {"key": "a.cpp:3", "severity": "medium", "why": "narrow config"},
+                    {"key": "b.cpp:5", "severity": "low", "why": "diagnostic only"},
+                ],
+                "missing": [],
+            }
+        },
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "out.json",
+    )
+    assert code == 0, out + err
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    a = next(
+        f for f in json.load(open(rundir / "CONFIRMED.json")) if f["file"] == "a.cpp"
+    )
+    assert a["severity"] == "medium" and a["severity_audit"] == "high", a
+    code, out, _ = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    assert (
+        json.loads(out.splitlines()[0])["n"] == 0
+    ), "rated findings are skipped unless --all"
+
+
 def test_every_spawn_user_imports_it_before_first_use():
     import ast
     import glob

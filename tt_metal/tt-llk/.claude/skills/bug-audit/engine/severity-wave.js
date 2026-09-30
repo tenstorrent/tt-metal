@@ -2,7 +2,7 @@ export const meta = {
     name: 'bug-audit-severity',
     description: 'Re-rate the severity of confirmed findings (high / medium / low) with a fixed rubric, in batches',
     whenToUse:
-        'For findings whose severity is a placeholder or untrusted (e.g. leads verified via recheck). args = {input_dir, n} (batch files b0000.json ... each {items: [...]}). Then apply with a disposition severity override.',
+        'Every audit, before filing, so all confirmed findings are rated against one rubric. args = {input_dir, n} from severity.py prepare (batch files b0000.json ... each {items: [...]}). Then severity.py persist <output>.',
     phases: [{title: 'Rate', detail: 'one agent per batch of about 10 findings'}],
 }
 
