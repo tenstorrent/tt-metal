@@ -202,8 +202,6 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
-        # Ring-path knobs; unset keeps the measured defaults. The transformer sets the fixed-offset softmax per
-        # block from MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS; MINIMAX_H3_SDPA_FIXED_SOFTMAX=1 turns it on everywhere.
         self.sdpa_fixed_offset = self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX") == "1"
         self.sdpa_fixed_offset_value = float(os.environ.get("MINIMAX_H3_SDPA_FIXED_OFFSET", "0"))
         sdpa_fidelity = ttnn.MathFidelity.HiFi2

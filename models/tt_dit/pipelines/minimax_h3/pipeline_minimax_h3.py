@@ -1252,8 +1252,6 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         apply_env_quant_config(self._transformer)
-        # Blackhole defaults: fixed-offset softmax on the blocks whose q/k gains bound the logits, and the adaLN
-        # scale/shift through the tile-row map (a request with too many boundary tiles falls back in __call__).
         if os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS") is None and is_blackhole():
             self._transformer._set_fixed_softmax_blocks("auto")
         if os.environ.get("MINIMAX_H3_ADALN_GATHER") is None and is_blackhole():
@@ -2107,7 +2105,6 @@ class MiniMaxH3Pipeline:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
             if not self.bucket_denoise:
                 if self.trace_denoise:
-                    # Exact-length tracing: the first pass warmed the rung, this one captures it.
                     self(prompt, num_inference_steps=2, **generation_kwargs)
                 return
             natural = self.last_seq_len.padded
@@ -2543,8 +2540,6 @@ class MiniMaxH3Pipeline:
                 **tilerow_kwargs,
             )
 
-            # The Euler update and the next step's timestep upload queue behind the forward, so that host
-            # work overlaps the device instead of sitting in the per-step sync bubble.
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))

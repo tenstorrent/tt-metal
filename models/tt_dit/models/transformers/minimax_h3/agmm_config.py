@@ -44,7 +44,6 @@ def _per_core_m(m: int, n: int) -> int:
 #   (5376, 5376)  attention to_qkv   K_tiles_per_device = 42
 #   (7168, 1344)  attention to_out   K_tiles_per_device = 56
 #   (5376, 7168)  feed-forward ff1   K_tiles_per_device = 42, fused SwiGLU so N_block must be even
-# per_core_M 36: 768P at 15 s (13664 rows/device), two N blocks per core.
 AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (5376, 5376, 1): (2, 6, 16),
     (5376, 5376, 2): (2, 7, 16),

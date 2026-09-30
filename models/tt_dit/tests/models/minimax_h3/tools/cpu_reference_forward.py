@@ -2,13 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-depth CPU reference forward of the MiniMax-H3 transformer on deterministic inputs, and PSNR of a device
-output against it. The device side is `test_zz_cpu_ref.py` (same inputs, current env knobs), so every speed knob can
-be scored as "distance to the fp32 CPU reference" per forward, next to the tip's own distance.
+"""Full-depth fp32 CPU reference forward of the MiniMax-H3 transformer on deterministic inputs (`reference`, hours at
+the 15 s shape), and PSNR of device outputs written by `test_zz_cpu_ref.py` against it (`score`).
 
-    # CPU (hours at the 15 s shape, ~1 h at 5 s on 64 cores, ~15 min at 2 s); writes inputs + reference outputs
     MINIMAX_H3_MODEL_PATH=... python cpu_reference_forward.py reference --shape 5s --out ref_5s.npz
-    # after the device test wrote tt_<tag>.npz
     python cpu_reference_forward.py score ref_5s.npz tt_tip.npz tt_rec3.npz
 """
 
@@ -23,11 +20,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# (num_text, num_audio, num_video, grid): the transformer test's production 5 s point and two cheaper ones
 SHAPES = {
-    "2s": (512, 166, 14112, (24, 42)),  # 14 latent frames of 24x42 patches
-    "5s": (512, 414, 37296, (24, 42)),  # the transformer test's prod_768p_5s
-    "15s": (512, 1242, 108864, (24, 42)),  # 108 latent frames: the served 15 s 16:9 clip's shape class
+    "2s": (512, 166, 14112, (24, 42)),
+    "5s": (512, 414, 37296, (24, 42)),
+    "15s": (512, 1242, 108864, (24, 42)),
 }
 
 

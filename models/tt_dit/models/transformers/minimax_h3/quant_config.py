@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in precision knobs for the MiniMax-H3 transformer blocks, read from the environment.
-
-MINIMAX_H3_FAST=1                         the measured 15 s recipe: adaLN schedule cache, bfloat8_b to_qkv/ff1
-                                          weights, LoFi PV in the ring SDPA (sets those knobs unless given)
-MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]  typecast the listed linears' weights to bfloat8_b after loading; `out` and
-                                          `ff2` feed fused residual/gate kernels whose ternary inputs must match the
-                                          weight format, so bf8 there may be rejected
-"""
+"""Opt-in precision knobs for the MiniMax-H3 transformer blocks, read from the environment: MINIMAX_H3_FAST=1 (the
+measured 15 s recipe, see FAST_RECIPE) and MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2] (typecast those linears' weights
+to bfloat8_b after loading). Documented in models/tt_dit/models/MiniMaxH3.md."""
 
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ import torch
 from ....models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, TILE, tilerow_remap
 from ....pipelines.minimax_h3 import packing as p
 
-HIDDEN = 1344  # per-device hidden at TP=4: 42 tile columns
+HIDDEN = 1344
 
 
 def _reader_gather(table: torch.Tensor, tile_map: torch.Tensor, expanded: torch.Tensor, sp_factor: int) -> torch.Tensor:
@@ -45,7 +45,6 @@ def _runs(lengths_and_rows, pad_to):
 
 @pytest.mark.parametrize("sp_factor", [1, 2, 4])
 def test_synthetic_runs_with_mid_tile_boundaries(sp_factor):
-    # Boundaries mid-tile, on a tile edge (64), two inside one tile (the 5-row run) and a run spanning devices.
     runs = [(45, 1), (19, 0), (64, 1), (5, 3), (300, 2), (700, 5), (31, 4), (33, 0)]
     total = sum(n for n, _ in runs)
     align = sp_factor * TILE
@@ -68,7 +67,6 @@ def test_random_runs_match_per_token_gather():
 
 @pytest.mark.parametrize("sp_factor", [8, 32])
 def test_packed_fl2va_layout(sp_factor):
-    # 997 text tokens with a keyframe's vision block inside them.
     tags = torch.ones(997, dtype=torch.long)
     tags[20:70] = p.MINIMAX_H3_VIDEO_TAG
     layout = p.build_packed_sequence(

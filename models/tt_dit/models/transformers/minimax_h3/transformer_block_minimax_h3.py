@@ -144,13 +144,9 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
-        # MINIMAX_H3_ADALN_GATHER: "matmul" gathers the six modulations as one-hot matmuls; "tilerow" hands the norms
-        # their scale/shift as a tile-row map into a small expanded table (adaln_tilerow.py), the gates stay matmuls.
         self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
         if self._adaln_gather not in ("matmul", "tilerow"):
             raise ValueError(f"MINIMAX_H3_ADALN_GATHER={self._adaln_gather!r}: expected 'matmul' or 'tilerow'")
-        # The norms' static weight is folded into the (1 + scale) table rows instead of the per-token weight;
-        # MINIMAX_H3_FOLD_NORM_WEIGHT=0 restores the per-token multiply.
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
@@ -281,10 +277,8 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
-        tables: the six modulation tables for this step from `MiniMaxH3Transformer3DModel.modulation_tables`, else
-            projected from `temb` here.
-        onehot: the gather matrix from `onehot_table`, shared by all blocks of a forward; built here if absent.
-        tilerow: `(tile_map, selector)` from `tilerow_tables`; the norms then read their scale/shift through the map.
+        tables / onehot / tilerow: this step's modulation tables, the shared one-hot gather matrix and the
+            `(tile_map, selector)` pair from `tilerow_tables`; each is built here when absent.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """

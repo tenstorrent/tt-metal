@@ -13,9 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 B, NH, S, D = 1, 8, 1024, 128
 Q_CHUNK, K_CHUNK = 256, 512
-# q and k are scaled by this, so the scaled logits have std ~ amp^2 and a block max near +20.
 LOGIT_AMP = 2.0
-# Two whole tile rows inside the second Q chunk, driven ~40 below the other rows in the dead-row test.
 DEAD_ROWS = slice(320, 384)
 DEAD_SHIFT = 40.0
 
@@ -133,7 +131,6 @@ def test_sdpa_fixed_offset_softmax_matches_standard(device, offset_above_max):
 def test_sdpa_fixed_offset_softmax_dead_rows(device):
     """Rows whose max logit sits far below the offset come out as zeros, not NaN; other rows are unaffected."""
     q, k, v = make_inputs(LOGIT_AMP)
-    # Feature 0 carries a per-row constant shift: k0 = 1 everywhere, q0 = -DEAD_SHIFT * sqrt(D) on the dead rows.
     k[..., 0] = 1.0
     q[..., 0] = 0.0
     q[:, :, DEAD_ROWS, 0] = -DEAD_SHIFT * D**0.5

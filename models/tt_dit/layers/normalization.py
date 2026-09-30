@@ -250,8 +250,6 @@ class DistributedRMSNorm(Module):
             msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
 
-        # dynamic_tile_row_map: the op reads tile row map[r] of dynamic_weight / dynamic_bias for input tile row r;
-        # passed only when set, so builds of the op without the argument keep working.
         extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST

@@ -2,14 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device side of tools/cpu_reference_forward.py: run the full-depth real-checkpoint transformer on the reference's
-inputs for one or more MINIMAX_H3_* knob sets, save each output and print PSNR / PCC against the CPU reference.
-
-The checkpoint goes onto the mesh once; every knob set is then applied in place and scored. A set with
-MINIMAX_H3_BF8_WEIGHTS typecasts the weights on the device, which cannot be undone, so list such sets last.
+"""Device side of tools/cpu_reference_forward.py: the full-depth transformer on the reference's inputs for each
+MINIMAX_H3_* knob set (applied in place, bf8 sets last since the typecast cannot be undone), scored against the CPU reference.
 
     H3_CPU_REF=ref.npz H3_CPU_REF_CONFIGS="tip:;lofipv:MINIMAX_H3_SDPA_PV_FIDELITY=LoFi" pytest test_zz_cpu_ref.py -k 4x8 -s
-(';' separates configs, a config is 'tag:ENV=VAL|ENV=VAL', an empty knob list is the plain tip; H3_TAG names a lone run)
 """
 
 import json
@@ -74,7 +70,6 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     tt_model._adaln_cache_enabled = knobs.get("MINIMAX_H3_ADALN_CACHE") == "1"
     tt_model._modulation_cache.clear()
     fidelity = getattr(ttnn.MathFidelity, knobs.get("MINIMAX_H3_SDPA_FIDELITY", "HiFi2"))
-    # The cached SDPA program configs hold the per-phase fidelities read from the environment; rebuild them.
     for block in tt_model.transformer_blocks:
         attn = block.attn
         attn.sdpa_fixed_offset = False
@@ -90,7 +85,6 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     spec = knobs.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS")
     if spec:
         tt_model._set_fixed_softmax_blocks(spec)
-    # The bf8 typecast cannot be undone, so a config can only add linears to the set already cast; cast just those.
     applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
     wanted = {name for name in knobs.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name}
     if wanted - applied:
@@ -176,7 +170,6 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
     for tag, knobs in configs:
         knob_str = _apply_knobs(tt_model, knobs, mesh_device)
         logger.info(f"[{tag}] knobs: {knob_str}")
-        # One compile pass per knob set, so the timed forward below is warm.
         tt_model(**inputs.tt)
         ttnn.synchronize_device(mesh_device)
         start = time.time()

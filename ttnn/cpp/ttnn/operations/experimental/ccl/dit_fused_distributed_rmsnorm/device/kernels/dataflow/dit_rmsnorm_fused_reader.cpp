@@ -165,7 +165,6 @@ void kernel_main() {
     }
 
 #ifdef AFFINE_TILE_ROW_MAP
-    // One page into a private CB; the read barrier is deferred to the first per-token row below.
     const auto tile_row_map_accessor = TensorAccessor(tile_row_map_args, tile_row_map_addr);
     CircularBuffer cb_tile_row_map(tile_row_map_cb);
     if (tile_row_start < tile_row_end) {

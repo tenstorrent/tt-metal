@@ -502,7 +502,6 @@ void blocked_matmul_exp_pack(
             pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
             configure_single_tile_pack(sum_cb);
         }
-        // Pass 0 (chunk-start subblock only): column 0 of every row with L1-acc off; pass 1: the other columns.
         const bool fresh = out_col_offset == 0;
 #pragma GCC unroll 1
         for (uint32_t pass = fresh ? 0 : 1; pass < 2; pass++) {
@@ -1514,7 +1513,6 @@ static void sdpa_inner_loop_step(
     uint32_t kt_index_offset = 0;
     constexpr bool fixed = sdpa_fixed_offset_softmax;
     const bool acc_overwrite = !fixed || (is_first_iter && !seed_from_prev);
-    // Fixed mode: each chunk's row sums land in chunk_sum_cb and fold into cur.sum once, one bf16 rounding per chunk.
     const uint32_t step_sum_cb = fixed ? chunk_sum_cb : cur.sum;
 
     if constexpr (!fixed) {
@@ -1535,8 +1533,6 @@ static void sdpa_inner_loop_step(
     }
     if constexpr (fixed) {
         if (is_first_iter) {
-            // cur.max holds Sq_chunk_t zero tiles for the whole Q chunk: the masked-chunk fallback subtracts
-            // them and the attention-sink normalize reads them.
             sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
             CircularBuffer(cb_col_identity).wait_front(1);
             CircularBuffer(cur.max).reserve_back(Sq_chunk_t);
@@ -1550,12 +1546,9 @@ static void sdpa_inner_loop_step(
             }
             reconfig_data_format(cb_qkt_im, cb_qkt_im);
         }
-        // After the MATH-side fill: PACK reaches this init only once it has packed those tiles, so the
-        // shared SFPU state is not rewritten under the exp macro (the fold needs SDPA_FIXED_OFFSET_BITS).
         exp_packthread_tile_init<true, scale_fp32, InputClamping::None, DST_ACCUM_MODE, SDPA_FIXED_OFFSET_BITS>();
     }
 
-    // Mask plan for this chunk (single source of truth; reused by the mask stamp below).
     constexpr bool uses_lightweight_mask =
         sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
     const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
@@ -1564,8 +1557,6 @@ static void sdpa_inner_loop_step(
         apply_sliding_window,
         apply_mask && lw_partial_tile_idx > 0);
     const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
-    // Fixed mode: exp at QK^T pack time unless this chunk stamps a mask onto the raw scores; then the
-    // chunk falls back to the in-place pass after the stamp, subtracting the zero max.
     const bool dest_exp = fixed && no_mask_this_iter;
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
@@ -1577,7 +1568,6 @@ static void sdpa_inner_loop_step(
     }
     if constexpr (fixed) {
         if (dest_exp) {
-            // Held for the whole phase: clamps the pack exp's negative out-of-range results in P and the row sums.
             PACK((llk_pack_relu_config(ReluConfig::zero())));
         }
     }
@@ -1595,7 +1585,6 @@ static void sdpa_inner_loop_step(
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
-        // An even count of exp-pack subblocks already left this MOP (blocked_matmul_exp_pack).
         const bool row_mop_kept = dest_exp && q_subblock > 0 && kt_num_full_subblocks % 2 == 0 &&
                                   !sdpa_pack_format_changed<cb_normalized_out, cb_qkt_im>();
         if (!row_mop_kept) {
@@ -1626,7 +1615,6 @@ static void sdpa_inner_loop_step(
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
 
         if constexpr (fixed) {
-            // The fallback pass re-reads the previous row group; the reduce's wait_front covered it before.
             if (!dest_exp && q_subblock > 0) {
                 CircularBuffer(cb_qkt_im).wait_front(q_subblock * row_tiles);
             }
@@ -1868,16 +1856,13 @@ static void sdpa_inner_loop_step(
                 sdpa_copy_tiles(prev.out, 0, out_cb, 0, qktv_output_num_tiles, dst_size);
                 CircularBuffer(prev.out).pop_front(qktv_output_num_tiles);
                 reconfig_data_format_srca(cb_qkt_im);
-                // Full matmul init after the datacopy; the PV loop's reinit restores only addrmods.
                 mm_no_mop_init_short<PV_MATH_FIDELITY>(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
             }
-            // The fallback drain re-reads the last row group; the reduce's wait_front covered it before.
             if (!dest_exp) {
                 CircularBuffer(cb_qkt_im).wait_front(Sq_chunk_t * KT_stride);
             }
         }
 
-        // Fixed mode without a mask stamp has no drain: row group 0 joins the PV loop below.
         const bool split_group0 = !(fixed && dest_exp);
         const uint32_t first_pv_group = split_group0 ? 1 : 0;
         if (!split_group0) {
@@ -2012,8 +1997,6 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
-        // Fixed mode, exp at pack time: P and row sums were packed before their pushes, so PV need not wait on PACK:
-        // UNPACK takes the barrier before the last PV group only and the fold runs after group 0 (PV loop below).
         const bool pv_early = fixed && dest_exp;
         if constexpr (fixed) {
             CircularBuffer(chunk_sum_cb).push_back(Sq_chunk_t);
@@ -2138,8 +2121,6 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                // Fixed mode: only group 0 follows the QK^T image; later groups reuse the first PV image
-                // (the fold between them is a datacopy) unless the remainder height flips reuse_a.
                 constexpr bool remainder_new_image =
                     has_qktv_remainder && ((qktv_subblock_w >= qktv_remainder_h) != (qktv_subblock_w >= qktv_h));
                 const bool pv_rerecord = !fixed || q_subblock == 0 || (is_remainder_iter && remainder_new_image);
@@ -2151,7 +2132,6 @@ static void sdpa_inner_loop_step(
                 }
                 if constexpr (fixed) {
                     if (pv_early && q_subblock == total_v_row_groups - 1) {
-                        // UNPACK half of the PV_BARRIER rendezvous, after the setup above.
                         MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER_LAST", prof_win);
                         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
@@ -2248,8 +2228,6 @@ static void sdpa_inner_loop_step(
             if (is_last_iter) {
                 normalize_row(pushed_rows, Sq_chunk_t);
             } else if (save_out_cb != INVALID_CB) {
-                // Ring-iter exit through DRAM staging: publish the accumulators, copy them to the writer's CBs
-                // (out row by row, the zero tiles for its max slot, then the sum) and leave them empty again.
                 CircularBuffer(cur.sum).push_back(Sq_chunk_t);
                 CircularBuffer(out_cb).push_back(qktv_output_num_tiles);
                 CircularBuffer(cur.sum).wait_front(Sq_chunk_t);
@@ -2847,7 +2825,6 @@ void sdpa_ring_v2(
         if (q_per_core > 1 && ring_iter > 0) {
             q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
         } else if constexpr (fixed) {
-            // The in-place accumulator lives in cur and is still unpublished.
             q_prev_norm = acc_state.cur;
             CircularBuffer(q_prev_norm.sum).push_back(Sq_chunk_t);
             CircularBuffer(q_prev_norm.out).push_back(Sq_chunk_t * vDHt);
@@ -3253,7 +3230,7 @@ void sdpa_ring_v2(
             [[maybe_unused]] const bool prof_win = sdpa_profile::window_hit(ring_iter, q - global_q_start, k_chunk);
 
             sdpa_inner_loop_step<
-                SDPA_PROFILE_ZONES == 1,  // profiling_enabled
+                SDPA_PROFILE_ZONES == 1,
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
@@ -3320,8 +3297,6 @@ void sdpa_ring_v2(
                 prof_win);
 
             if constexpr (fixed) {
-                // No ping-pong: q_cur accumulates in place. A staging restore leaves the writer's max and sum
-                // tiles to pop (the step popped its out tiles); the last chunk drops the zero max tiles.
                 if (step_seed_from_prev) {
                     CircularBuffer(q_prev.max).wait_front(Sq_chunk_t);
                     sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);

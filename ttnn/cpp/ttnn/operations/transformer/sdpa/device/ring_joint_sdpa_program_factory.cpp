@@ -1857,8 +1857,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";
-        // "iter,q,klo,khi" (-1 = open bound) limits zones to one ring iter, Q chunk and K-chunk range so they
-        // fit the 125 zones a RISC can hold; the per-subblock FINE zones only fit inside such a window.
         if (const char* window = std::getenv("TT_SDPA_PROFILE_WINDOW"); window != nullptr) {
             std::array<int, 4> bounds{};
             char trailing = 0;

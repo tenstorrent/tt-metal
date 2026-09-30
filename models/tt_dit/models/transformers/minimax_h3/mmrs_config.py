@@ -63,7 +63,6 @@ _N = 5376
 # 12x9. Mt_per_core = 107/12 -> 9, so M_block=8 leaves 2 blocks and the window rotates.
 _SWEPT_BLOCKINGS = {
     3424: FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 2, 8, 2, 2, None, 1),
-    # 768P 15 s (13664 rows/device): one N block per core.
     13664: FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 14, 2, 2, None, 1),
 }
 
@@ -122,7 +121,6 @@ def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> N
         raise ValueError(msg)
     env = os.environ.get("MINIMAX_H3_MMRS_BLOCKING")
     if env:
-        # Tuning override "gx,gy,Mb,Kb,Nb,sub_h,sub_w[,workers_per_link[,window]]" for every M.
         v = [int(x) for x in env.split(",")]
         cfg = FusedMMRSConfig(
             ttnn.CoreCoord(v[0], v[1]),

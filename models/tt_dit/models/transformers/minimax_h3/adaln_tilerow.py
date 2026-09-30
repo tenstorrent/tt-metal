@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side index tables for `MINIMAX_H3_ADALN_GATHER=tilerow`.
-
-The packed sequence is a few long runs of one adaLN table row each, so nearly every 32-row tile selects a single row.
-Instead of a per-token [S, H] modulation, the fused norm reads tile row `tile_map[r]` of a small expanded table for
-input tile row `r`: expanded tile row j < R repeats table row j, expanded tile row R + k holds the k-th tile that
-straddles a run boundary, one row per token. `onehot(expanded_indices) @ table` builds that expanded table with the
-same one-hot matmul as the per-token gather, so every tile the norm reads holds the same bits.
-"""
+"""Host-side index tables for `MINIMAX_H3_ADALN_GATHER=tilerow`: the fused norm reads tile row `tile_map[r]` of a
+small expanded table (one row per table row, then one per tile straddling a run boundary) for input tile row `r`;
+`onehot(expanded_indices) @ table` builds that table, so every tile the norm reads holds the per-token bits."""
 
 from __future__ import annotations
 
 import torch
 
 TILE = 32
-# Fixed so a trace serves every request of a bucket; each run boundary costs at most one mixed tile.
 DEFAULT_MAX_MIXED_TILES = 16
 
 

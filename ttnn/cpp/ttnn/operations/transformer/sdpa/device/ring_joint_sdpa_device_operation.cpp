@@ -567,7 +567,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     const auto dtype = input_tensor_q.dtype();
     if (((!args.is_causal && !is_chunked) || args.is_cross) && has_joint_tensors) {
-        // Streams that share a circular buffer must share a dtype: Q with joint Q, K with joint K, V with joint V.
         const auto k_dtype = gathered_input_tensor_k.dtype();
         const auto v_dtype = has_gathered_v ? tensor_args.gathered_v->dtype() : k_dtype;
         const std::array<std::pair<DataType, DataType>, 3> pairs = {

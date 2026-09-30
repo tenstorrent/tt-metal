@@ -2,12 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""dit_fused_distributed_rmsnorm with `affine_tile_row_map`: the mapped weight/bias tables must reproduce the per-token
-tables bit for bit, also on a program-cache hit that binds a different map buffer (the map address travels through the
-cached program's common runtime arguments).
-
-    pytest models/tt_dit/tests/unit/test_dit_rmsnorm_tilerow.py -k galaxy_tp4
-"""
+"""dit_fused_distributed_rmsnorm with `affine_tile_row_map`: mapped weight/bias tables must match the per-token tables
+bit for bit, also on a program-cache hit that binds a different map buffer."""
 
 from __future__ import annotations
 
@@ -66,7 +62,6 @@ def test_affine_tile_row_map(mesh_device):
     sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
 
     def run(weight, bias, tile_map=None):
-        # TP>1 needs the persistent stats/output buffer; a fresh one per call also moves its address between cache hits.
         pob = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
             x_tt, tp_axis, mesh_device, num_heads_per_device=1, per_head_norm=False, num_links=2, weight=weight
         )
@@ -114,7 +109,6 @@ def test_affine_tile_row_map(mesh_device):
     mesh_device.enable_program_cache()
     per_token_and_mapped(0)
     entries = mesh_device.num_program_cache_entries()
-    # Cache hits: the same programs bind a different map buffer (and different per-token tables) and must follow them.
     for index in (1, 0, 1):
         per_token_and_mapped(index)
         assert mesh_device.num_program_cache_entries() == entries
