@@ -34,6 +34,7 @@ union PerfCounter {
         std::uint32_t value_word;
         std::uint32_t ref_word;
         std::uint32_t type_word;
+        // NOLINTNEXTLINE(modernize-use-default-member-init): a union view, the constructors write every word
         std::uint32_t pad_word;
     } __attribute__((packed));
 
