@@ -125,9 +125,14 @@ ttnn::Tensor build_zero_state(uint32_t BH, uint32_t K, uint32_t V, MeshDevice* d
         ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
 }
 
-}  // namespace
+struct GdnResult {
+    ttnn::Tensor o;
+    std::optional<ttnn::Tensor> final_state;
+    // Present iff emit_intermediates:
+    std::optional<ttnn::Tensor> h, v_new, g_cumsum, A;
+};
 
-std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
+GdnResult chunk_gated_delta_rule_impl(
     const ttnn::Tensor& q_in,
     const ttnn::Tensor& k_in,
     const ttnn::Tensor& v_in,
@@ -144,7 +149,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    bool emit_intermediates) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -284,6 +290,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
 
     ttnn::Tensor o_c;          // [BH, NC, C, V]
     ttnn::Tensor final_state;  // [BH, K, V]
+    // emit_intermediates (phased path only): per-chunk DRAM tensors straight out of the prims.
+    std::optional<ttnn::Tensor> h_c;     // [BH, NC, K, V]  state entering each chunk (scan)
+    std::optional<ttnn::Tensor> vnew_c;  // [BH, NC, C, V]  (scan)
+    std::optional<ttnn::Tensor> gcum_c;  // [BH, NC, C, 1]  chunk-local cumsum(g) (prep)
+    std::optional<ttnn::Tensor> tinv_c;  // [BH, NC, C, C]  WY / UT inverse (prep's t_inv)
+    TT_FATAL(
+        !emit_intermediates || phased,
+        "chunk_gated_delta_rule(output_intermediates=True) needs the phased path (unset QWEN_GDN_PHASED=0)");
     TT_FATAL(!flat_v || phased, "OPT-A flat v is only supported on the phased path (set QWEN_GDN_PHASED=1)");
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
     TT_FATAL(!flat_qk || (phased && qk_norm), "OPT-A flat q/k needs the phased path + in-kernel norm (Ct==1)");
@@ -307,8 +321,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             qk_norm,
             scale,
             flat_qk,
-            H);
-        // prep = {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}
+            H,
+            /*emit_g_cumsum=*/emit_intermediates);
+        // prep = {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv[, g_cumsum]}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],
             prep[1],
@@ -319,11 +334,18 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             prep[6],
             s0,
             C,
-            output_final_state,
+            output_final_state || emit_intermediates,
             out_mem,
-            kernel_cfg);
+            kernel_cfg,
+            /*emit_intermediates=*/emit_intermediates);
         o_c = scan[0];
         final_state = scan[1];
+        if (emit_intermediates) {
+            h_c = scan[2];
+            vnew_c = scan[3];
+            gcum_c = prep[7];
+            tinv_c = prep[6];
+        }
         // DEBUG: QWEN_GDN_DUMP=<idx> routes prep[idx] out through the o path (idx 2 = q_decay,
         // shape [BH,NC,C,K]; only valid to view via o when K==V). Isolates prep-write/scan-read bugs.
         static const char* dumpenv = std::getenv("QWEN_GDN_DUMP");
@@ -338,46 +360,105 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     }
 
     std::optional<ttnn::Tensor> final_opt;
-    if (output_final_state) {
+    if (output_final_state || emit_intermediates) {
         final_opt = ttnn::reshape(final_state, ttnn::Shape({B, HV, K, V}));
     }
 
-    // Head-major output [BH,T,V] TILE: the kernel already produced o head-major, so avoid the
-    // token<->head permute round-trip (the default path permutes to [B,T,HV,V] and the GDN
-    // adapter permutes right back). C and V are tile-aligned, so when there is no time padding
-    // the fold NC,C -> T is a pure metadata reshape (zero relayout).
-    if (output_head_major) {
-        ttnn::Tensor o;
-        if (pad == 0) {
-            o = ttnn::reshape(o_c, ttnn::Shape({BH, L, V}));  // [BH,T,V] TILE, metadata-only
-        } else {
-            ttnn::Tensor t = ttnn::to_layout(o_c, Layout::ROW_MAJOR);
-            t = ttnn::reshape(t, ttnn::Shape({BH, L, V}));
+    // Per-chunk head-major [BH, NC, C, D] TILE -> the caller's token-indexed layout:
+    //   output_head_major: [BH, T, D] TILE (the kernel's native order; a metadata reshape when T % C == 0)
+    //   default:           [B, T, HV, D] ROW_MAJOR (token-major, like the FLA / torch reference)
+    // Used for o, and (with intermediates) v_new [.., V], A [.., C] and g_cumsum [.., 1].
+    auto to_token_layout = [&](const ttnn::Tensor& x_c, uint32_t D) -> ttnn::Tensor {
+        if (output_head_major) {
+            if (pad == 0) {
+                return ttnn::reshape(x_c, ttnn::Shape({BH, L, D}));  // [BH,T,D] TILE, metadata-only
+            }
+            ttnn::Tensor t = ttnn::to_layout(x_c, Layout::ROW_MAJOR);
+            t = ttnn::reshape(t, ttnn::Shape({BH, L, D}));
             t = ttnn::slice(
                 t,
                 ttnn::SmallVector<int32_t>{0, 0, 0},
-                ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
+                ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(D)},
                 ttnn::SmallVector<int32_t>{1, 1, 1});
-            o = ttnn::to_layout(t, Layout::TILE);  // [BH,T,V] TILE
+            return ttnn::to_layout(t, Layout::TILE);  // [BH,T,D] TILE
         }
-        return {o, final_opt};
-    }
+        ttnn::Tensor t = ttnn::to_layout(x_c, Layout::ROW_MAJOR);
+        t = ttnn::reshape(t, ttnn::Shape({BH, L, D}));
+        if (pad > 0) {
+            t = ttnn::slice(
+                t,
+                ttnn::SmallVector<int32_t>{0, 0, 0},
+                ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(D)},
+                ttnn::SmallVector<int32_t>{1, 1, 1});
+        }
+        t = ttnn::reshape(t, ttnn::Shape({B, HV, T, D}));
+        // NOTE: ROW_MAJOR. Tilizing [B,T,HV,D] with HV in the tile dim is avoided here (a TILE
+        // round-trip on the small HV tile-dim was problematic); callers can tilize.
+        return ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,D] (ROW_MAJOR)
+    };
 
-    // Default: token-major o [BH,NC,C,V] -> [B,T,HV,V] (ROW_MAJOR).
-    ttnn::Tensor o = ttnn::to_layout(o_c, Layout::ROW_MAJOR);
-    o = ttnn::reshape(o, ttnn::Shape({BH, L, V}));
-    if (pad > 0) {
-        o = ttnn::slice(
-            o,
-            ttnn::SmallVector<int32_t>{0, 0, 0},
-            ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
-            ttnn::SmallVector<int32_t>{1, 1, 1});
+    GdnResult res{to_token_layout(o_c, V), final_opt};
+    if (emit_intermediates) {
+        res.v_new = to_token_layout(*vnew_c, V);
+        res.A = to_token_layout(*tinv_c, C);  // row t of its chunk's UT inverse, FLA layout
+        ttnn::Tensor gc = to_token_layout(*gcum_c, 1);
+        res.g_cumsum = output_head_major ? ttnn::reshape(gc, ttnn::Shape({BH, T}))      // [BH, T]
+                                         : ttnn::reshape(gc, ttnn::Shape({B, T, HV}));  // [B, T, HV]
+        if (output_head_major) {
+            res.h = *h_c;  // [BH, NC, K, V] TILE
+        } else {
+            ttnn::Tensor h5 = ttnn::reshape(*h_c, ttnn::Shape({B, HV, NC, K, V}));
+            res.h = ttnn::permute(h5, ttnn::SmallVector<int64_t>{0, 2, 1, 3, 4});  // [B, NC, HV, K, V] TILE
+        }
     }
-    o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V] (ROW_MAJOR)
-    // NOTE: returned in ROW_MAJOR. Tilizing [B,T,HV,V] with HV in the tile dim is avoided
-    // here (a TILE round-trip on the small HV tile-dim was problematic); callers can tilize.
-    return {o, final_opt};
+    return res;
+}
+
+}  // namespace
+
+ChunkGatedDeltaRuleResult chunk_gated_delta_rule(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale,
+    const std::optional<ttnn::Tensor>& initial_state,
+    bool output_final_state,
+    uint32_t chunk_size,
+    bool use_qk_l2norm,
+    bool output_head_major,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& eye,
+    const std::optional<ttnn::Tensor>& tril,
+    const std::optional<ttnn::Tensor>& ones,
+    const std::optional<ttnn::Tensor>& masks,
+    bool output_intermediates) {
+    auto r = chunk_gated_delta_rule_impl(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        scale,
+        initial_state,
+        output_final_state,
+        chunk_size,
+        use_qk_l2norm,
+        output_head_major,
+        memory_config,
+        compute_kernel_config,
+        eye,
+        tril,
+        ones,
+        masks,
+        /*emit_intermediates=*/output_intermediates);
+    if (!output_intermediates) {
+        // Original contract, unchanged: (o, final_state if output_final_state else None).
+        return ChunkGatedDeltaRuleOutputs{r.o, r.final_state};
+    }
+    return ChunkGatedDeltaRuleOutputsWithIntermediates{r.o, *r.final_state, *r.h, *r.v_new, *r.g_cumsum, *r.A};
 }
 
 }  // namespace ttnn::transformer

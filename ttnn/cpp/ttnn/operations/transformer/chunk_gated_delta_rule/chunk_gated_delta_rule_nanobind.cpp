@@ -8,6 +8,7 @@
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 
 namespace ttnn::operations::transformer {
 
@@ -42,10 +43,23 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
 
+            output_intermediates (bool): default False. When True, also return the forward
+                intermediates a training backward consumes (see Returns). Same device programs; the
+                default (False) path is unchanged.
+
         Returns:
-            tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+            output_intermediates=False (default) -> tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
                 o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-                final_state [B, HV, K, V] (if output_final_state).
+                final_state [B, HV, K, V] (if output_final_state, else None).
+            output_intermediates=True -> tuple of 6 ttnn.Tensor (NC = ceil(T / chunk_size),
+            C = chunk_size; final_state is always returned in this mode):
+                o           [B, T, HV, V] ROW_MAJOR   ([B*HV, T, V] TILE if output_head_major)
+                final_state [B, HV, K, V] fp32
+                h           [B, NC, HV, K, V] fp32    state ENTERING chunk i; h[:, 0] = initial_state
+                                                      ([B*HV, NC, K, V] if output_head_major)
+                v_new       [B, T, HV, V] fp32        corrected values (include beta)
+                g_cumsum    [B, T, HV] fp32           chunk-local inclusive cumsum of g
+                A           [B, T, HV, C] fp32        rows of each chunk's UT inverse (I - A_strict)^-1
         )doc";
 
     ttnn::bind_function<"chunk_gated_delta_rule", "ttnn.transformer.">(
@@ -69,7 +83,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("output_intermediates") = false);
 }
 
 }  // namespace ttnn::operations::transformer
