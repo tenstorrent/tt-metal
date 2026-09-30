@@ -7,7 +7,7 @@ Then submit each as its own broker job (timeout 600):
   bash tmp/run25.sh dv153 NUM_FRAMES=153 FPS=25
   bash tmp/run25.sh conv145 LTX25_DIFFVAE=0
 Outputs: tt-project/baselines/ltx25_1080p_6s/<label>/{run.log,*.mp4}. Gen #1 is the traced steady-state replay with a fresh prompt.
-Caches are on /tmp (root fs): /tmp/t10-tt-metal-cache, /tmp/t10-dit-cache-ltx25. Delete both when the task ends.
+Caches are on /var/tmp (root fs; /tmp is wiped at boot): /var/tmp/t10-tt-metal-cache, /var/tmp/t10-dit-cache-ltx25. Delete both when the task ends.
 The first run fills the DiT cache and may run past 600s. If so, rerun: the second run loads from cache.
 Attempt 2 (2026-09-30): build done (BUILD_EXIT=0). Launched prewarm+dv145 detached; log tmp/prewarm_dv145.log, broker capture job 580.
 Next: once tmp/prewarm_dv145.log shows RUN_EXIT[dv145], read baselines/ltx25_1080p_6s/dv145/run.log, then submit dv145_c211, dv153, conv145 one at a time.
@@ -27,3 +27,13 @@ Baselines: detached driver tmp/drive26.sh (log tmp/drive26.log, ends DRIVE_DONE)
 then dv145_c211, dv153, conv145 one after another. It stops after dv145 if the transformer still misses.
 Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log for per-stage times (LTX_TIME_STAGES),
 the walltime ledger (expect 10 HITs), the mp4 path; grab a still with ffmpeg; build the table.
+Task t26 attempt 2 (2026-09-30): job 605 (dv145) timed out again, every DiT cache "absent". Real cause: the box
+rebooted at 13:51 (also 12:19, 07:17) and tmpfiles 'D /tmp' empties /tmp at boot, wiping both caches.
+Moved both caches to /var/tmp (same fs, survives reboot); tmp/ltx25_env.yaml and tmp/run25.sh updated.
+605 re-published all 10 DiT caches before timing out, so the DiT cache is warm. Commit 3f159a235a5 adds a
+"/tmp is wiped at every boot" hint to the miss reason (unit tests: 13 passed, 3 skipped).
+Driver: tmp/drive26b.sh (log tmp/drive26b.log, ends DRIVE_DONE; prewarm log tmp/prewarm26b.log, capture job 633).
+It runs kernel prewarm + dv145, then dv145_c211, dv153, conv145. A reboot kills it: if tmp/drive26b.log lacks
+DRIVE_DONE and no drive26b.sh process exists, check which run.logs passed and resubmit the rest.
+Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log (LTX_TIME_STAGES lines, walltime ledger,
+expect 10 CACHE HITs), mp4 in the same dir; still with ffmpeg -ss 3 -frames:v 1; build the table.
