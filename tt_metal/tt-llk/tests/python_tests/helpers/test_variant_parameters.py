@@ -1893,6 +1893,41 @@ class TYPECAST_FORMATS(TemplateParameter):
 
 
 @dataclass
+class QUANT_SCALAR_CFG(TemplateParameter):
+    """Compile-time config for the SFPU quantization test kernels
+    (sources/sfpu_quant_scalar_perf.cpp, sources/sfpu_quant_scalar_test.cpp).
+
+    ``quant_op`` selects quant (Float32 in, Int32 out), requant (Int32 in and out)
+    or dequant (Int32 in, Float32 out); ``scale_form`` selects the LLK form of the
+    per-tensor scale: ``tile`` (the scale is a DEST tile the body loads per row, as
+    binary_ng runs it) or ``scalar`` (the scale is loaded once by the init). The
+    zero point and the scale are emitted as fp32 bits.
+    """
+
+    quant_op: str = "quant"
+    scale_form: str = "tile"
+    zero_point: float = 3.0
+    scale: float = 0.5
+
+    _OPS = {"quant": 0, "requant": 1, "dequant": 2}
+    _FORMS = {"tile": 0, "scalar": 1}
+
+    def convert_to_cpp(self) -> str:
+        import struct
+
+        def bits(x: float) -> int:
+            return struct.unpack("<I", struct.pack("<f", x))[0]
+
+        lines = [
+            f"#define QUANT_OP {self._OPS[self.quant_op]}",
+            f"#define QUANT_SCALE_FORM {self._FORMS[self.scale_form]}",
+            f"#define QUANT_ZP_BITS 0x{bits(self.zero_point):08x}u",
+            f"#define QUANT_SCALE_BITS 0x{bits(self.scale):08x}u",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class CUSTOM_MM_REUSE_CFG(TemplateParameter):
     """Compile-time chain geometry for the custom_mm_reuse_dest_srcb test.
 
