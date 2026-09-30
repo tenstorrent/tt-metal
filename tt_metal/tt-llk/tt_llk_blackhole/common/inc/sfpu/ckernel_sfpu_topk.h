@@ -940,17 +940,17 @@ template <
     bool STABLE_SORT       = false,
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
-// The local sort. tile0_sorted: the first value tile (and its index tile) is already sorted in direction idir, as
-// the output tile 0 of a previous end_phase 5 call in the same direction is. Phases 0 to 4 then run on the second
-// tile only (their groups address DEST from 64 rows up, through the DEST target offset; phase 4 covers positions 32
-// to 63 in the direction of the second half) and phase 5 merges the two halves as usual. The values of the result
-// are those of the full call; the index order among equal values is that of the full call for the comparator-stable
-// and the rank-stamped networks (the sorted order is unique there) and may differ for the unstable one.
-// _bitonic_topk_phases_steps below is the same call without the flag (the SFPU call macros take the function's
-// address, so the flag cannot be a default argument).
-inline void _bitonic_topk_local_sort_(
-    const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step, const bool tile0_sorted)
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    bool TILE0_SORTED      = false>
+// TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir, as the output tile 0
+// of a previous end_phase 5 call in the same direction is. Phases 0 to 4 then run on the second tile only (their
+// groups address DEST from 64 rows up, through the DEST target offset; phase 4 covers positions 32 to 63 in the
+// direction of the second half) and phase 5 merges the two halves as usual. The values of the result are those of
+// the full call; the index order among equal values is that of the full call for the comparator-stable and the
+// rank-stamped networks (the sorted order is unique there) and may differ for the unstable one. A template
+// parameter, not an argument: the phase loops below unroll over their four groups only when the group bounds are
+// constants, and a runtime flag would cost the callers without it about 8 percent of the sort.
+inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
     // this network with a flipped idir to build bitonic sequences; the tie polarity must not follow it.
@@ -978,38 +978,43 @@ inline void _bitonic_topk_local_sort_(
     bool init_store = (topk_replay_init >= 0) ? true : false;
     bool init_phase;
 
-    // With the first tile sorted, phases 0 to 4 address the second tile only: groups 2 and 3 of the phase 0 to 3
-    // loops and the second 32-datum sequence of phase 4, both reached by moving the DEST target offset 64 rows up
-    // (one tile) for those phases.
-    const bool skip_tile0 = tile0_sorted && (i_start_phase <= 4);
-
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
         for (int col = 0; col < 2; col++)
         {
             bool dir = idir;
-            if (skip_tile0)
+            if constexpr (TILE0_SORTED)
             {
+                // Phases 0 to 4 address the second tile only: its rows start 64 rows (one tile) above the quadrant base.
                 set_dst_write_addr(dst_addr_offset + 64);
             }
             for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
             {
-                const bool tile1_only = skip_tile0 && (ph <= 4);
-                if (skip_tile0 && (ph == 5))
+                // With the first tile sorted, the phase 0 to 3 loops skip groups 0 and 1 (the first tile) and phase 4
+                // covers the second 32-datum sequence alone, in the direction of the second half.
+                bool tile1_only = false;
+                if constexpr (TILE0_SORTED)
                 {
-                    set_dst_write_addr(dst_addr_offset); // phase 5 covers both tiles again
+                    tile1_only = (ph <= 4);
+                    if (ph == 5)
+                    {
+                        set_dst_write_addr(dst_addr_offset); // phase 5 covers both tiles again
+                    }
                 }
-                const int first_group = tile1_only ? 2 : 0;
-                init_phase            = true; // init each new phase of local sort in replay buffer
+                init_phase = true; // init each new phase of local sort in replay buffer
 
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                 switch (ph)
                 {
                     case 0:
                     {
-                        for (int d = first_group; d < 4; d++)
+                        for (int d = 0; d < 4; d++)
                         {
+                            if (tile1_only && (d < 2))
+                            {
+                                continue;
+                            }
                             // Groups of 16 datums being sorted at the same time
                             if (init_load)
                             {
@@ -1054,8 +1059,12 @@ inline void _bitonic_topk_local_sort_(
                     case 1:
                     {
                         // Groups of 16 datums being sorted at the same time
-                        for (int d = first_group; d < 4; d++)
+                        for (int d = 0; d < 4; d++)
                         {
+                            if (tile1_only && (d < 2))
+                            {
+                                continue;
+                            }
                             lltt::replay(0, ldst_count);
                             if constexpr (STABLE_SORT)
                             {
@@ -1082,8 +1091,12 @@ inline void _bitonic_topk_local_sort_(
                     }
                     case 2:
                     {
-                        for (int d = first_group; d < 4; d++)
+                        for (int d = 0; d < 4; d++)
                         {
+                            if (tile1_only && (d < 2))
+                            {
+                                continue;
+                            }
                             lltt::replay(0, ldst_count);
                             if constexpr (STABLE_SORT)
                             {
@@ -1109,8 +1122,12 @@ inline void _bitonic_topk_local_sort_(
                         break;
                     }
                     case 3:
-                        for (int d = first_group; d < 4; d++)
+                        for (int d = 0; d < 4; d++)
                         {
+                            if (tile1_only && (d < 2))
+                            {
+                                continue;
+                            }
                             lltt::replay(0, ldst_count);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_phase, 16);
                             lltt::replay(8, ldst_count);
@@ -1211,19 +1228,6 @@ inline void _bitonic_topk_local_sort_(
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = -1;
-}
-
-template <
-    bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
-    bool STABLE_SORT       = false,
-    bool FUSED             = false,
-    bool RANK_STAMPED      = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
-inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
-{
-    _bitonic_topk_local_sort_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(
-        idir, i_end_phase, i_start_phase, i_end_step, i_start_step, false);
 }
 
 template <
