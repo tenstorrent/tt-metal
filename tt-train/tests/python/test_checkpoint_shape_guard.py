@@ -33,8 +33,9 @@ from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, 
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
-DIM = 128  # a record halved along its shard dim, then split 2-way by the live mapper, still lands on tile-aligned
-# (32-multiple) per-device shapes, so the per-device check is what fires rather than a tilize error
+# DIM is chosen so that a record halved along its shard dim, then split 2-way by the live mapper, still lands on
+# tile-aligned (32-multiple) per-device shapes: the per-device check is what fires rather than a tilize error.
+DIM = 128
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
@@ -112,14 +113,14 @@ def _forge_replicate(tensor) -> "ttnn.TensorTopology":
     """Relabel ``tensor`` as fully replicated without touching its data, returning the original label.
 
     Python ``get_value`` shares the C++ tensor's attributes, so the relabel sticks. The original topology is
-    captured by value first: ``tensor_topology()`` returns a reference into the attributes being replaced."""
+    captured before the relabel (``tensor_topology()`` returns a copy) so the caller can restore it."""
     value = tensor.get_value(NATIVE)
-    live = value.tensor_topology()
-    dist_shape = ttnn.MeshShape(list(live.distribution_shape()))
-    placements = list(live.placements())
-    mesh_coords = list(live.mesh_coords())
-    original = ttnn.TensorTopology(dist_shape, placements, mesh_coords)
-    forged = ttnn.TensorTopology(dist_shape, [ttnn.PlacementReplicate()] * len(placements), mesh_coords)
+    original = value.tensor_topology()
+    forged = ttnn.TensorTopology(
+        ttnn.MeshShape(list(original.distribution_shape())),
+        [ttnn.PlacementReplicate()] * len(original.placements()),
+        list(original.mesh_coords()),
+    )
     value.update_tensor_topology(forged)
     assert ttml.Sharding.from_tensor(tensor).is_fully_replicated, "precondition: the forged label did not stick"
     return original
@@ -179,13 +180,13 @@ def _write_with_truncated_record(src: str, dst: str, record_key: tuple, dim: int
 # --- save --------------------------------------------------------------------------------------------------------
 
 
-def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_path):
+def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_path, expect_error):
     """A moment relabelled ``Replicate`` on the axis its parameter is sharded on gathers to one shard; the save must
     refuse, name the leaf, both shapes and the layout, and leave no file behind. Restoring the label makes the same
     save succeed (positive control: the guard is not simply rejecting every TP checkpoint).
 
     Negative control: before the guard, ``save_checkpoint`` wrote the file with the (1, 1, DIM/2, DIM)-or-similar
-    record silently, so ``pytest.raises`` here would have failed with "did not raise"."""
+    record silently, so the ``expect_error`` here would have failed with "did not raise"."""
     params, opt = _trained_tp()
     name = _sharded_param_name(params)
     param_shape = _gathered_shape(params[name])
@@ -197,7 +198,7 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     assert forged_shape != param_shape, "precondition: the forged label must make the moment gather to a shard"
 
     path = str(tmp_path / "forged.ckpt")
-    with pytest.raises(CheckpointShapeError, match=rf"optimizer/exp_avg\[{name}\] gathers to") as excinfo:
+    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] gathers to") as excinfo:
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
     message = str(excinfo.value)
     for fragment in (str(forged_shape), str(param_shape), f"model[{name}]", "Replicate", "Nothing was written"):
@@ -210,7 +211,7 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     assert os.path.exists(path) and not os.path.exists(path + ".tmp")
 
 
-def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path):
+def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path, expect_error):
     """``expected_shapes`` holds a parameter to an absolute full shape: the one check that also catches a parameter
     whose own label is wrong (parameter and moments gathering to the same wrong shape). A wrong expectation is
     rejected with the leaf and both shapes named; the correct expectations pass; a name no tensor carries is an
@@ -225,13 +226,13 @@ def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path):
     assert per_device != full, "precondition: a sharded parameter's per-device shape differs from its full shape"
 
     path = str(tmp_path / "expected.ckpt")
-    with pytest.raises(CheckpointShapeError, match=rf"model\[{name}\] gathers to .* expected_shapes says"):
+    with expect_error(CheckpointShapeError, rf"model\[{name}\] gathers to .* expected_shapes says"):
         checkpointing.save_checkpoint(
             path, header={}, model_params=params, optimizer=opt, expected_shapes={name: per_device}
         )
     _assert_nothing_written(path)
 
-    with pytest.raises(ValueError, match="expected_shapes names tensors not in this checkpoint"):
+    with expect_error(ValueError, "expected_shapes names tensors not in this checkpoint"):
         checkpointing.save_checkpoint(path, header={}, model_params=params, expected_shapes={"no/such/param": full})
     _assert_nothing_written(path)
 
@@ -247,8 +248,9 @@ def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path):
 
 def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):
     """Optimizer state keyed by a name that is not in ``model_params`` has no parameter to compare against, so it is
-    written with a warning instead of rejected (``MuonWithAdamW`` splits the params across two inner optimizers,
-    and callers may checkpoint a subset). Everything else in the same save is still checked.
+    written as-is and reported in one summary warning (count plus the leaf names) instead of rejected
+    (``MuonWithAdamW`` splits the params across two inner optimizers, and callers may checkpoint a subset).
+    Everything else in the same save is still checked.
 
     Negative control: no warning was emitted before the guard (``pytest.warns`` would fail with "did not warn")."""
     params, opt = _trained_tp()
@@ -259,11 +261,22 @@ def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):
             subset[n] = t
     assert len(subset) == len(params) - 1
 
+    # Every moment the optimizer keeps for the dropped parameter (AdamW: exp_avg, exp_avg_sq, plus max_exp_avg_sq
+    # under amsgrad) is one unchecked leaf. The summary names at most three, so here all of them must appear.
+    unchecked = [
+        f"optimizer/{key}[{dropped}]"
+        for key, node in opt.get_state_dict().items()
+        if isinstance(node, ttml.NamedParameters) and dropped in node
+    ]
+    assert 1 <= len(unchecked) <= 3, unchecked
+
     path = str(tmp_path / "subset.ckpt")
-    with pytest.warns(UserWarning, match=rf"optimizer/exp_avg\[{dropped}\] is not a parameter of the model") as rec:
+    with pytest.warns(UserWarning, match="not parameters of the model being saved") as rec:
         checkpointing.save_checkpoint(path, header={}, model_params=subset, optimizer=opt)
-    warned = {str(w.message) for w in rec if "is not a parameter of the model" in str(w.message)}
-    assert len(warned) == 2, f"expected one warning per moment of the dropped param (exp_avg, exp_avg_sq): {warned}"
+    summaries = [str(w.message) for w in rec if "not parameters of the model being saved" in str(w.message)]
+    assert len(summaries) == 1, f"expected one summary warning, not one per leaf: {summaries}"
+    for fragment in (f"{len(unchecked)} optimizer state tensor", "saved as-is", *unchecked):
+        assert fragment in summaries[0], f"missing {fragment!r} in:\n{summaries[0]}"
     assert os.path.exists(path) and not os.path.exists(path + ".tmp")
 
     # The unchecked leaf was written at its own gathered shape; the rest of the file is intact.
@@ -280,14 +293,14 @@ def test_save_without_model_params_warns_once(tp_mesh, tmp_path):
     with pytest.warns(UserWarning, match="saving an optimizer without model_params") as rec:
         checkpointing.save_checkpoint(path, header={}, optimizer=opt)
     assert sum("without model_params" in str(w.message) for w in rec) == 1
-    assert sum("is not a parameter of the model" in str(w.message) for w in rec) == 0
+    assert sum("not parameters of the model being saved" in str(w.message) for w in rec) == 0
     assert os.path.exists(path)
 
 
 # --- load --------------------------------------------------------------------------------------------------------
 
 
-def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path):
+def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path, expect_error):
     """A checkpoint already on disk with one ``exp_avg`` record saved as a single shard (what the pre-guard saver
     produced for a mislabelled moment) must be refused on resume, whether the model is restored alongside or the
     optimizer is loaded alone (the model group is read for its shapes either way). The parameter's own record is
@@ -306,7 +319,7 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path):
     assert truncated != full
 
     _, fresh_params, fresh_opt = _fresh_tp()
-    with pytest.raises(CheckpointShapeError, match=rf"optimizer/exp_avg\[{name}\] record has shape") as excinfo:
+    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record has shape") as excinfo:
         checkpointing.load_checkpoint(bad, model_params=fresh_params, optimizer=fresh_opt)
     message = str(excinfo.value)
     assert str(tuple(truncated)) in message and str(full) in message, message
@@ -315,7 +328,7 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path):
     ), "the live moment must be untouched by a refused load"
 
     _, _, opt_only = _fresh_tp()
-    with pytest.raises(CheckpointShapeError, match=rf"optimizer/exp_avg\[{name}\] record has shape"):
+    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record has shape"):
         checkpointing.load_checkpoint(bad, optimizer=opt_only)
 
     # Positive control: the untampered file restores into the same fresh pair.
@@ -323,7 +336,7 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path):
     assert checkpointing.load_checkpoint(good, model_params=fresh_params, optimizer=fresh_opt) == {"step": 1}
 
 
-def test_load_rejects_truncated_record_without_model_group(tp_mesh, tmp_path):
+def test_load_rejects_truncated_record_without_model_group(tp_mesh, tmp_path, expect_error):
     """With no model group in the file there is nothing to cross-check against, so the per-device check is the last
     line: the half-size record redistributed by the live ``Shard(dim)`` mapper lands at a quarter of the parameter
     per device, which is not the live moment's shape.
@@ -340,5 +353,28 @@ def test_load_rejects_truncated_record_without_model_group(tp_mesh, tmp_path):
     _write_with_truncated_record(good, bad, ("optimizer", "exp_avg", name), _shard_dim(params[name]))
 
     _, _, fresh_opt = _fresh_tp()
-    with pytest.raises(CheckpointShapeError, match=rf"optimizer/exp_avg\[{name}\] record of shape .* per-device"):
+    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record of shape .* per-device"):
         checkpointing.load_checkpoint(bad, optimizer=fresh_opt)
+
+
+def test_load_rejects_truncated_model_record(tp_mesh, tmp_path, expect_error):
+    """A parameter record saved as one shard (a parameter whose own label was wrong) has nothing earlier in the file
+    to be cross-checked against, so the per-device check in the model group is the last line: the half-size record
+    redistributed by the live ``Shard(dim)`` mapper lands at a quarter of the parameter per device, and the load
+    refuses before ``assign`` touches the live parameter.
+
+    Negative control: ``assign`` (``AutocastTensor::set_tensor``) has no shape check of its own, so before the guard
+    this installed the quarter-size parameter silently (the ``expect_error`` would have failed with "did not raise")."""
+    params, opt = _trained_tp()
+    name = _sharded_param_name(params)
+    good = str(tmp_path / "model_good.ckpt")
+    checkpointing.save_checkpoint(good, header={}, model_params=params, optimizer=opt)
+
+    bad = str(tmp_path / "model_bad.ckpt")
+    _write_with_truncated_record(good, bad, ("model", name), _shard_dim(params[name]))
+
+    _, fresh_params, _ = _fresh_tp()
+    live_shape = tuple(fresh_params[name].get_value(NATIVE).shape)
+    with expect_error(CheckpointShapeError, rf"model\[{name}\] record of shape .* per-device"):
+        checkpointing.load_checkpoint(bad, model_params=fresh_params)
+    assert tuple(fresh_params[name].get_value(NATIVE).shape) == live_shape, "a refused load must not assign"
