@@ -34,8 +34,9 @@ jobs:
       - name: Run llk-audit unit tests
         working-directory: tt_metal/tt-llk/.claude/tools/llk-audit
         run: python3 tests/test_checks.py
-      - name: Install pytest
-        run: python3 -m pip install --no-cache-dir pytest
+      - name: Install pytest and PyYAML
+        # PyYAML loads the cross-thread checker's consumer table; without it those rules are skipped.
+        run: python3 -m pip install --no-cache-dir pytest pyyaml
       - name: Run infra checker unit tests
         working-directory: tt_metal/tt-llk/infra
         # --noconftest: the repo-root conftest imports models/, which is not built here.

@@ -17,10 +17,10 @@ text attend to another: PCC 0.71 against per-sequence attention, a wrong answer 
 less precise one. Pooling also reduces along S, and has to produce one mean per text rather
 than one per batch.
 
-The MoE matmuls force the opposite. ttnn.matmul broadcasts a weight's batch dims only when
-every batch dim of the activation is 1, so (1, 1, T, H) x (1, E, H, F) gives (1, E, T, F) while
-(B, 1, S, H) raises outright. The spare dim at position 1 is what the expert axis expands into
-and what fast_reduce_nc collapses again.
+The MoE matmuls force the opposite. sparse_matmul takes the tokens as one (1, 1, T, H) operand
+against the (1, E, H, F) weights, and a transposed pass multiplies the stacked weight by one
+(1, 1, H, T) x^T. The spare dim at position 1 is what the expert axis expands into and what
+fast_reduce_nc collapses again.
 
 So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
 x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
@@ -96,7 +96,9 @@ def pack_expert_weights(
     In torch that mistake is silent: the wrong slab plus a .T has the right shape and returns
     noise, which test_w2_transposed_view_typechecks_but_is_garbage pins. The 4D operand is what
     makes it loud, since there is no .T to paper over it and the inner dimensions stop agreeing;
-    test_transposed_expert_weights_are_a_shape_error asserts it raises.
+    test_transposed_expert_weights_are_a_shape_error asserts it raises. TtNomicExperts transposes
+    w2 once more for its own programs, back to the (E, H, F) shape of the mistake, so there the
+    module PCC tests are the guard.
     """
     expert_shape = (config.num_experts, config.intermediate_size, config.hidden_size)
     return (
