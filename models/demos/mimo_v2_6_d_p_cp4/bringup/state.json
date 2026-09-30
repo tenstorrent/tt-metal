@@ -88,6 +88,27 @@
   "started": "2026-09-30T23:06:44",
   "status": "PASS"
  },
+ "PL.0": {
+  "attempts": 0,
+  "duration_s": 12.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T23:07:35"
+   }
+  ],
+  "last_run": "2026-09-30T23:07:35",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/PL.0.log",
+  "metrics": {
+   "ledger_errors": 0,
+   "ledger_tasks": 59,
+   "ledger_tasks_added": 51
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T23:07:23",
+  "status": "PASS"
+ },
  "R.1": {
   "attempts": 0,
   "duration_s": 16.7,
