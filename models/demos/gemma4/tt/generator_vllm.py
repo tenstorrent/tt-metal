@@ -1310,7 +1310,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             lane_to_req[ln] = req
             toks4[ln] = tokens[req]
             plens4[ln] = plens[req]
-            tables4[ln, 0] = gpt[int(s)].to(torch.int32)
+            # Plugin per-layer tables arrive in LOCAL prefill order (row i =
+            # request i), not slot-indexed (see the debt #1 scatter below).
+            tables4[ln, 0] = gpt[req].to(torch.int32)
 
         # Per-layer tables: the wrapper's remapped rows (ring-slot map aware),
         # one row per lane.
@@ -1322,7 +1324,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
             rows = torch.zeros(lanes, int(pt2.shape[-1]), dtype=torch.int32)
             for ln, req in lane_to_req.items():
-                rows[ln] = pt2[int(slots[req])].to(torch.int32)
+                rows[ln] = pt2[req].to(torch.int32)
             per_layer.append(rows)
         if any(p is None for p in per_layer):
             return None
