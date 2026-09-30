@@ -90,6 +90,14 @@ MESH = [
         id="fabric2d-mesh-2x4",
     )
 ]
+MESH_4X2 = [  # LoudBox 4x2 (SP4 x TP2): production gate only (beads 8y7.20.*.2)
+    pytest.param(
+        (4, 2),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="fabric2d-mesh-4x2",
+    )
+]
 
 
 def setup_small(mesh_device, case, schedule):
@@ -368,7 +376,7 @@ def setup_production(mesh_device, weights, case):
     + [("real", c) for c in PRODUCTION_CASES if c not in ("one_chunk", "two_chunks")],
     ids=lambda v: v,
 )
-@pytest.mark.parametrize("mesh_device, device_params", MESH + galaxy_meshes(), indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + MESH_4X2 + galaxy_meshes(), indirect=True)
 def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
     """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
     tables, not downloaded). Precompute the reference outside the device lock first (tests/v41/prepare_caches.py:

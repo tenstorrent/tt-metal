@@ -52,11 +52,12 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
 from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import on_galaxy
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import EXPERT_DTYPES, _weights
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_perf import LAYERS
-from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import GALAXY_MESH, MESH, capture
+from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import GALAXY_MESH, MESH, TRACE_REGION, capture
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
@@ -81,6 +82,14 @@ SCENARIOS = {  # id: (chunk, chunk start, cache fill)
     "slice_S1": (1280, 12800, "forward"),
     "slice_S2": (1280, 128000, "tiled"),
 }
+MESH_4X2 = [  # LoudBox 4x2 (SP4 x TP2; beads 8y7.20.*.2): the same scenarios and model layout LOUDBOX_4X2
+    pytest.param(
+        (4, 2),
+        fabric2d_device_params(trace_region_size=TRACE_REGION),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="fabric2d-mesh-4x2",
+    )
+]
 OUT = os.environ.get("V41_SCENARIO_OUT", "generated/v41_scenario_traced.log")
 
 
@@ -236,7 +245,7 @@ def _galaxy_slice(mesh_device, scenario, **_) -> bool:
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("scenario", SCENARIO_IDS)
-@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + MESH_4X2 + GALAXY_MESH, indirect=True)
 @pytest.mark.uncollect_if(pred=_galaxy_slice)
 def test_v41_block_profile(mesh_device, device_params, scenario):
     stack = ScenarioStack(mesh_device, scenario)
@@ -289,7 +298,7 @@ def test_v41_block_profile(mesh_device, device_params, scenario):
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("scenario", SCENARIO_IDS)
-@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + MESH_4X2 + GALAXY_MESH, indirect=True)
 @pytest.mark.uncollect_if(pred=_galaxy_slice)
 def test_v41_scenario_traced(mesh_device, device_params, scenario):
     stack = ScenarioStack(mesh_device, scenario)
