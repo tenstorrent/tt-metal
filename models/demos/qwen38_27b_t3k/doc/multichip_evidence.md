@@ -51,15 +51,21 @@ number to clamp against, which is what an earlier revision of this tree did. A 1
 page gives 4352 B on both, which is already ttnn's default, so it is the prefill collective's
 bfloat16 page that the setting has to serve.
 
-This was wrong in the released configuration and is now corrected in three places that had
-disagreed: `fabric_payload_bytes()` derives it, `tests/run_ci.sh` sets it, and the serving spec
-sets `fabric_max_packet_payload_size_bytes`. The spec previously set none, so the nine-hour
-serving run took the 4352 B default and the runtime said so:
-`Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet
-size to maximize throughput.` Every serving number recorded here therefore predates the fix.
+`fabric_payload_bytes()` derives it for the demo and test paths, which are the only paths where
+it takes effect. **The serving path cannot set it from here.** The vLLM plugin builds its own
+fabric argument and drops the key: the served run logs
+`tt/worker.py:796] Setting fabric config: {'config': FabricConfig.FABRIC_1D_RING,
+'reliability_mode': FabricReliabilityMode.STRICT_INIT}`, with no router config, and
+`ttnn.set_fabric_config(..., router_config=...)` is the only way to carry the size. There is no
+environment variable for it.
 
-The gain is unmeasured. It is confined to the prefill collective, since the decode collective
-moves bfloat8_b and was already at its ideal, so it should move TTFT and not decode throughput.
+Benchmark run 36682118819 proves the key is inert rather than merely undocumented. It ran with
+`fabric_max_packet_payload_size_bytes: 6144` accepted into `additional_config` and echoed in the
+engine arguments, and the runtime still reported the same thing it reported for the run that set
+nothing at all: `Fabric packet size 4352 B is suboptimal for transporting 2048 B pages.
+Configure 6144 B packet size to maximize throughput.` Decode throughput was unchanged across the
+two, 48.0 against 49.6 tokens per second at eight concurrent requests, which is what an inert
+setting predicts. Closing this needs a change in the plugin, not in this tree or its spec.
 
 ## Context contract
 
@@ -299,6 +305,44 @@ be near 16.8 t/s/u, still 43%. That is consistent with the platform deltas recor
 64 worker cores against roughly 110, one usable ethernet link against two, and one DRAM reader
 per bank because multiple readers are Blackhole-only. It is a hardware gap rather than a defect,
 but it is larger than the phrase "slower on Wormhole" would suggest.
+
+## Served performance, which is not the traced-decode performance
+
+Benchmark run 36682118819 on tt-metal `5936475725f`, through vLLM in the release harness, over
+twenty ISL/OSL/concurrency combinations:
+
+| concurrency | ISL | TTFT | TPOT | output tput |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 128 | 324.0 ms | 168.6 ms | 5.9 t/s |
+| 1 | 1024 | 618.9 ms | 170.5 ms | 5.7 t/s |
+| 1 | 4096 | 1679.6 ms | 169.3 ms | 5.5 t/s |
+| 1 | 16384 | 5946.0 ms | 172.7 ms | 4.6 t/s |
+| 1 | 32768 | 12001.5 ms | 172.5 ms | 3.8 t/s |
+| 8 | 128 | 3240.2 ms | 159.5 ms | 43.6 t/s |
+| 8 | 4096 | 12486.0 ms | 161.4 ms | 31.0 t/s |
+| 8 | 16384 | 46856.0 ms | 167.1 ms | 15.0 t/s |
+
+**TPOT is 168.6 ms served against the 60.3 ms this tree measures locally at the same shape.**
+The batch-1 figure recorded under Batch-1 performance is a traced-decode measurement through
+`generate()`, and it does not survive the serving loop. Nothing here supersedes it; the two
+measure different things, and the serving number is the one a user sees.
+
+The shape of the gap identifies where it is not. TPOT is flat within 13 ms across every input
+length from 128 to 32768, so it is not attention or KV work, which grow with context. It barely
+improves from concurrency 1 to 8, 168.6 ms to 159.5 ms, where this tree's own local measurement
+moves the other way, 60.3 ms to 89.5 ms at batch 8, because more batch is more compute. A
+per-step cost that ignores both context and batch is a serialized host round trip, not device
+time. The plugin says as much at startup: `Using custom scheduler class
+vllm_tt_plugin.scheduler.TTScheduler ... If you have subclassed Scheduler instead of
+AsyncScheduler, you will see degraded performance due to async scheduling being disabled.`
+
+That is a hypothesis with a mechanism, not a measurement. Confirming it needs a profiled serving
+step, and the remedy is in the plugin either way.
+
+Acceptance reported `PASS` for this run on `0/26 passed, 6 waived, 20 NA`. No benchmark target
+was met: the strictest tier wants 16.89 t/s/u and the functional tier 1.68, so only the
+functional tier passes on throughput while every `complete` and `target` tier check fails.
+TTFT passes all three tiers at every length.
 
 ## Sequence-length branches
 
