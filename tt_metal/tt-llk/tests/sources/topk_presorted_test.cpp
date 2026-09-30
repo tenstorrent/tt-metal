@@ -30,7 +30,7 @@ constexpr int NUM_STAGES = 2; // values, indices
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
-inline void unpack_tile(std::uint32_t tile, std::uint32_t src_format, std::uint32_t dst_format, bool first_configuration, RUNTIME_PARAMETERS& params)
+inline void unpack_tile(std::uint32_t l1_address, std::uint32_t src_format, std::uint32_t dst_format, bool first_configuration)
 {
     if (first_configuration)
     {
@@ -42,7 +42,7 @@ inline void unpack_tile(std::uint32_t tile, std::uint32_t src_format, std::uint3
     }
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         1 /* transpose_of_faces */, 1 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, src_format, dst_format);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[tile]), src_format, dst_format);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(l1_address, src_format, dst_format);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -54,13 +54,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t dst[NUM_STAGES] = {formats.unpack_A_dst, ckernel::to_underlying(DataFormat::UInt16)};
 
     // The slab: value tiles 0 and 1, index tiles 2 and 3.
-    unpack_tile(0, src[0], dst[0], true, params);
-    unpack_tile(1, src[0], dst[0], false, params);
-    unpack_tile(2, src[1], dst[1], false, params);
-    unpack_tile(3, src[1], dst[1], false, params);
+    unpack_tile(L1_ADDRESS(params.buffer_A[0]), src[0], dst[0], true);
+    unpack_tile(L1_ADDRESS(params.buffer_A[1]), src[0], dst[0], false);
+    unpack_tile(L1_ADDRESS(params.buffer_A[2]), src[1], dst[1], false);
+    unpack_tile(L1_ADDRESS(params.buffer_A[3]), src[1], dst[1], false);
     // The incoming tile of the second sort: tile 1 again (values, then indices).
-    unpack_tile(1, src[0], dst[0], false, params);
-    unpack_tile(3, src[1], dst[1], false, params);
+    unpack_tile(L1_ADDRESS(params.buffer_A[1]), src[0], dst[0], false);
+    unpack_tile(L1_ADDRESS(params.buffer_A[3]), src[1], dst[1], false);
 }
 #endif
 

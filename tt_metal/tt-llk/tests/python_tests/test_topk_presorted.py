@@ -118,8 +118,8 @@ def _golden_second_sort(row_values, descending):
     return values2[order2], indices2[order2]
 
 
-def _run(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, tile0_sorted):
-    configuration = TestConfig(
+def _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, tile0_sorted):
+    return TestConfig(
         test_name="sources/topk_presorted_test.cpp",
         formats=formats,
         templates=[
@@ -151,6 +151,9 @@ def _run(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_
         dest_acc=DestAccumulation.Yes if sort_mode == "rank_stamped" else DestAccumulation.No,
         unpack_to_dest=False,
     )
+
+
+def _run(configuration, formats):
     res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format])
     res = transform_result_tensor_to_right_form(res, formats, 64, INPUT_DIMENSIONS_SLAB)
     untilizer = get_golden_generator(UntilizeGolden)
@@ -185,8 +188,14 @@ def test_topk_presorted(sort_direction: TopKSortDirection, sort_mode: str, stimu
     src_A = src_A.flatten()
     src_A = prepare_input_tensor_for_topk(src_A, formats, INPUT_DIMENSIONS_SLAB)
 
-    full_values, full_indices = _run(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, False)
-    skip_values, skip_indices = _run(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, True)
+    # Both builds are prepared before either runs: the compile-producer pass compiles in prepare() and ends the
+    # test at the first run(), so a second configuration prepared after it would never be compiled.
+    full = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, False)
+    skip = _config(formats, sort_direction, sort_mode, src_A, tile_cnt_A, src_B, tile_cnt_B, True)
+    full.prepare()
+    skip.prepare()
+    full_values, full_indices = _run(full, formats)
+    skip_values, skip_indices = _run(skip, formats)
 
     # The two builds against each other, bit for bit.
     assert torch.equal(full_values.view(torch.int16), skip_values.view(torch.int16)), "the values of the two sorts differ"
