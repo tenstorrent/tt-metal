@@ -19,18 +19,35 @@ from models.demos.qwen38_27b_t3k.tt.model import MAX_SERVING_BATCH, Qwen38Model
 # tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B), the same way
 # conftest.py does. Not bound to Python; update here if the C++ constants change.
 _MAX_PACKET_PAYLOAD_BYTES = {"wormhole_b0": 7 * 1088, "blackhole": 14 * 1088}
+# A collective writes whole pages, at most this many per packet, so a packet that is not a
+# whole multiple of the page carries fewer pages than the link allows. Mirrors
+# max_scatter_write_chunks in ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp, which warns when
+# the configured size differs from the ideal computed the same way.
+_MAX_SCATTER_WRITE_CHUNKS = 4
+# The prefill collective moves bfloat16, whose tile is a 2048 B page. The decode collective
+# moves bfloat8_b at 1088 B, whose ideal of 4352 B is already ttnn's default, so it is the
+# prefill page that the packet size has to be chosen for.
+_CCL_PAGE_BYTES = 2048
 
 
-def configure_fabric(*, payload_bytes=8192):
-    """Configure the measured ring before the caller opens its mesh.
+def fabric_payload_bytes(page_bytes=_CCL_PAGE_BYTES):
+    """Packet payload that carries the most whole CCL pages this arch's link allows.
 
-    The QB2 measurement picked 8192 B, which sits under Blackhole's 15232 B ceiling but over
-    Wormhole's 7616 B. Clamp instead of failing so a T3K gets the largest packet its ethernet
-    datamover accepts.
+    Blackhole reaches 8192 B for a 2048 B page and Wormhole 6144 B, which is why the QB2
+    measurement of 8192 does not carry over: it is four pages there and three here, not a
+    ceiling to clamp against.
     """
-    router = ttnn.FabricRouterConfig()
     arch_max = _MAX_PACKET_PAYLOAD_BYTES.get(ttnn.get_arch_name())
-    router.max_packet_payload_size_bytes = min(payload_bytes, arch_max) if arch_max else payload_bytes
+    if arch_max is None:
+        return page_bytes * _MAX_SCATTER_WRITE_CHUNKS
+    pages = min(arch_max // page_bytes, _MAX_SCATTER_WRITE_CHUNKS)
+    return pages * page_bytes if pages else arch_max
+
+
+def configure_fabric(*, payload_bytes=None):
+    """Configure the ring before the caller opens its mesh."""
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = payload_bytes or fabric_payload_bytes()
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
