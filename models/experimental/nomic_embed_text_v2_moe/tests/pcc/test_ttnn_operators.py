@@ -188,13 +188,28 @@ def test_linear(device, tt_config, config, state_dict, key, in_dim_is_ffn, group
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_gelu(device, config, batch, seqlen):
-    """aten.gelu -> ttnn.gelu, exact erf, at the dense FFN's intermediate width."""
+def test_gelu(device, config, tt_config, batch, seqlen):
+    """aten.gelu -> ttnn.gelu in the model's variant, at the dense FFN's intermediate width."""
     x = torch.randn(1, 1, batch * seqlen, config.intermediate_size)
 
-    out = ttnn.gelu(to_device(x, device))
+    out = ttnn.gelu(to_device(x, device), variant=tt_config.dense_gelu)
 
     assert_with_pcc(torch.nn.functional.gelu(x, approximate="none"), out, OPERATOR_PCC)
+
+
+def test_tanh_gelu_is_exact_to_well_under_bfloat16(device, config):
+    """The tanh form differs from exact erf by at most 4.7e-4, at x = -2.70.
+
+    bfloat16 rounds GELU's output by up to 1.6e-2, 33 times that, and the model's GELUs write
+    bfloat16 and bfloat8_b. Run in fp32, where the approximation is separable from the rounding.
+    """
+    x = torch.randn(1, 1, 512, config.intermediate_size)
+    ref = torch.nn.functional.gelu(x, approximate="none")
+    x_tt = to_device(x, device, dtype=ttnn.float32)
+
+    tanh = compute_max_abs_error(ttnn.to_torch(ttnn.gelu(x_tt, variant=ttnn.GeluVariant.Tanh)).float(), ref)
+
+    assert tanh < 1e-3, f"expected the tanh GELU within 1e-3 of exact erf in fp32, got {tanh:.3e}"
 
 
 def test_gelu_fast_mode_is_worse_than_the_bfloat16_noise_floor(device, config):
