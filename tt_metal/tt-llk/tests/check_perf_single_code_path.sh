@@ -29,7 +29,7 @@ for arch in "${ARCHES[@]}"; do
     marks="perf and not accuracy and not quasar"
     files=(perf_*.py)
   fi
-  CHIP_ARCH="$arch" pytest --collect-only -q -m "$marks" --override-ini=log_cli=false "${files[@]}" \
+  CHIP_ARCH="$arch" pytest --collect-only --compile-producer -q -m "$marks" --override-ini=log_cli=false "${files[@]}" \
     > "$OUT/$arch-collect.log" 2>&1 || true
   grep '::' "$OUT/$arch-collect.log" > "$OUT/$arch-all.txt" || true
   # PER_FILE evenly spaced variants of every test file, so the sample spans the formats of each test
