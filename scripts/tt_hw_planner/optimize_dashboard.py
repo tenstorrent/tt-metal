@@ -748,16 +748,66 @@ def make_server(host: str, port: int, collect_fn, decision_fn=None) -> Threading
     return srv
 
 
+def _reclaim_dashboard_port(port: int) -> bool:
+    """Free ``port`` if a STALE planner dashboard/proxy is squatting it (a leftover from a prior run
+    or a manual serve), so a new run binds its expected port instead of falling back to a random one
+    the UI can't find. Terminates ONLY our own dashboard/proxy processes — identified by their command
+    line — never an unrelated service. Returns True if it freed the port. Linux-only, best-effort."""
+    import signal
+    import subprocess
+
+    pids: set[int] = set()
+    try:
+        out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return False
+    for line in out.splitlines():
+        if (":%d " % port) not in line:
+            continue
+        for m in re.findall(r"pid=(\d+)", line):
+            pids.add(int(m))
+    freed = False
+    for pid in pids:
+        try:
+            cl = Path("/proc/%d/cmdline" % pid).read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except Exception:
+            continue
+        # only OUR own dashboard/proxy squatters — never anything else
+        ours = ("optimize-dashboard" in cl) or ("dash_proxy" in cl) or ("tt_hw_planner" in cl and "dashboard" in cl)
+        if ours:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                freed = True
+            except Exception:
+                pass
+    if freed:
+        time.sleep(1.0)  # let the socket release before rebinding
+    return freed
+
+
+def _make_server_or_reclaim(host: str, port: int, collect_fn, decision_fn=None):
+    """make_server on the requested port; if it's busy because a stale planner dashboard/proxy holds
+    it, free that (our process only) and retry so the run keeps its expected port — falling back to a
+    free port only if the squatter isn't ours."""
+    try:
+        return make_server(host, port, collect_fn, decision_fn)
+    except OSError as exc:
+        if port == 0:
+            raise
+        if _reclaim_dashboard_port(port):
+            try:
+                srv = make_server(host, port, collect_fn, decision_fn)
+                print("  [dashboard] reclaimed port %d from a stale planner dashboard" % port)
+                return srv
+            except OSError:
+                pass
+        print("  [dashboard] port %d unavailable (%s); using a free port instead" % (port, exc))
+        return make_server(host, 0, collect_fn, decision_fn)
+
+
 def serve(host: str, port: int, collect_fn, decision_fn=None) -> int:
     """Blocking serve (standalone command). Returns on Ctrl+C."""
-    try:
-        srv = make_server(host, port, collect_fn, decision_fn)
-    except OSError as exc:
-        if port != 0:
-            print(f"  [dashboard] port {port} unavailable ({exc}); using a free port instead")
-            srv = make_server(host, 0, collect_fn, decision_fn)
-        else:
-            raise
+    srv = _make_server_or_reclaim(host, port, collect_fn, decision_fn)
     url = "http://%s:%d/" % (host if host not in ("0.0.0.0", "::") else "127.0.0.1", srv.server_address[1])
     print(f"  [dashboard] live optimize view: {url}  (Ctrl+C to stop)")
     try:
@@ -773,14 +823,7 @@ def serve_in_thread(host: str, port: int, collect_fn, decision_fn=None):
     """Non-blocking serve for ``optimize --dashboard``: daemon thread, dies with the run process."""
     import threading
 
-    try:
-        srv = make_server(host, port, collect_fn, decision_fn)
-    except OSError as exc:
-        if port != 0:
-            print(f"  [dashboard] port {port} unavailable ({exc}); using a free port instead")
-            srv = make_server(host, 0, collect_fn, decision_fn)
-        else:
-            raise
+    srv = _make_server_or_reclaim(host, port, collect_fn, decision_fn)
     t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
     t.start()
     url = "http://%s:%d/" % (host if host not in ("0.0.0.0", "::") else "127.0.0.1", srv.server_address[1])
