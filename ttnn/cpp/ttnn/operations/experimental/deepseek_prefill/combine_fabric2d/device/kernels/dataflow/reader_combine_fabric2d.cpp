@@ -52,6 +52,32 @@
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
+// Device-profiler build only: where the reader's time goes, summed over the run and reported once at the end,
+// since a zone per token would overflow the profiler buffer. Compiles to nothing otherwise.
+#if defined(PROFILE_KERNEL)
+#include "tools/profiler/kernel_profiler.hpp"
+namespace cmbf2d_prof {
+uint64_t wait_untilizer = 0;  // a batch of routed-expert output not yet untilized
+uint64_t wait_sender = 0;     // ring full: the sender has not freed a slot
+uint64_t wait_upstream = 0;   // relayed tokens from the upstream chip not yet arrived
+uint64_t read_barrier = 0;    // DRAM / L1 reads of a batch still landing
+uint64_t local_phase = 0;     // same-chip copies
+// Per local expert, and when the first relayed token was needed and first seen, both in cycles since this
+// kernel started: one chip's clock only, so they compare across runs without any cross-chip sync.
+uint64_t upstream_by_expert[32] = {};
+uint64_t untilizer_by_expert[32] = {};
+uint32_t expert = 0;
+uint64_t t_start = 0;
+uint64_t first_need = 0;
+uint64_t first_arrive = 0;
+}  // namespace cmbf2d_prof
+#define CMBF2D_PROF_NOW() get_timestamp()
+#define CMBF2D_PROF_ADD(counter, t0) (cmbf2d_prof::counter += get_timestamp() - (t0))
+#else
+#define CMBF2D_PROF_NOW() 0ull
+#define CMBF2D_PROF_ADD(counter, t0) ((void)(t0))
+#endif
+
 // `local_expert` throughout is a WALK STEP, not a slot id. Standalone the two coincide; overlapped the
 // step is the routed expert's threshold-split order and `expert_of` maps it through the id table. That one
 // function is the only place the order is decided.
@@ -243,10 +269,15 @@ struct Untilized {
         if (batch != open) {
             release_through(batch);
             volatile tt_l1_ptr uint32_t* produced = produced_by(owner(batch));
+            [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
             invalidate_l1_cache();
             while (*produced < batch / ct.num_untilizers + 1) {
                 invalidate_l1_cache();
             }
+            CMBF2D_PROF_ADD(wait_untilizer, prof_t0);
+#if defined(PROFILE_KERNEL)
+            cmbf2d_prof::untilizer_by_expert[cmbf2d_prof::expert] += get_timestamp() - prof_t0;
+#endif
             open = batch;
         }
         const uint32_t row = (batch / ct.num_untilizers % ct.unt_ring_batches) * ::cmbf2d::UNT_BATCH_ROWS +
@@ -332,12 +363,14 @@ struct Reader {
         invalidate_l1_cache();
         if (claimed - *freed >= ct.num_l1_slots) {
             flush_publish();
+            [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
             while (true) {
                 invalidate_l1_cache();
                 if (claimed - *freed < ct.num_l1_slots) {
                     break;
                 }
             }
+            CMBF2D_PROF_ADD(wait_sender, prof_t0);
         }
         return claimed++ % ct.num_l1_slots;
     }
@@ -429,7 +462,9 @@ struct Reader {
                 for (uint32_t j = 0; j < k; j++) {
                     issue_token(dst_chip_id, base + pad_at(n, q + j), pad_at(n, q + j));
                 }
+                [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
                 noc_async_read_barrier();  // every token of the ct.batch is in L1 before any is announced
+                CMBF2D_PROF_ADD(read_barrier, prof_t0);
                 publish_n(k);
                 q += k;
             }
@@ -504,18 +539,33 @@ struct Reader {
     // claimed, all of which belong to the chunk.
     uint32_t read_arrived_pages(uint32_t remaining) {
         volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
+#if defined(PROFILE_KERNEL)
+        if (cmbf2d_prof::first_need == 0) {
+            cmbf2d_prof::first_need = get_timestamp() - cmbf2d_prof::t_start;
+        }
+#endif
         // Do not outpace the upstream sender. It bumps this counter every fwd_bump_every pages and ALWAYS on
         // the last page of a chunk, so a chunk boundary is never left unreachable.
         invalidate_l1_cache();
         if (*fwd_arrived <= consumed) {
             flush_publish();  // let the sender work while we wait on upstream
+            [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
             while (true) {
                 invalidate_l1_cache();
                 if (*fwd_arrived > consumed) {
                     break;
                 }
             }
+            CMBF2D_PROF_ADD(wait_upstream, prof_t0);
+#if defined(PROFILE_KERNEL)
+            cmbf2d_prof::upstream_by_expert[cmbf2d_prof::expert] += get_timestamp() - prof_t0;
+#endif
         }
+#if defined(PROFILE_KERNEL)
+        if (cmbf2d_prof::first_arrive == 0) {
+            cmbf2d_prof::first_arrive = get_timestamp() - cmbf2d_prof::t_start;
+        }
+#endif
         uint32_t k = *fwd_arrived - consumed;
         if (k > ct.batch) {
             k = ct.batch;
@@ -530,7 +580,9 @@ struct Reader {
             // metadata, because the page layout was chosen to match the slot layout exactly.
             noc_async_read(dram.fwd.get_noc_addr(fwd_page(consumed + j)), slot_addr_of(slot), fwd_read_bytes);
         }
+        [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
         noc_async_read_barrier();
+        CMBF2D_PROF_ADD(read_barrier, prof_t0);
         return k;
     }
 
@@ -562,6 +614,7 @@ struct Reader {
     // alike — before the next one starts; that costs some overlap with the fabric work still draining, and
     // whether these copies belong on separate cores entirely is a stage-3 question.
     void run_local_phase(uint32_t local_expert) {
+        [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
         // One slot serves as the staging buffer for the whole phase, and is deliberately NEVER published:
         // the sender must not see these tokens, or it would send them over the fabric as well. Slot
         // `published % num_l1_slots` is the next one the sender has yet to be told about, so it is ours to
@@ -590,6 +643,7 @@ struct Reader {
             }
         });
         claimed--;  // hand the staging slot back; nothing was ever announced for it
+        CMBF2D_PROF_ADD(local_phase, prof_t0);
     }
 
     // End of stream. The sender cannot know the length up front, so it stops on this.
@@ -606,12 +660,18 @@ void kernel_main() {
     // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
     return;
 #endif
+#if defined(PROFILE_KERNEL)
+    cmbf2d_prof::t_start = get_timestamp();
+#endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
     // e + 1 is touched.
     for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+#if defined(PROFILE_KERNEL)
+        cmbf2d_prof::expert = local_expert < 32 ? local_expert : 31;
+#endif
 #if TILE
         reader.walk = ::cmbf2d::group_walk(
             reader.ctl,
@@ -628,16 +688,37 @@ void kernel_main() {
 #if TILE
         reader.untilized.finish_expert(reader.walk);
 #endif
+#if defined(PROFILE_KERNEL)
+        DeviceTimestampedData("CMBF2D_R_EXPERT_DONE", local_expert);
+#endif
     }
     reader.end_stream();
+#if defined(PROFILE_KERNEL)
+    DeviceTimestampedData("CMBF2D_R_WAIT_UNTILIZER", cmbf2d_prof::wait_untilizer);
+    DeviceTimestampedData("CMBF2D_R_WAIT_SENDER", cmbf2d_prof::wait_sender);
+    DeviceTimestampedData("CMBF2D_R_WAIT_UPSTREAM", cmbf2d_prof::wait_upstream);
+    DeviceTimestampedData("CMBF2D_R_READ_BARRIER", cmbf2d_prof::read_barrier);
+    DeviceTimestampedData("CMBF2D_R_LOCAL_PHASE", cmbf2d_prof::local_phase);
+    DeviceTimestampedData("CMBF2D_R_FIRST_NEED", cmbf2d_prof::first_need);
+    DeviceTimestampedData("CMBF2D_R_FIRST_ARRIVE", cmbf2d_prof::first_arrive);
+    // Expert index in the top byte, cycles below: one marker per expert and kind.
+    for (uint32_t e = 0; e < ct.experts_per_chip && e < 32; e++) {
+        DeviceTimestampedData("CMBF2D_R_UP_BY_EXPERT", (uint64_t(e) << 56) | cmbf2d_prof::upstream_by_expert[e]);
+        DeviceTimestampedData("CMBF2D_R_RE_BY_EXPERT", (uint64_t(e) << 56) | cmbf2d_prof::untilizer_by_expert[e]);
+    }
+#endif
 #if TILE
     reader.untilized.reset_counters();
 #endif
 
-    // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
-    // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
-    // one has already landed — and its drain targets a sink address rather than this semaphore.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
-    // Do not exit with `filled` increments still in the NIU.
+    // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
+    // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
+    // always bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed` and what is left
+    // belongs to the next launch. The NoC only has an atomic add, so this adds the two's complement.
+    //
+    // This keeps the count right, nothing more. The upstream chip never waits for us to read a page before
+    // writing that page again, so a chip far enough ahead can still overwrite pages we have not read.
+    noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
+    // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
 }
