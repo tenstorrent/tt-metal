@@ -786,6 +786,27 @@ class VECTOR_MODE(TemplateParameter):
 
 
 @dataclass
+class PERF_STAGE(TemplateParameter):
+    """How much of a perf kernel's iteration runs. 0 is the frame alone (the data copies, inits and
+    pack the op needs), so that its cost can be subtracted from the stages that add the op's parts."""
+
+    perf_stage: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int PERF_STAGE = {self.perf_stage};"
+
+
+@dataclass
+class PACK_BLOCK_CONTIGUOUS(TemplateParameter):
+    """True packs a block with one _llk_pack_block_contiguous_ call, False with one standard _llk_pack_ per tile."""
+
+    pack_block_contiguous: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool PACK_BLOCK_CONTIGUOUS = {'true' if self.pack_block_contiguous else 'false'};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
