@@ -1,0 +1,9 @@
+# experiment artifacts stay out of git (shipped as a tarball)
+*.log
+*.out
+*.pt
+*.npy
+*.mp4
+*.wav
+ref_*/
+tt_*/

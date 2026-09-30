@@ -23,7 +23,7 @@ from ....parallel.manager import CCLManager
 from ....utils import cache as cache_module
 from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, typed_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 from .quant_config import LtxQuantProfile
@@ -806,14 +806,18 @@ class LTXTransformerModel(Module):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]
-        # Scalar timestep (1,1,B,1) drives audio / prompt / A<->V cross modulation.
-        timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
+        # Scalar timestep (1,1,B,1) drives audio / prompt / A<->V cross modulation. fp32: the
+        # sinusoidal embedding is computed from it on device (see _LTXTimestepEmbedding).
+        timestep = typed_tensor(
+            timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, dtype=ttnn.float32, device=self.mesh_device
+        )
         # Per-token video timestep (1,1,B*N,1), SP-sharded on dim 2 to match video_1BNI (shard_dim=-2).
         video_timestep = None
         if self.image_conditioning:
             assert video_timestep_torch is not None, "video_timestep_torch required when image_conditioning=True"
-            video_timestep = bf16_tensor(
+            video_timestep = typed_tensor(
                 video_timestep_torch.reshape(1, 1, -1, 1) * 1000.0,
+                dtype=ttnn.float32,
                 device=self.mesh_device,
                 mesh_axis=sp_axis,
                 shard_dim=-2,

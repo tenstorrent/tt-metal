@@ -665,16 +665,28 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
 
     vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
     als = AudioLatentShape.from_video_pixel_shape(vps)
-    # Seeded synthetic latent scaled to a real girl-clip audio latent's statistics (mean≈0.2,
-    # std≈0.92). The PCC gate below is TT-vs-torch with both legs fed the same mel, so the input
-    # need not be "real" content — only AUDIO_OUT .wav listening would differ. AUDIO_LATENT
-    # (.npy or .pt) still overrides for anyone who wants to decode a real dumped latent.
-    _lat = os.environ.get("AUDIO_LATENT")
-    if _lat and os.path.exists(_lat):
+    # Default to the committed real girl-clip audio latent (39 KB fp16 fixture, dumped from a real
+    # 145f@24fps generation via LTX_DUMP_AUDIO_LATENT; ported from smarton/ltx-rt-pr2-traced-avgen), so
+    # the decode and its torch oracle run on actual content: the bf16 chain scores measurably lower on
+    # real latents than on random ones. AUDIO_LATENT (.npy or .pt) overrides; a seeded synthetic latent
+    # with the fixture's statistics (mean≈0.2, std≈0.92) is the fallback when NUM_FRAMES changes the
+    # latent length away from the fixture's.
+    _fixture = os.path.join(os.path.dirname(__file__), "fixtures", "girl_audio_latent.npy")
+    _lat = os.environ.get("AUDIO_LATENT") or _fixture
+    latent = None
+    if os.path.exists(_lat):
         latent = (torch.from_numpy(np.load(_lat)) if _lat.endswith(".npy") else torch.load(_lat)).float()
-    else:
+        if latent.shape[1] != als.frames and _lat == _fixture:
+            logger.info(
+                f"fixture latent has {latent.shape[1]} tokens, NUM_FRAMES={num_frames} needs {als.frames}; using synthetic"
+            )
+            latent = None
+    if latent is None:
         torch.manual_seed(0)
         latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.92 + 0.2
+    logger.info(
+        f"audio latent source: {'AUDIO_LATENT' if os.environ.get('AUDIO_LATENT') else ('fixture' if latent.shape[1] == als.frames and os.path.exists(_fixture) else 'synthetic')} shape={tuple(latent.shape)}"
+    )
 
     t0 = time.perf_counter()
     audio = pipeline.decode_audio(latent, num_frames, fps=24.0)  # cold: weight load + compile (+ capture)

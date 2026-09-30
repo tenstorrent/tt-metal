@@ -714,21 +714,33 @@ class _LTXTimestepEmbedding(Module):
     def __init__(self, embedding_dim: int, mesh_device=None, dtype=ttnn.bfloat16):
         super().__init__()
         self.mesh_device = mesh_device
+        self.dtype = dtype
         self.timestep_embedder = TimestepEmbedding(
             in_channels=256,
             time_embed_dim=embedding_dim,
             mesh_device=mesh_device,
             dtype=dtype,
         )
-        # Sinusoidal with cos first, no freq shift (matching LTX-2's flip_sin_to_cos=True)
+        # Sinusoidal with cos first, no freq shift (matching LTX-2's flip_sin_to_cos=True).
+        # Always fp32, whatever the MLP dtype: the reference computes the sinusoid in fp32 and
+        # only casts afterwards. In bf16 the product ``t * freq`` at t~1000 has a spacing of 4,
+        # so the ~50 highest-frequency channels get an essentially random phase; the prompt
+        # adaLN MLP (prompt_adaln_single) is dominated by those channels and its output moved
+        # ~30% under bf16 in a CPU emulation, while adaln_single moved <1%.
         self.time_proj = Timesteps(
             num_channels=256,
             cos_first=True,
             downscale_freq_shift=0,
             mesh_device=mesh_device,
-            dtype=dtype,
+            dtype=ttnn.float32,
         )
 
     def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+        # Callers should upload the timestep in fp32; a bf16 input is accepted but has already
+        # rounded t (spacing 4 near 1000), so only the sinusoid itself is protected here.
+        if timestep.dtype != ttnn.float32:
+            timestep = ttnn.typecast(timestep, ttnn.float32)
         timesteps_proj = self.time_proj(timestep)
+        if self.dtype != ttnn.float32:
+            timesteps_proj = ttnn.typecast(timesteps_proj, self.dtype)
         return self.timestep_embedder(timesteps_proj)

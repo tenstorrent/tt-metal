@@ -74,14 +74,18 @@ class LTXDistilledPipeline(LTXPipeline):
         denoise_mask: torch.Tensor | None,
         sigma: torch.Tensor,
         seed: int,
+        noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
 
         ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
         ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
         bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
-        torch.manual_seed(seed)
-        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        if noise is None:
+            torch.manual_seed(seed)
+            noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        else:  # EXPERIMENT: injected reference noise (LTX_INJECT_NOISE_DIR)
+            noise = noise.reshape(base.shape).to(torch.bfloat16).to(base.dtype)
         scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
         return noise * scaled_mask + base * (1.0 - scaled_mask)
 
@@ -434,7 +438,20 @@ class LTXDistilledPipeline(LTXPipeline):
             ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
         else:  # T2V S1: pure noise from zeros
             base_v = torch.zeros(B, video_N_real, self.in_channels)
-        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
+        inj_dir = os.environ.get("LTX_INJECT_NOISE_DIR")
+        inj_v = inj_a = None
+        if inj_dir:
+            _pv, _pa = (os.path.join(inj_dir, f"noise_{trace_key}_{m}.pt") for m in ("video", "audio"))
+            if os.path.exists(_pv) and os.path.exists(_pa):
+                inj_v, inj_a = torch.load(_pv), torch.load(_pa)
+                logger.info(
+                    f"Injecting reference noise from {inj_dir} ({trace_key}): video {tuple(inj_v.shape)} audio {tuple(inj_a.shape)}"
+                )
+            else:
+                logger.warning(
+                    f"LTX_INJECT_NOISE_DIR set but {_pv} / {_pa} missing: using seeded noise for {trace_key}"
+                )
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed, noise=inj_v)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -448,6 +465,11 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat[:, :audio_N_real, :] = initial_audio_latent[:, :audio_N_real, :].float()
             torch.manual_seed(seed + 1)
             noise_a = torch.randn_like(audio_lat)
+            if inj_a is not None:
+                noise_a = torch.zeros_like(audio_lat)
+                noise_a[:, :audio_N_real, :] = (
+                    inj_a.reshape(B, audio_N_real, self.in_channels).to(torch.bfloat16).float()
+                )
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
             torch.manual_seed(seed)
@@ -455,6 +477,8 @@ class LTXDistilledPipeline(LTXPipeline):
             # stays independent of video sequence length.
             _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
             audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            if inj_a is not None:
+                audio_lat_real = inj_a.reshape(B, audio_N_real, self.in_channels).to(torch.bfloat16).float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = audio_lat_real
 
@@ -485,11 +509,25 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
+        # EXPERIMENT (LTX_EULER_FP32=1): do the Euler step the reference way -- fp32 accumulate, one
+        # rounding to bf16 per step (EulerDiffusionStep: (sample.float() + velocity.float()*dt).to(dtype)).
+        # The default path rounds the fp32 velocity to bf16, multiplies by dt in bf16 and adds in bf16.
+        euler_fp32 = os.environ.get("LTX_EULER_FP32", "0") in ("1", "true", "True")
+        if euler_fp32:
+            v_mask32 = ttnn.typecast(state.tt_video_pad_mask, ttnn.float32)
+            a_mask32 = ttnn.typecast(state.tt_audio_pad_mask, ttnn.float32)
+            logger.info("Euler step: fp32 accumulate (LTX_EULER_FP32=1)")
+
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
+            # fp32: the device computes the sinusoidal timestep embedding from this value, and
+            # bf16 rounds both t (spacing 4 near 1000) and the t*freq products that feed cos/sin.
             state._tt_timestep.update(
-                torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
+                torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0,
+                traced,
+                dtype=ttnn.float32,
+                device=self.mesh_device,
             )
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
@@ -497,7 +535,9 @@ class LTXDistilledPipeline(LTXPipeline):
                 # {0,1} pin mask so the transformer blends per token (avoids dense modulation OOM).
                 pinned_scale = (1.0 - image_cond_strength) if (image_cond and i2v.n_cond > 0) else 1.0
                 ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
-                state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
+                state._tt_video_ts_pair.update(
+                    ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, dtype=ttnn.float32, device=self.mesh_device
+                )
                 pin_mask_host = torch.zeros(1, 1, video_N, 1)
                 if i2v.n_cond > 0:
                     pin_mask_host[:, :, : i2v.n_cond, :] = 1.0
@@ -552,14 +592,25 @@ class LTXDistilledPipeline(LTXPipeline):
                 x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
                 v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
                 ttnn.add_(state.tt_video_lat, v_pin)
+            elif euler_fp32:
+                lat32 = ttnn.add(
+                    ttnn.typecast(state.tt_video_lat, ttnn.float32), ttnn.multiply(ttnn.multiply(v_out, dt), v_mask32)
+                )
+                ttnn.copy(ttnn.typecast(lat32, ttnn.bfloat16), state.tt_video_lat)
             else:
                 ttnn.multiply_(v_vel, dt)
                 ttnn.add_(state.tt_video_lat, v_vel)
             ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
-            a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
-            ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
-            ttnn.multiply_(a_vel, dt)
-            ttnn.add_(state.tt_audio_lat, a_vel)
+            if euler_fp32:
+                lat32 = ttnn.add(
+                    ttnn.typecast(state.tt_audio_lat, ttnn.float32), ttnn.multiply(ttnn.multiply(a_out, dt), a_mask32)
+                )
+                ttnn.copy(ttnn.typecast(lat32, ttnn.bfloat16), state.tt_audio_lat)
+            else:
+                a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
+                ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
+                ttnn.multiply_(a_vel, dt)
+                ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
@@ -688,6 +739,22 @@ class LTXDistilledPipeline(LTXPipeline):
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+        if os.environ.get("LTX_EMBEDS_OVERRIDE"):  # EXPERIMENT: reference connector embeddings
+            _ov = torch.load(os.environ["LTX_EMBEDS_OVERRIDE"])
+            logger.info(
+                f"Embeds override: ours v{tuple(v_embeds.shape)} a{tuple(a_embeds.shape)} -> ref v{tuple(_ov['video'].shape)} a{tuple(_ov['audio'].shape)}"
+            )
+            v_embeds, a_embeds = (
+                _ov["video"].reshape(v_embeds.shape).float(),
+                _ov["audio"].reshape(a_embeds.shape).float(),
+            )
+        _dump_dir = os.environ.get("LTX_DUMP_LATENT_DIR")
+        if _dump_dir:
+            os.makedirs(_dump_dir, exist_ok=True)
+            torch.save(
+                {"video": v_embeds.cpu(), "audio": a_embeds.cpu(), "prompt": prompt},
+                os.path.join(_dump_dir, "embeds.pt"),
+            )
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
@@ -744,6 +811,9 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
         self._log_latent_stats("s1", s1_video, s1_audio)
+        if _dump_dir:
+            torch.save(s1_video.float().cpu(), os.path.join(_dump_dir, "s1_video.pt"))
+            torch.save(s1_audio.float().cpu(), os.path.join(_dump_dir, "s1_audio.pt"))
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -758,6 +828,8 @@ class LTXDistilledPipeline(LTXPipeline):
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
 
+        if _dump_dir:
+            torch.save(upsampled_flat.float().cpu(), os.path.join(_dump_dir, "upsampled.pt"))
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
         s2_video, s2_audio = self._denoise_no_guidance(
@@ -781,6 +853,9 @@ class LTXDistilledPipeline(LTXPipeline):
         # Last point before the VAE: if this latent is white or partly unwritten, the
         # decode cannot recover and the served MP4 will be noise.
         self._log_latent_stats("s2", s2_video, s2_audio, warn=True)
+        if _dump_dir:
+            torch.save(s2_video.float().cpu(), os.path.join(_dump_dir, "s2_video.pt"))
+            torch.save(s2_audio.float().cpu(), os.path.join(_dump_dir, "s2_audio.pt"))
 
         t0 = time.time()
         self._prepare_vae()

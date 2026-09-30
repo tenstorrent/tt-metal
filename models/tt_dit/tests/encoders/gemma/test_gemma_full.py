@@ -64,7 +64,7 @@ def _raw_connectors_to_diffusers(raw: dict[str, torch.Tensor]) -> dict[str, torc
     return out
 
 
-PROMPT = "A plump orange tabby cat sits on a piano bench playing keys with its paws."
+PROMPT = "sculptor, accelerating, salt flat, sunrise, gradual zoom out, anamorphic film"
 
 CONNECTOR_PREFIXES = (
     "text_embedding_projection.video_aggregate_embed.",
@@ -156,7 +156,24 @@ def _encode_prompts_reference(
         # Pack the 49 per-layer hidden states D-major (B, seq, 3840, 49) → (B, seq, 188160).
         hidden = torch.stack(out.hidden_states, dim=-1).flatten(2, 3).float()
         video, audio, _ = connectors(hidden, ti.attention_mask)
-    return video.float(), audio.float()
+    video, audio = video.float(), audio.float()
+    _dump_reference_tensors(hidden, video, audio)
+    return video, audio
+
+
+def _dump_reference_tensors(hidden: torch.Tensor, video: torch.Tensor, audio: torch.Tensor) -> None:
+    """Write the connector input and each connector output. Override the directory with LTX_REF_DUMP_DIR."""
+    dump_dir = os.path.abspath(os.environ.get("LTX_REF_DUMP_DIR", "ltx_ref_dumps"))
+    os.makedirs(dump_dir, exist_ok=True)
+    paths = {
+        "text_embeddings.pt": hidden,
+        "connector_video.pt": video,
+        "connector_audio.pt": audio,
+    }
+    for name, tensor in paths.items():
+        path = os.path.join(dump_dir, name)
+        torch.save(tensor.detach().cpu(), path)
+        logger.info(f"dumped {name} {tuple(tensor.shape)} -> {path}")
 
 
 # 2x4 drives the encoder's TP all-gathers over CCL, which needs the 1D fabric up;

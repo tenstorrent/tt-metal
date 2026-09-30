@@ -33,7 +33,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard, typed_tensor
 from models.tt_dit.utils.test import (
     line_params_req_exact_devices,
     ring_params_4k,
@@ -1597,7 +1597,7 @@ def _build_video_trace_setup(
     video_1BNI_torch = video_lat.unsqueeze(0)  # (1, B=1, video_N, IN_CHANNELS)
     B_size = video_1BNI_torch.shape[1]
     video_1BNI = bf16_tensor(video_1BNI_torch, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-    timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=mesh_device)
+    timestep = typed_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, dtype=ttnn.float32, device=mesh_device)
 
     # inner_step is keyword-only; these are exactly the device tensors it consumes.
     inner_kwargs = dict(
@@ -1678,7 +1678,7 @@ def _build_trace_inner_kwargs(*, mesh_device, sp_axis, tp_axis, F, H, W, has_aud
     video_1BNI_torch = video_lat.unsqueeze(0)
     B_size = video_1BNI_torch.shape[1]
     video_1BNI = bf16_tensor(video_1BNI_torch, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
-    timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=mesh_device)
+    timestep = typed_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, dtype=ttnn.float32, device=mesh_device)
 
     inner_kwargs = dict(
         video_1BNI=video_1BNI,
