@@ -80,6 +80,12 @@ enum class BinaryOp : std::uint8_t
     COPY_DEST,
 };
 
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
+};
+
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)

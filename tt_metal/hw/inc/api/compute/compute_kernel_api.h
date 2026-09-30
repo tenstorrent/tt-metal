@@ -63,6 +63,7 @@
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #include "ckernel_sfpu_copy_dest_values.h"
 #include "ckernel_sfpu_reduce.h"
+#include "ckernel_sfpu_max_pool_indices.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -802,8 +803,6 @@ ALWI void sfpu_reduce_init() {
         reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
-
 // clang-format off
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile
@@ -830,6 +829,13 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
+#ifdef ARCH_QUASAR
+    // The Quasar kernel addresses the whole tile pair itself, so it runs once (VectorMode::None) rather
+    // than once per face.
+    constexpr VectorMode vector_mode = VectorMode::None;
+#else
+    constexpr VectorMode vector_mode = VectorMode::RC;
+#endif
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -838,7 +844,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
-        VectorMode::RC,
+        vector_mode,
         chunk)));
 }
 
@@ -850,6 +856,8 @@ ALWI void max_reduce_with_indices_init() {
     MATH((SFPU_BINARY_INIT_FN(
         max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
 }
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // clang-format off
 /**

@@ -128,6 +128,7 @@ enum class SfpuType : std::uint32_t
     greater_than_equal_zero,
     cumsum,
     reduce,
+    max_pool_with_indices,
 };
 
 enum class DstSync : std::uint8_t
