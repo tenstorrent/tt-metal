@@ -12,11 +12,20 @@ conventions where possible so that users familiar with TRL face minimal friction
 ```python
 from datasets import load_dataset
 from ttml.trainers import GRPOConfig, GRPOTrainer
+from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 
-# 1. A GRPOCompleter handles model loading, text generation, and
-#    forward passes. The trainer is agnostic to which one you pass.
-#    See "GRPOCompleter" below for the contract.
-completer = MyCompleter(...)
+# 1. A RolloutSampler generates completions together with their per-token
+#    log pi_old. TTMLRolloutSampler builds the ttml model and tokenizer and
+#    generates in-process. See "RolloutSampler" below for the contract.
+sampler = TTMLRolloutSampler(
+    model_kind="llama",                  # or "qwen3"
+    transformer_config=transformer_config,
+    device_config=device_config,
+    model_source="...",
+    max_completion_length=256,
+    temperature=1.0,
+    completions_per_prompt=8,            # = GRPOConfig.num_generations
+)
 
 # 2. Dataset must have a "prompt" column. All other columns are
 #    forwarded by name to the reward function.
@@ -31,7 +40,9 @@ def my_reward(completions, answer, **kwargs):
 # 4. Train — the trainer auto-appends a `GRPOMonitor` from `GRPOConfig`, so
 #    `output_dir/grpo_metrics.csv` and per-step console lines come for free.
 trainer = GRPOTrainer(
-    completer=completer,
+    model=sampler.model,
+    tokenizer=sampler.tokenizer,
+    rollout_sampler=sampler,
     dataset=dataset,
     config=GRPOConfig(
         epsilon=0.2,
@@ -55,13 +66,9 @@ trainer.train()
 ```
 
 `GRPOTrainer` is agnostic to model architecture, device topology, and
-rank count. It only calls `completer.generate(...)`,
-`completer.compute_nlog_probs(...)`, and the standard
-`TrainerCallback` hooks. Where generation runs — in-process on the
-same mesh as the policy, or on a peer MPI rank — is the completer's
-choice. For a worked-out two-rank deployment (separate trainer and
-inference ranks, weight push every step), see the
-[BoolQ example](../sources/examples/grpo_remote_rollout/boolq/README.md).
+rank count. It calls `rollout_sampler.generate(...)` for completions and
+their `log pi_old`, runs its own teacher-forced forward pass on `model`
+for `log pi`, and fires the standard `TrainerCallback` hooks.
 
 ---
 
@@ -69,102 +76,99 @@ inference ranks, weight push every step), see the
 
 GRPO training is split into two components:
 
-- **`GRPOCompleter`** — abstract base class that handles model-specific concerns:
-  model loading, device setup, text generation, and forward passes for log-prob
-  computation.
+- **`RolloutSampler`** — abstract producer of rollouts: for a batch of
+  tokenised prompts it returns a `RolloutBatch` holding the completions and the
+  per-token `log pi_old` of every generated token. `TTMLRolloutSampler` also
+  owns model loading and device setup for the in-process case.
 - **`GRPOTrainer`** — model-agnostic training loop that drives reward computation,
   advantage estimation, and policy gradient updates.
 
-This separation means the trainer does not need to know anything
-about model architecture, device topology, or rank count. The trainer
-only calls `completer.generate(...)`, `completer.compute_nlog_probs(...)`,
-and the standard `TrainerCallback` hooks; whether generation runs
-in-process on the same mesh as the policy or on a peer MPI rank is
-the completer's choice. To support a new model family, implement a
-new `GRPOCompleter` subclass (see [GRPOCompleter](#grpocompleter)).
+Per generation batch the data flows as follows:
+
+1. `rollout_sampler.generate(prompts)` returns a `RolloutBatch`. Its `logprobs`
+   array (`[B, max_completion_length]`) is `pi_old` for the whole batch; the
+   trainer runs **no** extra forward pass for it, and it stays fixed across
+   `num_iterations` passes.
+2. Rewards and group-relative advantages are computed on the host.
+3. For each micro-batch, the trainer lays out `prompt + completion` right-padded
+   for next-token prediction (`layout_microbatch`), moves the matching rows of
+   `logprobs` into the same columns with the sign flipped (`place_old_nlog_probs`),
+   runs `model(x, causal_mask)` with gradients to get `-log pi`, and backpropagates
+   the clipped GRPO surrogate.
+
+**Run mode.** The trainer never calls `train()` / `eval()` on the model; it
+asserts that the model is in train mode before each optimization pass. A sampler
+that shares the model with the trainer (as `TTMLRolloutSampler` does) must switch
+it to eval mode only for the duration of `generate()` and restore the previous
+mode afterwards — `ttml.common.utils.run_mode` does exactly that.
 
 ---
 
-## GRPOCompleter
+## RolloutSampler
 
 ```python
-from ttml.trainers import GRPOCompleter
+from ttml.trainers.grpo_trainer import RolloutBatch, RolloutSampler
 ```
 
-Abstract base class for model-specific completion engines. Subclass this for each
-model architecture (Llama, Qwen, etc.).
+### RolloutBatch
 
-### Required properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `tokenizer` | any | The tokenizer used by this completion engine. |
-| `model` | any | The underlying tt model used for forward passes and optimization. |
+| Field | Type | Description |
+|-------|------|-------------|
+| `batch_id` | `int` | Monotonic counter picked by the producer. |
+| `weight_version` | `int` | Which policy version produced this batch. |
+| `prompts` | `List[List[int]]` | `B` prompts, already expanded: each input prompt repeated `num_generations` times, in order. |
+| `completions` | `List[List[int]]` | `B` completions, trimmed at the stop token. |
+| `logprobs` | `np.ndarray` `[B, max_completion_length]` float32 | `+log pi_old` of completion token `j` at column `j`; columns past `len(completion)` are ignored. |
 
 ### Required methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `generate` | `(prompts: List[List[int]]) -> List[List[int]]` | Generate completions for a batch of tokenised prompts. |
-| `generate_str` | `(prompt_strs: List[str]) -> List[str]` | Generate completions from string prompts, returning decoded strings. |
-| `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. |
+| `generate` | `(prompts: List[List[int]]) -> RolloutBatch` | Generate `num_generations` completions per prompt and their per-token `log pi_old`. |
 
-The detailed API contract can be found in `tt-train/sources/ttml/ttml/trainers/grpo_trainer.py`.
+If the sampler also has a `set_weight_version(version)` method, the trainer
+calls it with the new step number after every optimizer step.
 
-### Available completer implementations
-
-Three concrete completers ship today:
-
-- `LlamaGRPOCompleter`
-  ([`sources/examples/grpo/utils/llama_completer.py`](../sources/examples/grpo/utils/llama_completer.py))
-  — single-process Llama; owns its own mesh via `setup_device`.
-- `Qwen3GRPOCompleter`
-  ([`sources/examples/grpo/utils/qwen3_completer.py`](../sources/examples/grpo/utils/qwen3_completer.py))
-  — single-process Qwen3 with FSDP (see below).
-- `LlamaCompleterRemoteRollout`
-  ([`sources/examples/grpo_remote_rollout/utils/llama_grpo_completer.py`](../sources/examples/grpo_remote_rollout/utils/llama_grpo_completer.py))
-  — two-rank Llama; receives an already-opened mesh and delegates
-  generation to a peer MPI rank. Documented alongside the
-  [BoolQ example](../sources/examples/grpo_remote_rollout/boolq/README.md).
-
-### Qwen3GRPOCompleter
+### TTMLRolloutSampler
 
 ```python
-from grpo.utils.qwen3_completer import Qwen3GRPOCompleter, Qwen3CompletionCtx
+from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 ```
 
-Qwen3-specific implementation of `GRPOCompleter`. Drives the pure-Python ttml
-Qwen3 model (`ttml.models.qwen3.Qwen3`) and shards it across the `"fsdp"` mesh
-axis with `ttml.fsdp.fully_shard`. The model architecture is read from the
-HuggingFace config of `model_source`; only `max_sequence_length` is taken from
-`transformer_config` (to bound the generation horizon).
+In-process sampler for the ttml Llama and Qwen3 models
+([`sources/examples/grpo/utils/ttml_rollout_sampler.py`](../sources/examples/grpo/utils/ttml_rollout_sampler.py)).
+It opens the device, builds the model and tokenizer from `model_source`
+(exposed as `sampler.model` / `sampler.tokenizer`), and runs a KV-cached,
+right-padded prefill + decode loop that captures `log pi_old` on device.
 
 ```python
 from ttml.common.config import DeviceConfig
 
-completer = Qwen3GRPOCompleter(
-    ctx=Qwen3CompletionCtx(
-        max_tokens_to_complete=256,
-        temperature=1.0,
-        completions_per_prompt=8,
-    ),
-    transformer_config=transformer_config,   # max_sequence_length only
+sampler = TTMLRolloutSampler(
+    model_kind="qwen3",
+    transformer_config=transformer_config,   # Qwen3: max_sequence_length + runner_type only
     device_config=DeviceConfig(
         {"device_config": {"enable_fsdp": True, "mesh_shape": [32, 1]}}
     ),
     model_source="Qwen/Qwen3-32B",
+    max_completion_length=256,
+    temperature=1.0,
+    completions_per_prompt=8,
 )
 ```
+
+For Llama the architecture comes from `transformer_config`. For Qwen3 it is read
+from the HuggingFace config of `model_source`, and only `max_sequence_length` and
+`runner_type` are taken from `transformer_config`.
 
 `DeviceConfig` is defined in
 [`ttml/common/config.py`](../sources/ttml/ttml/common/config.py); its
 constructor accepts either a full YAML dict (with a top-level
 `device_config:` block) or a path to a YAML file. In practice the
 BoolQ script loads a training YAML and passes the raw dict, i.e.
-`DeviceConfig(raw)` (see
-[`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)).
+`DeviceConfig(raw)`.
 
-Unlike the Llama completer, `setup_device` opens a **named** mesh via
+For Qwen3, `setup_device` opens a **named** mesh via
 `ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
 (`lazy_parameter_init=True`) the model is built lazily, each block plus the root
 model is wrapped with `fully_shard`, the parameters are materialized
@@ -173,6 +177,13 @@ full unsharded model is never materialized on one chip). With
 `lazy_parameter_init=False` it instead loads the (still replicated) weights
 first and then wraps with `fully_shard`. Either way, parameters, gradients, and
 optimizer state end up sharded `1/N` across the FSDP axis.
+
+### GRPOCompleter (not used by the trainer)
+
+`GRPOCompleter` and its subclasses (`LlamaGRPOCompleter`, `Qwen3GRPOCompleter`,
+`LlamaCompleterRemoteRollout`) are no longer accepted by `GRPOTrainer`. They
+remain for standalone generation (e.g. `boolq_accuracy_example.py`) and for the
+remote-rollout example, which still needs a remote `RolloutSampler`.
 
 ---
 
@@ -217,7 +228,9 @@ from ttml.trainers import GRPOTrainer
 
 ```python
 GRPOTrainer(
-    completer,
+    model,
+    tokenizer,
+    rollout_sampler,
     dataset,
     config,
     reward_func,
@@ -229,7 +242,9 @@ GRPOTrainer(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `completer` | `GRPOCompleter` | A model-specific completion engine (e.g. `LlamaGRPOCompleter`, `Qwen3GRPOCompleter`, or `LlamaCompleterRemoteRollout`). Responsible for generation, forward passes, and device setup. |
+| `model` | ttml module | The policy to optimize. The trainer runs its own forward pass with gradients on it and never changes its run mode. For `TTMLRolloutSampler`, pass `sampler.model`. |
+| `tokenizer` | HF tokenizer | Encodes dataset prompts and decodes completions for the reward functions. For `TTMLRolloutSampler`, pass `sampler.tokenizer`. |
+| `rollout_sampler` | `RolloutSampler` | Produces a `RolloutBatch` (completions + per-token `log pi_old`) per generation batch; see [RolloutSampler](#rolloutsampler). |
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
 | `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
@@ -377,15 +392,16 @@ from difflib import SequenceMatcher
 from ttml.trainers import TrainerCallback
 
 class EvalCallback(TrainerCallback):
-    def __init__(self, completer, ctx, dataset, num_examples):
+    def __init__(self, dataset, num_examples):
         rows = dataset.select(range(min(num_examples, len(dataset))))
-        self.completer = completer
-        self.ctx = ctx
         self.prompts = list(rows["prompt"])
         self.answers = list(rows["answer"])
 
     def on_step_end(self, trainer, step, **kwargs):
-        similarity = self._greedy_similarity()
+        tok = trainer.tokenizer
+        batch = trainer.rollout_sampler.generate([tok.encode(p) for p in self.prompts])
+        texts = [tok.decode(c, skip_special_tokens=True) for c in batch.completions]
+        similarity = self._similarity(texts)
         # `trainer.metrics` is a mutable dict populated by the trainer for
         # this step. Any scalar you write here lands in the CSV row that the
         # built-in GRPOMonitor writes AFTER this callback runs.
@@ -420,7 +436,7 @@ Two contracts are worth calling out:
 The only built-in logging is the auto-added `GRPOMonitor`; other CSV writing,
 progress bars, or dashboards belong in additional callbacks.
 
-> **Cross-rank weight transfer**: a completer that runs generation on
+> **Cross-rank weight transfer**: a sampler that runs generation on
 > a peer MPI rank can use a `TrainerCallback` to push freshly-updated
 > policy weights to the peer after each optimizer step. The trainer
 > itself does not know about this — it just fires `on_step_end`. See
@@ -478,11 +494,9 @@ built-in optimizers.
 
 ## Device Config
 
-The abstract `GRPOCompleter` and `GRPOTrainer` impose no
-`device_config` of their own — concrete completers decide how (and
-whether) to consume one. Either way, the mesh is configured from a
-YAML training config (`device_config:` block) applied by your
-entrypoint:
+`GRPOTrainer` imposes no `device_config` of its own; it reads the
+topology from the already-opened device. The mesh is configured from a
+YAML training config (`device_config:` block):
 
 ```yaml
 device_config:
@@ -490,10 +504,9 @@ device_config:
   enable_ddp: true
 ```
 
-**In-process completers (`LlamaGRPOCompleter`, `Qwen3GRPOCompleter`)**
-accept a `DeviceConfig` object (see
+`TTMLRolloutSampler` accepts a `DeviceConfig` object (see
 [`ttml/common/config.py`](../sources/ttml/ttml/common/config.py))
-and open the mesh themselves inside `setup_device`. The entrypoint
+and opens the mesh itself inside `setup_device`. The entrypoint
 just constructs it from the loaded YAML dict:
 
 ```python
@@ -501,25 +514,12 @@ from ttml.common.config import DeviceConfig
 
 raw = load_config(config_path)
 device_config = DeviceConfig(raw)
-completer = LlamaGRPOCompleter(..., device_config=device_config)
-```
-
-**Remote-rollout completer (`LlamaCompleterRemoteRollout`)** instead
-receives an already-opened `mesh_device`; the entrypoint opens it
-before construction:
-
-```python
-mesh_device = ttnn.open_mesh_device(
-    mesh_shape=ttnn.MeshShape(*device_config.mesh_shape), ...
-)
-completer = LlamaCompleterRemoteRollout(
-    ..., mesh_device=mesh_device, enable_ddp=device_config.enable_ddp
-)
+sampler = TTMLRolloutSampler(..., device_config=device_config)
 ```
 
 ### FSDP
 
-When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
+When the sampler opens a named mesh with an `"fsdp"` axis (size > 1), the
 `GRPOTrainer` automatically:
 
 1. Slices each micro-batch across the whole mesh (dim 0): the across-mesh
@@ -543,7 +543,7 @@ When the YAML config sets `enable_ddp: true` and `mesh_shape: [1, N]`,
 the policy is replicated across the N chips of the trainer's mesh and
 data parallelism is applied within that mesh:
 
-1. The completer initialises ttml's parallelism context against the
+1. The sampler initialises ttml's parallelism context against the
    already-opened mesh.
 2. Input tensors are sharded across the N chips along the batch
    dimension.
@@ -558,9 +558,9 @@ per micro-batch, and the per-micro-batch prompt count is derived as
 `per_device_train_batch_size * total_devices / num_generations`.
 
 This section describes only the trainer's own mesh — the in-process
-data parallelism that the trainer drives. If your completer also runs
+data parallelism that the trainer drives. If your sampler runs
 generation on a peer MPI rank, the topology over there is independent
-of `GRPOTrainer` and lives in the completer / its example doc.
+of `GRPOTrainer` and lives in the sampler / its example doc.
 
 > Sharded TP / CP is not exercised by `GRPOTrainer` today; this
 > section assumes replicated parameters with batch-dim sharding.
@@ -612,11 +612,11 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 | Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
-| **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaGRPOCompleter`, `Qwen3GRPOCompleter`, or `LlamaCompleterRemoteRollout`) from a HF ID or local path |
+| **Model** | Passed as a `transformers` model object | A ttml model, typically built by `TTMLRolloutSampler` from a HF ID or local path and passed as `sampler.model` |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
-| **Device setup** | Handled by HF Accelerate | Caller opens the mesh from a YAML `device_config:` block and hands it to the completer |
+| **Device setup** | Handled by HF Accelerate | The rollout sampler opens the mesh from a YAML `device_config:` block |
 | **KL penalty** | `beta` parameter | Not implemented (equivalent to `beta=0.0`) |
 | **Callbacks** | HF `TrainerCallback` with `on_log(args, state, control, logs)` | `TrainerCallback` with `on_step_end(trainer, step, **kwargs)` |
 | **`report_to`** | List of tracker names (`"wandb"`, `"tensorboard"`, `"trackio"`, ...) | Single string, only `"none"` or `"wandb"` accepted (no list form) |
@@ -718,9 +718,10 @@ python3 reverse_text/reverse_text_plot_example.py
   runs the ttml policy and `GRPOTrainer`; rank 1 runs generation
   workers.
 
-Both examples plug into `GRPOTrainer` through the same
-`GRPOCompleter` abstraction — the trainer itself does not know which
-of the two deployments it's in.
+The single-process examples plug into `GRPOTrainer` through
+`TTMLRolloutSampler`. The two-rank example still constructs the trainer
+with a `GRPOCompleter` and does not run with the current `GRPOTrainer`
+until a remote `RolloutSampler` exists.
 
 ---
 
