@@ -116,10 +116,8 @@ def test_perf_eltwise_binary_sfpu_float_rne(
     iterations,
     input_dimensions,
 ):
-    # ADD/SUB/RSUB with DstRoundingMode::NearestEven, the arm binary_ng runs for every bf16
-    # ADD/SUB/RSUB it sends to the SFPU. Only meaningful with a bf16 Dest (dest_acc=No): the
-    # rounding is skipped when fp32 accumulation is on, so that variant would duplicate the
-    # Default one above.
+    # The NearestEven arm binary_ng runs for bf16 ADD/SUB/RSUB on the SFPU. bf16 Dest only: with
+    # fp32 accumulation the rounding is skipped and the variant would duplicate the Default one.
     _run_float(
         perf_report,
         formats,

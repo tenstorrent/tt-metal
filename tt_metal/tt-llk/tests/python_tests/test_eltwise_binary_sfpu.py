@@ -470,18 +470,16 @@ def sfpu_binary(
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
-    *dst_rounding_mode* is forwarded to the kernel as add_binary_tile<DstRoundingMode::...>()
-    would: it selects how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest (truncating
-    store, or software round-to-nearest-even before it). Every other op ignores it.
-
-    *exact* replaces the tolerance check with a bit-for-bit comparison against the golden. A
-    tolerance cannot tell a round-to-even lane from a round-half-away one, which is the whole
-    point of the tie tests.
-
     For the one case where the sign genuinely is not specified: a NaN the kernel generated,
     packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole. The
     magnitude, the finiteness and every finite lane stay checked. Scoped per lane, because one
     tensor can hold both a non-finite whose sign the ISA leaves open and one it specifies.
+
+    *dst_rounding_mode* reaches the kernel as add_binary_tile<DstRoundingMode::...>() would:
+    how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest. Other ops ignore it.
+
+    *exact* compares bit for bit instead of within tolerance; a tolerance cannot tell a
+    round-to-even lane from a round-half-away one.
     """
 
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
@@ -1423,7 +1421,9 @@ assert _BINARY_EDGE_OPS, (
 # torch.isclose, which cannot see a zero's sign in the first place. The indeterminate forms
 # are asserted too, now that the golden models the packer substituting an infinity for a NaN
 # the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
-# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
+# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail. The one
+# xfail left, on both archs, is MUL's 0 * {inf, NaN} on a bf16 Dest (#58445), scoped to those
+# lanes below.
 
 
 @pytest.mark.nightly
@@ -1450,17 +1450,10 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
         and edge_class == _EDGE_CLASS_SPECIALS_IN
         and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
-        # calculate_sfpu_binary_mul -- the kernel mul_binary_tile() dispatches, and what this
-        # harness runs for float MUL -- forces 0 * x = 0 on a bf16 Dest "to match FPU
-        # behaviour", so 0 * inf and 0 * NaN come back 0 where IEEE, the fp32 arm and this
-        # golden say NaN (packed as inf). Recorded rather than modelled: the asymmetry is tracked
-        # in https://github.com/tenstorrent/tt-metal/issues/58445 and its resolution belongs to
-        # the kernel, not to the golden.
-        #
-        # Only those lanes are expected to fail, so they run on their own: every other
-        # non-finite pair (inf * inf, NaN propagation, result signs, ...) is asserted as usual,
-        # and the 0 * {inf, NaN} pairs are a strict expected failure -- a pass there means the
-        # kernel changed and this block should go.
+        # calculate_sfpu_binary_mul forces 0 * x = 0 on a bf16 Dest, so 0 * inf and 0 * NaN
+        # come back 0 where IEEE and this golden say NaN (#58445; a kernel question, not a
+        # golden one). Every other non-finite pair is asserted as usual; only those lanes are a
+        # strict expected failure, so a pass there means the kernel changed and this block goes.
         _sfpu_binary_edges(
             formats,
             dest_acc,
@@ -1565,13 +1558,9 @@ def _sfpu_binary_edges(
 
 
 # =============================================================================
-# bf16 round-to-nearest-even narrowing
-#
-# ADD/SUB/RSUB narrow a float result into a bf16 Dest with round-to-nearest-even when the caller
-# asks for DstRoundingMode::NearestEven, which is what binary_ng does for every bf16 ADD/SUB/RSUB
-# it routes to the SFPU. The sweeps above run the truncating Default mode, so the RNE arm gets its
-# own variants: the registered-domain sweep, the edge classes, and exact ties. MUL always narrows
-# with RNE when the Dest is bf16 (calculate_sfpu_binary_mul), so it joins the tie test as is.
+# bf16 round-to-nearest-even narrowing. binary_ng asks for DstRoundingMode::NearestEven on every
+# bf16 ADD/SUB/RSUB it sends to the SFPU; the sweeps above run the truncating Default, so the RNE
+# arm gets its own domain sweep, edge classes and exact ties. MUL always rounds on a bf16 Dest.
 # =============================================================================
 
 _BF16_RNE_OPS = [
@@ -1614,12 +1603,10 @@ def test_eltwise_binary_sfpu_rne_edges(formats, mathop, edge_class):
 def _bf16_tie_pairs(mathop, count, seed=0):
     """*count* (a, b) bf16 pairs whose exact result lies halfway between two bf16 values.
 
-    ADD/SUB/RSUB: b is half a bf16 ULP of a (a power of two, so itself bf16), and a's mantissa is
-    non-zero so both bf16 neighbours of the sum share a's exponent. The fp32 sum is then exact
-    and its low 16 bits are 0x8000 for any sign combination. MUL: the 8x8-bit mantissa product
-    is picked so that the bit just below the bf16 LSB is set and everything under it is clear.
-    Signs and exponents are random, so about half the ties sit on an even bf16 LSB -- the only
-    lanes where round-to-nearest-even and round-half-away disagree.
+    ADD/SUB/RSUB: b is half a bf16 ULP of a, and a's mantissa is non-zero so both neighbours of
+    the sum share a's exponent. MUL: the 8x8-bit mantissa product has the bit below the bf16 LSB
+    set and nothing under it. Random signs and exponents put about half the ties on an even LSB,
+    the only lanes where round-to-nearest-even and round-half-away disagree.
     """
     rng = random.Random(seed)
     sign = lambda: -1.0 if rng.random() < 0.5 else 1.0
@@ -1666,12 +1653,10 @@ def _bf16_tie_pairs(mathop, count, seed=0):
     mathop=_BF16_RNE_OPS + [MathOperation.SfpuElwmul],
 )
 def test_eltwise_binary_sfpu_bf16_rne_ties(formats, mathop):
-    """Exact bf16 ties must round to even, bit for bit.
+    """Exact bf16 ties must round to even, bit for bit against torch.
 
-    Guards the software narrowing against being swapped for the hardware SFPSTOCHRND
-    FP32_TO_FP16B, which was measured on Blackhole silicon as round-half-away (every even-LSB
-    tie rounds up), NaN -> +/-inf and denormal -> +0. Compared bit-for-bit against torch's bf16
-    round-to-nearest-even over pairs built to sit exactly half a ULP apart.
+    Guards against swapping the software narrowing for SFPSTOCHRND, which on Blackhole silicon
+    rounds ties away from zero, NaN -> +/-inf and denormal -> +0.
     """
     rounding = (
         DstRoundingMode.Default  # MUL narrows with RNE unconditionally on a bf16 Dest

@@ -31,7 +31,6 @@ inline void calculate_lerp(
         sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
         sfpi::vFloat result = in0 + in2 * (in1 - in0);
         if constexpr (!is_fp32_dest_acc_en) {
-            // Low 16 bits left unspecified; the bf16 SFPSTORE below keeps only the high half.
             result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

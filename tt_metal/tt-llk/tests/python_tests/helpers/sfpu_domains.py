@@ -2221,7 +2221,9 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        # inf*x = inf, inf*0 = NaN, +/-0 signs multiply. Exception: on a bf16 Dest the kernel
+        # forces 0*inf = 0*NaN = 0 (#58445), xfailed per lane in test_eltwise_binary_sfpu_edges.
+        MathOperation.SfpuElwmul,
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN

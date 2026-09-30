@@ -1830,10 +1830,8 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
  *
- * DST_ROUNDING_MODE selects how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest,
- * exactly as add_binary_tile<DstRoundingMode::...>() does: Default is the truncating
- * SFPSTORE, NearestEven the software round-to-nearest-even the kernel applies before it.
- * Ignored by every other op and whenever DST_ACCUM_MODE is set.
+ * DST_ROUNDING_MODE: how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest, as in
+ * add_binary_tile<DstRoundingMode::...>(). Ignored by other ops and with DST_ACCUM_MODE set.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1909,11 +1907,9 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MUL && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32))
     {
-        // Route float MUL to the dedicated production kernel (calculate_sfpu_binary_mul), matching
-        // what mul_binary_tile() dispatches. With a bf16 Dest it narrows with software
-        // round-to-nearest-even and forces 0 * x = 0 (FPU parity); the generic
-        // calculate_sfpu_binary MUL arm below does neither, so measuring it would not guard the
-        // kernel ttnn runs.
+        // Float MUL runs the production kernel (calculate_sfpu_binary_mul, what mul_binary_tile()
+        // dispatches), on every arch: on a bf16 Dest it rounds to nearest even and forces
+        // 0 * x = 0, which the generic arm below does not.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

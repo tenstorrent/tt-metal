@@ -114,7 +114,7 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // Hoisted out of the row loop; only the bf16 NearestEven ADD/SUB/RSUB arms use it.
+    // bf16 RNE addend, hoisted out of the row loop (arms that do not round drop it).
     const sfpi::vUInt rne_bias = bf16_rne_bias();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -204,7 +204,6 @@ inline void calculate_sfpu_binary(
         if constexpr (
             (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
             dst_rounding_mode == DstRoundingMode::NearestEven) {
-            // Low 16 bits left unspecified; the bf16 SFPSTORE below keeps only the high half.
             result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
@@ -226,7 +225,7 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach; low 16 bits left unspecified for the bf16 SFPSTORE below
+            // software RNE approach:
             result = float32_to_bf16_rne_for_store(result, rne_bias);
 
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
@@ -275,7 +274,7 @@ inline void calculate_sfpu_binary_div(
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach; low 16 bits left unspecified for the bf16 SFPSTORE below
+            // software RNE approach:
             result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
