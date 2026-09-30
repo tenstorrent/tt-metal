@@ -401,6 +401,38 @@ def _prefill_snapshot(mesh_device, logits, state) -> dict:
     return {"logits": logits} | {k: down(t) for k, t in tensors.items()}
 
 
+def _replay_phases(mesh_device, trace, tokens, iters=TIMED_ITERS) -> dict:
+    """Host wall per phase of ``trace.run(tokens)`` (mean over ``iters``): carry zeroing, chunk loop (input copies,
+    non-blocking replays), waiting for the device, logits readback (also per iteration: it is host bound and
+    varies); plus a device-only replay synchronized per iteration (no pipelining across iterations)."""
+    model, phases, readback = trace.model, {}, []
+    names = ("zero_carries", "chunk_loop", "device_wait", "readback", "device_only_sync")
+    for _ in range(iters):
+        ttnn.synchronize_device(mesh_device)
+        t = [time.perf_counter()]
+        request = model._request(tokens, trace.logit_positions)
+        trace.state.start = 0
+        for tensor in list(trace.state.window_carry.values()) + list(trace.state.dspark_rings or ()):
+            ttnn.copy_host_to_device_tensor(trace._zeros(tensor), tensor)
+        t.append(time.perf_counter())
+        model._run(request, trace.state, trace.buffers, lambda c, _: trace.controllers[c].replay(blocking=False) or [])
+        t.append(time.perf_counter())
+        ttnn.synchronize_device(mesh_device)
+        t.append(time.perf_counter())
+        model._logits(trace.scored)
+        t.append(time.perf_counter())
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for controller in trace.controllers:
+            controller.replay(blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        t.append(t[-1] + time.perf_counter() - start)
+        readback.append(round((t[4] - t[3]) * 1e3, 2))
+        for name, a, b in zip(names, t, t[1:]):
+            phases[name] = phases.get(name, 0.0) + (b - a) * 1e3 / iters
+    return {k: round(v, 2) for k, v in phases.items()} | {"readback_each": readback}
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("case", list(PREFILL_CASES))
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
@@ -469,6 +501,7 @@ def test_v41_prefill_trace(mesh_device, device_params, case, monkeypatch):
     serial_ms = _timed_ms(mesh_device, serial)
     device_ms = _timed_ms(mesh_device, device_only)
     readback_ms = _timed_ms(mesh_device, lambda: model._logits(trace.scored))  # scored rows' logits to host
+    phases = _replay_phases(mesh_device, trace, tokens[0])
     segments = trace.num_segments
     trace.release()
     report = {
@@ -493,6 +526,7 @@ def test_v41_prefill_trace(mesh_device, device_params, case, monkeypatch):
         "host_critical_path_ms": round(traced_ms - device_ms - readback_ms, 2),
         "host_critical_path_serial_ms": round(serial_ms - device_ms - readback_ms, 2),
         "speedup": round(untraced_ms / traced_ms, 2),
+        "traced_phases_ms": phases,
     }
     logger.info(f"V41_PREFILL_TRACE_RESULT {json.dumps(report)}")
     assert not mismatches, report
