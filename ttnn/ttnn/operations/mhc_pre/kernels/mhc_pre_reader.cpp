@@ -32,7 +32,9 @@ void kernel_main() {
     constexpr uint32_t tensor_c_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t mix_cols = get_compile_time_arg_val(8);  // n*(n+2)
     constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(9);  // W pushed in chunks (split pipelining)
-    constexpr auto x_args = TensorAccessorArgs<10>();
+    constexpr uint32_t cb_max_scaler = get_compile_time_arg_val(10);
+    constexpr bool needs_max_scaler = get_compile_time_arg_val(11) != 0;  // fp32 X grid split
+    constexpr auto x_args = TensorAccessorArgs<12>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
@@ -103,6 +105,10 @@ void kernel_main() {
 
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+    if constexpr (needs_max_scaler) {
+        dataflow_kernel_lib::
+            prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_SCALAR>(1.0f);
+    }
 
     // ---------------- load_x_block ----------------
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
