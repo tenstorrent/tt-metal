@@ -125,8 +125,13 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
+    // Every NoC transfer path -- async_read/async_write, their DataflowBuffer overloads, set_async_*_state and
+    // *_with_state, multicast, async_write_zeros -- takes its endpoint addresses from these three helpers, so this is
+    // where op-to-op R/W inference notes a bound tensor: a source is read, a destination written
+    // (api/dataflow/buf_rw_note.h). The notes are section data only: no instructions.
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
         auto addr = noc_traits_t<Src>::template src_addr<address_type>(src, *this, src_args);
         if constexpr (address_type == AddressType::LOCAL_L1) {
             return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
@@ -137,6 +142,7 @@ private:
 
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         auto addr = noc_traits_t<Dst>::template dst_addr<address_type>(dst, *this, dst_args);
         if constexpr (address_type == AddressType::LOCAL_L1) {
             return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
@@ -147,6 +153,7 @@ private:
 
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr_mcast(const Dst& dst, const dst_args_mcast_t<Dst>& dst_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         return addr_underlying_t<address_type>{
             noc_traits_t<Dst>::template dst_addr_mcast<address_type>(dst, *this, dst_args)};
     }
@@ -194,8 +201,6 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
-        // Op-to-op R/W inference: this reads the source endpoint; note it if it is a bound tensor.
-        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
             DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_set_trid(noc_opts.trid, noc_id_);
@@ -352,8 +357,6 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
-        // Op-to-op R/W inference: this writes the destination endpoint; note it if it is a bound tensor.
-        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
 

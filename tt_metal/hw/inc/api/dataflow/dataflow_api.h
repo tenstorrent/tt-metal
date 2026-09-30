@@ -21,6 +21,7 @@
 #include "api/compile_time_args.h"
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
@@ -1083,6 +1084,7 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
+    tt_buf_rw::note_if_bound<tt_buf_rw::READ, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
@@ -1267,6 +1269,7 @@ FORCE_INLINE void noc_async_write_page(
             posted,
             noc);
     }
+    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
 }
@@ -1446,6 +1449,7 @@ FORCE_INLINE void noc_async_read_shard(
         -1,
         false,
         noc);
+    tt_buf_rw::note_if_bound<tt_buf_rw::READ, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
@@ -1483,6 +1487,7 @@ FORCE_INLINE void noc_async_write_shard(
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
+    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
