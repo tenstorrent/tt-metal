@@ -3,7 +3,7 @@
 another branch, cherry-pick the `[F56]` commits (`git log --oneline --grep "\[F56\]"`); they touch only
 `models/demos/common/bringup/` (testing/component_checks.py new; component.py, harness.py, templates.py, core/runs.py,
 core/metrics.py, orchestrator.py, README.md, selftest/test_component_checks.py, dev/f56_*, dev/BREADCRUMBS.md, this
-file). The proofs are recorded (dev/f56_mutation_proof.md, BREADCRUMBS F56 device table); there is no need to rerun
+file). The proofs are recorded (dev/f56_proof/<model>.md, BREADCRUMBS F56 tables); there is no need to rerun
 them after a cherry-pick. Run the selftests after it (`scripts/run_safe_pytest.sh --no-precompile --run-all
 models/demos/common/bringup/selftest/`).
 
@@ -56,9 +56,11 @@ for 4000 programs (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`), since a 6-la
   for the bugs the golden cannot show: a wrong norm epsilon, iHC stream order at layer 0, a clamp.
 - At freeze a CPU sweep injects every standard mistake and requires the test to catch each; if one slips through,
   the review agent starts with that log. Switch: `agents.component_review` (default `all`: review on).
-- Proof: `dev/f56_mutation_proof.md` (CPU, all 42 reviewed Hy4 component tests: 309 mistakes, none caught by a
-  reviewed test and missed by the new checks; 41 of 42 would freeze without a review) and BREADCRUMBS F56 (device,
-  6 Hy4 components, no false alarms).
+- Proof on every component test of the five models brought up so far (Hy4, GLM-5.3, Gemma-4, MiMo, MiMo 2x2: 148
+  tests, 1045 injected mistakes): nothing a reviewed test catches gets past the new checks (the reviewed tests caught
+  912, the new checks 1041); 142 of 148 tests would freeze without a review; on the device 142 of 148 pass and the 6
+  that fail are real problems the reviewed tests missed (Gemma experts +1-1.5 % scale, MiMo full attention +0.3-1 %).
+  Tables: BREADCRUMBS F56; rows: `dev/f56_proof/<model>.md`.
 
 ## Remains (not started)
 
