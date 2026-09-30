@@ -59,3 +59,10 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   with ~1.35x headroom; watch ffn_hc / moe attn_hc for column-only failures. Owner noted the 64-column cutoff is a
   heuristic; proposed follow-up for the F56 branch: check the worst column on every float output with a per-column
   limit from the precision model, no NARROW cutoff (owner to decide). Resumed.
+- 06:35 C.dense.attention attempt 1: ring_mla hit TT_FATAL (ring_joint_sdpa_program_factory.cpp:1352, kv_actual_isl
+  needs streaming compute, which is off when fp32_dest_acc_en), the agent switched to the all_gather + chunked flash
+  MLA fallback, whose SDPA CBs overflowed L1 at fp32 dest. Owner: "turn off fp32_dest_acc ... streaming compute is much
+  faster" (rule 7 is HiFi4 only; fp32 accumulation was the planner's). Stopped the orchestrator and the agent between
+  device runs (06:36:55), moved its WIP out of the tree (runs/run1/wip_attention_attempt1), added the owner rule
+  (fp32_dest_acc_en=False for ring_mla, use ring_mla), intake re-approved on the owner's word; C.dense.attention
+  restarted from its precheck.
