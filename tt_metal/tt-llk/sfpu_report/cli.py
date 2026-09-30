@@ -200,7 +200,19 @@ def cmd_run(args):
             not_covered += ops[MAX_OPS:]
             ops = ops[:MAX_OPS]
     sfpu_files = [p for p in plan.applied if "sfpu" in p.lower() and "/tests/" not in p]
-    if not ops and sfpu_files:
+    arch_dir = {"wormhole": "wormhole_b0", "blackhole": "blackhole"}[args.arch]
+    other_arch_only = sfpu_files and all(
+        any(d in p for d in ("wormhole_b0", "blackhole", "quasar"))
+        and arch_dir not in p
+        for p in sfpu_files
+    )
+    if not ops and other_arch_only:
+        notes.append(
+            f"This PR changes SFPU kernels of other architectures only, not {args.arch.title()}'s: "
+            + ", ".join(f"`{p}`" for p in sfpu_files[:4])
+            + ". Nothing to measure here."
+        )
+    elif not ops and sfpu_files:
         notes.append(
             "This PR changes SFPU kernel files, but the machine code of no op this report covers "
             "(elementwise unary and binary SFPU, typecast) changed. The changed kernels may be "
