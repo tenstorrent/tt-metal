@@ -947,6 +947,22 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
 
     @classmethod
+    def _tt_lane_prefill_group(cls):
+        """Plugin marker: merged prefill steps should arrive as pure lane groups.
+
+        True when the lane-parallel prefill router is enabled: the plugin then
+        admits at most one new prefill per lane per step and gathers lanes
+        briefly, so a group covers every lane once and the router prefills it
+        in ONE multi-pipe chunk walk (a mixed group+serial mega-call returns
+        every first token at call END and dilutes the TTFT win).
+        """
+        return cls._tt_folds_dp_into_lanes() and os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
