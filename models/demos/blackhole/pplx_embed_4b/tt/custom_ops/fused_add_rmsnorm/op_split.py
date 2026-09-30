@@ -43,13 +43,13 @@ def fused_add_rmsnorm_split(
     out_dtype: ttnn.DataType | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     out_memory_config: ttnn.MemoryConfig | None = None,
-    out_tensor: "ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None,
-) -> "tuple[ttnn.Tensor, ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]]":
+    out_tensor: "ttnn.Tensor | tuple[ttnn.Tensor, ...] | None" = None,
+) -> "tuple[ttnn.Tensor, ttnn.Tensor | tuple[ttnn.Tensor, ...]]":
     """``memory_config`` places the residual sum, ``out_memory_config`` (default: the same) the normalised output.
     ``out_tensor``: a preallocated normalised output (same shape, ``out_dtype``); where it sits in L1 is then the
-    caller's choice (allocated before the ops that would otherwise push it low). A pair ``(first, second)`` splits the
-    normalised output by rows: the first tensor's rows, then the rest (e.g. two half batches, each read by its own
-    QKV chunk); the pair is returned in place of the tensor."""
+    caller's choice (allocated before the ops that would otherwise push it low). A tuple of 2 or 4 equal tensors splits
+    the normalised output by rows, in order (e.g. half or quarter batches, each read by its own QKV chunk); the tuple
+    is returned in place of the tensor."""
     if memory_config is None:
         memory_config = a.memory_config()
     if out_memory_config is None:
@@ -90,27 +90,35 @@ def fused_add_rmsnorm_split(
 
     sum_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config)
     split_row = 0xFFFFFFFF
-    out2 = None
+    parts = None
     if isinstance(out_tensor, (tuple, list)):
-        out_tensor, out2 = out_tensor
-        r1 = 1
-        for d in list(out_tensor.padded_shape)[:-1]:
-            r1 *= int(d)
-        r2 = 1
-        for d in list(out2.padded_shape)[:-1]:
-            r2 *= int(d)
-        if (r1 + r2) != rows or r1 % 32 or out_tensor.padded_shape[-1] != W or out2.padded_shape[-1] != W:
-            raise ValueError(f"out_tensor pair rows {r1} + {r2} / width must cover {shape}")
-        if out_tensor.dtype != out_dtype or out2.dtype != out_dtype:
-            raise ValueError(f"out_tensor pair dtypes {out_tensor.dtype} / {out2.dtype} != {out_dtype}")
-        split_row = r1 // 32
+        parts = tuple(out_tensor)
+        part_rows = []
+        for t in parts:
+            r = 1
+            for d in list(t.padded_shape)[:-1]:
+                r *= int(d)
+            part_rows.append(r)
+        if (
+            len(parts) not in (2, 4)
+            or len(set(part_rows)) != 1
+            or sum(part_rows) != rows
+            or part_rows[0] % 32
+            or any(t.padded_shape[-1] != W for t in parts)
+        ):
+            raise ValueError(f"out_tensor parts rows {part_rows} / width must split {shape} evenly in 2 or 4")
+        if any(t.dtype != out_dtype for t in parts):
+            raise ValueError(f"out_tensor part dtypes {[t.dtype for t in parts]} != {out_dtype}")
+        split_row = part_rows[0] // 32
+        out_tensor = parts[0]
     elif out_tensor is None:
         out_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memory_config
         )
     elif list(out_tensor.padded_shape) != shape or out_tensor.dtype != out_dtype:
         raise ValueError(f"out_tensor {list(out_tensor.padded_shape)} {out_tensor.dtype} != {shape} {out_dtype}")
-    second = out2 if out2 is not None else out_tensor  # the writer's second accessor (unused without a split)
+    # the writer's four output accessors (the first repeated where there are fewer parts)
+    outs = list(parts) + [out_tensor] * (4 - len(parts)) if parts else [out_tensor] * 4
 
     def cb(index, tiles, dtype):
         ts = _TILE_BYTES[dtype]
@@ -142,7 +150,7 @@ def fused_add_rmsnorm_split(
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     compute_ct = [Wc, R, _CHUNK]
     writer_ct = [Wt, Wc, R, SEM_ID]
-    for t in (sum_tensor, out_tensor, second):
+    for t in [sum_tensor] + outs:
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     reader_rt, compute_rt, writer_rt = [], [], []
@@ -177,7 +185,8 @@ def fused_add_rmsnorm_split(
                 core,
                 [sum_tensor.buffer_address(), out_tensor.buffer_address(), n_waves, row0, row_stride, k]
                 + peers
-                + [split_row, second.buffer_address()],
+                + [split_row]
+                + [t.buffer_address() for t in outs[1:]],
             )
         )
 
@@ -217,6 +226,6 @@ def fused_add_rmsnorm_split(
         semaphores=semaphores,
         cbs=cbs,
     )
-    io = [a, b, gamma_tiles, scaler_tile, eps_tile, sum_tensor, out_tensor] + ([out2] if out2 is not None else [])
+    io = [a, b, gamma_tiles, scaler_tile, eps_tile, sum_tensor] + (list(parts) if parts else [out_tensor])
     ttnn.generic_op(io, pd)
-    return sum_tensor, ((out_tensor, out2) if out2 is not None else out_tensor)
+    return sum_tensor, (parts if parts else out_tensor)

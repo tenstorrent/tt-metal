@@ -15,12 +15,12 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
    −0.7 / −0.6%, bs8 sustained +0.4%). Left: the partial-sum add (66-69 µs, 4% at bs16; only K_block 80 avoids it and
    that fits only small blocks), and the power cap eating most cold gains (sustained gets ~⅓).
 3. SDPA DRAM traffic. Landed at bs8 / 16 (§64): only the K / V reads matter; K / V in L1 (`QWEN_HEADS_KV_L1`), SDPA
-   −15 / −13%, cold −1.7 / −0.8%, sustained 0.0 / −0.6%, bit-identical. bs1 already has Q/K/V in L1. **Open at bs32:**
-   K / V are 190 KB per core short beside the first QKV chunk; 4 QKV chunks would fit and the matmuls are ~neutral
-   since §63 (needs a 4-output `fused_add_rmsnorm_split`). The head-major QKV write (#57722) is untried.
+   −15 / −13%, cold −1.7 / −0.8%, sustained 0.0 / −0.6%, bit-identical. bs1 already has Q/K/V in L1. bs32 landed with
+   4 quarter-batch QKV chunks (§66: replay −1.1 ms, cold −0.7 / −1.5 ms). The head-major QKV write (#57722) is untried.
 4. SDPA compute (§65). Compute-only / DM-only floors measured (bs32: 519 / 483 µs against 597); the pack thread paced
-   the Q·Kᵀ / exp loop. Landed: row sums on the math thread (SDPA −6 / −7 / −6%). **Next:** a cheaper exp (~510 of
-   ~1,300 pack cycles per column block; the no-exp probe is −19% of a compute-only unit).
+   the Q·Kᵀ / exp loop. Landed: row sums on the math thread (SDPA −6 / −7 / −6%). Done with SDPA compute: the exp is
+   already the SFPLOADMACRO Schraudolph path at its rated speed. SDPA's remaining gap to its floors is each core's
+   cold start on its first head's K / V (a next-head prefetch was negative).
 
 `sustained_run.sh` reports AICLK / power over the sustained window and J/inference, but tt-smi samples swing 30-155 W
 within a window (host gaps), so J/inference is too noisy to rank variants yet.

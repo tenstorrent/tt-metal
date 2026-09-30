@@ -487,8 +487,8 @@ class PplxBidirectionalAttention(Attention):
                 return _saved_dealloc(t, *a, **kw)
 
             ttnn.deallocate = _guarded_dealloc
-        # QWEN_QKV_CHUNKS=2: this layer's input may be a stand-in for two half-batch normalised tensors
-        # (tt/qkv_chunks.py). The QKV matmul call then runs per half into L1, each half's heads op (v3, L1 input)
+        # QWEN_QKV_CHUNKS=2 / 4: this layer's input may be a stand-in for batch-chunk normalised tensors
+        # (tt/qkv_chunks.py). The QKV matmul call then runs per chunk into L1, each chunk's heads op (v3, L1 input)
         # writes into full-batch Q / K / V at its batch offset, and the base forward gets a never-written DRAM
         # placeholder for the QKV output that the heads call below recognises and answers with those Q / K / V.
         halves = qkv_chunks.take(x_11SH)

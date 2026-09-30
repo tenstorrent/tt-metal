@@ -1525,5 +1525,45 @@ cosine new vs old mean 0.9946 (min 0.86), inside the model's own spread (old ker
 End to end SDPA is ~8% of the replay: cold bs8 77.0 → 76.7 ms, bs16 144.0 → 143.1, bs32 within noise (same chip, 2
 alternating rounds).
 
-**Next: a cheaper exp.** It is the largest piece left on the pack thread's critical path (~510 of ~1,300 cycles per
-column block).
+**No cheaper exp.** `exp_approx_mode` already runs the replay-buffer `SFPLOADMACRO` Schraudolph pipeline (load, MAD by
+scale / ln 2 plus bias, round to int, shift into the exponent, store; `ckernel_sfpu_exp.h`, rated ~68 cycles a tile) and
+measures ~64 cycles a tile (EXP zone 500-540 per 8 tiles, unchanged by the row-sum change, which cut PACK SUB_EXP from
+455-465 to 121-168 and MATH's acquire wait from 725-750 to 265-420). Unlike the SwiGLU sigmoid (§62) there is no
+heavier formulation to strip. Splitting the exp over MATH and PACK would have both threads drive the one SFPU (shared
+LREG / addrmod state). SDPA compute stops here.
+
+**What the data movement at bs32 is.** Floors on these kernels (traced, device µs): control 566.6, compute only 480.9,
+data movement only 482.8 (178 MB, ~369 GB/s, ~90% of what streaming ops reach), reads only 335.2, writes only 247.4.
+CB-wait zones at bs16 all DRAM (`sdpa_kernel_variants.py` + wait zones) put nearly all the waiting on each core's first
+unit: 58,900 cycles (~44 µs) while all 120 cores pull their first head's K + V (16.7 MB) at once, against 2,950
+cycles per core for every later KV-head switch together; the output CB never back-pressures (47 cycles). A next-head
+K / V prefetch in the reader (the next head's slots reserved from a head's second Q chunk on, its tiles issued a Q
+chunk's worth per Q chunk) only added contention: bs16 all DRAM 325.1 -> 371.1 µs, bs32 566.6 -> 619.7, first-unit wait
+65,975 cycles; reverted. Streaming K into compute would not shorten the start either (V is needed ~6 µs later). The
+lever is fewer K / V bytes in DRAM: K / V in L1 cut the first-unit wait to 19,300 cycles (§66).
+
+## 66. bs32 QKV in four quarter-batch chunks: K / V fit in L1 (landed) (2026-09-30)
+
+§64's open item. `fused_add_rmsnorm_split` writes its normalised output as 2 or 4 equal row parts (the writer has four
+output accessors), `decoder_fusion.py` preallocates `QWEN_QKV_CHUNKS` parts, and the attention's chunk hooks (already
+chunk-count generic) run QKV + the heads op per quarter batch into full-batch Q / K / V, with K / V in L1. Live per core
+at the first chunk: 4 × 90 KB norm outputs (the same 362 KB as two halves), K / V 290 KB, a 223 KB QKV output (was
+446): it fits. `test_qkv_chunks.py 4`: the 4-part add+norm and the 4-chunk heads op are bit-identical to one tensor /
+one full-batch call.
+
+Device profile (bs32 replay, ms):
+
+| | 2 chunks (was) | 1 chunk + K / V L1 | 4 chunks | **4 chunks + K / V L1** |
+|---|---|---|---|---|
+| QKV matmuls | 37.72 (71 calls) | 38.73 (36) | 36.95 (141) | 36.92 |
+| heads op | 15.26 (71) | 21.00 (36, DRAM input) | 16.74 (141) | 16.73 |
+| SDPA | 19.77 | 17.99 | 19.74 | **17.97** |
+| replay | 280.00 | 285.08 | 280.64 | **278.88** |
+
+SDPA −50 µs per layer (549 -> 499), quarter QKV matmuls slightly faster than halves; the heads op pays ~10 µs of fixed
+cost per call (115.3 µs per quarter vs 209.7 per half). sustained_run.sh, 2 alternating rounds per chip, cold /
+sustained: chip 0 294.2 / 374.5 -> 293.5 / 373.8 ms, chip 1 296.7 / 382.4 -> 295.2 / 376.6. STS-B bs32 0.8148 ->
+0.8155; not bit-identical, and not because of the chunking ops: `minimal_matmul` itself differs across M (the QKV
+matmul at M = 4096 vs M = 8192 with the same config: 7.5% of elements on every row, max 0.094, bfp8 rounding), while K /
+V in L1 alone and 2 chunks vs 1 are bit-identical and the eval is deterministic. Default at bs32
+(`QWEN_QKV_CHUNKS=4`, `QWEN_HEADS_KV_L1=1`); `QWEN_QKV_CHUNKS=2` restores the old path.
