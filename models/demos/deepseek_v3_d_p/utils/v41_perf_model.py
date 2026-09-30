@@ -54,9 +54,12 @@ Galaxy's per-chip cache depth; V4.1 replicates its caches on every chip, so the 
 count but only sp / 8 of its visible cache: it under-represents every cache-length term (indexer, top-k).
 
 Bounds with two sides. Per op, ``dram_bytes`` is the optimistic (reuse-maximal) traffic; ``dram_bytes_cons`` (when
-set) is the conservative traffic of an implementation without that reuse. Only ``sparse_attention`` has one: the
+set) is the conservative traffic of an implementation without that reuse. ``sparse_attention``: the
 optimistic side reads the union of its queries' selected KV rows once, the conservative side reads each query's
-``SLIDING_WINDOW + INDEX_TOPK`` (640) rows with no reuse across queries. A block's ``optimistic_ns`` =
+``SLIDING_WINDOW + INDEX_TOPK`` (640) rows with no reuse across queries. The candidate index source's
+``index_scores`` scores only its queries' candidate columns (the reference masks every other column to -inf, so
+only those are observable): optimistic reads the index-K once, conservative gathers each query's candidate rows
+(no reuse) or scores the whole row densely, whichever is cheaper (``OpCost.cons_alternative``). A block's ``optimistic_ns`` =
 max(sum compute, sum optimistic DRAM, sum CCL); ``conservative_ns`` = sum over ops of max(compute, conservative DRAM)
 + sum CCL. G2 target = max(2 x optimistic, conservative) (``g2_target_ns``).
 """
@@ -167,6 +170,9 @@ class OpCost:
     collectives: list = field(default_factory=list)
     # conservative DRAM bytes (no cross-query reuse); None = same as ``dram_bytes``
     dram_bytes_cons: float | None = None
+    # another no-reuse implementation of the same op with different work (e.g. dense scoring of a row whose
+    # observable part is sparse); the conservative side takes the cheaper of the two
+    cons_alternative: "OpCost | None" = None
     # timed top-k calls: (rows, width, k) per chip, at ``TOPK_ELEMENTS_PER_NS[k]``
     topk_calls: list = field(default_factory=list)
     fpu_ns: float = 0.0
@@ -183,8 +189,9 @@ class OpCost:
 
     @property
     def roofline_cons_ns(self) -> float:
-        """Local compute/DRAM overlap with the conservative DRAM traffic."""
-        return max(self.compute_ns, self.dram_cons_ns)
+        """Local compute/DRAM overlap with the conservative DRAM traffic (the cheaper no-reuse implementation)."""
+        own = max(self.compute_ns, self.dram_cons_ns)
+        return own if self.cons_alternative is None else min(own, self.cons_alternative.roofline_cons_ns)
 
 
 @dataclass(frozen=True)
@@ -258,6 +265,8 @@ def _finish(op: OpCost, layout: Layout, hw: Hardware) -> OpCost:
     op.dram_ns = op.dram_bytes / hw.dram_bytes_per_ns
     op.dram_cons_ns = (op.dram_bytes if op.dram_bytes_cons is None else op.dram_bytes_cons) / hw.dram_bytes_per_ns
     op.ccl_ns = sum(collective_ns(c, layout, hw) for c in op.collectives)
+    if op.cons_alternative is not None:
+        _finish(op.cons_alternative, layout, hw)
     return op
 
 
@@ -487,6 +496,39 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
     qi = s / layout.tp
     t = max(-(-visible // TILE) * TILE, TILE)  # score width in whole tiles
     score = qi * t * 2
+    kb, block, k = C.CANDIDATE_TOPK_BLOCKS, C.CANDIDATE_BLOCK_SIZE, C.INDEX_TOPK
+    blocks = -(-t // block)
+    candidate_calls, row_calls = selection_topk_calls(btype, qi, t)
+    candidate_cols = row_calls[0][1]  # the score columns the row top-k reads
+    ids = qi * kb * 4  # the published candidate set: kb int32 block ids per query
+    dense_scores = OpCost(
+        "B9",
+        "index_scores",
+        matmul_flop=2 * qi * ih * idim * visible,
+        fidelity="LoFi",  # FP4 q and k in the reference
+        eltwise=qi * ih * visible * 3 + qi * t,
+        # q once, index-K read + tiled copy + read; the score written once, its visibility mask fused (the
+        # reference masks the score in place: -inf is part of the declared score)
+        dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score,
+    )
+    if btype == V41BlockType.CANDIDATE_INDEX_SOURCE and candidate_cols < t:
+        # candidate index source: its score is observable only inside the query's kb x 8 candidate columns (the
+        # reference's masked_fill(~candidates, -inf)), so only those are scored and written. Optimistic: index-K
+        # read once (shared by the queries), candidate ids read, candidate scores written; conservative: each query
+        # gathers its candidate index-K rows (no reuse), or the dense full-row scoring if that is cheaper.
+        cand_scores = qi * candidate_cols * 2
+        scores_op = OpCost(
+            "B9",
+            "index_scores",
+            matmul_flop=2 * qi * ih * idim * candidate_cols,
+            fidelity="LoFi",
+            eltwise=qi * ih * candidate_cols * 3 + qi * candidate_cols,
+            dram_bytes=qi * ih * idim * 2 + t * idim * 2 + ids + cand_scores,
+            dram_bytes_cons=qi * ih * idim * 2 + qi * candidate_cols * idim * 2 + ids + cand_scores,
+            cons_alternative=dense_scores,
+        )
+    else:
+        scores_op = dense_scores
     ops = [
         _linear("B9", "index_wq_b", qi, q_lora, ih * idim, "bf16", layout, k_sharded_tp=False, n_sharded_tp=False),
         _linear(
@@ -501,22 +543,8 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
             n_sharded_tp=False,
             coll=[Collective("all_reduce", "tp", s * ih * 2 / layout.tp)],
         ),
-        OpCost(
-            "B9",
-            "index_scores",
-            matmul_flop=2 * qi * ih * idim * visible,
-            fidelity="LoFi",  # FP4 q and k in the reference
-            eltwise=qi * ih * visible * 3 + qi * t,
-            # q once, index-K read + tiled copy + read; the score written once, its visibility mask fused (the
-            # reference masks the score in place: -inf is part of the declared score)
-            dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score,
-        ),
+        scores_op,
     ]
-    kb, block, k = C.CANDIDATE_TOPK_BLOCKS, C.CANDIDATE_BLOCK_SIZE, C.INDEX_TOPK
-    blocks = -(-t // block)
-    candidate_calls, row_calls = selection_topk_calls(btype, qi, t)
-    candidate_cols = row_calls[0][1]  # the score columns the row top-k reads
-    ids = qi * kb * 4  # the published candidate set: kb int32 block ids per query
     if candidate_calls:
         # candidate source: block maxima (7 max per block of 8) of the whole row, written and read back by the
         # top-kb over blocks; the newest row's block pinned (one write per query); candidate block ids written

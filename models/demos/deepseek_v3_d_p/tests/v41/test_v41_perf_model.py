@@ -182,6 +182,32 @@ def test_candidate_selection_work_and_traffic():
     assert scores.dram_bytes == 640 * 32 * 128 * 2 + 56320 * 128 * 2 * 3 + 72_089_600
 
 
+def test_candidate_index_source_scores_only_candidates():
+    # LoudBox 2x4, L24 (candidate index source, ratio 1): 640 queries per chip x 32 heads x 128 dims; its score is
+    # observable only in the 2048 x 8 = 16384 candidate columns, so only those are scored and written
+    for start, t in ((51200, 56320), (512000, 517120)):
+        ops = {o.name: o for o in m.block_ops(24, m.Workload(start=start), m.LOUDBOX_2X4, HW)}
+        scores = ops["index_scores"]
+        assert scores.matmul_flop == 2 * 640 * 32 * 128 * 16384  # 85,899,345,920, independent of T
+        # q 5,242,880 B + index-K read once t x 256 B + block ids 5,242,880 B + candidate scores 20,971,520 B
+        assert scores.dram_bytes == 5_242_880 + t * 256 + 5_242_880 + 20_971_520
+        # no reuse: every query gathers its 16384 index-K rows of 256 B = 2,684,354,560 B
+        assert scores.dram_bytes_cons == 5_242_880 + 2_684_354_560 + 5_242_880 + 20_971_520
+        dense = scores.cons_alternative
+        assert dense.matmul_flop == 2 * 640 * 32 * 128 * t
+        assert scores.roofline_cons_ns == min(
+            max(scores.compute_ns, scores.dram_cons_ns), max(dense.compute_ns, dense.dram_cons_ns)
+        )
+    # the gather (2.716e9 B / 512 B/ns = 5.30 ms) is dearer than dense scoring at 56320 columns, cheaper at 517120
+    s1 = {o.name: o for o in m.block_ops(24, m.Workload(start=51200), m.LOUDBOX_2X4, HW)}["index_scores"]
+    s2 = {o.name: o for o in m.block_ops(24, m.Workload(start=512000), m.LOUDBOX_2X4, HW)}["index_scores"]
+    assert math.isclose(s2.roofline_cons_ns, 2_715_811_840 / 512)
+    assert s1.roofline_cons_ns == s1.cons_alternative.roofline_cons_ns < 2_715_811_840 / 512
+    # the candidate source (L20) scores its whole row: it ranks all its block maxima
+    l20 = {o.name: o for o in m.block_ops(20, m.Workload(start=51200), m.LOUDBOX_2X4, HW)}["index_scores"]
+    assert l20.matmul_flop == 2 * 640 * 32 * 128 * 56320 and l20.cons_alternative is None
+
+
 def test_indexer_topk_is_timed_in_compute():
     # LoudBox 2x4 at start 512000, L2 (ratio 2): 640 query rows x 258,560 visible columns, one direct top-512
     ops = {o.name: o for o in m.block_ops(2, m.Workload(start=512000), m.LOUDBOX_2X4, HW)}
