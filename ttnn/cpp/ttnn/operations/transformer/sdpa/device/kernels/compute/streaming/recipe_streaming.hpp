@@ -927,7 +927,6 @@ void salad_correct_fused(
         current_sum_popped ? write_row_base : sum_row_base,
         sum_row_base,
         current_sum_popped ? write_row_base : sum_row_base,
-        write_row_base,
         identity_correction,
         group_boundary,
         group_odd,
@@ -1788,6 +1787,9 @@ static void sdpa_inner_loop_step(
 
         // Rows 1..N-1: correction of the previous row overlaps the current PV matmul.
         constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks;
+        // No score exp follows. This restores the generic SFPU state (config register, ADDR_MOD_7 with no
+        // DST increment, counters) that the SFPI correction exp assumes: the BALANCED/ACCURATE refine
+        // leaves ADDR_MOD_7 at a DST increment of 4, and the FP32 correction does not reset it itself.
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
