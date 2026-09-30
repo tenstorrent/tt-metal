@@ -29,10 +29,11 @@ constexpr std::uint32_t MAX_POOL_SIXTEEN_ROW_OFFSET = 16 * MAX_POOL_UNITS_PER_RO
 constexpr std::uint32_t SFPU_CTRL_INDEX_TRACKING = 0x4;  // Control Register bit 2 = INDEX_TRACKING_ENABLE
 constexpr std::uint32_t MAX_POOL_SWAP_IMM12_FP32 = 0x1;  // SFPSWAP imm12 bit 0 = FP32 compare
 
-// Replay slots for the TILE-layout sort network recorded by max_pool_sort_tile_().
-constexpr std::uint32_t MAX_POOL_SORT_TILE_START = 0;
-constexpr std::uint32_t MAX_POOL_SORT_TILE_LEN = 12;   // 2 x SFPTRANSP + 5 x (SFPSWAP + SFPNOP)
-constexpr std::uint32_t MAX_POOL_FOLD_TILE_START = 8;  // its last two swaps: LREG0/LREG1, LREG2/LREG3
+// Replay slots for the sort network init_max_pool_with_indices() records for its layout:
+// max_pool_sort_tile_() or max_pool_sort_row_major_(), both 2 x SFPTRANSP + 5 x (SFPSWAP + SFPNOP).
+constexpr std::uint32_t MAX_POOL_SORT_START = 0;
+constexpr std::uint32_t MAX_POOL_SORT_LEN = 12;
+constexpr std::uint32_t MAX_POOL_FOLD_TILE_START = 8;  // TILE only: its last two swaps, LREG0/LREG1 and LREG2/LREG3
 constexpr std::uint32_t MAX_POOL_FOLD_TILE_LEN = 4;
 
 /**
@@ -42,13 +43,14 @@ constexpr std::uint32_t MAX_POOL_FOLD_TILE_LEN = 4;
  * @tparam VD: Value LREG that receives the smaller of the pair, values = <LREG0-LREG3>
  * @note Index tracking makes LREG[VC+4] / LREG[VD+4] follow the exchange, which is what carries the
  *       indices alongside the values. Enable it with @ref init_max_pool_with_indices first.
- * @note The trailing SFPNOP is mandatory: SFPSWAP takes 2 cycles and the next instruction must not
- *       read its result (SFPSWAP -> SFPSTORE auto-stall bug).
+ * @note The trailing SFPNOP is mandatory: SFPSWAP is a 2-cycle op, and the SFPU misses the hazard of a
+ *       2-cycle op followed by SFPSWAP (erratum TEN-4581). It costs no throughput, since SFPSWAP
+ *       issues at most every other cycle.
  */
 template <std::uint32_t VC, std::uint32_t VD>
 inline __attribute__((always_inline)) void max_pool_swap_() {
     TTI_SFPSWAP(MAX_POOL_SWAP_IMM12_FP32, VC, VD, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);  // SFPSWAP is 2-cycle
+    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);  // TEN-4581
 }
 
 /**
@@ -58,8 +60,8 @@ inline __attribute__((always_inline)) void max_pool_swap_() {
  * 4 rows sit in 4 separate registers, a 3-swap network maxes them, and the second SFPTRANSP restores
  * store order - after which two more swaps fold the 4-row groups together.
  *
- * @note This is the body @ref _calculate_max_pool_with_indices_ records into the replay buffer, so
- *       its instruction count must stay MAX_POOL_SORT_TILE_LEN and its last 4 instructions must stay
+ * @note This is the TILE-layout body @ref init_max_pool_with_indices records into the replay buffer,
+ *       so its instruction count must stay MAX_POOL_SORT_LEN and its last 4 instructions must stay
  *       the two swaps MAX_POOL_FOLD_TILE_START names.
  */
 inline __attribute__((always_inline)) void max_pool_sort_tile_() {
@@ -78,6 +80,9 @@ inline __attribute__((always_inline)) void max_pool_sort_tile_() {
  * Each of LREG0-3 arrives holding one pair of logical rows. Three swaps max the four registers
  * against each other, and the transpose-swap-transpose tail then folds the two rows that share a
  * register.
+ *
+ * @note This is the ROW_MAJOR body @ref init_max_pool_with_indices records into the replay buffer,
+ *       so its instruction count must stay MAX_POOL_SORT_LEN.
  */
 inline __attribute__((always_inline)) void max_pool_sort_row_major_() {
     max_pool_swap_<p_sfpu::LREG0, p_sfpu::LREG1>();
@@ -95,8 +100,7 @@ inline __attribute__((always_inline)) void max_pool_sort_row_major_() {
  * @tparam is_fp32_dest_acc_en: Whether Dest holds 32-bit datums, which selects the load/store modes
  * @param v: Dest address of the face in the values tile
  * @param i: Dest address of the face in the indices tile
- * @note Runs the recorded sort network, so @ref _calculate_max_pool_with_indices_ must have loaded
- *       the replay buffer before this.
+ * @note Replays the TILE sort network, so @ref init_max_pool_with_indices<TILE> must have recorded it.
  */
 template <bool is_fp32_dest_acc_en>
 inline __attribute__((always_inline)) void max_pool_reduce_tile_face_(const std::uint32_t v, const std::uint32_t i) {
@@ -114,8 +118,8 @@ inline __attribute__((always_inline)) void max_pool_reduce_tile_face_(const std:
 
     // max of rows 0-7: even cols in LREG0, odd cols in LREG2
     TTI_REPLAY(
-        MAX_POOL_SORT_TILE_START,
-        MAX_POOL_SORT_TILE_LEN,
+        MAX_POOL_SORT_START,
+        MAX_POOL_SORT_LEN,
         0 /* last */,
         0 /* set_mutex */,
         0 /* execute_while_loading */,
@@ -147,6 +151,8 @@ inline __attribute__((always_inline)) void max_pool_reduce_tile_face_(const std:
  * @tparam is_fp32_dest_acc_en: Whether Dest holds 32-bit datums, which selects the load/store modes
  * @param v: Dest address of the values tile, already offset to this column parity
  * @param i: Dest address of the indices tile, already offset to this column parity
+ * @note Replays the ROW_MAJOR sort network, so @ref init_max_pool_with_indices<ROW_MAJOR> must have
+ *       recorded it.
  */
 template <bool is_fp32_dest_acc_en>
 inline __attribute__((always_inline)) void max_pool_reduce_row_major_9_(const std::uint32_t v, const std::uint32_t i) {
@@ -162,7 +168,14 @@ inline __attribute__((always_inline)) void max_pool_reduce_row_major_9_(const st
     TT_SFPLOAD(p_sfpu::LREG6, idx_mode, ADDR_MOD_7, 0 /* done */, i + 8);
     TT_SFPLOAD(p_sfpu::LREG7, idx_mode, ADDR_MOD_7, 0 /* done */, i + 12);
 
-    max_pool_sort_row_major_();
+    // max of the 8 rows -> LREG0 / LREG4
+    TTI_REPLAY(
+        MAX_POOL_SORT_START,
+        MAX_POOL_SORT_LEN,
+        0 /* last */,
+        0 /* set_mutex */,
+        0 /* execute_while_loading */,
+        0 /* load_mode */);
 
     TT_SFPLOAD(p_sfpu::LREG1, val_mode, ADDR_MOD_7, 0 /* done */, v + 16);  // row 8
     TT_SFPLOAD(p_sfpu::LREG5, idx_mode, ADDR_MOD_7, 0 /* done */, i + 16);
@@ -181,6 +194,8 @@ inline __attribute__((always_inline)) void max_pool_reduce_row_major_9_(const st
  *         LREG0 / LREG4 for the caller to fold into the next block
  * @param vb: Dest address of this row block in the values tile
  * @param ib: Dest address of this row block in the indices tile
+ * @note Replays the ROW_MAJOR sort network, so @ref init_max_pool_with_indices<ROW_MAJOR> must have
+ *       recorded it.
  */
 template <bool is_fp32_dest_acc_en, bool store>
 inline __attribute__((always_inline)) void max_pool_reduce_8_rows_(const std::uint32_t vb, const std::uint32_t ib) {
@@ -196,7 +211,14 @@ inline __attribute__((always_inline)) void max_pool_reduce_8_rows_(const std::ui
     TT_SFPLOAD(p_sfpu::LREG6, idx_mode, ADDR_MOD_7, 0 /* done */, ib + 8);
     TT_SFPLOAD(p_sfpu::LREG7, idx_mode, ADDR_MOD_7, 0 /* done */, ib + 12);
 
-    max_pool_sort_row_major_();
+    // max of the 8 rows -> LREG0 / LREG4
+    TTI_REPLAY(
+        MAX_POOL_SORT_START,
+        MAX_POOL_SORT_LEN,
+        0 /* last */,
+        0 /* set_mutex */,
+        0 /* execute_while_loading */,
+        0 /* load_mode */);
 
     if constexpr (store) {
         TT_SFPSTORE(p_sfpu::LREG0, val_mode, ADDR_MOD_7, 0 /* done */, vb);
@@ -290,14 +312,12 @@ inline __attribute__((always_inline)) void max_pool_final_swap_(
  *
  * @tparam is_fp32_dest_acc_en: Whether Dest holds 32-bit datums, which selects the load/store modes
  * @tparam layout: How the tile's rows sit in Dest, values = <TILE/ROW_MAJOR>
- * @tparam accumulate: Whether to carry a running max across calls; TILE layout rejects it
+ * @tparam accumulate: Unsupported on the 9-row path, so it must be false
  * @param values_tile_idx: Dest tile index of the values operand
  * @param indices_tile_idx: Dest tile index of the indices operand
  * @param chunk: Index of this call in the accumulation chain. Unused on this path.
  * @note Faces 2 and 3 of the TILE-layout tiles are neither read nor written, and every row but row 0
  *       is scratch on return.
- * @note TILE layout claims MAX_POOL_SORT_TILE_LEN replay slots from MAX_POOL_SORT_TILE_START on the
- *       math thread, re-recording them on every call.
  */
 template <bool is_fp32_dest_acc_en, ckernel::DataLayout layout, bool accumulate>
 inline void _calculate_max_pool_with_indices_(
@@ -307,14 +327,14 @@ inline void _calculate_max_pool_with_indices_(
     const std::uint32_t v = values_tile_idx * MAX_POOL_DEST_TILE_SIZE;
     const std::uint32_t i = indices_tile_idx * MAX_POOL_DEST_TILE_SIZE;
 
+    static_assert(!accumulate, "accumulate is only implemented for the 32-row ROW_MAJOR path (num_rows > 9)");
+
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         max_pool_reduce_row_major_9_<is_fp32_dest_acc_en>(
             v + p_sfpu::col_offset::EVEN_COL, i + p_sfpu::col_offset::EVEN_COL);
         max_pool_reduce_row_major_9_<is_fp32_dest_acc_en>(
             v + p_sfpu::col_offset::ODD_COL, i + p_sfpu::col_offset::ODD_COL);
     } else {
-        static_assert(!accumulate, "accumulate mode is not supported for TILE layout");
-        load_replay_buf<MAX_POOL_SORT_TILE_START, MAX_POOL_SORT_TILE_LEN>([] { max_pool_sort_tile_(); });
         max_pool_reduce_tile_face_<is_fp32_dest_acc_en>(v, i);
         max_pool_reduce_tile_face_<is_fp32_dest_acc_en>(v + MAX_POOL_FACE_OFFSET, i + MAX_POOL_FACE_OFFSET);
     }
@@ -357,13 +377,18 @@ inline void _calculate_max_pool_with_indices_generic_(
 }
 
 /**
- * @brief Enable SFPU index tracking, the state the arg-max reduction is built on.
+ * @brief Enable SFPU index tracking and record the layout's sort network into the replay buffer.
  *
  * @tparam APPROXIMATION_MODE: Unused; the reduction is exact.
- * @tparam layout: Unused on Quasar; the sort network is recorded per call, not here.
+ * @tparam layout: Layout whose sort network to record, values = <TILE/ROW_MAJOR>; must match the
+ *         layout passed to @ref calculate_max_pool_with_indices
  * @note Call this before @ref calculate_max_pool_with_indices, and after
  *       @ref _llk_math_eltwise_sfpu_init_ - that rewrites the whole SFPU Control Register, so
  *       running it afterwards would clear index tracking again.
+ * @note Claims math-thread replay slots MAX_POOL_SORT_START to MAX_POOL_SORT_START +
+ *       MAX_POOL_SORT_LEN - 1. Call it again after any other math-thread op that records into the
+ *       replay buffer (eltwise binary, reduce, matmul, transpose, binary max/min, ...) and before the
+ *       next @ref calculate_max_pool_with_indices.
  */
 template <bool APPROXIMATION_MODE, ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 inline void init_max_pool_with_indices() {
@@ -372,29 +397,39 @@ inline void init_max_pool_with_indices() {
     // SFPCONFIG is 2-cycle and must not be followed directly by SFPSWAP (TEN-4581)
     TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
     TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
+
+    if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
+        load_replay_buf<MAX_POOL_SORT_START, MAX_POOL_SORT_LEN>([] { max_pool_sort_row_major_(); });
+    } else {
+        load_replay_buf<MAX_POOL_SORT_START, MAX_POOL_SORT_LEN>([] { max_pool_sort_tile_(); });
+    }
 }
 
 /**
- * @brief Column-wise arg-max over the first num_rows rows of a Dest tile pair, in place into row 0.
+ * @brief Column-wise arg-max over rows 0-8 or rows 0-31 of a Dest tile pair, in place into row 0.
  *
  * For every column, writes the maximum value into row 0 of the values tile and the entry that
- * travelled with it into row 0 of the indices tile. Dispatches on num_rows: up to 9 rows go through
- * the fixed 9-row network, more through the generic 32-row walk.
+ * travelled with it into row 0 of the indices tile. num_rows only selects between two fixed
+ * networks: up to 9 reduces exactly rows 0-8, 10 to 32 reduces all rows 0-31. Rows past the
+ * requested count but inside the selected network are reduced too, so pad them with a value no
+ * larger than any real one (e.g. -inf).
  *
  * @tparam APPROXIMATION_MODE: Unused; the reduction is exact.
  * @tparam is_fp32_dest_acc_en: Whether Dest holds 32-bit datums, which selects the load/store modes
- * @tparam num_rows: Rows to reduce, 1-32. Above 9 requires ROW_MAJOR layout.
+ * @tparam num_rows: 9-versus-32 network selector, values = <1-9 (rows 0-8), 10-32 (rows 0-31)>.
+ *         The 32-row network requires ROW_MAJOR layout.
  * @tparam ITERATIONS: Unused; one call covers the whole tile.
  * @tparam layout: How the tile's rows sit in Dest, values = <TILE/ROW_MAJOR>
  * @tparam accumulate: Whether to carry a running max across calls in the tile pair above the
- *         operands; ROW_MAJOR and num_rows > 9 only
+ *         operands; ROW_MAJOR and num_rows > 9 only (static_assert)
  * @param values_tile_idx: Dest tile index of the values operand
  * @param indices_tile_idx: Dest tile index of the indices operand
  * @param unused_tile_idx: Unused; the reduction writes back over its operands.
  * @param chunk: Index of this call in the accumulation chain; chunk 0 seeds the running max instead
  *         of folding into it. Unused unless accumulate is set.
- * @note Call @ref init_max_pool_with_indices before this - without index tracking the swaps move
- *       values without their indices.
+ * @note Call @ref init_max_pool_with_indices with the same layout before this - it enables index
+ *       tracking (without it the swaps move values without their indices) and records the sort
+ *       network this replays.
  * @note Run this once per tile under VectorMode::None, not once per face: it addresses the whole
  *       tile itself, and every row but row 0 is scratch on return.
  */

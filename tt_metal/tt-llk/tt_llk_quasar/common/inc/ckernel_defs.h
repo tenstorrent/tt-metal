@@ -78,7 +78,6 @@ enum class BinaryOp : std::uint8_t
     DEQUANT,
     ATAN2,
     COPY_DEST,
-    MAX_POOL_WITH_INDICES,
 };
 
 enum class DataLayout

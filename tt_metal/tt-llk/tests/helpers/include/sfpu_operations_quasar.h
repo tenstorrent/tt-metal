@@ -45,12 +45,11 @@
 // 2. Add the enumerator to ckernel::BinaryOp (tt_llk_quasar/common/inc/ckernel_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
-#include "llk_sfpu/ckernel_sfpu_add.h"              // calculate_add_int (int add)
-#include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
-#include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_add.h"            // calculate_add_int (int add)
+#include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
+#include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
-#include "llk_sfpu/ckernel_sfpu_max_pool_indices.h" // calculate_max_pool_with_indices / init_max_pool_with_indices
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
@@ -467,11 +466,6 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // reciprocal variant.
         calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
-    else if constexpr (OP == BinaryOp::MAX_POOL_WITH_INDICES)
-    {
-        // Enables SFPU index tracking; must run after _llk_math_eltwise_sfpu_init_(), which resets it.
-        init_max_pool_with_indices<APPROXIMATION_MODE, ckernel::DataLayout::TILE>();
-    }
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST are stateless — no init.
 }
 
@@ -669,21 +663,6 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
-    }
-    else if constexpr (OP == BinaryOp::MAX_POOL_WITH_INDICES)
-    {
-        // src0 = values tile, src1 = indices tile; both reduced in place into their row 0.
-        // VectorMode::None runs the kernel once: it addresses the whole tile itself.
-        SFPU_BINARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_max_pool_with_indices,
-            (APPROXIMATION_MODE, is_fp32_dest_acc_en, 9 /* num_rows */, ITERATIONS, ckernel::DataLayout::TILE, false /* accumulate */),
-            src0_tile,
-            src1_tile,
-            dst_tile,
-            VectorMode::None,
-            0 /* chunk */);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
