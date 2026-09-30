@@ -61,6 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
+#include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu/llk_math_ema_sfpu_entry.h"
 
@@ -91,8 +92,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             EMA_INPUT_DST_INDEX, formats.math, formats.math);
 
+        if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
+        {
+            // Another math init in the same DEST section before the EMA, as a fused kernel would issue it.
+            // The eltwise binary init programs the FPU address-mode records with a non-zero DEST
+            // increment; the EMA body must not depend on them. The datacopy init is re-run after the
+            // EMA so the next tile's copy is unaffected.
+            _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* transpose */);
+        }
+
         // EMA reads dst tile 0, writes dst tile 1, updates the LREG4 carry.
         llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
+
+        if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
+        {
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+                TILE_NUM_FACES, formats.math);
+        }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

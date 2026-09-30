@@ -1835,6 +1835,17 @@ class EMA_ALPHA_BETA(TemplateParameter):
         ]
         return "\n".join(lines)
 
+@dataclass
+class EMA_INTERLEAVED_INIT(TemplateParameter):
+    """Whether sfpu_ema_test.cpp issues an eltwise binary init between the datacopy and
+    ``ema_tile`` in every DEST section, the way a fused kernel would. The EMA body must not
+    depend on the FPU address-mode records that init programs."""
+
+    binary_init_before_ema: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};"
+
 
 @dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
