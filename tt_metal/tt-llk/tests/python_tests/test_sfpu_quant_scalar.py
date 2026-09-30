@@ -4,9 +4,10 @@
 """
 LLK SFPU quantization tests: quant (Float32 -> Int32), requant (Int32 -> Int32) and dequant (Int32 -> Float32)
 with a per-tensor scale, in the two LLK forms of the scale (see perf_sfpu_quant_scalar.py): the scale as a DEST
-tile (``tile``) and the scale loaded once by the init (``scalar``). Both forms run on the same stimuli and must
-produce the same bits; the tile form is also checked against a host reference on values where the arithmetic is
-exact, so the check does not depend on the rounding and saturation contracts of the kernels.
+tile (``tile``) and the scale loaded once by the init (``scalar``). Both forms run on the same stimuli against the
+same host reference, bit for bit: whole-number results (``exact``) and fractions, ties and both saturation ends
+(the signed int8 rounding of SFPSTOCHRND rounds half to even and clamps to plus or minus 127). One configuration
+per test, so the compile-producer / consumer split of the harness builds every variant.
 
 Int32 buffers use two's complement in L1 (twos_complement=True), the encoding the quant kernels read and write.
 """
@@ -38,9 +39,8 @@ def _float_bits(x: float) -> int:
 
 
 def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
-    """Input tile A. With ``exact`` every result is a whole number well inside the quantized range, so the host
-    reference is exact whatever the rounding mode; otherwise the inputs cover fractions, ties and both saturation
-    ends, and only the two forms are compared with each other."""
+    """Input tile A. With ``exact`` every result is a whole number well inside the quantized range; otherwise the
+    inputs cover fractions, ties and both saturation ends."""
     g = torch.Generator().manual_seed(seed)
     if exact:
         # x * 0.25 + 3.0 is a whole number for x a multiple of 4; keep it inside [-120, 120].
@@ -100,33 +100,18 @@ def _run(quant_op: str, scale_form: str, src_A: torch.Tensor) -> torch.Tensor:
 
 @parametrize(
     quant_op=["quant", "requant", "dequant"],
+    scale_form=["tile", "scalar"],
     exact=[True, False],
 )
-def test_sfpu_quant_scalar(quant_op, exact):
-    if isinstance(quant_op, tuple):
-        (quant_op,) = quant_op
+def test_sfpu_quant_scalar(quant_op, scale_form, exact):
     src_A = _stimuli(quant_op, exact, seed=7 if exact else 11)
-
-    res_tile = _run(quant_op, "tile", src_A)
-    res_scalar = _run(quant_op, "scalar", src_A)
-
-    # The scalar-scale form is the tile-scale form without the per-row scale load: same bits, every lane.
-    if res_tile.dtype == torch.float32:
-        same = res_tile.view(torch.int32) == res_scalar.view(torch.int32)
+    res = _run(quant_op, scale_form, src_A)
+    golden = _reference(quant_op, src_A)
+    if golden.dtype == torch.float32:
+        diff = (res.view(torch.int32).to(torch.int64) - golden.view(torch.int32).to(torch.int64)).abs()
     else:
-        same = res_tile == res_scalar
-    assert bool(same.all()), (
-        f"{quant_op}: the scalar-scale form differs from the tile-scale form in {int((~same).sum())} lanes; "
-        f"first tile {res_tile[~same][:8].tolist()} scalar {res_scalar[~same][:8].tolist()}"
+        diff = (res.to(torch.int64) - golden.to(torch.int64)).abs()
+    assert int((diff != 0).sum()) == 0, (
+        f"{quant_op} ({scale_form} scale, exact={exact}): {int((diff != 0).sum())} lanes differ from the host "
+        f"reference; first result {res[diff != 0][:8].tolist()} golden {golden[diff != 0][:8].tolist()}"
     )
-
-    if exact:
-        golden = _reference(quant_op, src_A)
-        if golden.dtype == torch.float32:
-            diff = (res_tile - golden).abs()
-        else:
-            diff = (res_tile.to(torch.int64) - golden.to(torch.int64)).abs()
-        assert float(diff.max()) == 0.0, (
-            f"{quant_op}: {int((diff != 0).sum())} lanes differ from the host reference; "
-            f"first result {res_tile[diff != 0][:8].tolist()} golden {golden[diff != 0][:8].tolist()}"
-        )
