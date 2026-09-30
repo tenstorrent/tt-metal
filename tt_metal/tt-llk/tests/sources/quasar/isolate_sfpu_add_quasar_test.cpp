@@ -37,6 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
@@ -67,43 +68,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Buffer descriptors and HW setup
     // -------------------------------------------------------------------------
 
-    constexpr std::uint32_t buf_desc_id_unpack_0 = 0; // First input operand (buffer_A)
-    constexpr std::uint32_t buf_desc_id_unpack_1 = 1; // Second input operand (buffer_B)
-    constexpr std::uint32_t buf_desc_id_pack     = 8;
-
-    buffer_descriptor_u bd_unpack_0 = {0};
-    buffer_descriptor_u bd_unpack_1 = {0};
-    buffer_descriptor_u bd_pack     = {0};
+    const ckernel::TensorShape srcs_shape =
+        ckernel::make_tensor_shape(static_cast<std::uint8_t>(PARAM_SRCS_YDIM), PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
 
     // Unpack BD 0: L1 input A -> SrcS slice 0
-    bd_unpack_0.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
-    bd_unpack_0.f.format      = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack_0.f.x_dim       = PARAM_SRCS_XDIM;
-    bd_unpack_0.f.y_dim       = PARAM_SRCS_YDIM;
-    bd_unpack_0.f.z_dim       = PARAM_SRCS_ZDIM;
-    _configure_buf_desc_table_(buf_desc_id_unpack_0, bd_unpack_0);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_S_src);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
     // Unpack BD 1: L1 input B -> SrcS slice 1
-    bd_unpack_1.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
-    bd_unpack_1.f.format      = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack_1.f.x_dim       = PARAM_SRCS_XDIM;
-    bd_unpack_1.f.y_dim       = PARAM_SRCS_YDIM;
-    bd_unpack_1.f.z_dim       = PARAM_SRCS_ZDIM;
-    _configure_buf_desc_table_(buf_desc_id_unpack_1, bd_unpack_1);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(srcs_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_S_src);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
+    const std::uint8_t bfd_unpack_0 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
+    const std::uint8_t bfd_unpack_1 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice1>();
+
     // Pack BD: SrcS slice 2 -> L1 output
-    bd_pack.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
-    bd_pack.f.format      = static_cast<std::uint8_t>(formats.pack_S_dst);
-    bd_pack.f.x_dim       = PARAM_SRCS_XDIM;
-    bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
-    bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
-    _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst);
+    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
-    // Implied math format disable for SrcS and sfpmem mod selection
+    // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -125,20 +114,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0 /*set_mutex*/,
         0 /*last*/,
         // Lambda function to load replay buffer
-        [in0_base, in1_base, out_base, num_sfpu_iterations]
+        [in0_base, in1_base, out_base, num_sfpu_iterations, load_sfpmem, store_sfpmem]
         {
 #pragma GCC unroll 4
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_base + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_base + (d << 1));
                 // Add LREG0 + LREG1, store result in LREG2
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
                 // Store result back to output slice
-                TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_base + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, out_base + (d << 1));
             }
         });
 
+    // UNPACR2 is issued manually below, so the auto-loop must not replay it. This register is not
+    // reset between tests, so a preceding tile-at-a-time SrcS test would otherwise leave it set.
+    _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
@@ -146,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
 
-        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(bfd_pack, i * PARAM_SRCS_SLICE_COUNT);
 
         // No auto-loops for unpacker due to HW bug for binary unpacking. Issue #1635: https://github.com/tenstorrent/tt-llk/issues/1635
         // Preload the unpacker pipeline so that SFPU is not starved
@@ -154,14 +146,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #pragma GCC unroll preload_count
         for (std::uint32_t j = 0; j < preload_count; j++)
         {
-            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
-            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, bfd_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, bfd_unpack_1, 0b1 /*Set dvalid*/);
         }
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT - preload_count; slice++)
         {
-            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
-            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, bfd_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, bfd_unpack_1, 0b1 /*Set dvalid*/);
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write
         }

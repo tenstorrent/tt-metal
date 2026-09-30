@@ -43,7 +43,7 @@ def ring_grid_cols(num_dram_banks: int, ring_size: int) -> int:
     return max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
 
 
-def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int, row_offset: int = 0):
     """Strided receivers matching BufferDistributionSpec round-robin placement:
     bank b -> ring positions [b, b + num_dram_banks, b + 2*num_dram_banks, ...].
 
@@ -51,17 +51,21 @@ def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: in
     (s % num_dram_banks) at bank-local slab (s // num_dram_banks). Pairing that
     with this GCB topology means shard index == ring position, so the caller can
     store data in ring-position order without a permutation.
+
+    ``row_offset`` shifts the whole grid down, which is how a caller places two
+    targets on disjoint receivers for one prefetcher. Ring position is a property
+    of the (bank, slab) pairing above, so shifting rows does not renumber it.
     """
     cores = []
     for s in range(recv_per_bank):
         ring_pos = bank_idx + s * num_dram_banks
         col = ring_pos % ring_cols
-        row = ring_pos // ring_cols
+        row = ring_pos // ring_cols + row_offset
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
 
 
-def bank_receivers_contiguous(bank_idx: int, recv_per_bank: int, ring_cols: int):
+def bank_receivers_contiguous(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):
     """Contiguous receiver arc matching BufferDistributionSpec CONTIGUOUS_1D (shard-contiguous)
     placement: bank b -> ring positions [b*recv_per_bank .. (b+1)*recv_per_bank - 1].
 
@@ -69,12 +73,14 @@ def bank_receivers_contiguous(bank_idx: int, recv_per_bank: int, ring_cols: int)
     (s // recv_per_bank) at bank-local slab (s % recv_per_bank). Pairing that with
     this GCB topology means shard index == ring position (no permutation), and each
     bank feeds a contiguous arc of the ring instead of a strided set.
+
+    ``row_offset`` shifts the whole grid down; see bank_receivers_strided.
     """
     cores = []
     for s in range(recv_per_bank):
         ring_pos = bank_idx * recv_per_bank + s
         col = ring_pos % ring_cols
-        row = ring_pos // ring_cols
+        row = ring_pos // ring_cols + row_offset
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
 
@@ -104,7 +110,7 @@ def make_recv_contig_weight(
     """
     K = pt_weight.shape[-2]
     N = pt_weight.shape[-1]
-    assert N % ring_size == 0, f"N={N} must divide ring_size={ring_size}"
+    assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
     n_per_recv = N // ring_size
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
@@ -116,6 +122,32 @@ def make_recv_contig_weight(
         distribution_strategy,
     )
     mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+def make_krow_major_weight(device, pt_weight, num_dram_banks: int, dtype):
+    """Allocate ``pt_weight`` ((1, 1, K, N)) in the legacy K-row-major layout: one
+    WIDTH_SHARDED ``(K, N // num_dram_banks)`` shard per DRAM bank, K-row-major
+    within the bank so one sender read serves every receiver on that bank.
+
+    The counterpart to ``make_recv_contig_weight``. Bank b owns N-columns
+    ``[b * N // num_dram_banks, (b + 1) * N // num_dram_banks)`` and hands its
+    receivers consecutive sub-slices of that range, so pair it with
+    ``bank_receivers_contiguous`` (bank b -> ring positions
+    ``[b * recv_per_bank, (b + 1) * recv_per_bank)``) to make shard index equal
+    ring position.
+    """
+    K = pt_weight.shape[-2]
+    N = pt_weight.shape[-1]
+    assert N % num_dram_banks == 0, f"N={N} must be divisible by num_dram_banks={num_dram_banks}"
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
+    )
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 

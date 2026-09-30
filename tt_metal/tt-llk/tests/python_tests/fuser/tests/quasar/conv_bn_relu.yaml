@@ -1,0 +1,87 @@
+# Convolution + batch norm + ReLU: full ResNet conv-bn-relu block.
+# Conv matmul, BN scale+shift via broadcast eltwise, then ReLU activation.
+
+operands:
+  - name: "activations"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 128]
+    format: "Float16_b"
+  - name: "bn_scale"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "bn_shift"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "conv_result"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "scaled"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [64, 64]
+        in0: "activations"
+        in1: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "conv_result"
+        block_size: [64, 64]
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        block_size: [32, 32]
+        in0: "conv_result"
+        in1: "bn_scale"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi2"
+        indexes:
+          in0: {count: 16}
+          in1: {count: 16, step: 0}
+          dest: {count: 4}
+    pack:
+      - output: "scaled"
+        block_size: [32, 32]
+        packer: "Packer"
+        indexes:
+          dest: {count: 4}
+          out: {count: 16}
+
+  - math:
+      - type: "Fpu"
+        block_size: [32, 32]
+        in0: "scaled"
+        in1: "bn_shift"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+        indexes:
+          in0: {count: 16}
+          in1: {count: 16, step: 0}
+          dest: {count: 4}
+      - type: "UnarySfpu"
+        block_size: [32, 32]
+        operation: "Relu"
+        iterations: 32
+        indexes:
+          dest: {count: 4}
+    pack:
+      - output: "output"
+        block_size: [32, 32]
+        packer: "Packer"
+        indexes:
+          dest: {count: 4}
+          out: {count: 16}

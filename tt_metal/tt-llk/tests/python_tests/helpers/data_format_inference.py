@@ -10,7 +10,7 @@ architecture-specific differences between Wormhole and Blackhole.
 """
 from typing import List, Optional
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
 from .format_config import DataFormat, FormatConfig
 from .llk_params import DestAccumulation
 
@@ -25,6 +25,8 @@ VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Int16,
     DataFormat.MxFp4_2x_A,
     DataFormat.MxFp4_2x_B,
+    DataFormat.Int8_2x,
+    DataFormat.UInt8_2x,
 ]
 
 VALID_QUASAR_DEST_REG_FORMATS = [
@@ -116,6 +118,9 @@ def is_format_combination_outlier(
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
+    # Integer 2x formats additionally require the four-row variant in infer_unpack_out.
+    DataFormat.Int8_2x: ChipArchitecture.QUASAR,
+    DataFormat.UInt8_2x: ChipArchitecture.QUASAR,
 }
 
 
@@ -169,10 +174,31 @@ def infer_unpack_out(
                 f"{register_format_hint.name} is only valid on "
                 f"{_SRCAB_ONLY_FORMATS[register_format_hint].value}"
             )
+        if (
+            register_format_hint
+            in (
+                DataFormat.Int8_2x,
+                DataFormat.UInt8_2x,
+            )
+            and not is_4row_arch()
+        ):
+            raise ValueError(
+                f"{register_format_hint.name} is only valid on the four-row Quasar variant"
+            )
         if input_format == DataFormat.MxFp4 and register_format_hint not in [
             DataFormat.MxFp4_2x_A,
             DataFormat.MxFp4_2x_B,
         ]:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
+            )
+        if (
+            input_format == DataFormat.Int8
+            and register_format_hint != DataFormat.Int8_2x
+        ) or (
+            input_format == DataFormat.UInt8
+            and register_format_hint != DataFormat.UInt8_2x
+        ):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -205,8 +231,9 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        # Unpack-to-SrcS cannot convert fp16 to TF32 (Tensix Formats conversion table).
         if input_format in (DataFormat.Float16, DataFormat.Float16_b):
-            return DataFormat.Tf32
+            return input_format
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -246,6 +273,10 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
+        if unpacking_to_srcs:
+            # PACK1 reads SrcS; dest_acc does not widen pack_in.
+            return unpack_out
+
         if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.
@@ -348,6 +379,10 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
         return DataFormat.Float16
     if unpack_out == DataFormat.MxFp4_2x_B:
         return DataFormat.Float16_b
+    if unpack_out == DataFormat.Int8_2x:
+        return DataFormat.Int8
+    if unpack_out == DataFormat.UInt8_2x:
+        return DataFormat.UInt8
     return unpack_out
 
 

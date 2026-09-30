@@ -1,0 +1,14 @@
+# Core inference dependencies for XTTS-v2 (tokenizer, audio I/O, mel filterbanks).
+# Install from repo root:
+#   python_env/bin/python -m pip install -r models/experimental/xtts/requirements.txt
+soundfile==0.14.0
+scipy==1.15.3
+librosa==0.10.0
+tokenizers==0.22.2
+
+# Eval (eval/xtts_eval.py / tests/pcc eval): UTMOS22 resamples via torchaudio internally.
+# tt-metal dev env uses CPU torch (see tt_metal/python_env/requirements-dev.txt); default
+# PyPI torchaudio links libcudart and fails to load _torchaudio.abi3.so.
+# The +cpu wheel is only on the PyTorch CPU index (x86_64 CI / dev hosts).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.11.0+cpu ; platform_machine == "x86_64"

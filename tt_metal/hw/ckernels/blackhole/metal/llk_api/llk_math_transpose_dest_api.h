@@ -6,15 +6,18 @@
 
 #include "llk_math_common_api.h"
 #include "llk_math_transpose_dest.h"
+#include "sanitizer/api.h"
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void llk_math_transpose_dest(uint dst_index) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    SAN_HOOK(unsupported());
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     _llk_math_transpose_dest_<transpose_of_faces, is_32bit>(dst_index);
 }
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void llk_math_transpose_dest_init() {
+    SAN_HOOK(unsupported());
     _llk_math_transpose_dest_init_<transpose_of_faces, is_32bit>();
 }

@@ -8,9 +8,9 @@ indexer's NATIVE mesh-coord chunk_start (cluster_axis), which replaced our old h
 each device's causal start from its mesh coordinate: chunk_start = chunk_start_idx(=cached_len=0) +
 rank·640 via cluster_axis=sp_axis. Output stays SP-sharded — what the SP residual stream + EP-MoE need.
 
-The OLD gather-everything golden (`msa_sp_attention_gather_all`) is INCOMPATIBLE with the merged op:
+A gather-everything golden (full-T query on every device) is INCOMPATIBLE with the merged op:
 cluster_axis=None linearizes the whole mesh, so a full-T (5120-row) query OOBs on every device r>0
-(`max_cs + Sq <= T` TT_FATAL). So we verify the NEW thing directly:
+(`max_cs + Sq <= T` TT_FATAL). So we verify the deployed behaviour directly:
 
   (A) cluster_axis CAUSALITY — the decisive check. Device r owns global query positions [r·640 ..]. The
       indexer masks future blocks to -inf, so the causal frontier (count of FINITE blocks for a device's
@@ -76,8 +76,8 @@ def test_msa_sp_sharded(mesh_device, device_params, chunk_local, reset_seeds):
     iq_t, ik_t = shard(iq, True), shard(ik, False)
 
     # --- (A) cluster_axis causality: raw indexer with the deployed per-device mesh-coord chunk_start ---
-    # AllGather index_k across SP (the deployed path does this), keep index_q sharded; cluster_axis=sp_axis
-    # makes device r score its 640 rows starting at global r*640.
+    # Gather index_k across SP (any gather will do here; the deployed path uses high_bw_all_gather), keep
+    # index_q sharded; cluster_axis=sp_axis makes device r score its 640 rows starting at global r*640.
     ik_full = mesh_config.allgather(ik_t, ccl, axis=sp_axis, dim=2)
     block_scores = ttnn.experimental.indexer_score_msa(
         iq_t,

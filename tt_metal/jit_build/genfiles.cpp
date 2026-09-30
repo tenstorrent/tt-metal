@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <tuple>
 // Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
 #include <map>
 #include <set>
@@ -42,6 +43,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -54,14 +56,20 @@ using namespace std;
 
 namespace tt::tt_metal {
 
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
+
 namespace {
 
 string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    // Kernels define kernel_main() with no prior declaration (-Wmissing-prototypes). Not static:
+    // that lets the compiler inline the only call and drop the symbol, which dump-consts.py and
+    // llk-audit resolve by name.
+    constexpr const char* kernel_main_decl = "void kernel_main();\n";
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
-            return "#include \"" + kernel_src.path_.string() + "\"\n";
+            return kernel_main_decl + ("#include \"" + kernel_src.path_.string() + "\"\n");
         }
-        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        case KernelSource::SOURCE_CODE: return kernel_main_decl + kernel_src.source_;
     }
     ttsl::unreachable();
 }
@@ -102,7 +110,7 @@ void write_file(const string& path, const string& content) {
 
 // Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
 // of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
-// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// on the command line. Emitted only for the legacy map API, including Metal 2.0 kernels.
 // Returns true if a header was written.
 //
 // Written here rather than in the build step so it lands in the kernel's generated-files directory
@@ -123,6 +131,58 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
     return true;
 }
 
+/**
+ * Emit get_token_if_present() helper for a given binding type.
+ *
+ * get_token_if_present() is a helper function on the device side that performs lookup of the resource binding token
+ * by name. The function returns a pointer to the binding token if found, otherwise nullptr.
+ *
+ * This is used by kernels to check if a binding is present when kernel is meant to be reusable across different
+ * programs.
+ */
+template <typename Entry>
+void emit_programmatic_binding_token_getter(
+    ostream& content, const vector<Entry>& entries, string_view null_binding_type) {
+    // Function header
+    content << "template <::internal::TemplateString name>\n"
+            // Using auto here as the tokens could be templated differently depending on the name.
+            << "constexpr auto get_token_if_present() {\n";
+
+    // 4 space left pad.
+    string padding(4, ' ');
+
+    // If statements for each entry, switching between `if constexpr` and `else if constexpr`
+    const char* if_kw = "if constexpr";
+    for (const auto& entry : entries) {
+        // Emits equivalent to:
+        // if constexpr (name == "entry_name") {
+        //     return &entry_name;
+        // }
+        content << padding << if_kw << " (name == \"" << entry.name << "\") {\n"
+                << padding << padding << "return &" << entry.name << ";\n";
+
+        if_kw = "} else if constexpr";
+    }
+
+    // Emit "cannot find binding" case
+    //
+    // equivalent to:
+    // using null_token_ptr_t = const <null_binding_type>*;
+    // return null_token_ptr_t{nullptr};
+    if (entries.empty()) {
+        content << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << "return null_token_ptr_t{nullptr};\n";
+    } else {
+        content << padding << "} else {\n"
+                << padding << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << padding << "return null_token_ptr_t{nullptr};\n"
+                << padding << "}\n";
+    }
+
+    // Function close
+    content << "}\n";
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -132,17 +192,37 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    vector<pair<string, uint16_t>> dfb_entries;
+    struct DfbEntry {
+        string name;
+        uint16_t id;
+        bool is_relay;
+        uint8_t prefetcher_pipe_id;
+        std::optional<LLKMetadata> metadata;
+    };
+    vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
-    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&dfb_entries](
+            const string& name,
+            uint16_t id,
+            bool is_relay,
+            uint8_t prefetcher_pipe_id,
+            const std::optional<LLKMetadata>& metadata) {
+            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata});
+        });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
-    vector<pair<string, uint16_t>> sem_entries;
+    vector<tt::tt_metal::SemBindingEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
-    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&sem_entries](const string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            sem_entries.push_back({name, id, scope, total_binder_harts});
+        });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Gates the cached-semaphore list below.
+    const bool has_cached_sem = std::any_of(
+        sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -151,12 +231,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -165,21 +249,47 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        std::optional<LLKMetadata> metadata;
     };
     vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_word});
+    settings.process_scratchpad_binding_handles([&scratch_entries](
+                                                    const string& name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>& metadata) {
+        scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
+    });
+
+    // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
+    // hashes them in binding order; both orders carry the same set, so the cache key is stable).
+    struct PipeEntry {
+        string name;
+        uint8_t prefetcher_pipe_id;
+    };
+    vector<PipeEntry> pipe_entries;
+    settings.process_prefetcher_pipe_binding_handles([&pipe_entries](const string& name, uint8_t prefetcher_pipe_id) {
+        pipe_entries.push_back({name, prefetcher_pipe_id});
+    });
+    sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+    struct TensorBindingSequenceEntry {
+        string name;
+        vector<string> members;
+    };
+    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences(
+        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
+            tensor_binding_sequence_entries.push_back({name, members});
         });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
-    //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
-    //    the kernel constructs a Semaphore straight from the bare id)
+    //  - Semaphore binding tokens are emitted into the sem namespace
     //  - TensorBindings are emitted into the tensor namespace
     //  - Scratchpad binding tokens are emitted into the scratch namespace
     //
-    // NOTE: DFB tokens and semaphore ids are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB and semaphore tokens are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
     //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
@@ -193,75 +303,152 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
-        content << "// No bindings for this kernel.\n";
-    } else {
-        if (!dfb_entries.empty()) {
-            content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-        }
-        if (!sem_entries.empty()) {
-            content << "#include <cstdint>\n";
-        }
-        if (!ta_entries.empty()) {
-            // This header defines TensorBindingToken, a type which can be used
-            // to construct a TensorAccessor or LocalTensorAccessor.
-            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
-        }
-        if (!scratch_entries.empty()) {
-            // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
-            content << "#include \"api/scratchpad.h\"\n";
-        }
-        content << "\n";
 
-        if (!dfb_entries.empty()) {
-            content << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
-            }
-            content << "}  // namespace dfb\n";
-        }
+    // Emit Includes:
+    // Support get_token_if_present() helper.
+    content << "#include \"internal/template_string.h\"\n";
 
-        if (!sem_entries.empty()) {
-            content << "namespace sem {\n";
-            for (const auto& [name, id] : sem_entries) {
-                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
-            }
-            content << "}  // namespace sem\n";
-        }
+    if (!dfb_entries.empty()) {
+        content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    }
+    if (!pipe_entries.empty()) {
+        // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
+        // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
+        content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
+    }
 
-        if (!ta_entries.empty()) {
-            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA.
-            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
-            //
-            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-            // template with extra metadata in the future without touching kernel source.
-            content << "namespace tensor {\n";
-            for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
-                        << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
-            }
-            content << "}  // namespace tensor\n";
-        }
+    if (!sem_entries.empty()) {
+        // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
+        // so it is safe on compute builds too.
+        content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    }
+    if (has_cached_sem) {
+        // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
+        // guarded exactly like those bodies (the pool is DM-only).
+        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
+        content << "#include \"api/semaphore.h\"\n";
+        content << "#endif\n";
+    }
 
-        if (!scratch_entries.empty()) {
-            // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
-            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
-            // and the scratchpad's compile-time per-node size.
-            // The kernel-side Scratchpad(token) constructor unpacks both.
-            // The token's members are opaque, so the framework can extend it later without touching
-            // kernel source.
-            content << "namespace scratch {\n";
-            for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                        << entry.size_bytes << "u};\n";
+    // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
+    // definition of TensorBindingToken.
+    content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+
+    if (!scratch_entries.empty()) {
+        content << "#include \"api/scratchpad.h\"\n";
+    }
+
+    if (!tensor_binding_sequence_entries.empty()) {
+        content << "#include <tuple>\n";
+    }
+    content << "\n";
+
+    // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
+    // the headers that define those token types are omitted, but the empty getter still returns
+    // const BindingTokenType*{nullptr} and needs those types in scope.
+    if (dfb_entries.empty()) {
+        content << "struct DFBBindingToken;\n";
+    }
+    if (scratch_entries.empty()) {
+        content << "struct ScratchpadBindingToken;\n";
+    }
+
+    // Emit DFB bindings
+    content << "namespace dfb {\n";
+    for (const auto& entry : dfb_entries) {
+        if (entry.is_relay) {
+            // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
+            // constructor can O(1)-align to the durable checkpoint; CrossNode relays
+            // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
+            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
+            if (entry.prefetcher_pipe_id != 0xFF) {
+                content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
-            content << "}  // namespace scratch\n";
+            content << "};\n";
+        } else if (entry.metadata.has_value()) {
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
+        } else {
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
     }
+    emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
+    content << "}  // namespace dfb\n";
+
+    // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
+    if (!pipe_entries.empty()) {
+        content << "namespace pipe {\n";
+        for (const auto& entry : pipe_entries) {
+            content << "constexpr PrefetcherPipeBindingToken " << entry.name << "{"
+                    << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
+        }
+        content << "}  // namespace pipe\n";
+    }
+
+    // Emit Semaphore bindings
+    tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
+    if (has_cached_sem) {
+        content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
+        tt::tt_metal::emit_cached_semaphore_list(content, sem_entries);
+    }
+
+    // Emit Tensor bindings
+    content << "namespace tensor {\n";
+    // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+    // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+    // its implicit base-address CRTA.
+    // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+    //
+    // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+    // template with extra metadata in the future without touching kernel source.
+    //
+    // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
+    for (const auto& entry : ta_entries) {
+        content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
+                << entry.addr_crta_offset << "u>;\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{";
+        emit_llk_metadata(content, entry.metadata);
+        content << "};\n";
+    }
+
+    // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
+    // Thus, a dedicated type is needed to represent the absence of a binding.
+    emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
+
+    // Emit TensorBindingToken sequences
+    for (const auto& sequence : tensor_binding_sequence_entries) {
+        content << fmt::format(
+            "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
+    }
+
+    content << "}  // namespace tensor\n";
+
+    // Emit Scratchpad bindings
+    content << "namespace scratch {\n";
+
+    // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+    // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+    // and the scratchpad's compile-time per-node size.
+    // The kernel-side Scratchpad(token) constructor unpacks both.
+    // The token's members are opaque, so the framework can extend it later without touching
+    // kernel source.
+    for (const auto& entry : scratch_entries) {
+        if (entry.metadata.has_value()) {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u, ";
+            emit_llk_metadata(content, *entry.metadata);
+            content << "};\n";
+        } else {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u};\n";
+        }
+    }
+
+    emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
+
+    content << "}  // namespace scratch\n";
+
     write_file(path, content.str());
 }
 
@@ -532,6 +719,8 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
+        // When the kernel binds cached semaphores, the generated header lists them and dmk.cc
+        // runs the pool entry/exit around kernel_main() (TT_DM_CACHED_SEM_STUBS).
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
@@ -548,6 +737,7 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content += "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
+
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
@@ -569,6 +759,7 @@ void jit_build_genfiles_triscs_src(
     // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
     const bool is_metal2 = settings.is_metal2_kernel();
     if (is_metal2) {
+        // The cached pool is DM-only
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
@@ -653,22 +844,24 @@ constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on 
 constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
 constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 
+hw_format_t host_data_format_to_hw(DataFormat f) {
+    switch (f) {
+        case DataFormat::Int16: return kHwInt16;
+        case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+        case DataFormat::MxInt8: return kHwMxInt8;
+        case DataFormat::MxInt4: return kHwMxInt4;
+        case DataFormat::MxInt2: return kHwMxInt2;
+        default: return static_cast<hw_format_t>(f);
+    }
+}
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t {
-        switch (f) {
-            case DataFormat::Int16: return kHwInt16;
-            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
-            case DataFormat::MxInt8: return kHwMxInt8;
-            case DataFormat::MxInt4: return kHwMxInt4;
-            case DataFormat::MxInt2: return kHwMxInt2;
-            default: return static_cast<hw_format_t>(f);
-        }
-    };
+    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -677,8 +870,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    bool enable_2x_src_format,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
@@ -686,11 +878,10 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         std::move(unpack_to_dest_mode),
-        /*int_fpu_en=*/false,
-        enable_2x_src_format);
+        /*int_fpu_en=*/false);
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -699,12 +890,12 @@ void emit_unpack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
     // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
     // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -713,17 +904,11 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
     // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
@@ -748,8 +933,8 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
         }
     }
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -758,9 +943,9 @@ void emit_pack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats_all_cbs);
+    uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -796,7 +981,7 @@ struct ComputedDataFormats {
     std::vector<DataFormat> unpack_src, unpack_dst, pack_src, pack_dst;
 };
 
-ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
+ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_dfbs) {
     // assuming all cores within a op have the same desc
     const tt_hlk_desc& desc = options.hlk_desc;
 
@@ -817,15 +1002,10 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc,
-        unpack_conditional_dst_format,
-        options.fp32_dest_acc_en,
-        options.unpack_to_dest_mode,
-        options.enable_2x_src_format,
-        max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_dfbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_dfbs);
 
     // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -906,34 +1086,34 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     return {r_dims, c_dims};
 }
 
-void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
-void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
 void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
@@ -963,7 +1143,7 @@ void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
 }
 
 void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    const uint32_t max_cbs = env.get_max_cbs();
+    const uint32_t max_dfbs = env.get_max_dfbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
     const string descriptors_path = options.path + "chlkc_descriptors.h";
@@ -973,7 +1153,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
         throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
 
-    auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
+    auto fmts = compute_data_formats(options, env.get_arch(), max_dfbs);
 
     out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
@@ -987,19 +1167,19 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
-    emit_unpack_tile_dims(out, desc, max_cbs);
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
+    emit_unpack_tile_dims(out, desc, max_dfbs);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
-    emit_pack_tile_dims(out, desc, max_cbs);
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs);
+    emit_pack_tile_dims(out, desc, max_dfbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    out << "#endif\n";   // if pack
-    out << "#endif\n\n"; // if not math and not unpack
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
+    out << "#endif\n";    // if pack
+    out << "#endif\n\n";  // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
@@ -1019,6 +1199,22 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
+}
+
+void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata) {
+    const Tile& tile = metadata.tile;
+    const uint32_t face_r_dim = tile.get_face_shape()[0];
+    const uint32_t num_faces = tile.get_num_faces();
+    const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
+    const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
+    os << fmt::format(
+        "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
+        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+        host_data_format_to_hw(metadata.format),
+        face_r_dim,
+        constants::FACE_WIDTH,
+        num_faces_r_dim,
+        num_faces_c_dim);
 }
 // clang-format on
 

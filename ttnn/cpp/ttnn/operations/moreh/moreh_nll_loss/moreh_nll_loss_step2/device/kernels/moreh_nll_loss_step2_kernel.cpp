@@ -6,150 +6,135 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
-
-    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
-    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    DataflowBuffer dfb_divisor_obj(cb_divisor);
-
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    DataflowBuffer dfb_tmp_weight_obj(cb_tmp_weight);
-    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
-    DataflowBuffer dfb_tmp_input_obj(cb_tmp_input);
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_26;
-    DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;
-    DataflowBuffer dfb_divisor_recip_obj(cb_divisor_recip);  // 1/divisor
-    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_28;
-    DataflowBuffer dfb_tmp3_obj(cb_tmp3);
-
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
-    DataflowBuffer dfb_output_obj(cb_output);
-
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t onetile = 1;
-
-    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
-
-#if defined(DIVISOR)
-    dfb_divisor_obj.wait_front(onetile);
-
-    tile_regs_acquire();
-    copy_tile_init_with_dt(dfb_divisor_obj);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    dfb_divisor_obj.pop_front(onetile);
-    dfb_divisor_recip_obj.reserve_back(onetile);
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, dfb_divisor_recip_obj);
-    tile_regs_release();
-    dfb_divisor_recip_obj.push_back(onetile);
-#endif
-
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        dfb_tmp_input_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-        copy_tile_init_with_dt(dfb_tmp_input_obj);
-        copy_tile(cb_tmp_input, 0, dst0);
-
-        negative_tile_init();
-        negative_tile(dst0);
-        tile_regs_commit();
-
-        dfb_tmp_input_obj.pop_front(onetile);
+    constexpr auto per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
+    using D = ckl::Dst;
 
 #if defined(WEIGHT)
-        dfb_tmp1_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_tmp1_obj);
-        tile_regs_release();
-        dfb_tmp1_obj.push_back(onetile);
-
-        // multiply weight
-        dfb_tmp1_obj.wait_front(onetile);
-        dfb_tmp_weight_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-        mul_tiles_init_with_dt(dfb_tmp1_obj, dfb_tmp_weight_obj);
-        mul_tiles(cb_tmp1, cb_tmp_weight, 0, 0, dst0);
-        tile_regs_commit();
-
-        dfb_tmp_weight_obj.pop_front(onetile);
-        dfb_tmp1_obj.pop_front(onetile);
+    constexpr bool has_weight = true;
+#else
+    constexpr bool has_weight = false;
+#endif
 
 #if defined(DIVISOR)
-        dfb_tmp3_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_tmp3_obj);
-        tile_regs_release();
-        dfb_tmp3_obj.push_back(onetile);
-
-        dfb_tmp3_obj.wait_front(onetile);
-        dfb_divisor_recip_obj.wait_front(onetile);
-        tile_regs_acquire();
-#if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp3, cb_divisor_recip);
-#endif
-        mul_bcast_scalar_init(cb_tmp3, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
-        tile_regs_commit();
-        dfb_tmp3_obj.pop_front(onetile);
-
-        dfb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_output_obj);
-        tile_regs_release();
-        dfb_output_obj.push_back(onetile);
+    constexpr bool has_divisor = true;
 #else
-        dfb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_output_obj);
-        tile_regs_release();
-        dfb_output_obj.push_back(onetile);
+    constexpr bool has_divisor = false;
 #endif
-#else
+
+    compute_kernel_hw_startup(dfb::tmp_weight, dfb::tmp_input, dfb::output);
+
+    // `dfb::divisor` is not declared at all in the sum-reduction program.  This
+    // must be a preprocessor guard rather than `if constexpr`: non-dependent
+    // DFB token names are resolved before the discarded branch is eliminated.
 #if defined(DIVISOR)
-        dfb_tmp1_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_tmp1_obj);
-        tile_regs_release();
-        dfb_tmp1_obj.push_back(onetile);
+    ckl::unary<
+        ckl::Recip<D::D0>,
+        ckl::input(dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
+        ckl::output(
+            dfb::divisor_recip,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
 
-        dfb_divisor_recip_obj.wait_front(onetile);
-        dfb_tmp1_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-#if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp1, cb_divisor_recip);
+    // The reciprocal is reused by every output tile. Keep it pinned while the per-tile stages run;
+    // their chain inputs use caller-managed lifecycle so it is consumed only after the final tile.
+    DataflowBuffer dfb_divisor_recip_obj(dfb::divisor_recip);
+    dfb_divisor_recip_obj.wait_front(1);
 #endif
-        mul_bcast_scalar_init(cb_tmp1, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
-        tile_regs_commit();
 
-        dfb_tmp1_obj.pop_front(onetile);
+    // Keep the current algorithm's operation order: negate, then apply the optional weight,
+    // then the scalar reciprocal. Re-associating these products changes low-precision rounding.
+    if constexpr (has_weight || has_divisor) {
+        // tmp1 and tmp3 each hold one tile. Complete every stage for the current tile before
+        // producing the next one, otherwise a multi-tile producer fills its scratch buffer before
+        // the later consumer starts and deadlocks.
+        for (uint32_t tile = 0; tile < per_core_tile_cnt; ++tile) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::CopyTile<ckl::input(
+                    dfb::tmp_input,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig)>{},
+                ckl::Negative<D::D0>{},
+                ckl::PackTile<ckl::output(
+                    dfb::tmp1,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig)>{});
 
-        dfb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_output_obj);
-        tile_regs_release();
-        dfb_output_obj.push_back(onetile);
-#else
-        dfb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_output_obj);
-        tile_regs_release();
-        dfb_output_obj.push_back(onetile);
-#endif
-#endif
+            if constexpr (has_weight) {
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::input(
+                            dfb::tmp1,
+                            ckl::WaitPolicy::PerTile,
+                            ckl::PopPolicy::PerTile,
+                            ckernel::moreh_data_format_reconfig),
+                        ckl::input(
+                            dfb::tmp_weight,
+                            ckl::BroadcastDim::None,
+                            ckl::WaitPolicy::PerTile,
+                            ckl::PopPolicy::PerTile,
+                            ckl::InputTileMapping::Scalar,
+                            ckernel::moreh_data_format_reconfig)>{},
+                    ckl::PackTile<ckl::output(
+                        has_divisor ? dfb::tmp3 : dfb::output,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckernel::moreh_data_format_reconfig)>{});
+            }
+
+            if constexpr (has_divisor) {
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::input(
+                            has_weight ? dfb::tmp3 : dfb::tmp1,
+                            ckl::WaitPolicy::PerTile,
+                            ckl::PopPolicy::PerTile,
+                            ckernel::moreh_data_format_reconfig),
+                        ckl::input(
+                            dfb::divisor_recip,
+                            ckl::BroadcastDim::Scalar,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::InputTileMapping::Scalar,
+                            ckernel::moreh_data_format_reconfig)>{},
+                    ckl::PackTile<ckl::output(
+                        dfb::output,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckernel::moreh_data_format_reconfig)>{});
+            }
+        }
+    } else {
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(per_core_tile_cnt),
+            ckl::CopyTile<ckl::input(
+                dfb::tmp_input,
+                ckl::WaitPolicy::PerTile,
+                ckl::PopPolicy::PerTile,
+                ckernel::moreh_data_format_reconfig)>{},
+            ckl::Negative<D::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb::output,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckernel::moreh_data_format_reconfig)>{});
     }
 
 #if defined(DIVISOR)
-    dfb_divisor_recip_obj.pop_front(onetile);
+    dfb_divisor_recip_obj.pop_front(1);
 #endif
 }

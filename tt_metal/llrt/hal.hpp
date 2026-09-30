@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <string_view>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/utils/semver.hpp>
@@ -244,6 +245,21 @@ HalCoreInfoType create_unregistered_programmable_core(
 
 void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source);
 
+// Verifies the KERNEL_CONFIG ring buffer does not extend into free_region_type.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
+
+// Overload for TENSIX cores whose KERNEL_CONFIG size isn't in mem_map_sizes because it's set
+// dynamically by the allocator.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    uint32_t kernel_config_size,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
+
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
@@ -342,7 +358,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::SemVer)>;
 
 private:
     tt::ARCH arch_;
@@ -371,6 +387,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    bool supports_fds_{};
     NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
@@ -380,6 +397,9 @@ private:
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
+    // Whether this arch addresses its PCIE/DRAM non-worker cores through virtual coordinates
+    // (Blackhole, Quasar) rather than physical ones (Wormhole). ETH is virtualized on every arch.
+    bool virtualizes_non_worker_cores_{};
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
@@ -415,7 +435,8 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator,
-        bool enable_blackhole_dram_programmable_cores);
+        bool enable_blackhole_dram_programmable_cores,
+        bool enable_aerisc_ptp_trace);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
@@ -444,7 +465,8 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator = false,
-        bool enable_blackhole_dram_programmable_cores = false);
+        bool enable_blackhole_dram_programmable_cores = false,
+        bool enable_aerisc_ptp_trace = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -481,6 +503,7 @@ public:
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
@@ -508,9 +531,7 @@ public:
     float get_inf() const { return inf_; }
 
     // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
-    }
+    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
@@ -542,6 +563,7 @@ public:
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+    bool virtualizes_non_worker_cores() const { return this->virtualizes_non_worker_cores_; }
 
     bool get_supports_eth_fw_mailbox() const;
     bool get_supports_eth_debug_regs() const;
@@ -930,24 +952,3 @@ template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
     std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
 };
-
-#define HAL_MEM_L1_BASE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_ETH_BASE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_DRAM_L1_BASE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_DRAM_L1_SIZE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

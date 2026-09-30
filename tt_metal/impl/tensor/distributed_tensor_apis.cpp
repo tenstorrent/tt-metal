@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
@@ -36,14 +37,14 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
-    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
-    // check this, but we enforce it here at the device-binding boundary so any path that
-    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
-    // generating programs that misbehave later.
+    // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
+    // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
+    // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
+    // rather than an arch list, so this stays correct as arches are added or drop FP8 support.
     if (spec.data_type() == DataType::FP8_E4M3) {
         TT_FATAL(
-            mesh_device.arch() == tt::ARCH::BLACKHOLE,
-            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            tt::is_data_format_supported(tt::DataFormat::Fp8_e4m3, mesh_device.arch()),
+            "FP8_E4M3 is not supported on arch {}",
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
@@ -234,7 +235,11 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         HostBuffer pinned_buffer(*host_buffer);
         auto pinned_memory = local_coords.empty() ? nullptr
                                                   : experimental::PinnedMemoryCache::instance().try_pin(
-                                                        *mesh_device, local_range, pinned_buffer, /*map_to_noc=*/true);
+                                                        *mesh_device,
+                                                        local_range,
+                                                        pinned_buffer,
+                                                        /*map_to_noc=*/true,
+                                                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
         if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
@@ -296,52 +301,35 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
 
-    size_t total_size = 0;
-    for (const auto& coord : distributed_host_buffer.shard_coords()) {
-        auto buf = distributed_host_buffer.get_shard(coord);
-        if (buf) {
-            total_size += buf->view_bytes().size();
-        }
-    }
+    auto* mesh_device = mesh_buffer->device();
+    auto local_shards = tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
 
     const bool use_pinned =
-        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), total_size);
+        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), local_shards.size_bytes);
 
     if (use_pinned) {
-        auto* mesh_device = mesh_buffer->device();
-        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
-        transfers.reserve(distributed_host_buffer.shard_coords().size());
+        transfers.reserve(local_shards.shards.size());
         bool any_pinned = false;
 
-        for (const auto& coord : distributed_host_buffer.shard_coords()) {
-            // get_shard yields a buffer only for shards owned by this host, so remote chips are
-            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
-            auto buf = distributed_host_buffer.get_shard(coord);
-            if (buf) {
-                // The host buffer's distribution must agree with the device's: host memory can only
-                // be pinned to MMIO devices local to this process, so a populated shard for a coord
-                // the device owns on another host must never reach try_pin (which would fault while
-                // resolving the remote device).
-                TT_FATAL(
-                    view.impl().is_local(coord),
-                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
-                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
-                    coord);
-                auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-                HostBuffer pinned_buf(*buf);
-                auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+        for (auto& [coord, buf] : local_shards.shards) {
+            auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+            HostBuffer pinned_buf(buf);
+            auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
+                *mesh_device,
+                coord_range,
+                pinned_buf,
+                /*map_to_noc=*/true,
+                experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
-                auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
-                                .host_data(buf->view_bytes().data())
-                                .region(BufferRegion(0, buf->view_bytes().size()));
-                if (pinned_memory) {
-                    experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
-                    any_pinned = true;
-                }
-                transfers.push_back(std::move(xfer));
+            auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
+                            .host_data(buf.view_bytes().data())
+                            .region(BufferRegion(0, buf.view_bytes().size()));
+            if (pinned_memory) {
+                experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
+                any_pinned = true;
             }
+            transfers.push_back(std::move(xfer));
         }
         if (any_pinned) {
             cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);

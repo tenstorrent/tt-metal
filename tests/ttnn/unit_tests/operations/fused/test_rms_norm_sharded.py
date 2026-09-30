@@ -432,6 +432,12 @@ def test_rms_norm_sharded_width_non_rectangular_grid(
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     ids=["row_major", "col_major"],
 )
+@pytest.mark.skip(
+    "The sharded factory builds a ProgramSpec, and neither that type nor the kernel and semaphore "
+    "placements it derives are exposed to Python. Both halves of this test need that surface: the "
+    "core_range_set rejection it drives directly, and the assertion that placement covers exactly "
+    "the multicast bounding box. Enable once a program spec is reachable from Python. Issue #54365."
+)
 def test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(
     device, full_lines, cores_in_last_line, origin, line_length, orientation, expect_error
 ):

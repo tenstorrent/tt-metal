@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 
@@ -45,16 +44,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
-
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
@@ -62,6 +51,17 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math_unpack_to_dest_math_ready();
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
+
+        // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
+        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
+        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
+        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
+        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
+        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
+        if constexpr (src_b_bcast_type != BroadcastType::NONE)
+        {
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+        }
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
@@ -556,16 +556,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
-
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)

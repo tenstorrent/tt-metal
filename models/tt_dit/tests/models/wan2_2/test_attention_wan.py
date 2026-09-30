@@ -16,7 +16,7 @@ from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 @pytest.mark.parametrize(
@@ -57,6 +57,8 @@ def test_wan_attention(
     is_fsdp: bool,
     topology: ttnn.Topology,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     torch_dtype = torch.float32
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]

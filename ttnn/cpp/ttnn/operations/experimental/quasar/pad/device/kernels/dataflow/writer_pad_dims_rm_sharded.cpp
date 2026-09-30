@@ -6,7 +6,7 @@
 // Self-loop DFBs are no longer permitted on data-movement kernels, so cb_pad is now a CROSS-KERNEL DFB:
 // the reader PRODUCES the pad-value stick (the fill logic moved there); this writer CONSUMES it (wait_front
 // -> read its address -> broadcast pad sticks -> pop_front). The c_16 output shard is written in place
-// via tensor::output (NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0))) — no borrowed co-write DFB. start_dim_offset
+// via tensor::output (noc_address_backend::extract_local_address(s_out.get_noc_addr(0))) — no borrowed co-write DFB. start_dim_offset
 // is read by constant indices so it is three named scalar RTAs.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -46,7 +46,7 @@ void kernel_main() {
     // Output shard base from the resident output TensorAccessor (written in place; no borrowed
     // co-write DFB — the reader writes the gathered sticks, this writer writes the pad sticks).
     const auto s_out = TensorAccessor(tensor::output);
-    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
+    uint32_t l1_write_addr = noc_address_backend::extract_local_address(s_out.get_noc_addr(0));
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_c, curr_h = start_dim_h, curr_n = start_dim_n;

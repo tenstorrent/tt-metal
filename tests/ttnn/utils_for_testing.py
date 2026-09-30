@@ -174,6 +174,18 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     return pcc_passed, pcc_message
 
 
+def assert_reshape(torch_output, actual, dtype):
+    """Assert a reshape preserved shape and values. Block-float dtypes quantize, so compare with
+    PCC; every other dtype (bf16/fp32/int) must be bit-exact."""
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        assert_with_pcc(torch_output, actual, 0.99)
+    else:
+        assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
+
+
 def assert_allclose(
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],
@@ -216,6 +228,7 @@ def assert_allclose(
 
 
 def assert_with_ulp(
+    *,
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],
     ulp_threshold=10,
@@ -232,6 +245,7 @@ def assert_with_ulp(
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
 
     ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    All arguments are keyword-only because swapping the reference and actual tensors changes the metric.
     On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
     ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
     ``expected_result``.
@@ -635,12 +649,22 @@ def get_per_core_size_and_num_cores(
             yield per_core_size, num_cores_actual
 
 
+# Callables invoked with True on start_measuring_time() and False on stop_measuring_time().
+# The sweep framework uses this to tell a module's op apart from its tensor setup.
+_measuring_window_listeners = []
+
+
 def start_measuring_time() -> int:
+    for listener in _measuring_window_listeners:
+        listener(True)
     return time.time_ns()
 
 
 def stop_measuring_time(start_time) -> int:
-    return time.time_ns() - start_time
+    elapsed = time.time_ns() - start_time
+    for listener in _measuring_window_listeners:
+        listener(False)
+    return elapsed
 
 
 def maybe_trace(op_func, enable_trace, device):
@@ -927,7 +951,11 @@ def assert_div_by_zero_outputs(
     finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
     if finite_mask.any():
         # Safety net: not reached when golden is all ±inf after zero replacement.
-        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
+        assert_with_ulp(
+            expected_result=golden_tensor[finite_mask],
+            actual_result=device_tensor[finite_mask],
+            ulp_threshold=ulp_threshold,
+        )
 
 
 # ---------------------------------------------------------------------------

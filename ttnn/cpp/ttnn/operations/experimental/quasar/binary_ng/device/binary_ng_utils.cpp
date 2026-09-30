@@ -6,6 +6,11 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
+// log_info / log_warning in native_tuning(). Included explicitly rather than left to arrive
+// transitively: this target is a unity build, so a missing include here still compiles.
+#include <tt-logger/tt-logger.hpp>
+
+#include <cstdlib>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -149,7 +154,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -221,10 +230,16 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -694,8 +709,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
@@ -884,5 +907,98 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
         input_tensor_a.memory_config().memory_layout(),
         input_tensor_a.memory_config().buffer_type(),
         adjusted_shard_spec);
+}
+
+const NativeTuning& native_tuning() {
+    // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`env_u32` at file scope
+    // would collide with any sibling in the same blob (an anonymous namespace does not help).
+    static const NativeTuning tuning = [] {
+        // Unset, empty and "0" all mean OFF -- the A/B reference arm depends on =0 meaning off.
+        const auto env_bool = [](const char* name) {
+            const char* v = std::getenv(name);
+            return v != nullptr && v[0] != '\0' && v[0] != '0';
+        };
+        // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
+        // truncates to 0, and the gate's max(p,c) % min(p,c) then divides by zero. Depth 40 is a normal
+        // sweep point; 40 reader threads is not -- hence different bounds.
+        const auto env_u32 = [](const char* name, uint32_t fallback, uint32_t max_value) {
+            const char* v = std::getenv(name);
+            if (v == nullptr || v[0] == '\0') {
+                return fallback;
+            }
+            char* end = nullptr;
+            const long parsed = std::strtol(v, &end, 10);
+            TT_FATAL(
+                end != nullptr && *end == '\0' && parsed > 0 && parsed <= static_cast<long>(max_value),
+                "{} must be a decimal integer in [1, {}], got '{}'",
+                name,
+                max_value,
+                v);
+            return static_cast<uint32_t>(parsed);
+        };
+        // 8 covers every legal thread count; depth's ceiling is the platform's uint8_t cliff at 255.
+        constexpr uint32_t kMaxThreads = 8;
+        constexpr uint32_t kMaxEntriesPerThread = 255;
+
+        NativeTuning t;
+        t.enabled = env_bool("TTNN_QSR_NATIVE");
+        t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
+        t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
+        // EXPERIMENTAL: 0 keeps the derived value. env_u32 rejects 0, so read it separately.
+        t.tiles_per_cycle =
+            std::getenv("TTNN_QSR_TILES_PER_CYCLE") == nullptr ? 0u : env_u32("TTNN_QSR_TILES_PER_CYCLE", 1, 8);
+        t.dm_batch = env_u32("TTNN_QSR_DM_BATCH", 1, 8);
+        t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
+        t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
+        t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
+
+        // Only when enabled: with the native path off nothing reads these, so an unconditional throw
+        // would have no protective value and would kill the fallback reference arm on any arch.
+        if (!t.enabled) {
+            const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
+                                      t.compute_threads != 1 || t.writer_threads != 1 || t.tiles_per_cycle != 0 ||
+                                      t.dm_batch != 1;
+            if (any_knob_set) {
+                log_warning(
+                    tt::LogOp,
+                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE is off, so they have NO effect "
+                    "and the fallback factory will run. Set TTNN_QSR_NATIVE=1 to use them.");
+            }
+            return t;
+        }
+        // Inert today (the factory hardcodes explicit sync), and it cannot simply be switched on: under
+        // implicit sync a thread that drew zero tiles skips handle_final_credits' barrier while its
+        // siblings enter it, which deadlocks. Uneven tile counts are now admitted, so that is reachable.
+        TT_FATAL(
+            !t.implicit_sync,
+            "TTNN_QSR_IMPLICIT_SYNC is parsed but not consumed. Enabling it requires restoring the "
+            "guarantee that no thread draws zero tiles, which the uneven-tile-count support removed.");
+        // Also enforced in program_spec.cpp, but a throw here names the knob.
+        TT_FATAL(
+            t.compute_threads == 1 || t.compute_threads == 2 || t.compute_threads == 4,
+            "TTNN_QSR_COMPUTE_THREADS must be 1, 2 or 4, got {}",
+            t.compute_threads);
+        TT_FATAL(
+            t.reader_threads + t.writer_threads <= 6,
+            "TTNN_QSR_READER_THREADS + TTNN_QSR_WRITER_THREADS must be <= 6 (Quasar has 6 user DM "
+            "cores), got {} + {}",
+            t.reader_threads,
+            t.writer_threads);
+        // Once, so an A/B log is self-describing. num_entries is DERIVED (entries_per_thread x the
+        // endpoint's max(producers, consumers)), so the depth reaching the credit register is not this
+        // number.
+        log_info(
+            tt::LogOp,
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={} "
+            "dm_batch={}. Sync is EXPLICIT.",
+            t.reader_threads,
+            t.compute_threads,
+            t.writer_threads,
+            t.entries_per_thread,
+            t.tiles_per_cycle,
+            t.dm_batch);
+        return t;
+    }();
+    return tuning;
 }
 }  // namespace ttnn::operations::experimental::quasar::binary_ng
