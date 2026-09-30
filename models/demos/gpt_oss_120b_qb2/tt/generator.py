@@ -445,8 +445,10 @@ class Generator:
         page_tables_per_layer=None,
     ):
         logical_len = int(token_ids.shape[-1])
+        # Match the shared prefill graph used by device sampling and prefix resumes.
+        padded_tokens = torch.nn.functional.pad(token_ids, (0, get_padded_prefill_len(logical_len) - logical_len))
         inputs = self.model.prepare_inputs_prefill(
-            token_ids,
+            padded_tokens,
             page_table=page_table_row,
             batch_size=1,
             user_id=0,

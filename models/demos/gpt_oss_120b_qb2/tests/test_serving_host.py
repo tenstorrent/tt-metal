@@ -276,3 +276,28 @@ def test_serving_report_serializes_fabric_without_mutating_capabilities(monkeypa
     assert report["model_capabilities"]["fabric_config"]["config"] == str(fabric)
     assert adapter.model_capabilities["fabric_config"]["config"] is fabric
     assert report["resident_layers"] == 36
+
+
+@pytest.mark.parametrize("logical_len,padded_len", [(3, 128), (4, 128), (128, 128), (129, 256), (511, 512)])
+@pytest.mark.parametrize("return_all_logits", [False, True])
+def test_host_prefill_matches_shared_padding_and_preserves_logical_outputs(logical_len, padded_len, return_all_logits):
+    generator = object.__new__(Generator)
+    page_table = torch.zeros(1, 8, dtype=torch.int32)
+    token_ids = torch.arange(1, logical_len + 1).reshape(1, logical_len)
+    all_logits = torch.arange(padded_len * 128).reshape(1, 1, padded_len, 128)
+
+    def forward(embedded, *, get_last_token, **kwargs):
+        return all_logits if get_last_token == -1 else all_logits[:, :, get_last_token : get_last_token + 32]
+
+    prepare = Mock(side_effect=lambda tokens, **kwargs: (tokens, None, None, page_table))
+    generator.model = SimpleNamespace(prepare_inputs_prefill=prepare, ttnn_prefill_forward=Mock(side_effect=forward))
+    generator._gather_prefill_logits = lambda output: output
+    generator.trace_evidence = TraceEvidence()
+    actual = generator._prefill_one(token_ids, page_table, [], return_all_logits=return_all_logits)
+
+    prepared = prepare.call_args.args[0]
+    assert prepared.shape == (1, padded_len)
+    torch.testing.assert_close(prepared[:, :logical_len], token_ids, rtol=0, atol=0)
+    assert torch.count_nonzero(prepared[:, logical_len:]) == 0
+    expected = all_logits[0, 0, :logical_len] if return_all_logits else all_logits[0, 0, logical_len - 1 : logical_len]
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
