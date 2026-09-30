@@ -14,37 +14,12 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/compute_kernel_api.h"  // SFPU call macros
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 // Complement-form decay: final_decay carries expm1(G_last) (see prepare_chunk_recurrence) and the state
-// update is S + (S * expm1(G_last) + update). The FPU reads FP32
-// circular-buffer operands through 19-bit source registers, which drops the low 13 mantissa bits of the state on
-// every block; rounding the new state to TF32 (nearest even) before it is packed makes that read exact, so the
-// state is rounded once per 32-token block, without bias.
-#ifdef TRISC_MATH
-namespace ckernel::sfpu {
-template <int ITERATIONS = 8>
-inline void calculate_round_to_tf32() {
-    for (int d = 0; d < ITERATIONS; ++d) {
-        sfpi::vFloat value = sfpi::dst_reg[0];
-        sfpi::vInt bits = sfpi::as<sfpi::vInt>(value);
-        sfpi::vInt odd = (bits >> 13u) & 1;
-        bits = bits + 0x0FFF;
-        bits = bits + odd;
-        bits = bits & -8192;
-        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
-        sfpi::dst_reg++;
-    }
-}
-}  // namespace ckernel::sfpu
-
-inline void round_to_tf32_tile(uint32_t idst) {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_tf32, (8), idst, VectorMode::RC);
-}
-#endif
+// update is S + (S * expm1(G_last) + update), so long-memory channels keep their forgetting.
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 enum class ChunkInputPolicy { RETAIN, CONSUME };
@@ -146,7 +121,7 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
     }
 }
 
-// output = TF32_nearest(state + (state * decay_m1 + update)), one DST pass per tile group.
+// output = state + (state * decay_m1 + update), one DST pass per tile group.
 FORCE_INLINE void complement_update(
     DataflowBuffer& state,
     DataflowBuffer& decay_m1,
@@ -181,10 +156,6 @@ FORCE_INLINE void complement_update(
         add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(state_id);
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(state_id, block_start + tile, tile);
-        }
-        MATH((SFPU_UNARY_INIT(unused)));
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            MATH((round_to_tf32_tile(tile)));
         }
         tile_regs_commit();
         tile_regs_wait();
