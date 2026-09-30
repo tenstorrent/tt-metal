@@ -25,9 +25,6 @@ class CompactDecodeHostTests(unittest.TestCase):
         model = SimpleNamespace(
             embedding_weight=object(),
             config=SimpleNamespace(hidden_size=8),
-            # The gather mock stacks four shards, so this stands in for a TP4 mesh.
-            TP=4,
-            num_links=2,
             mesh=object(),
             ccl=SimpleNamespace(
                 get_and_cycle_ag_semaphore_handles=lambda _count: object(),

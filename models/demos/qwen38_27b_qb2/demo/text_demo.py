@@ -10,7 +10,6 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import native_mesh_shape
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
 p = argparse.ArgumentParser()
@@ -27,7 +26,7 @@ if a.profile and a.full:
     p.error("Full-stack profiling is prohibited; use the reduced stack")
 torch.set_num_threads(8)
 configure_fabric()
-mesh = ttnn.open_mesh_device(ttnn.MeshShape(*native_mesh_shape()), trace_region_size=200000000)
+mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
 gen = None
 try:
     begin = time.perf_counter()
