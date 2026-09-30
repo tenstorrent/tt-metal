@@ -78,3 +78,11 @@ Detached driver ~/fasth3/t27/tmp/drive27c.sh waits for drive27b (job 889), then 
 Log ~/fasth3/t27/tmp/drive27c.log ends DRIVE27C_DONE; job logs tmp/job_thread.log, tmp/job_process2.log.
 Next: same greps and md5 check as attempt 4, comparing job_thread.log with job_process2.log.
 Cleanup after: rm -rf /var/tmp/fasth3/cache/t27-tt-metal-cache (5.1 GB) and the ~/fasth3/t27 worktree on blx03.
+
+## 2026-09-30 20:45 (attempt 8, after host reboots)
+Both hosts rebooted. Job 889 (thread) never started (log ends at "Waiting to start"); drive27c died with the reboot,
+so job_process2.log does not exist. blx03 broker has the device HELD (degraded): 8/32 chips (8-15) off the bus,
+bridge-reset / glx_reset jobs 906-910 failed. No device timings yet. JIT cache /var/tmp/fasth3/cache/t27-tt-metal-cache
+(5.2 GB) is still warm. Next, once the broker is healthy: on blx03 run
+`cd ~/fasth3/t27 && setsid nohup bash -c 'tt-device-mcp run-bg "bash tmp/blx03_ab.sh thread" -w $PWD -t 590 -e tmp/blx03_env.yaml' ...`
+i.e. edit drive27c.sh to submit thread first (drop the drive27b wait), then process; same greps and md5 check as attempt 4.
