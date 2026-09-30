@@ -36,6 +36,25 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+def _paged_fill_cache(cache, x, *args, **kwargs):
+    """paged_fill_cache requires input dtype == cache dtype; cast when they differ.
+
+    Unlike paged_update_cache, the fill op does not repack (bfp8_b KV under
+    GEMMA4_KV_BFP8 hits its dtype TT_FATAL). The cast copy is freed after the
+    fill so callers' own deallocation of ``x`` stays balanced.
+    """
+    if x.dtype == cache.dtype:
+        return ttnn.experimental.paged_fill_cache(cache, x, *args, **kwargs)
+    xc = ttnn.typecast(x, cache.dtype)
+    try:
+        return ttnn.experimental.paged_fill_cache(cache, xc, *args, **kwargs)
+    finally:
+        try:
+            xc.deallocate(True)
+        except Exception:
+            pass
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -574,7 +593,7 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
 
     # ② persist updated hot blocks for next step, then ③ one fill launch.
     ttnn.assign(merged, staging)
-    ttnn.experimental.paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
+    _paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
     ttnn.deallocate(merged)
 
 
