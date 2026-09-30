@@ -10,3 +10,18 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   Custom modeling code (trust_remote_code) builds on python_env's transformers 5.12.1; nothing vendored.
 - Fit: all 40 layers, <= ~11 GiB per chip (experts bfp8 3.3 + rest bf16 replicated 5.1 + MLA cache 2.4).
 - 03:05 owner approved the spec ("yes"); intake approved, ledger --early 8 tasks, run1.
+- 03:15-05:10 R.1 PASS b72ea7fe647 (smoke "Paris<_end>", HF text_top1_acc 0.749). Overseer check of the low accuracy
+  (scratchpad probe, CPU): rope_interleave=False gives 0.132 (so the interleaved layout is right), eager / fp32 give
+  0.744 / 0.746 (not precision); greedy recites the book after its own markdown header. Owner's earlier small models:
+  Gemma-4 26B-A4B 0.67, the big ones 0.955-0.965. Classified plausible for a 4B-active model; floor left at 0.4.
+- R.2 PASS 89499441318 (attempt 1): standalone reference (reference/xing_ref.py, no HF import), parity PCC 1.0 on 40
+  layers and logits, top1 match 1.0. Accepted. R.3 65a71665b03, G.s4096 / s16384 / s56320, B.1 (2x4), PL.0 PASS.
+- 05:15 owner: cherry-pick F56 (dnijemcevic/f56-component-checks): reviewed the diff (checks=None unchanged, freeze
+  sweep, CPU proof 73/73, device 6/6, default review on); cherry-picked 6f2d7d30e45..a7816821e06, selftests 290 passed
+  8 skipped. Owner chose agents.component_review: none (spec edit, intake re-approved on their word).
+- 05:25 PL.1 attempt 1 (2x4, replicated 4-stream residual + TP=8 heads / EP=8, glm53 scheme): owner REJECTED, no
+  sequence parallelism. Overseer probe: the box opens as 4x2 with FABRIC_2D, all_gather / all_reduce on both axes.
+  Owner: mesh 4x2, SP=4 (rows) x TP=2 (columns), the Kimi K2.7 4x4 layout. Spec: box.mesh [4, 2] + owner rule
+  (agents.rules); intake re-approved on their word. Draft plan moved out of the tree (scratchpad plan_attempt1_2x4);
+  its known_issues entry (mhc_split_sinkhorn differs from Xing's Sinkhorn) kept. rerun --from B.1 (B.1 for the new
+  mesh, PL.1 replanned); goldens unaffected (CPU).
