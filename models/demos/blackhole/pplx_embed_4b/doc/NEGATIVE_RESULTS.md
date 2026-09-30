@@ -1375,7 +1375,7 @@ The first subblock's pass hides behind the next subblock's math; the last one's,
 output block's K block 0 in the other DST half, half does not (~0.45 µs per block at bs16, about half of one
 subblock's pass). Why is open: the pack thread's next-block setup (intermediate reserve, L1-acc / format reconfig)
 queued behind the tail, or a CB handoff at the block boundary; device-profiler zones on the math and pack threads
-around the boundary would say which.
+around the boundary would say which. (It was the output writer's deferred write, §63.)
 
 **e2e**, sustained_run.sh, 3 alternating rounds per batch, chips 2 / 0 / 1 concurrently, medians of 3, cold /
 sustained ms: bs8 78.5 / 101.2 → 78.3 / 99.4 (−0.3 / −1.8%), bs16 148.9 / 194.9 → 148.1 / 194.4 (−0.5 / −0.3%),
@@ -1384,3 +1384,52 @@ bs32 300.5 / 403.7 → 297.8 / 401.8 (−0.9 / −0.5%); the new pass is faster 
 per-text embedding cosine vs the old pass mean 0.995 (p1 0.955-0.962). ttnn nightly `test_minimal_matmul.py -k
 swiglu` (4) and `test_minimal_matmul_split.py -k swiglu` (6) pass; their relative RMSE vs torch 0.0078-0.0085 before
 and after.
+
+## 63. minimal_matmul: the output writer held the next block's in1 behind the previous block's tail (landed) (2026-09-30)
+
+Following §62's tail finding, bs16 fused FF13, `bench_swiglu_variants.py` with `SW_SKIP`, µs:
+
+| blocks | full | skip first | skip last | skip all | exposed | saved by skip last |
+|---|---|---|---|---|---|---|
+| 4,40,4 1×4 (2 K blocks) | 1805.5 | 1803.3 | 1756.0 | 1737.8 | 67.7 | 49.5 (73%) |
+| 4,80,4 1×4 (1 K block, no partials, no add) | 1664.9 | 1660.5 | 1651.4 | 1627.2 | 37.7 | 13.5 (36%) |
+| 4,40,4, partial-sum packs skipped | 1814.4 | — | 1751.9 | 1737.9 | 76.5 | 62.5 |
+| 4,40,8 1×8, partial-sum packs skipped | 1684.5 | — | 1660.1 | 1637.1 | 47.4 | 24.4 |
+| 4,40,4, partial-sum add skipped | 1749.3 | 1742.3 | 1696.3 | 1691.1 | 58.2 | 53.0 (91%) |
+| 4,40,8 1×8, partial-sum add skipped | 1616.1 | 1606.6 | 1594.3 | 1573.8 | 42.3 | 21.8 |
+
+**Not the partial-sum packs** (K block 0's packs queued on the pack thread behind the previous block's SwiGLU): skipping
+them leaves the tail as exposed. **Not the partial-sum add** either, though it is a cost of its own, 66-69 µs (4%) of
+math-thread throughput at bs16. **K_block 80** (one K block: no packs, no add) only fits small blocks
+(`bench_ff13_sweep.py`, 32 K-80 configs per batch): bs16 4,80,4 1×4 1664.7 vs 4,40,8 1×8 1685.2; bs8 best 4,80,6 965.8
+vs 8,40,6 857.7; bs32 best 4,80,2 3386.1 vs 4,40,8 3227.8. Not taken.
+
+**The cause.** The in1 reader (`dm_in1_sender_out_metal2.cpp`, likewise `dm_in0_sender_metal2.cpp` where it writes)
+writes an output block during the next block's K loop, at `k_block_iter == defer_write_k_block`, and waits for that
+output (`dfb_out.wait_front`) before reading (and forwarding) that K block's in1. The descriptor set
+`defer_write_k_block = min(core.y * k_blocks_per_core, K_blocks - 1)`: with 2 K blocks, 0 on row 0, so those writers
+stalled the next block's first K block behind the previous block's last subblock and its write; and injector cores never
+deferred (`defer_write && !is_injector_core`), writing each block synchronously before injecting the next block's in1,
+which holds every core down the forwarding chain. Kernel-patch variants (µs, bs16 / bs32 fused FF13 at 4,40,8 1×8,
+bs8 at 8,40,6 1×6): base 1686.3 / 3236.3 / 872.2; injectors defer (at their `core.y` K block) 1693.3 / 3234.5 / 869.9;
+defer point never K block 0 (injectors still synchronous) 1692.5 / 3228.2; both 1654.4 / 3132.1; everything deferred
+to the last K block 1649.2 / 3129.0 / 871.0. With the SwiGLU skipped entirely too 1644.1 → 1616.2 (bs16), 3126.1 →
+3060.8 (bs32): the synchronous write cost more than the SwiGLU tail.
+
+**Landed:** the descriptor never defers to K block 0 when there is a later K block (`defer_write_k_block_for`; the
+`core.y` stagger for large-K matmuls is kept), and injectors defer like the other writers. The model's other matmuls
+(`bench_mm_ablate.py <preset> <batch>`, full variant, µs, base → fix):
+
+| | bs8 | bs16 | bs32 |
+|---|---|---|---|
+| FF13 fused | 872.2 → 871.0 | 1686.3 → 1649.9 | 3236.3 → 3139.4 |
+| QKV | 266.3 → 266.3 | 559.9 → 534.1 | 1125.2 → 1072.4 |
+| FF2 | 373.1 → 373.0 | 732.2 → 724.3 | 1502.2 → 1474.1 |
+| WO | 174.3 → 173.3 | 333.4 → 325.3 | 660.9 → 638.5 |
+
+Outputs unchanged (the variant bench's error vs torch identical to 5 digits). ttnn nightly `test_minimal_matmul.py` +
+`test_minimal_matmul_split.py`: 216 passed, 276 skipped (`test_performance` excluded: it shells out to tracy with the
+system python). e2e, sustained_run.sh, 3 alternating rounds (rebuilt between arms), chips 2 / 0 / 1, medians, cold /
+sustained ms: bs8 78.2 / 100.0 → 78.3 / 100.4 (the sustained +0.4% repeats in all 3 pairs, with the new arm first;
+standalone bs8 is unchanged), bs16 148.0 / 194.1 → 145.3 / 192.8 (−1.8 / −0.7%), bs32 298.3 / 401.9 → 292.0 / 399.6
+(−2.1 / −0.6%).
