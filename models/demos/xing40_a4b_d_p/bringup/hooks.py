@@ -24,9 +24,137 @@ def reference(spec, layers=None, dtype=None):
     return XingReference(hf_path(spec), layers=layers, dtype=dtype or torch.float32)
 
 
+# Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
+# swap gate, once run). Steps not listed run on the CPU reference.
+DEVICE_STEPS = {
+    "dense": {"attn_hc"},
+}
+
+# mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
+_HC_STEPS = {"attn_hc", "ffn_hc"}
+
+
+def _loader(spec):
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.xing40_a4b_d_p.reference.weights import WeightLoader
+
+    return WeightLoader(hf_path(spec))
+
+
+def _cfg(spec):
+    import os
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.xing40_a4b_d_p.reference.xing_ref import XingConfig
+
+    return XingConfig.from_json(os.path.join(hf_path(spec), "config.json"))
+
+
+def _hc_host_fn(mesh, module, hidden):
+    """fn(ctx, streams_host [S * 4, H]) -> coefficients host [S, 24] fp32 (harness boundary: streams in, out back)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import row_split_to_host, streams_to_device
+
+    def fn(ctx, x):
+        xd = streams_to_device(mesh, x, hidden)
+        od = module(xd)
+        out = row_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _device_step_fn(mesh, spec, layer, step, loader, cfg):
+    if step in _HC_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.mhc import build_hc
+
+        return _hc_host_fn(mesh, build_hc(mesh, loader, cfg, layer, step), cfg.hidden_size)
+    return None
+
+
 def device_component(mesh, spec, layer, step):
-    raise NotImplementedError(f"implement step: no device module for {step} yet")
+    fn = _device_step_fn(mesh, spec, layer, step, _loader(spec), _cfg(spec))
+    if fn is None:
+        raise NotImplementedError(f"implement step: no device module for {step} yet")
+    return fn
+
+
+class _HybridState:
+    """The CPU reference state (no device-stateful step is swapped yet)."""
+
+    def __init__(self, ref, max_seq):
+        self.ref, self.s = ref, ref.new_state(max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.ref.load_state(self.s, layer, tensors, length)
+
+    def to_torch(self, layer, length):
+        return self.ref.state_tensors(self.s, layer, length)
+
+
+class HybridDeviceModel:
+    """CPU reference model with the steps in DEVICE_STEPS swapped for device modules (host in / host out per step).
+    Hidden states (the 4 mHC streams, [S * 4, H] fp32 token-major) stay on the host. The all-device model is the
+    assemble step's."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        t0 = time.time()
+        self.spec, self.mesh = spec, mesh
+        self.ref = reference(spec, layers=layers, dtype=torch.float32)
+        self.cfg = self.ref.cfg
+        loader = _loader(spec)
+        self.overrides = {}
+        for i in self.ref.layer_ids:
+            steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
+            self.overrides[i] = {s: _device_step_fn(mesh, spec, i, s, loader, self.cfg) for s in steps}
+            missing = [s for s, f in self.overrides[i].items() if f is None]
+            assert not missing, f"layer {i}: no device module for {missing}"
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _HybridState(self.ref, max_seq)
+
+    def embed(self, tokens):
+        import torch.nn.functional as F
+
+        e = F.embedding(tokens.long().reshape(-1), self.ref.embed)
+        return e.unsqueeze(1).expand(-1, self.cfg.hc_mult, -1).reshape(-1, e.shape[-1]).contiguous()
+
+    def from_host(self, h):
+        return h.float()
+
+    def to_host(self, h):
+        return h
+
+    def layer(self, i, h, start, state):
+        from models.demos.common.bringup.reference.interface import run_block
+
+        ctx = self.ref.chunk_context(i, start, h.shape[0] // self.cfg.hc_mult, state.s)
+        return run_block(
+            self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
+        )
+
+    def final_norm(self, h):
+        from models.demos.xing40_a4b_d_p.reference.xing_ref import rms_norm
+
+        mean = h.view(-1, self.cfg.hc_mult, h.shape[-1]).mean(dim=1)
+        return rms_norm(mean, self.ref.final_norm_w, self.cfg.rms_norm_eps)
+
+    def logits(self, hidden, rows):
+        return self.ref.logits(hidden[rows])
+
+    def free(self, h):
+        pass
+
+    def sync(self):
+        pass
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("implement step: no device model yet")
+    """The hybrid model (CPU reference with DEVICE_STEPS on the device) until the assemble step."""
+    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
