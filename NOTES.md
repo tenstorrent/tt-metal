@@ -6,3 +6,5 @@
 - Next: when 601 is done: grep "denoise init\|Stage [12] denoise" from `tt-device-mcp logs -n 100000 601`;
   compare latents tmp/e2e/noisepf/latents.gen2.pt vs ../t14/tmp/e2e/safe/latents.gen2.pt (expect bit-identical);
   baseline init S1 ~85 ms, S2 ~135 ms, S1 2.18 s, S2 2.46 s (job 574).
+- E2E job 602: same + LTX_DEVICE_PROMPT_HANDOFF=1 (plan item #2), outputs tmp/e2e/noisepf_ph/. Compare its latents to safe too
+  (handoff may change nothing numerically — the prompt comes from the encoder straight into device buffers).
