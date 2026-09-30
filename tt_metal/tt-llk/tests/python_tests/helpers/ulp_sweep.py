@@ -362,6 +362,7 @@ def _known_lanes() -> Dict:
             MathOperation.Gelu: (
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
+            MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
             MathOperation.Silu: (KnownNonfiniteLanes(**top_of_fp16),),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
@@ -375,9 +376,40 @@ def _known_lanes() -> Dict:
                 ),
             ),
             # #57215: the Float16 store saturates a value just past 65504 to 65504 rather
-            # than to an infinity. 1/x for |x| a step or two under 2**-16 is such a
-            # value, and the approximate reciprocal's few-percent shortfall keeps it
-            # under 2**16, the one value the store does carry to inf.
+            # than to an infinity, on a 32-bit Dest packed to Float16. 1/x for |x| a step
+            # or two under 2**-16, x - tanh(x) for |x| around 2**16, sqrt(x) for x around
+            # 2**32: each lands in (65504, 65536), where the pack answers 65504 and the
+            # golden's fp16 rounding answers inf.
+            MathOperation.Tanhshrink: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "magnitude": True,
+                        "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
+                    }
+                ),
+                KnownNonfiniteLanes(
+                    issue="#57215",
+                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
+                    output=DataFormat.Float16,
+                    dest=DestAccumulation.Yes,
+                    low=65024.0,
+                    high=66048.0,
+                    magnitude=True,
+                    why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
+                ),
+            ),
+            MathOperation.SqrtCustom: (
+                KnownNonfiniteLanes(
+                    issue="#57215",
+                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
+                    output=DataFormat.Float16,
+                    dest=DestAccumulation.Yes,
+                    low=4.26e9,
+                    high=4.33e9,
+                    why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
+                ),
+            ),
             MathOperation.Reciprocal: (
                 KnownNonfiniteLanes(
                     issue="#57215",
