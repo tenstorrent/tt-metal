@@ -24,19 +24,27 @@ from models.tt_dit.models.transformers.minimax_h3.attention_minimax_h3 import Mi
 P150_SERVED_LENGTHS = (19328, 22464, 37760)
 
 
-def _attn_stub():
-    """The narrowest object `_sdpa_program_config` can run against."""
+def _attn_stub(*, is_sequence_parallel=True):
+    """The narrowest object `_sdpa_program_config` can run against.
+
+    `is_sequence_parallel` is what separates the DiT's attention from the token refiner's: the
+    refiner is constructed `is_sequence_parallel=False` (token_refiner_minimax_h3.py), and BOTH pass
+    a window, so it is the only thing that tells them apart.
+    """
     return SimpleNamespace(
         _sdpa_program_configs={},
         measured_sdpa_chunk_sizes=MiniMaxH3Attention.measured_sdpa_chunk_sizes,
         plain_windowed_sdpa_chunk_sizes=MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes,
+        is_sequence_parallel=is_sequence_parallel,
         full_grid=ttnn.CoreCoord(11, 10),
         sdpa_worker_grid=(10, 10),
     )
 
 
-def _config(seq_local, *, ring, windowed):
-    return MiniMaxH3Attention._sdpa_program_config(_attn_stub(), seq_local, ring=ring, windowed=windowed)
+def _config(seq_local, *, ring, windowed, is_sequence_parallel=True):
+    return MiniMaxH3Attention._sdpa_program_config(
+        _attn_stub(is_sequence_parallel=is_sequence_parallel), seq_local, ring=ring, windowed=windowed
+    )
 
 
 @pytest.mark.parametrize("seq_local", P150_SERVED_LENGTHS)
@@ -47,8 +55,27 @@ def test_served_1x1_lengths_take_the_measured_windowed_chunks(seq_local):
     assert (cfg.compute_with_storage_grid_size.x, cfg.compute_with_storage_grid_size.y) == (11, 10)
 
 
-def test_token_refiner_keeps_the_generic_rule():
-    """The other non-ring caller passes no window and must not inherit the 1x1 attention's chunks."""
+# The refiner's real presentation lengths: `MINIMAX_H3_REF2VA_PRESENTATION_RUNGS` pads to 1024 and
+# above, and 512 is the short t2va case. All are above the generic q of 256, so all three would have
+# silently taken (384, 256) under the first version of this rule.
+REFINER_LENGTHS = (512, 1024, 5120)
+
+
+@pytest.mark.parametrize("seq_local", REFINER_LENGTHS)
+def test_token_refiner_keeps_the_generic_rule_even_though_it_passes_a_window(seq_local):
+    """The refiner's REAL config, which the first version of this test did not exercise.
+
+    It used to assert `windowed=False` for the refiner, on the strength of a comment saying the
+    refiner passes no window. It does pass one -- `MiniMaxH3Pipeline._prompt_windows` fences off its
+    padded text tail on every mesh -- so the assertion was testing the complement of the real
+    configuration and the refiner was in fact inheriting the DiT's chunk sizes on every mesh,
+    including ring meshes the commit claimed were untouched.
+    """
+    cfg = _config(seq_local, ring=False, windowed=True, is_sequence_parallel=False)
+    assert (cfg.q_chunk_size, cfg.k_chunk_size) == (256, 256), "windowed still caps k at 256"
+
+
+def test_a_non_windowed_non_ring_call_keeps_the_generic_rule():
     cfg = _config(512, ring=False, windowed=False)
     assert (cfg.q_chunk_size, cfg.k_chunk_size) == (256, 512)
 

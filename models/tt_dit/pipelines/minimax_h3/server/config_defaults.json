@@ -595,24 +595,25 @@
   "optimized_by": "stage 06 (see artifacts/s06/results.json); the matrix[] rows are stage 05 measurements at the PRE-optimization tree and are left as recorded",
   "p150": {
     "audio_shift": 3.0,
-    "choice_reason": "within budget; NFE 8 kept (stage 05: CLIP 0.3552 vs 0.2970 at NFE 4, +0.0582 >= 0.01 -- but see DECISIONS 2026-09-30 (05), that tiebreak is the thinnest conclusion in stage 05 and stage 06 did not get to re-run it over several prompts). Stage 06 took the e2e from 147.7 s to 134.9 s at this same point: SDPA chunk sizes for the one-chip windowed path and fp32 destination accumulation off.",
-    "clip": 0.3537,
+    "choice_reason": "within budget; NFE 8 kept (stage 05: CLIP 0.3552 vs 0.2970 at NFE 4). That tiebreak is UNVERIFIED -- DECISIONS 2026-09-30 (05) asked stage 06 to re-run it over several prompts and stage 06 did not get to it, so the default rests on a single-clip margin barely outside the measured noise; NFE 4 here would be a ~92 s default. Stage 06 took this point from 147.7 s to 133.9 s.",
+    "clip": 0.3473,
     "dit_dtype_policy": {
       "activation_dtype": null,
       "bf16_blocks": [],
       "ff_dtype": "bfloat8_b",
       "mm_fp32_dest_acc_en": false,
+      "mm_fp32_dest_acc_en_scope": "all four block matmuls: to_qkv and to_out via attention_kwargs, ff1 and ff2 via the block",
       "out_dtype": "bfloat8_b",
       "precomputed_adaln": true,
       "profile": "bf8_weights_bf8_out_nofp32acc",
       "qkv_dtype": "bfloat8_b",
-      "why": "bf4_ff, the only storage alternative measured, is not faster and costs CLIP (see rejected[]). The arithmetic knob is a separate axis and stage 06 measured it: fp32 destination accumulation off is 1.1% faster per forward with full-depth video PCC 0.9957 against 0.9927 and audio 0.9813 against 0.9840, so it ships; LoFi is 9.6% faster on a block but scores 0.9863 video, under the 0.99 bar, and is not offered as a profile."
+      "why": "bf4_ff, the only storage alternative measured, is not faster and costs CLIP (see rejected[]). The arithmetic is a separate axis and stage 06 measured it over all four block matmuls: fp32 destination accumulation off is 2.5% of a block and 1.6% of the e2e, with full-depth video PCC 0.9930 against bf8_weights_bf8_out's 0.9927 and audio 0.9799 against 0.9840 (bars 0.99/0.95). LoFi is 12.5% of a block but scores video 0.9892, under the 0.99 bar by 0.0008, and is not offered as a profile; LoFi with bf16_blocks=(0,-1) is the untried escape hatch."
     },
     "dit_quant_profile": "bf8_weights_bf8_out_nofp32acc",
-    "e2e_s": 134.9,
+    "e2e_s": 133.9,
     "e2e_samples_s": [
-      134.9,
-      134.9
+      133.9,
+      133.9
     ],
     "frames_max": {
       "1344x768": 124,
@@ -626,9 +627,9 @@
     "peak_dram_gib": 22.34,
     "phases_s": {
       "audio": 1.171,
-      "denoising": 108.715,
+      "denoising": 107.755,
       "encoder": 0.003,
-      "vae": 17.198
+      "vae": 17.155
     },
     "short_edge_max": 768,
     "steps": 9,

@@ -10,7 +10,7 @@ then one of them silently reads the other's weights back into a Parameter of the
 field that changes what gets written therefore has to change the cache tag.
 """
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -49,10 +49,24 @@ def test_presets_resolve_by_name_and_reject_typos(expect_error):
         resolve_quant_profile("bf8")
 
 
-# The fields that decide what bytes the device-weight cache holds. `mm_math_fidelity` and
-# `mm_fp32_dest_acc_en` are deliberately absent: they change how the matmul unit reads a stored tile,
-# not what is stored, so two profiles that differ only in them must share a cache directory.
-STORAGE_FIELDS = ("qkv_dtype", "out_dtype", "ff_dtype", "activation_dtype", "pin_output_bf16", "bf16_blocks")
+# Fields that do NOT change the stored tensorbins: the profile's own label, and the two matmul
+# precision knobs, which change how the matmul unit reads a stored tile rather than what is stored.
+# Everything else is storage BY DEFAULT and must therefore change the cache tag.
+#
+# Derived from the dataclass rather than listed, deliberately. A hand-written list of storage fields
+# is a second copy of `cache_tag`'s own field set, and the two drift silently in the dangerous
+# direction: add a field that changes written bytes, forget it in `cache_tag`, and a hardcoded list
+# that also omits it makes this test PASS on a real cache collision. Deriving means a new field is
+# storage until someone adds it to NON_STORAGE_FIELDS on purpose.
+NON_STORAGE_FIELDS = ("name", "mm_math_fidelity", "mm_fp32_dest_acc_en")
+STORAGE_FIELDS = tuple(f.name for f in fields(MiniMaxH3QuantProfile) if f.name not in NON_STORAGE_FIELDS)
+
+
+def test_every_non_storage_field_is_a_real_field_of_the_profile():
+    """So a rename cannot quietly turn a storage field into an unchecked one."""
+    names = {f.name for f in fields(MiniMaxH3QuantProfile)}
+    assert set(NON_STORAGE_FIELDS) <= names, set(NON_STORAGE_FIELDS) - names
+    assert STORAGE_FIELDS, "every field was excluded -- the derivation is broken"
 
 
 def _storage(profile) -> tuple:
@@ -158,9 +172,31 @@ def test_bf8_weights_kwargs_quantize_the_three_projections_and_carve_out_to_out(
 
 
 def test_bf16_profile_is_the_no_op_policy():
+    """Every kwarg the bf16 profile hands out must leave the module building what it always built.
+
+    `attention_kwargs` now also carries `mm_compute_kernel_overrides`, which the attention splats
+    over its own compute-kernel defaults. For a no-op policy that has to be EMPTY -- an override of
+    `{"fp32_dest_acc_en": True}` would happen to be the current default and would silently stop
+    being a no-op the day the default changes.
+    """
     profile = MiniMaxH3QuantProfile.bf16()
-    assert set(profile.attention_kwargs().values()) <= {ttnn.bfloat16, None, False}
+    attention = dict(profile.attention_kwargs())
+    assert attention.pop("mm_compute_kernel_overrides") == {}
+    assert set(attention.values()) <= {ttnn.bfloat16, None, False}
     assert set(profile.ffn_kwargs().values()) <= {ttnn.bfloat16, None, False}
+
+
+def test_only_the_arithmetic_preset_hands_the_attention_an_override():
+    """The attention owns its own matmul config, so the policy has to reach it explicitly.
+
+    This is the regression test for the stage-06 review finding: the first version of the precision
+    policy was wired into the block only, so to_qkv and to_out -- 26.7 ms of a 221.7 ms block -- kept
+    fp32 destination accumulation while the shipped description said all four matmuls had changed.
+    """
+    for name in PRESETS:
+        overrides = PRESETS[name]().attention_kwargs()["mm_compute_kernel_overrides"]
+        expected = {"fp32_dest_acc_en": False} if name == "bf8_weights_bf8_out_nofp32acc" else {}
+        assert overrides == expected, name
 
 
 @pytest.mark.parametrize("pinned, expect_bf16", [((-1,), 49), ((0,), 0), ((0, -1), None)])

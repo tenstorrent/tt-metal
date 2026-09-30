@@ -459,12 +459,13 @@ def _prepare_tt_inputs(
         pytest.param(
             15, 74, 448, (8, 8), (), "checkpoint_bf8_out", 50, None, id="golden_shape_full_depth_real_weights_bf8_out"
         ),
-        # The same storage policy with fp32 destination accumulation off -- worth 3.0% of a block's
-        # device time at the served p150 shape. Arithmetic precision is the one axis this test exists
+        # The same storage policy with fp32 destination accumulation off on all four block matmuls
+        # -- worth 2.5% of a block's device time at the served p150 shape. Arithmetic precision is the one axis this test exists
         # to bound, and it is a DEPTH question: one matmul accumulating in bf16 rather than fp32 is a
         # small error, and what matters is whether 50 blocks of it stay inside the bar the quantized
-        # rows already hold. (LoFi, the bigger 9.6% win, was measured here too and scored 0.9863 --
-        # under the bar, so it is not offered as a profile.)
+        # rows already hold. (LoFi, the bigger 12.5% win, was measured here too, on the real
+        # checkpoint and over the same four matmuls, and scored video 0.9892 -- under the bar by
+        # 0.0008, so it is not offered as a profile and the bar was not moved.)
         pytest.param(
             15,
             74,

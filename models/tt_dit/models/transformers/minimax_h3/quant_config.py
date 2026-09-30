@@ -122,12 +122,19 @@ class MiniMaxH3QuantProfile:
         )
 
     def attention_kwargs(self) -> dict:
-        """Construction kwargs for ``MiniMaxH3Attention``."""
+        """Construction kwargs for ``MiniMaxH3Attention``.
+
+        ``mm_compute_kernel_overrides`` is here because the attention builds its OWN matmul
+        compute-kernel config for to_qkv and to_out rather than taking the block's, so a policy
+        wired only into the block reaches ff1/ff2 and silently leaves half the block's matmul time
+        on the old arithmetic.
+        """
         return {
             "qkv_dtype": self.qkv_dtype,
             "out_dtype": self.out_dtype,
             "activation_dtype": self.activation_dtype,
             "pin_output_bf16": self.pin_output_bf16,
+            "mm_compute_kernel_overrides": self.compute_kernel_kwargs(),
         }
 
     def ffn_kwargs(self) -> dict:
@@ -207,18 +214,24 @@ class MiniMaxH3QuantProfile:
         fp32 destination accumulation halves the usable destination-register tiles, which costs
         blocking freedom on the four large block matmuls, and it buys precision the INPUTS cannot
         carry: a bfloat8_b tile is an 8-bit mantissa against one shared exponent per 16 values, so
-        the accumulator is not what bounds the error. Measured on one real block at the served p150
-        shape (1344x768 x73, 22464 padded rows, three warm samples each):
+        the accumulator is not what bounds the error.
 
-            HiFi2 + fp32_dest_acc   262.62 ms   (the default)
-            HiFi2                   254.71 ms   (-3.0%, this profile)
-            LoFi  + fp32_dest_acc   239.20 ms   (-8.9%)
-            LoFi                    237.45 ms   (-9.6%)
+        The policy reaches all four block matmuls -- to_qkv and to_out through
+        ``attention_kwargs``, ff1 and ff2 through the block -- and that is deliberate. The attention
+        builds its OWN compute-kernel config, so a policy wired only into the block reaches ff1/ff2
+        and silently leaves the two attention projections (26.7 ms of a 221.7 ms block) on the old
+        arithmetic. Measured on one real block at the served p150 shape (1344x768 x73, 22464 padded
+        rows), three warm samples, medians rather than minima:
+
+            HiFi2 + fp32_dest_acc   261.64 / 261.92 / 261.64 ms   (the default)
+            HiFi2                   252.68 / 255.05 / 257.26 ms   (-2.5%, this profile)
+            LoFi                    226.43 / 228.81 / 230.17 ms   (-12.5%)
 
         LoFi is the bigger win and is deliberately NOT offered: at full depth on the real checkpoint
-        it scores video PCC 0.9863 against the 0.99 bar every quantized row here holds, i.e. it costs
-        0.0064 of PCC against ``bf8_weights_bf8_out``'s 0.9927. Dropping to one mantissa pass over a
-        bf8 tile is a real fidelity loss and 50 blocks accumulate it; the accumulator width is not.
+        it scores video PCC 0.9892 against the 0.99 bar every quantized row here holds (audio
+        0.9721, which passes its 0.95). It misses by 0.0008 and the bar was not moved. The obvious
+        next thing to try is LoFi with ``bf16_blocks=(0, -1)``, the escape hatch this class already
+        documents, which costs 770 MB of DRAM and a re-quantized cache; it has not been measured.
         """
         return replace(
             MiniMaxH3QuantProfile.bf8_weights_bf8_out(),

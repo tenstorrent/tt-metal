@@ -141,9 +141,15 @@ class MiniMaxH3Attention(Module):
     # q=384 gives 3304 items and a shorter tail. k stays at 256 because the windowed mask CB is
     # what bounds it: (448, 256) and (512, 256) both fail to build L1 at every length above.
     #
-    # Deliberately keyed on `windowed` rather than on "not ring": the other non-ring caller is the
-    # token refiner, which runs a few hundred text rows on every mesh and passes no window. Its
-    # optimum is not this one and it was not measured, so it keeps the generic rule.
+    # Keyed on `windowed` AND on `is_sequence_parallel`, which together mean "the DiT's packed
+    # sequence on a mesh with no sequence parallelism". `windowed` alone is NOT enough and the first
+    # version of this made that mistake: the token refiner is the other non-ring caller, and it does
+    # pass a window -- `MiniMaxH3Pipeline._prompt_windows` fences off its padded text tail on every
+    # mesh, so `windowed` is true there too. It runs a few hundred to a few thousand text rows once
+    # per request, its optimum is not this one and it was never measured, so it keeps the generic
+    # rule. `is_sequence_parallel` separates them exactly: the refiner is built with
+    # `is_sequence_parallel=False` (its sequence is replicated on the SP axis), the DiT's attention
+    # is not.
     plain_windowed_sdpa_chunk_sizes = (384, 256)
 
     def __init__(
@@ -163,6 +169,9 @@ class MiniMaxH3Attention(Module):
         out_dtype: ttnn.DataType = ttnn.bfloat16,
         activation_dtype: ttnn.DataType | None = None,
         pin_output_bf16: bool = False,
+        # Matmul compute-kernel overrides from the DiT quant policy, for to_qkv and to_out. Empty
+        # means keep the defaults below. See MiniMaxH3QuantProfile.compute_kernel_kwargs.
+        mm_compute_kernel_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -281,10 +290,13 @@ class MiniMaxH3Attention(Module):
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            **{
+                "math_fidelity": ttnn.MathFidelity.HiFi2,
+                "math_approx_mode": True,
+                "fp32_dest_acc_en": True,
+                "packer_l1_acc": True,
+                **(mm_compute_kernel_overrides or {}),
+            },
         )
 
     # ------------------------------------------------------------------ weights
@@ -360,8 +372,10 @@ class MiniMaxH3Attention(Module):
         7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
         the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
 
-        `windowed` caps k at 256 so the on-device mask CB fits in L1, and takes its own measured
-        (q, k) from `plain_windowed_sdpa_chunk_sizes` -- see that constant for the measurements.
+        `windowed` caps k at 256 so the on-device mask CB fits in L1. A windowed call on the DiT's
+        own attention also takes its measured (q, k) from `plain_windowed_sdpa_chunk_sizes`; the
+        token refiner passes a window too but is built `is_sequence_parallel=False` and keeps the
+        generic rule -- see that constant.
         """
         key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
@@ -369,7 +383,7 @@ class MiniMaxH3Attention(Module):
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
             if measured is not None:
                 q_chunk, k_chunk = measured
-            elif windowed:
+            elif windowed and self.is_sequence_parallel:
                 q_pref, k_pref = self.plain_windowed_sdpa_chunk_sizes
                 q_chunk = max(tile, min(q_pref, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(k_pref, (seq_local // tile) * tile))
