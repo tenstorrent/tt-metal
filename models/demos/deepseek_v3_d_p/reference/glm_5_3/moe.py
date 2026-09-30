@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.1 MoE FFN CPU reference (plain routed MoE, no device dispatch/combine).
+"""GLM-5.3 MoE FFN CPU reference (plain routed MoE, no device dispatch/combine).
 
 The routing is the *same* noaux_tc gate the device uses (and that test_ttnn_moe validates the on-device
 gate against): reference.modeling_deepseek.MoEGate with scoring_func="sigmoid", topk_method="noaux_tc",

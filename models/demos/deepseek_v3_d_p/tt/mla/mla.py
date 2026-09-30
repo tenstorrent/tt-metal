@@ -600,7 +600,7 @@ class ttMLA:
             )
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
-        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
+        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
         # "full" -> current behavior, unchanged.
         self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
         requested_overlap_profile = sparse_mla_overlap_profile
@@ -778,7 +778,7 @@ class ttMLA:
         if cfg.get("num_heads") not in (None, self.num_heads):
             return False
         # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
-        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
+        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.3's (2048), even
         # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
         if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):

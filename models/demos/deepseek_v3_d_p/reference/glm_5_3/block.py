@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.1 decoder-*layer* (block) CPU reference.
+"""GLM-5.3 decoder-*layer* (block) CPU reference.
 
-GLM has no standalone HF reference model wired (see reference/glm_5_1_config.py); the DSA family
+GLM has no standalone HF reference model wired; the DSA family
 validates by *composing* the CPU references it already owns. This module assembles one full decoder
 layer exactly as ``TtPrefillBlock.forward`` does:
 
@@ -22,8 +22,8 @@ plain torch (dense) or a caller-supplied MoE callable. Nothing here re-implement
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
-from models.demos.deepseek_v3_d_p.reference.glm_5_1.moe import glm_moe_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
@@ -59,14 +59,14 @@ def glm_decoder_layer_reference(
     """One GLM decoder layer on CPU (DSA-MLA + norm/residual + FFN), matching TtPrefillBlock.forward.
 
     Args:
-        config: GLM HF-attribute config (glm_hf_config()); ``config.max_seq_len`` should be set.
+        config: GLM HF-attribute config (glm_5_3_hf_config()); ``config.max_seq_len`` should be set.
         mla_weights: canonical MLA+indexer weights (cpu_deepseek_v32 ``Weights``), also fed to ttMLA.
         attn_norm_weight / ffn_norm_weight: the two RMSNorm gains [hidden].
         hidden_states: block input [1, seq, hidden] (pre-attn-norm).
         seq_len: sequence length (sizes the sparse-MLA KVPE buffer).
         ffn_weights: dense-layer FFN weights {"gate_proj","up_proj","down_proj"}, OR
         moe_weights: MoE-layer weights {"gate_weights","routed_expert_weights","shared_expert_weights"}.
-            Exactly one must be given. The MoE uses GLM's own routing config (GLM51Config: 256 routed
+            Exactly one must be given. The MoE uses GLM's own routing config (GLM53Config: 256 routed
             experts, single-group top-k n_group=topk_group=1, top-8, route_scale=2.5) — not DeepSeek's.
         indexer_topk: attend through another layer's top-k instead of this layer's, the CPU dual of
             ttMLA's ``indexer_indices``. Needed by GLM-5.3's shared and MTP-iteration index reuse.
@@ -101,10 +101,10 @@ def glm_decoder_layer_reference(
             routed_expert_weights=moe_weights["routed_expert_weights"],
             shared_expert_weights=moe_weights["shared_expert_weights"],
             emb_dim=config.hidden_size,
-            num_experts_per_tok=GLM51Config.NUM_EXPERTS_PER_TOKEN,
-            n_group=GLM51Config.NUM_EXPERT_GROUPS,
-            topk_group=GLM51Config.NUM_LIMITED_GROUPS,
-            routed_scaling_factor=GLM51Config.ROUTE_SCALE,
+            num_experts_per_tok=GLM53Config.NUM_EXPERTS_PER_TOKEN,
+            n_group=GLM53Config.NUM_EXPERT_GROUPS,
+            topk_group=GLM53Config.NUM_LIMITED_GROUPS,
+            routed_scaling_factor=GLM53Config.ROUTE_SCALE,
         )
 
     if return_indexer_topk:
