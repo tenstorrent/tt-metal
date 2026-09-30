@@ -45,8 +45,19 @@ CB_COMB_COEF = 11
 CB_PRE_COLS = 12
 CB_Y_OUT = 13
 CB_OUT_STAGE = 14
+CB_WEIGHT_SPLIT = 15  # aliases CB_WEIGHT's allocation (fp32 W only): bf16 pages [W_hi(k), W_lo(k)] per k
 NUM_CB_SLOTS = 64
 UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_LOGITS_COEF)
+
+
+def w_pieces(w_dtype):
+    """bf16 pieces of W the projection accumulates in one DEST window (op_design.md, W hi/lo split).
+
+    An fp32 W is split exactly into W_hi = bf16-truncate(W) and W_lo = W - W_hi (the FPU would otherwise
+    read it as ~tf32); a bf16 W is already exact. Single source for the descriptor and the compute kernel.
+    """
+    return 2 if w_dtype == ttnn.float32 else 1
+
 
 # ---- semaphores ----
 SEM_GATHER = 0  # monotonic partial-arrival counter on the group root
@@ -59,6 +70,9 @@ X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of th
 Y_DEPTH = 2  # cb_y_out windows in flight
 Y_CHUNK_TILES_CAP = 8  # 4-8 writes in flight per barrier saturate (catalog: double_buffer)
 OUT_STAGE_PAGES = 2  # one post + one comb staging tile
+# W is pushed into cb_weight in chunks of this many tiles (one read barrier each), so the compute kernel's
+# fp32 W hi/lo split of chunk j runs under the DRAM read of chunk j+1 instead of after the whole W slice.
+W_CHUNK_TILES = 8
 L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
 # Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
 # Measured on BH p150 (fp32, device kernel ns, bt=coarsest-fit -> bt=1): 640x7168 384->383 us,
@@ -109,16 +123,22 @@ class Plan:
 
 
 def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype, w_dtype, y_dtype):
-    """THE per-core CB inventory: [(cb_index, num_pages, page_bytes, data_format)].
+    """THE per-core CB inventory: [(cb_index, num_pages, page_bytes, data_format, aliases)].
+
+    `aliases` = ((cb_index, page_bytes, data_format), ...) extra CB indices sharing the SAME allocation
+    (they cost no L1). cb_weight_split aliases cb_weight: the compute kernel rewrites each fp32 W tile k
+    in place into the bf16 pair [W_hi(k), W_lo(k)] (same 4096 B), so the split costs zero extra L1.
 
     Single source of truth for every CB size: the L1 selection function (`_l1_bytes`) and the
     ProgramDescriptor (`create_program_descriptor`) both read this table, so a knob turn lands in one
     place. Mirrors l1_ledger.md row by row.
     """
     f32, fT = ttnn.float32, F32_TILE_BYTES
-    return [
+    pieces = w_pieces(w_dtype)
+    w_alias = ((CB_WEIGHT_SPLIT, w_tile // pieces, ttnn.bfloat16),) if pieces > 1 else ()
+    table = [
         (CB_X_RESIDENT, depth * bt * kmax, x_tile, x_dtype),
-        (CB_WEIGHT, kmax, w_tile, w_dtype),
+        (CB_WEIGHT, kmax, w_tile, w_dtype, w_alias),
         (CB_BIAS_COEF, 1, fT, f32),
         (CB_REDUCE_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
         (CB_SQ_ACC, 1, fT, f32),
@@ -133,11 +153,12 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
         (CB_OUT_STAGE, OUT_STAGE_PAGES, fT, f32),
     ]
+    return [e if len(e) == 5 else e + ((),) for e in table]
 
 
 def _l1_bytes(**table_kwargs):
     """Per-core L1 footprint (identical on every core; see l1_ledger.md 'Total per-core footprint')."""
-    return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_table(**table_kwargs))
+    return sum(pages * page_bytes for _, pages, page_bytes, _, _ in _cb_table(**table_kwargs))
 
 
 def make_plan(device, x_tensor, w_tensor, n):
@@ -229,11 +250,12 @@ def make_plan(device, x_tensor, w_tensor, n):
     )
 
 
-def _cb(index, core_ranges, num_pages, page_bytes, dtype):
+def _cb(index, core_ranges, num_pages, page_bytes, dtype, aliases=()):
+    fmts = [(index, page_bytes, dtype)] + list(aliases)
     return ttnn.CBDescriptor(
         total_size=num_pages * page_bytes,
         core_ranges=core_ranges,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)],
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=d, page_size=pb) for i, pb, d in fmts],
     )
 
 
@@ -266,8 +288,8 @@ def create_program_descriptor(
 
     # ---- CBs: identical descriptors on every launched core (uniform L1 addresses for remote writes) ----
     cbs = [
-        _cb(index, all_cores, pages, page_bytes, fmt)
-        for index, pages, page_bytes, fmt in _cb_table(
+        _cb(index, all_cores, pages, page_bytes, fmt, aliases)
+        for index, pages, page_bytes, fmt, aliases in _cb_table(
             bt=bt,
             depth=plan.x_block_depth,
             kmax=kmax,
@@ -321,6 +343,7 @@ def create_program_descriptor(
         kmax,
         plan.Ct,
         n * (n + 2),
+        W_CHUNK_TILES,
     ]
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
@@ -345,6 +368,9 @@ def create_program_descriptor(
         bt,
         kmax,
         G,
+        CB_WEIGHT_SPLIT,
+        w_pieces(w_tensor.dtype),
+        W_CHUNK_TILES,
     ]
 
     writer_ct = [
@@ -444,7 +470,10 @@ def create_program_descriptor(
         math_approx_mode=cfg.math_approx_mode,
     )
     modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
-    for idx in UNPACK_TO_DEST_FP32_CBS:
+    # The fp32 W CB is only read by the split's copy_tile (the matmul reads cb_weight_split); a bf16 W
+    # feeds the FPU matmul directly and must stay Default.
+    fp32_cbs = UNPACK_TO_DEST_FP32_CBS + ((CB_WEIGHT,) if w_pieces(w_tensor.dtype) > 1 else ())
+    for idx in fp32_cbs:
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_cfg.unpack_to_dest_mode = modes
     compute = ttnn.KernelDescriptor(

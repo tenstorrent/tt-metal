@@ -31,7 +31,8 @@ void kernel_main() {
     constexpr uint32_t core_k_tiles_max = get_compile_time_arg_val(6);
     constexpr uint32_t tensor_c_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t mix_cols = get_compile_time_arg_val(8);  // n*(n+2)
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(9);  // W pushed in chunks (split pipelining)
+    constexpr auto x_args = TensorAccessorArgs<10>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
@@ -57,15 +58,20 @@ void kernel_main() {
     const auto b_acc = TensorAccessor(b_args, b_addr, b_tile_bytes);
 
     // ---------------- load_resident_constants ----------------
-    // W slice.
+    // W slice, K order p = c*n + i, pushed in chunks of w_chunk_tiles so the compute kernel can start
+    // consuming (fp32 W: the hi/lo split) while the rest of the slice is still in flight.
     cb_reserve_back(cb_weight, core_k_tiles);
     {
         const uint32_t w_base = get_write_ptr(cb_weight);
-        for (uint32_t c = 0; c < core_c_tiles; ++c) {
-            for (uint32_t i = 0; i < n_streams; ++i) {
-                noc_async_read_page(
-                    i * tensor_c_tiles + c_start + c, w_acc, w_base + (c * n_streams + i) * w_tile_bytes);
+        for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
+            const uint32_t p1 = (p0 + w_chunk_tiles) < core_k_tiles ? (p0 + w_chunk_tiles) : core_k_tiles;
+            for (uint32_t p = p0; p < p1; ++p) {
+                const uint32_t c = p / n_streams;
+                const uint32_t i = p - c * n_streams;
+                noc_async_read_page(i * tensor_c_tiles + c_start + c, w_acc, w_base + p * w_tile_bytes);
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_weight, p1 - p0);
         }
     }
 
@@ -82,8 +88,7 @@ void kernel_main() {
         noc.async_write_zeros(bias_cb, b_tile_bytes);
         noc.write_zeros_l1_barrier();
     }
-    noc_async_read_barrier();  // W slice + bias tile landed
-    cb_push_back(cb_weight, core_k_tiles);
+    noc_async_read_barrier();  // bias tile landed
     {
         volatile tt_l1_ptr float* src = reinterpret_cast<volatile tt_l1_ptr float*>(stage_addr);
         volatile tt_l1_ptr float* dst = reinterpret_cast<volatile tt_l1_ptr float*>(get_write_ptr(cb_bias_coef));
