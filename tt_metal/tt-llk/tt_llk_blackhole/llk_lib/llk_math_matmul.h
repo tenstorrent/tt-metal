@@ -294,13 +294,34 @@ inline void matmul_configure_addrmod(
 }
 
 // Set by matmul_configure_mop: true when the programmed MOP covers a whole reuse row of full 32x32 tiles (the DEST
-// advance from tile to tile is in the address mods and the tile count comes with the MOP instruction), false when it
+// advance from tile to tile is in the address mods, the tile count is the MOP's outer loop count), false when it
 // covers one tile (tiny tiles, partial faces, the throttled MOP). _llk_math_matmul_ issues one MOP per row or per tile
 // accordingly.
 static bool matmul_mop_covers_row = false;
+// The row MOP's parameters as programmed: streamed tiles per row (the outer loop count) and the DEST stride from one
+// tile of the row to the next in DEST rows (the DEST increment of ADDR_MOD_3). _llk_math_matmul_ refreshes them when
+// a call's block dimensions differ from the init's.
+static std::uint32_t matmul_mop_row_tiles   = 0;
+static std::uint32_t matmul_mop_dest_stride = 0;
 
 // DEST rows one 32x32 output tile occupies (the tile index shift of set_dst_write_addr).
 constexpr std::uint32_t MATMUL_DEST_TILE_ROWS = 64;
+
+/**
+ * @brief Program the DEST word of ADDR_MOD_3, the end of a tile that is not the last of its row in the row MOP.
+ *
+ * DEST moves to the next tile of the row through the carriage return register and the fidelity phase is cleared. The
+ * stride is a run-time value, so the word is written with the run-time form of SETC16.
+ *
+ * @param dest_tile_stride: DEST rows from one tile of the row to the next (64 along ct, ct_dim x 64 along rt).
+ */
+inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
+{
+    constexpr addr_mod_t::addr_mod_dest_t dest {.incr = 0, .clr = 0, .cr = 1};
+    constexpr addr_mod_t::addr_mod_fidelity_t fidelity {.incr = 0, .clr = 1};
+    TT_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (dest_tile_stride & DEST_INCR_MASK) | dest.val() | (fidelity.val() << 13));
+    matmul_mop_dest_stride = dest_tile_stride;
+}
 
 /**
  * @brief Build the matmul MOP: records the MVMUL sequence of one tile into the replay buffer and wraps it in a ckernel_template.
@@ -310,8 +331,9 @@ constexpr std::uint32_t MATMUL_DEST_TILE_ROWS = 64;
  * next tile of the row through the carriage return register, clear the fidelity phase, clear the streamed source bank)
  * and at the end of the row (ADDR_MOD_6: every counter to zero, clear both source banks). Between fidelity phases
  * MVMUL 16 uses ADDR_MOD_7, which rewinds DEST to the tile base held in the carriage return register. The row length
- * (tiles per row) is given by the MOP instruction at run time, so the MOP program does not depend on it. This removes
- * the SETC16, the MOP restart and the SETRWC per tile that each cost one FPU-idle cycle.
+ * (tiles per row) is the MOP's outer loop count. This removes the SETC16, the MOP restart and the SETRWC per tile
+ * that each cost one FPU-idle cycle. @ref _llk_math_matmul_ refreshes the row length and the DEST stride when a call
+ * uses other block dimensions than the init (as matmul_block does for the valid columns of a padded block).
  *
  * Other geometries (16x32, 32x16, partial faces): the MOP covers one tile, the recorded MVMUL order depends on the
  * in0/in1 face geometry, the inner loop count is the number of fidelity phases, and for high fidelity the end op clears
@@ -360,9 +382,10 @@ inline void matmul_configure_mop(
     {
         // Full 32x32 tiles: one MOP per reuse row (see the function description).
         constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
+        const std::uint32_t rut_dim                = reuse_a ? ct_dim : rt_dim; // streamed tiles per row
         // DEST rows from one tile of the row to the next: consecutive tiles when the row runs along ct, ct_dim tiles
         // apart when it runs along rt.
-        const std::int16_t dest_tile_stride = static_cast<std::int16_t>((reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS);
+        const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS;
 
         // End of a fidelity phase that is not the last of the tile: sources to zero, DEST back to the tile base, next phase.
         addr_mod_t {
@@ -373,19 +396,16 @@ inline void matmul_configure_mop(
         }
             .set(ADDR_MOD_7);
         // End of a tile that is not the last of the row: sources to zero, DEST to the next tile, fidelity phase to zero.
-        // The DEST word depends on ct_dim, so it is written with the run-time form of SETC16; the other two words are
-        // constants (the same source and bias words as ADDR_MOD_6).
+        // The source and bias words are constants (the same as in ADDR_MOD_6); the DEST word carries the stride.
         {
             constexpr addr_mod_t tile_end {
-                .srca     = {.incr = 0, .clr = 1, .cr = 1},
-                .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-                .dest     = {.incr = 0, .clr = 0, .cr = 1},
-                .fidelity = {.incr = 0, .clr = 1},
+                .srca = {.incr = 0, .clr = 1, .cr = 1},
+                .srcb = {.incr = 0, .clr = 1, .cr = 1},
             };
             TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.srca.val() | (tile_end.srcb.val() << 8));
-            TT_SETC16(ADDR_MOD_DST_SEC3_DestIncr_ADDR32, (dest_tile_stride & DEST_INCR_MASK) | tile_end.dest.val() | (tile_end.fidelity.val() << 13));
             TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
         }
+        matmul_set_row_tile_end_dest(dest_tile_stride);
         // End of the row: everything to zero.
         addr_mod_t {
             .srca     = {.incr = 0, .clr = 1, .cr = 1},
@@ -422,9 +442,8 @@ inline void matmul_configure_mop(
             });
 
         constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
-        // Outer loop length 1 is the default; _llk_math_matmul_ gives the tiles per row with the MOP instruction.
         ckernel_template tmp(
-            1 /* outer loop */,
+            rut_dim /* outer loop: tiles of the row */,
             inner_loops,
             lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
             TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0)); // B3A3 // MVMUL 16 between fidelity phases
@@ -433,6 +452,7 @@ inline void matmul_configure_mop(
         // MVMUL 16 of the last phase of the last tile of the row: clear both source banks, every counter to zero.
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
         tmp.program();
+        matmul_mop_row_tiles  = rut_dim;
         matmul_mop_covers_row = true;
         return;
     }
@@ -846,12 +866,26 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     {
         if (matmul_mop_covers_row)
         {
-            // Full 32x32 tiles: one DEST offset and one MOP per reuse row. The MOP instruction carries the outer loop
-            // count (tiles of the row) in bits 10 to 19; the inner loop count (fidelity phases) stays the programmed one.
+            // Full 32x32 tiles: one DEST offset and one MOP per reuse row. The MOP was programmed for the init's block;
+            // a call with another block width (matmul_block narrowed to the valid columns of a padded block) first
+            // refreshes the DEST stride of the tile end and the outer loop count. The reuse direction has to be the
+            // init's, as for the tile MOP.
+            const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS;
+            if (dest_tile_stride != matmul_mop_dest_stride)
+            {
+                matmul_set_row_tile_end_dest(dest_tile_stride);
+            }
+            if (rut_dim != matmul_mop_row_tiles)
+            {
+                // The MOP expander reads its configuration while it expands: wait for the previous MOP to finish.
+                mop_sync();
+                reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE)[0] = rut_dim;
+                matmul_mop_row_tiles = rut_dim;
+            }
             for (std::uint32_t t = 0; t < t_dim; t++)
             {
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t : t));
-                TT_MOP(1, 0, rut_dim << 10);
+                ckernel_template::run();
             }
             return;
         }
