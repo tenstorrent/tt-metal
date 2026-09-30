@@ -111,7 +111,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         buf.dtype(),
         buf.layout());
     // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
-    // pages by exactly one token; a TILE one is untilized into tokens on the way through.
+    // pages by exactly one token; a TILE one pages by one tile, which the untilizer reads and strides its input
+    // CB by.
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
@@ -120,6 +121,14 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "exactly one page",
         buf.buffer()->aligned_page_size(),
         token_page);
+    TT_FATAL(
+        buf.layout() == tt::tt_metal::Layout::ROW_MAJOR ||
+            tile_size_bytes(tensor_args) == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+        "combine_fabric2d: TILE dispatched_buffer pages by {} B but a {} tile is {} B; one tile must be "
+        "exactly one page",
+        buf.buffer()->aligned_page_size(),
+        buf.dtype(),
+        tile_size_bytes(tensor_args));
     // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(
         token_page % 16 == 0,
@@ -206,9 +215,7 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            args.output_mem_config));
+            TOKEN_DTYPE, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
