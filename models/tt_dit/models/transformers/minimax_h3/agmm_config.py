@@ -22,6 +22,7 @@ these shapes need an entry rather than falling back.
 from __future__ import annotations
 
 import os
+import re
 
 from ....utils.matmul import register_matmul_configs
 
@@ -90,7 +91,8 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 def _env_agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """Tuning override MINIMAX_H3_AGMM_BLOCKS="K,N:Mb,Kb,Nb[,sub_h,sub_w];..." for the (K, N) linears listed.
     A 5-value entry registers a 12x9 table hit (subblock included) and returns None so the table wins."""
-    for entry in os.environ.get("MINIMAX_H3_AGMM_BLOCKS", "").split(";"):
+    # Entries separated by ";" or "/" (the latter for shells and config strings that reserve ";").
+    for entry in re.split(r"[;/]", os.environ.get("MINIMAX_H3_AGMM_BLOCKS", "")):
         if ":" not in entry:
             continue
         shape, blocks = entry.split(":")
