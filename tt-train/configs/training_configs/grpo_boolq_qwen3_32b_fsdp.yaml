@@ -45,3 +45,7 @@ training_config:
 device_config:
   enable_fsdp: true
   mesh_shape: [32, 1]
+  # Qwen3's per-head q/k norms are [1,1,1,128]: over 32 devices that's 4-wide shards, well under a
+  # 32-wide tile, so FSDP would all-gather/reduce-scatter them via ttnn's slow composite path every
+  # step. Keeping these 128 tiny params replicated costs a few MiB per device. See docs/FSDP.md.
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]

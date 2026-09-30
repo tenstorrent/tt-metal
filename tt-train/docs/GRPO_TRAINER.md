@@ -532,6 +532,12 @@ When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
    gradients were already reduce-scattered by the FSDP backward hook); any
    replicated parameter is all-reduced across the axis.
 
+For Qwen3 on 8 or more FSDP devices, keep the per-head q/k norms replicated with
+`device_config.fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]` (as
+`grpo_boolq_qwen3_32b_fsdp.yaml` does). Their `[1, 1, 1, 128]` weights would otherwise
+be sharded into sub-tile pieces that take ttnn's slow composite CCL path on every
+step; see [Tile alignment](./FSDP.md#tile-alignment-and-replicated-parameters).
+
 Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
 shards rather than full tensors) — set `checkpointing: false`.
 

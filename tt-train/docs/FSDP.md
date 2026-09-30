@@ -93,6 +93,7 @@ def fully_shard(
     shard_dim: Union[int, Literal["auto"]] = "auto",
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
+    replicate: Sequence[str] = (),
 ) -> AbstractModuleBase
 ```
 
@@ -111,9 +112,10 @@ Wraps `module` in place and returns it. After the call:
 | Parameter | Default | Description |
 |---|---|---|
 | `module` | required | An `AbstractModuleBase` instance (block, root model, etc.). |
-| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
+| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto considers `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights) then `rank-1`, skipping a dim already taken by another mesh axis (e.g. TP) or of size 1, and prefers the one whose per-device shards are whole tiles, then one that divides evenly (see [Tile alignment](#tile-alignment-and-replicated-parameters)). Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
+| `replicate` | `()` | Glob patterns (`fnmatch`) of parameters to keep replicated instead of sharding. A pattern matches a parameter's dotted name relative to `module`, or any trailing part of it, so `"q_norm.weight"` matches `self_attn.q_norm.weight` in every block. See [Tile alignment](#tile-alignment-and-replicated-parameters). |
 
 ### Recommended usage pattern (FSDP2-style root)
 
@@ -131,6 +133,81 @@ is what gives the canonical "one block gathered at a time" memory profile.
 
 You can wrap any other granularity (e.g. only every other block, or just
 the root), but per-block wrapping is the granularity we test against.
+
+---
+
+## Tile alignment and replicated parameters
+
+ttnn stores tensors in 32×32 tiles. When a parameter's **per-device shard is
+not a whole number of tiles** along the shard dim, `all_gather` and
+`reduce_scatter` can't use the native CCL and fall back to a composite
+implementation (broadcast to every device, then concat). On an 8-card
+Blackhole loudbox that path measured 7–19× slower per call, e.g. an
+all-gather of a `[384, 1024]` weight took 868 µs as 48-row shards vs 118 µs
+as 128-column shards. It is paid on every step: two all-gathers (forward,
+and again before backward) plus one reduce-scatter per parameter.
+
+### What `fully_shard` does about it
+
+1. **Picks an aligned dim when there is one.** In auto mode, a candidate dim
+   whose shards are whole tiles wins over the default order. This covers
+   most real cases, e.g. a Llama-3 embedding `[128256, 4096]` over 32
+   devices shards into 128 columns instead of 4008 rows.
+2. **Warns when there isn't one.** If no candidate dim gives whole-tile
+   shards, the parameter is still sharded (correct, but on the slow path)
+   and a warning names it. It is reported once per shape, so a model with
+   many identical norms produces a single warning.
+3. **Lets you keep such parameters replicated** with `replicate=[...]`, the
+   right call for small ones: no gathers or reduce-scatter at all, only one
+   gradient all-reduce per optimizer step.
+
+In the [training example](/tt-train/sources/examples/train/train.py) and the
+[GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py),
+set the patterns in `device_config`:
+
+```yaml
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]
+```
+
+The run logs how many parameters were kept replicated, and warns about any
+pattern that matched nothing. In Python,
+`ttml.fsdp.replicated_parameters(model)` returns them.
+
+### Which models are affected
+
+Once the aligned dim is picked, the only unalignable weights in the models
+we checked (FSDP sizes 2–32) are:
+
+| Model | Unalignable weights | Suggested |
+|---|---|---|
+| Llama 3.2 1B, TinyLlama, Llama 3 8B / 70B, Llama 405B | none | — |
+| Qwen3 (0.6B–32B), FSDP ≥ 8 | per-head `q_norm` / `k_norm` (`[1, 1, 1, 128]`) | `fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]` |
+| Small models with narrow hidden sizes (e.g. 384 at FSDP 8, GPT-2's 768 at FSDP ≥ 16) | norms, and possibly attention matrices or the embedding | replicate the small ones; matrices and embeddings are too large to replicate and stay on the slow path |
+
+On Qwen3-0.6B at FSDP 8, keeping the q/k norms replicated cut the step time
+by 9% (278.6 → 253.3 ms).
+
+### Cost of replicating
+
+A replicated parameter stores its full value, gradient and optimizer state
+on every device. For small parameters this is negligible: Qwen3-32B's 128
+q/k norms take ~4 MiB per device replicated vs ~1 MiB sharded (bf16 AdamW,
+counted in whole tiles). Compute is unchanged, since FSDP gathers the full
+weight for forward and backward anyway. Don't replicate large matrices or
+embeddings.
+
+### Gradient sync requirement
+
+A replicated parameter gets a different gradient on each FSDP rank (each
+rank sees a different slice of the batch), so the training loop must
+average it over the FSDP axis:
+`ttml.sync_gradients(model.parameters(), axis_names=("fsdp",))` (or
+`("dp", "fsdp")` under HSDP). `SFTTrainer` and `GRPOTrainer` already do
+this. FSDP-managed parameters are skipped on that axis, so the same call is
+correct for both.
 
 ---
 
@@ -233,8 +310,11 @@ host-roundtrip:
 
 `ttml.sync_gradients(model.parameters(), axis_names=("dp",))` continues to
 work exactly like in DDP. For pure-FSDP runs (no `"dp"` axis on the mesh)
-it is a no-op: gradients have already been reduce-scattered in
-`backward_post`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
+it is a no-op for FSDP-managed parameters: their gradients have already been
+reduce-scattered in `backward_post`. Parameters left replicated (by
+`replicate=` or because they couldn't be sharded) still need an all-reduce
+over `"fsdp"`, which is why the trainers call it with
+`axis_names=("dp", "fsdp")`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
 is filtered per-axis: FSDP-sharded params skip the `"fsdp"` axis (already
 reduce-scattered) but still all-reduce on the `"dp"` axis (replicated
 across DP groups). The same call covers both cases, no rewrites needed.
@@ -320,11 +400,15 @@ In this layout:
 - **`clip_grad_norm`** raises under FSDP for the same reason it raises
   under TP: the per-rank L2 norm isn't the global norm. A
   sharding-aware clip is on the TODO list.
-- **Parameters on the chosen shard dim with size 1** (e.g. RMSNorm
-  `gamma` shaped `[1, 1, 1, F]` with `shard_dim` 2) are skipped
-  with a warning rather than sharded. They stay replicated. For the
-  small norm-style parameters this is the right behavior. If `shard_dim`
-  is set to `auto`, it will try to shard on dim 2, and then dim 3 before skipping.
+- **Parameters with no usable shard dim** (every candidate has size 1, e.g.
+  a `[1, 1, 1, 1]` scalar), or whose chosen dim isn't divisible by the FSDP
+  axis size, are skipped with a warning and stay replicated. In auto mode
+  an RMSNorm `gamma` shaped `[1, 1, 1, F]` is sharded along dim 3, since
+  dim 2 has size 1.
+- **Sub-tile shards are slow.** See
+  [Tile alignment](#tile-alignment-and-replicated-parameters): keep small
+  unalignable parameters replicated with `replicate=` /
+  `fsdp_replicate_params`.
 
 ---
 

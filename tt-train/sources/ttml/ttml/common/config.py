@@ -39,6 +39,13 @@ class DeviceConfig:
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.
         self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
+        # Glob patterns of parameters FSDP keeps replicated instead of sharding (passed to
+        # ``ttml.fsdp.fully_shard(..., replicate=...)``). Meant for small params that can't be
+        # split into whole 32-wide tiles, e.g. Qwen3's q/k norms: ["q_norm.weight", "k_norm.weight"].
+        replicate = device_config.get("fsdp_replicate_params", None) or []
+        if isinstance(replicate, str) or not all(isinstance(p, str) for p in replicate):
+            raise ValueError(f"device_config.fsdp_replicate_params must be a list of glob strings, got {replicate!r}")
+        self.fsdp_replicate_params = list(replicate)
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
