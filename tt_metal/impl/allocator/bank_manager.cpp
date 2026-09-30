@@ -31,12 +31,12 @@ std::string l1_small_hint(BufferType buffer_type, DeviceAddr bank_size) {
         return "";
     }
     if (bank_size == 0) {
-        return " The L1_SMALL region is 0 B: it is reserved at device open, so pass a non-zero l1_small_size to "
-               "ttnn.open_device / ttnn.open_mesh_device / CreateDevice (conv2d, pooling and CCL semaphores allocate "
-               "from it).";
+        return " The L1_SMALL region is 0 B: it is reserved at device open, so set l1_small_size in ttnn.open_device / "
+               "ttnn.open_mesh_device (C++: MeshDevice::create_unit_mesh) large enough for the op; conv2d, pooling "
+               "and CCL semaphores allocate from it.";
     }
     return " The L1_SMALL region is sized at device open; increase l1_small_size in ttnn.open_device / "
-           "ttnn.open_mesh_device / CreateDevice.";
+           "ttnn.open_mesh_device (C++: MeshDevice::create_unit_mesh).";
 }
 
 }  // namespace
