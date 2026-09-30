@@ -17,7 +17,7 @@ import ttnn
 
 from models.common.utility_functions import comp_allclose
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.bringup.mhc_post import mhc_post
+from ttnn.bringup.mhc_post_ttnn import mhc_post
 
 N = 4
 

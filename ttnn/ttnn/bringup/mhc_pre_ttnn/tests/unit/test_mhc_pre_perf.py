@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.bringup.mhc_pre import mhc_pre
+from ttnn.bringup.mhc_pre_ttnn import mhc_pre
 
 PERF_SHAPES = [
     (1, 1, 640, 4 * 7168),

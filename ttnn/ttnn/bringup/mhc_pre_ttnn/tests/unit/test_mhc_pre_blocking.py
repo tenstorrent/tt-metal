@@ -12,8 +12,8 @@ import pytest
 import torch
 import ttnn
 
-import ttnn.bringup.mhc_pre.mhc_pre_program_descriptor as pd
-from ttnn.bringup.mhc_pre import mhc_pre
+import ttnn.bringup.mhc_pre_ttnn.mhc_pre_program_descriptor as pd
+from ttnn.bringup.mhc_pre_ttnn import mhc_pre
 
 import importlib.util
 import pathlib
