@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <cstdint>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -53,6 +54,8 @@ struct ProgramCommandSequence {
         CircularBufferImpl* circular_buffer;
         uint32_t* dst;
         uint32_t buffer_index;
+        // The assembled payload already contains this generation's config.
+        uint64_t last_config_generation;
     };
     struct LaunchMsgData {
         const bool is_multicast = false;

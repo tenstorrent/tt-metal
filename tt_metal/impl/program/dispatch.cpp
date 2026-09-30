@@ -2739,14 +2739,16 @@ void assemble_device_commands(
                 local_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
             for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                 remote_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + remote_offset_index +
                          (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
         }
     }
@@ -2984,6 +2986,32 @@ void reserve_space_in_kernel_config_buffer(
         std::make_move_iterator(reservation.second.begin()), std::make_move_iterator(reservation.second.end() - 2));
 }
 
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence) {
+    // Update CB configs through destinations cached when the command sequence was assembled. The values
+    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
+    // and 16-bit page-count checks.
+    for (auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = circular_buffer.size();
+        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
+        update.dst[3] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+    for (auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+}
+
 void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
@@ -3059,21 +3087,7 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB configs through destinations cached when the command sequence was assembled. The values
-    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
-    // and 16-bit page-count checks.
-    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.address();
-        update.dst[1] = circular_buffer.size();
-        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
-        update.dst[3] = circular_buffer.page_size(update.buffer_index);
-    }
-    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.config_address();
-        update.dst[1] = circular_buffer.page_size(update.buffer_index);
-    }
+    update_circular_buffer_configs(cached_program_command_sequence);
 
     {
         uint32_t dfb_i = 0;
