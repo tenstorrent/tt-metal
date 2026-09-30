@@ -105,7 +105,10 @@ agents:
       8 per chip, dispatch / combine up and down each column (axis 0), then a reduce over the 2 columns. The mHC
       residual streams stay split by row, like the tokens, never replicated over all 8 chips. hy4_preview_d_p (SP2 x TP2
       with MLA + iHC, tt/ihc.py, tt/layout.py) is the closest working code. Do not fall back to a replicated-residual
-      TP=8 plan."
+      TP=8 plan. Plan role: think hard before you write the plan. Work out, for every step, where each tensor
+      lives on the 4x2 grid and which collective moves it (axis and size), how the causal work is balanced over the 4
+      rows at the last chunk, how the latent cache is laid out and gathered, and how dispatch / combine run on 4-chip
+      columns with the existing forks; say where the Kimi layout does not carry over and why."
     - "Text decoder only: never build, load or test the MTP layer (model.layers.40.*: eh_proj, enorm, hnorm,
       shared_head). There is no vision or audio part."
     - "Closest repo models: glm53_flash_d_p (the same mHC: 4 streams, 20-iteration Sinkhorn, tt/residual.py mix as one
