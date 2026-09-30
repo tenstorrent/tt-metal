@@ -6,7 +6,7 @@
 """GRPO on the reverse-text task, ported from the prime-rl / verifiers example.
 
 Trains Qwen3-0.6B to reverse text character-by-character on a single p150.
-Rollouts are generated on device by ``Qwen3GRPOCompleter``.
+Rollouts are generated on device by ``TTMLRolloutSampler``.
 
 Run:
     python3 reverse_text/reverse_text_training_example.py
@@ -32,8 +32,7 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
-from grpo.utils.qwen3_completer import Qwen3CompletionCtx
-from grpo.utils.qwen3_completer import Qwen3GRPOCompleter
+from grpo.utils.ttml_rollout_sampler import TTMLRolloutSampler
 
 MODEL_SOURCE = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 DATASET = "PrimeIntellect/Reverse-Text-RL"
@@ -108,19 +107,19 @@ def similarity_reward(completions, answer, **kwargs):
 class EvalCallback(TrainerCallback):
     """Greedy eval on the held-out split, before training and after every step.
 
-    Generation parameters live on the shared ``Qwen3CompletionCtx``, so greedy
-    decoding is a temporary mutation of that context: ``temperature == 0.0``
-    takes the pure-argmax path in ``ttnn_fixed::sample``.
+    Generation parameters live on the shared rollout sampler, so greedy
+    decoding is a temporary change of its ``temperature`` and
+    ``completions_per_prompt``: ``temperature == 0.0`` takes the pure-argmax
+    path in ``ttnn_fixed::sample``.
 
     Writes the three eval scalars (``eval_similarity`` / ``eval_chars`` /
     ``eval_format``) into ``trainer.metrics`` so the built-in ``GRPOMonitor``
     picks them up as CSV columns in the same step's row.
     """
 
-    def __init__(self, completer, ctx, dataset, num_examples):
+    def __init__(self, sampler, dataset, num_examples):
         rows = dataset.select(range(min(num_examples, len(dataset))))
-        self.completer = completer
-        self.ctx = ctx
+        self.sampler = sampler
         self.prompts = list(rows["prompt"])
         self.answers = list(rows["answer"])
         self.latest: dict[str, float] = {}
@@ -134,12 +133,15 @@ class EvalCallback(TrainerCallback):
         trainer.metrics.update(self.latest)
 
     def _evaluate(self, step):
-        saved = (self.ctx.temperature, self.ctx.completions_per_prompt)
-        self.ctx.temperature, self.ctx.completions_per_prompt = 0.0, 1
+        sampler = self.sampler
+        tokenizer = sampler.tokenizer
+        saved = (sampler.temperature, sampler.completions_per_prompt)
+        sampler.temperature, sampler.completions_per_prompt = 0.0, 1
         try:
-            texts = self.completer.generate_str(self.prompts)
+            batch = sampler.generate([tokenizer.encode(p) for p in self.prompts])
         finally:
-            self.ctx.temperature, self.ctx.completions_per_prompt = saved
+            sampler.temperature, sampler.completions_per_prompt = saved
+        texts = [tokenizer.decode(c) for c in batch.completions]
 
         similarities, char_fracs, formats = [], [], []
         for text, answer in zip(texts, self.answers):
@@ -191,15 +193,6 @@ def parse_args():
         help="Override the model config's max_sequence_length (bounds the generation horizon "
         "and the decode KV cache).",
     )
-    parser.add_argument(
-        "--memory_efficient",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use gradient checkpointing (RunnerType.MemoryEfficient, the default): per-block "
-        "activations are recomputed in the backward pass to keep within DRAM. Pass "
-        "--no-memory_efficient for the retain-activations runner: faster backward, much "
-        "higher peak memory.",
-    )
     args, _ = parser.parse_known_args()
     return args
 
@@ -250,26 +243,25 @@ if __name__ == "__main__":
         grpo_config.gradient_accumulation_steps,
     )
 
-    completion_ctx = Qwen3CompletionCtx(
-        max_tokens_to_complete=grpo_config.max_completion_length,
-        temperature=grpo_config.temperature,
-        completions_per_prompt=grpo_config.num_generations,
-    )
-    completer = Qwen3GRPOCompleter(
-        ctx=completion_ctx,
+    sampler = TTMLRolloutSampler(
+        model_kind=transformer_config.model_type,
         transformer_config=transformer_config,
         device_config=device_config,
         model_source=model_source,
-        memory_efficient=args.memory_efficient,
+        max_completion_length=grpo_config.max_completion_length,
+        temperature=grpo_config.temperature,
+        completions_per_prompt=grpo_config.num_generations,
     )
 
     grpo_trainer = GRPOTrainer(
-        completer=completer,
+        model=sampler.model,
+        tokenizer=sampler.tokenizer,
+        rollout_sampler=sampler,
         dataset=train_dataset,
         config=grpo_config,
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
-        callbacks=[EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples)],
+        callbacks=[EvalCallback(sampler, eval_dataset, args.eval_examples)],
         model_source=model_source,
     )
     grpo_trainer.train()
