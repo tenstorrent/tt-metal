@@ -97,7 +97,28 @@ def test_lanes_ladder(mesh_device, reset_seeds, request):
                 tables4[lane, 0] = torch.arange(1 + s * bpu, 1 + (s + 1) * bpu, dtype=torch.int32)
                 plens.append(int(t.shape[-1]))
             t0 = time.perf_counter()
-            logits4 = generator.prefill_forward_lanes(toks4, tables4, tt_kv_cache, plens, slot_ids=s)
+            if os.environ.get("G4_LADDER_SERIAL_PREFILL", "0") == "1":
+                # Discriminator mode: the proven serial wrapper per user (4x
+                # slower) — separates lane-loop-specific defects from shared
+                # depth machinery under lanes.
+                rows_l = []
+                for lane in range(lanes):
+                    tok1 = toks4[lane : lane + 1]
+                    out1 = generator.prefill_forward_text(
+                        tok1,
+                        page_table=tables4[lane],
+                        kv_cache=tt_kv_cache,
+                        prompt_lens=torch.tensor([plens[lane]]),
+                        empty_slots=[lane * SLOTS_PER_LANE + s],
+                        enable_trace=False,
+                        sampling_params=None,
+                        warmup_prefill=False,
+                    )
+                    lg1 = out1[0] if isinstance(out1, (list, tuple)) else out1
+                    rows_l.append(lg1.reshape(-1)[: generator.model[0].vocab_size].float())
+                logits4 = torch.stack(rows_l)
+            else:
+                logits4 = generator.prefill_forward_lanes(toks4, tables4, tt_kv_cache, plens, slot_ids=s)
             round_walls.append(time.perf_counter() - t0)
             for lane in range(lanes):
                 positions[(lane, s)] = plens[lane]

@@ -1028,6 +1028,15 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             page_tables = torch.cat([page_tables, pad], dim=-1)
 
+        # Mode-split async CCL: async RS+AG measured -27% on prefill but
+        # regressed decode, so GEMMA4_CCL_ASYNC_PREFILL=1 enables it for the
+        # duration of this prefill only (ccl_async_enabled() reads the env per
+        # call; decode steps outside this scope see it off).
+        _async_prefill = os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "0").lower() in ("1", "true", "yes")
+        _async_prev = os.environ.get("GEMMA4_CCL_ASYNC")
+        if _async_prefill:
+            os.environ["GEMMA4_CCL_ASYNC"] = "1"
+
         # Bounded sliding pools are PER-LAYER ring tensors addressed by
         # RING-LOCAL block ids (slot s owns rows [s*rb, (s+1)*rb)); the global
         # table's pool ids would index far past them — decode then reads
@@ -1142,6 +1151,11 @@ class ChunkedPrefillPageTableGuardMixin:
             host = ttnn.to_torch(shards[lane]).float()
             out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
+        if _async_prefill:
+            if _async_prev is None:
+                os.environ.pop("GEMMA4_CCL_ASYNC", None)
+            else:
+                os.environ["GEMMA4_CCL_ASYNC"] = _async_prev
         return out
 
     def _prefill_forward_single_user_text_eager(
