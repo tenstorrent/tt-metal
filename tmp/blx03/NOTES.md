@@ -17,3 +17,14 @@ passes -e tmp/blx03/env.yaml (c11bf19dc4); drive36 id parse fixed. Smoke resubmi
 Waiter: ~/fasth3/wait36.sh 867 (log ~/fasth3/wait36.log, ends SMOKE36_DONE RUN_EXIT[...]).
 Next: read timings from ~/fasth3/out/ltx25_1080p_6s/smoke_dv145/run.log, record DiT cache size, fill READY_blx03.md,
 remove ~/fasth3/uvboot and any .uv-cache, report disk after.
+
+Attempt 3 (18:57): job 867 ran 945s and failed in the warmup decode (not the model): DIFFVAE_MEM_LOG
+ping_pong_buffer_report crashed on reduce-scatter cache keys (no kind label). Fixed in 49ccc0ebb4 (CPU-tested).
+867 did write all 10 DiT caches (72G, ~/fasth3/cache/dit-ltx25; cold convert: transformer 143s, text encoder 72s,
+vocoder 39s, others <25s) and the kernel cache (5.6G). Warmup gen got through S1/S2 and into decode (warmup 159s).
+Disk after 867: /home 141 GB free (99%), ~/fasth3 90G (cache 79G, tree 11G). Removed ~/fasth3/uvboot (venv uses ~/fasth3/.uv-python).
+Rerun: ~/fasth3/drive36b.sh (log ~/fasth3/drive36b.log, ends DRIVE36B_DONE) waits until no other project job
+holds blx03 (869 from another task was running), then queues smoke2_dv145 (cap 1200s, pytest 1140s), waits, prints disk.
+Next: when DRIVE36B_DONE, read LTX_TIME / stage lines from ~/fasth3/out/ltx25_1080p_6s/smoke2_dv145/run.log
+(expect all load-cache hits), grab a still, fill timing into READY_blx03.md.
+If blx03 reboots and drive36b is gone: check `tt-device-mcp status` for a smarton smoke2 job; resubmit via the driver if none.
