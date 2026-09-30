@@ -39,7 +39,8 @@ namespace ttnn::operations::experimental::fabric_all_gather {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr uint32_t kCbChunks = tt::CBIndex::c_0;
-constexpr uint32_t kCbMeta = tt::CBIndex::c_1;
+constexpr uint32_t kCbMeta = tt::CBIndex::c_1;        // reader's metadata landing slot
+constexpr uint32_t kCbMetaWriter = tt::CBIndex::c_2;  // sender's / copy writer's (the two RISCs read concurrently)
 constexpr uint32_t kMetaBytes = 64;
 constexpr uint32_t kIncEvery = 8;           // one fused write + increment per this many chunks
 constexpr uint32_t kCbBudget = 112 * 1024;  // chunk CB per core: two halves of `group` chunks
@@ -687,11 +688,13 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
             all_set,
             tt::tt_metal::CircularBufferConfig(2 * group * chunk_bytes, {{kCbChunks, data_format}})
                 .set_page_size(kCbChunks, page_bytes));
-        tt::tt_metal::CreateCircularBuffer(
-            program,
-            all_set,
-            tt::tt_metal::CircularBufferConfig(kMetaBytes, {{kCbMeta, data_format}})
-                .set_page_size(kCbMeta, kMetaBytes));
+        for (const uint32_t meta_cb : {kCbMeta, kCbMetaWriter}) {
+            tt::tt_metal::CreateCircularBuffer(
+                program,
+                all_set,
+                tt::tt_metal::CircularBufferConfig(kMetaBytes, {{meta_cb, tt::DataFormat::UInt32}})
+                    .set_page_size(meta_cb, kMetaBytes));
+        }
 
         const Tensor& batch_t = batch_meta ? *tensor_args.input_batch_index_tensor : output_tensor;
         const Tensor& prefix_t = prefix_meta ? *tensor_args.gathered_prefix_tensor : output_tensor;
@@ -705,6 +708,7 @@ FabricAllGatherFactory::cached_mesh_workload_t FabricAllGatherFactory::create_me
         append_accessor(reader_ct, batch_t);
         append_accessor(reader_ct, prefix_t);
         std::vector<uint32_t> writer_ct = base_ct;
+        writer_ct[1] = kCbMetaWriter;
         writer_ct.push_back(prefix_meta ? 1u : 0u);
         append_accessor(writer_ct, output_tensor);
         append_accessor(writer_ct, prefix_t);
