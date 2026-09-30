@@ -106,6 +106,14 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
     return tensor_args.output;
 }
 
+std::vector<tt::tt_metal::TensorTopology> SliceWriteDeviceOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    // In-place: the output is the caller's tensor, and writing a slice into it does not change how it is
+    // distributed across the mesh. The default output-topology inference unions input and output and would
+    // relabel a Replicate output with a sharded input's placement. Keep the output's own label.
+    return {tensor_args.output.tensor_topology()};
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
