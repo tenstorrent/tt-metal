@@ -532,6 +532,18 @@ def _run_typecast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
-    ), "Assert against golden failed"
+    if max_ulp == 0 and formats.output_format.is_integer():
+        # The harness ULP gate is defined for the float formats only; an integer output of a bit-exact
+        # test is compared value for value, and the first mismatch is reported with its input.
+        golden_i = golden_tensor.flatten().to(torch.int64)
+        result_i = res_tensor.flatten().to(torch.int64)
+        mismatch = (golden_i != result_i).nonzero().flatten()
+        assert mismatch.numel() == 0, (
+            f"{mismatch.numel()} of {golden_i.numel()} results differ from the golden; first at index "
+            f"{int(mismatch[0])}: input {src_A.flatten()[int(mismatch[0])].item()}, golden "
+            f"{int(golden_i[mismatch[0]])}, result {int(result_i[mismatch[0]])}"
+        )
+    else:
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
+        ), "Assert against golden failed"
