@@ -290,8 +290,8 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
         ReduceFp32Mode::Fast,
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-    ASSERT_EQ(tail.auxiliary_tiles.size(), 4U);
-    EXPECT_EQ(tail.total_owned_l1_bytes, 4U * tt::tile_size(tt::DataFormat::Float16_b));
+    ASSERT_EQ(tail.auxiliary_tiles.size(), 3U);
+    EXPECT_EQ(tail.total_owned_l1_bytes, 3U * tt::tile_size(tt::DataFormat::Float16_b));
 }
 
 TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
@@ -371,7 +371,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             ASSERT_NE(full.tail_plan, nullptr);
             const auto& tail = *full.tail_plan;
             const bool add = algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd;
-            ASSERT_EQ(tail.auxiliary_tiles.size(), 3U);
+            ASSERT_EQ(tail.auxiliary_tiles.size(), 2U);
             EXPECT_EQ(full.find_cb(ReduceCbRole::Auxiliary)->page_count, sequence.auxiliary.tiles.size());
             EXPECT_EQ(full.reduce_factor, add ? 256U : 1U);
             EXPECT_EQ(full.logical_h, 256U);
@@ -383,8 +383,6 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             }
             EXPECT_EQ(tail.partial_reduce_axis_elements, 7U);
             EXPECT_EQ(tail.auxiliary_tiles[add ? 0 : 1].num_valid_elements, 7U);
-            EXPECT_EQ(tail.auxiliary_tiles.back().num_valid_elements, 1U);
-            EXPECT_FLOAT_EQ(tail.auxiliary_tiles.back().value, 1.0F);
             EXPECT_EQ(tail.chunk.reduce_axis_tiles, 5U);
             EXPECT_EQ(tail.reduce_factor, add ? 135U : 1U);
             EXPECT_NEAR(tail.post_scale, 1.0F, 1e-6F);
@@ -503,8 +501,7 @@ TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
                                         std::bit_cast<uint32_t>(variant->post_scale), std::bit_cast<uint32_t>(scalar));
                                 } else {
                                     const auto scalers = variant->tail_plan ? variant->full_auxiliary_tile_count
-                                                                            : variant->auxiliary_tiles.size() -
-                                                                                  (variant->tail ? 1U : 0U);
+                                                                            : variant->auxiliary_tiles.size();
                                     for (std::size_t i = 0; i < scalers; ++i) {
                                         EXPECT_EQ(
                                             std::bit_cast<uint32_t>(variant->auxiliary_tiles[i].value),
@@ -513,7 +510,6 @@ TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
                                 }
                             }
                         }
-                        EXPECT_FLOAT_EQ(sequence.calls.back().plan.auxiliary_tiles.back().value, 1.0F);
                     }
                 }
             }
@@ -657,7 +653,7 @@ TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
     EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0}));
     second.block.tail->shape.width = 231;
     const auto shared = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
-    EXPECT_EQ(shared.auxiliary.tiles.size(), 4U);
+    EXPECT_EQ(shared.auxiliary.tiles.size(), 3U);
     EXPECT_EQ(shared.calls[0].auxiliary_tile_offset, shared.calls[1].auxiliary_tile_offset);
     EXPECT_EQ(shared.calls[1].plan.tail_plan->tail_runtime_arg_offset, 0U);
     EXPECT_EQ(shared.get_runtime_shape_args(), (std::vector<uint32_t>{65, 231, 1}));
@@ -721,8 +717,6 @@ TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
             }
             const auto& tail_plan = *sequence.calls.back().plan.tail_plan;
             EXPECT_EQ(tail_plan.partial_reduce_axis_elements, 7U);
-            EXPECT_FLOAT_EQ(tail_plan.auxiliary_tiles.back().value, 1.0F);
-            EXPECT_EQ(tail_plan.auxiliary_tiles.back().num_valid_elements, 1U);
         }
     }
 }

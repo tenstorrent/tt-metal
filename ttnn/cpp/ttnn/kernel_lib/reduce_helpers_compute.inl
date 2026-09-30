@@ -15,7 +15,6 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
-#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
@@ -1459,7 +1458,6 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
     auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
     auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
                                         : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    [[maybe_unused]] uint32_t output_index = 0;
     if constexpr (Call::is_tail) {
         static_assert(
             Call::reduce_dim != ReduceDim::REDUCE_SCALAR ||
@@ -1473,45 +1471,12 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
         }
     }
-    if constexpr (Call::has_output_mask) {
-        // The last recipe tile masks the tail's partial non-reduced edge.
-        DataflowBuffer(Call::auxiliary_cb_id).wait_front(Call::auxiliary_tile_offset + Call::auxiliary_tile_count);
-    }
-
     auto post_scale = [&](uint32_t dst_index) {
         if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
             constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
             reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
         }
         post_reduce_op(dst_index);
-        if constexpr (Call::has_output_mask) {
-            const uint32_t outputs_per_batch = Call::reduce_dim == ReduceDim::REDUCE_ROW ? shape.rows : shape.cols;
-            if (++output_index % outputs_per_batch == 0) {
-                // The planner reserves the last DEST slot only when this mask is needed.
-                constexpr uint32_t mask_dst = DEST_AUTO_LIMIT - 1;
-                constexpr uint32_t mask_tile = Call::auxiliary_tile_offset + Call::auxiliary_tile_count - 1;
-                constexpr DataFormat dst_format = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
-                reconfig_data_format_srca(Call::auxiliary_cb_id);
-                copy_init(Call::auxiliary_cb_id);
-                copy_tile(Call::auxiliary_cb_id, mask_tile, mask_dst);
-                where_tile_init();
-                // Select zero instead of multiplying by zero, so NaNs in the padding are removed too.
-                where_tile<dst_format>(mask_dst, dst_index, mask_dst, dst_index);
-                if constexpr (Call::algorithm == ReduceAlgorithm::AccumulateViaAdd) {
-                    reconfig_data_format(Call::input_cb_id, Call::input_cb_id);
-                    sfpu_reduce_init<PoolType::SUM, dst_format>();
-                } else {
-                    constexpr bool swap = reduce_swaps_operands<Call::reduce_type, Call::reduce_dim, false>();
-                    if constexpr (swap) {
-                        reconfig_data_format(Call::auxiliary_cb_id, Call::input_cb_id);
-                    } else {
-                        reconfig_data_format(Call::input_cb_id, Call::auxiliary_cb_id);
-                    }
-                    reduce_init<Call::reduce_type, Call::reduce_dim>(
-                        Call::input_cb_id, Call::auxiliary_cb_id, Call::output_cb_id);
-                }
-            }
-        }
     };
 
     auto issue = [&](auto accumulate, auto post_op) {
@@ -1538,7 +1503,7 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
 
     // A NoOp post operation lets AccumulateViaAdd keep its SFPU reduction state across outputs.
     constexpr bool trivial_post_op = Call::post_scale_bits == ttnn::kernel_lib::reduce_plan_args::float_one_bits &&
-                                     !Call::has_output_mask && std::is_same_v<PostReduceOp, NoOp>;
+                                     std::is_same_v<PostReduceOp, NoOp>;
     auto final_post_op = [&]() {
         if constexpr (trivial_post_op) {
             return NoOp{};

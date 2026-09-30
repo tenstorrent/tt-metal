@@ -103,6 +103,8 @@
  *   offset. reduce<Call>() selects between them internally: [0] chooses full work; the planned
  *   [height, width, batches] chooses tail work, including its auxiliary slice and AVG
  *   normalization. The same call type and compiled kernel run on every core of the grid.
+ *   Output lanes beyond the valid non-reduced extent are unspecified; a consumer that needs them
+ *   to be zero masks its own output.
  *
  *   call_count only bounds the walk. Never infer accumulation, final-call, or partial-tile behavior
  *   from I: Call carries all of it explicitly. Calls may repeat an input CB ID; the kernel may refill
