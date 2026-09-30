@@ -10,7 +10,6 @@ import ttnn
 from typing import Optional
 from pathlib import Path
 
-
 # Get default layout and dtype
 DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
 DEFAULT_DTYPE = ttnn.bfloat16
@@ -474,7 +473,8 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=N
     if layout is None:
         layout = DEFAULT_LAYOUT
 
-    layer_params = {}
+    # ttnn.layer_norm defaults to epsilon=1e-12; carry the module's own.
+    layer_params = {"eps": layer_norm.eps}
 
     # Weight (gamma)
     kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
