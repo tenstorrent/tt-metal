@@ -2013,6 +2013,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py -k "torus_xy_6k" -q -s || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf
