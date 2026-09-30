@@ -337,12 +337,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         attributes.program_config);
 }
 
+bool SoftmaxDeviceOperation::is_inplace(const operation_attributes_t& attributes) {
+    return (attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
+            attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
+            attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
+           attributes.inplace;
+}
+
 SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    if ((attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
-        attributes.inplace) {
+    if (is_inplace(attributes)) {
         return tensor_args.input_tensor.tensor_spec();
     }
     return {tt::tt_metal::TensorSpec(
@@ -356,14 +360,25 @@ SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_outp
 SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Inplace config
-    if ((attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
-        attributes.inplace) {
+    if (is_inplace(attributes)) {
         return tensor_args.input_tensor;
     }
     // Standard
     return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
+}
+
+std::vector<tt::tt_metal::TensorTopology> SoftmaxDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // In place, the returned tensor IS the caller's input: its distribution over the mesh does not change, so
+    // it must keep the caller's topology. The framework default would instead union the input with the mask
+    // and relabel a replicated input as sharded whenever the mask is sharded (cf. update_padded_kv_cache).
+    if (is_inplace(attributes)) {
+        return {tensor_args.input_tensor.tensor_topology()};
+    }
+    // Out of place the output is a fresh tensor. softmax(input * scale + mask) is a genuinely two-input op,
+    // so the union of input and mask is the right label (a sharded mask makes the output per-device
+    // distinct); an empty vector selects that framework default.
+    return {};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -34,6 +35,12 @@ struct TypecastDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Output distribution label: a typecast copies the input's per-device shards, so the output carries the
+    // input's topology; a caller-owned preallocated output keeps its own label when it does not span the
+    // same mesh coordinates.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };

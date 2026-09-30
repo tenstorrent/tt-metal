@@ -105,6 +105,14 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
     return tensor_args.output;
 }
 
+std::vector<tt::tt_metal::TensorTopology> SliceWriteDeviceOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    // In-place partial write: every device overwrites output[start:end:step] with its own input shard, so the
+    // output's distribution over the mesh is unchanged and the caller's label stays correct
+    // (cf. update_padded_kv_cache).
+    return {tensor_args.output.tensor_topology()};
+}
+
 }  // namespace ttnn::prim::qsr
 
 namespace ttnn::prim::qsr {

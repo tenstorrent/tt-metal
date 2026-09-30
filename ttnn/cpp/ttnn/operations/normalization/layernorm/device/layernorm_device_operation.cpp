@@ -482,21 +482,42 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
         operation_attributes.program_config);
 }
 
-Tensor LayerNormDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+bool LayerNormDeviceOperation::is_inplace(const operation_attributes_t& operation_attributes) {
     return std::visit(
-        [&](const auto& program_config) -> tensor_return_value_t {
+        [&](const auto& program_config) -> bool {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                if (operation_attributes.distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
-                    program_config.inplace) {
-                    return tensor_args.input;
-                }
+                return operation_attributes.distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
+                       program_config.inplace;
+            } else {
+                return false;
             }
-            auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-            return create_device_tensor(output_spec, tensor_args.input.device());
         },
         operation_attributes.program_config);
+}
+
+Tensor LayerNormDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (is_inplace(operation_attributes)) {
+        return tensor_args.input;
+    }
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> LayerNormDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // In place, the returned tensor IS the caller's input: its distribution over the mesh does not change, so
+    // it must keep the caller's topology. The framework default would instead union the input with
+    // weight/bias/residual and relabel a replicated input as sharded whenever one of those is sharded
+    // (cf. update_padded_kv_cache).
+    if (is_inplace(operation_attributes)) {
+        return {tensor_args.input.tensor_topology()};
+    }
+    // Out of place the output is a fresh tensor. norm(input + residual) with a sharded residual is a
+    // legitimate two-activation op whose output is per-device distinct, so the union of all inputs is the
+    // right label; an empty vector selects that framework default.
+    return {};
 }
 
 Tensor layer_norm(
