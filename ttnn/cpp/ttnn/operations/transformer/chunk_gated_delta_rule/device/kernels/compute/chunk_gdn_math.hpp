@@ -463,6 +463,42 @@ inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, ui
     cb_push_back(o, Mt * Nt);
 }
 
+// nkd = -(k_beta * decay_exp) -> o_nkd and q_decay = q * decay_exp -> o_q (single row-tile, Kt tiles each) in one
+// block: outputs reserved and formats configured once. QSame: q shares k_beta's (fp32) format, so no srcA reconfig
+// between the two products; otherwise the srcA format and the bcast MOP are re-set for q.
+template <bool QSame>
+inline void kd_qdecay(uint32_t kbeta, uint32_t q, uint32_t col, uint32_t o_nkd, uint32_t o_q, uint32_t Kt) {
+    cb_reserve_back(o_nkd, Kt);
+    cb_reserve_back(o_q, Kt);
+    pack_reconfig_data_format(o_nkd);  // o_nkd, o_q fp32
+    reconfig_data_format(kbeta, col);  // bcast(a,col): a->srcA, col->srcB
+    mul_bcast_cols_init(kbeta, col);
+    negative_tile_init();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        tile_regs_acquire();
+        mul_tiles_bcast_cols(kbeta, col, ki, 0, 0);
+        negative_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o_nkd, ki);
+        tile_regs_release();
+    }
+    cb_push_back(o_nkd, Kt);
+    if constexpr (!QSame) {
+        reconfig_data_format_srca(kbeta, q);
+        mul_bcast_cols_init(q, col);
+    }
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        tile_regs_acquire();
+        mul_tiles_bcast_cols(q, col, ki, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o_q, ki);
+        tile_regs_release();
+    }
+    cb_push_back(o_q, Kt);
+}
+
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfig = false) {
     cb_reserve_back(o, 1);
@@ -870,23 +906,29 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // operand is handed off NEGATED so the scan forms v_beta + nkd@S as one DST accumulation
         // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact SFPU sign flip of
         // the broadcast product before it is packed.
+        // At Ct == 1 the block also forms q_decay = q * decay_exp (cb.qdecay): the same broadcast column, one
+        // reserve/reconfig/init for both outputs (the writers wait per CB, so the push order is free).
         WAIT(cb.decay_exp, Ct);
-        bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        if constexpr (Ct == 1) {
+            kd_qdecay<qk_norm>(cb.kbeta, Q, cb.decay_exp, cb.w, cb.qdecay, Kt);  // nkd -> cb.w, q_decay -> cb.qdecay
+        } else {
+            bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
+        }
         POP(cb.kbeta, ck);
     }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
 
     {
         GDN_ZONE("pp_intra");
-        // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
+        // ---- intra = (q@k^T) * L_mask ; (q_decay at Ct == 2) ; k_dec_t ----
         intra_fused(Q, Kk, cb.lmask, cb.intra, ct, Kt);  // intra = (q @ k^T) * L_mask, one DST pass per tile
         POP(cb.lmask, cc);
     }
-    {
+    if constexpr (Ct != 1) {
         GDN_ZONE("pp_qdecay");
-        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);
-        POP(Q, ck);
+        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);  // Ct == 1: formed in pp_kd
     }
+    POP(Q, ck);
     // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
     {
         GDN_ZONE("pp_kdec");
