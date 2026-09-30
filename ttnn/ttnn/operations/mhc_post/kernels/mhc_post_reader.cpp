@@ -16,31 +16,33 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "mhc_post_common.hpp"
 
 namespace {
 
 constexpr uint32_t FACE_HW = 16;
 constexpr uint32_t FACE_ELEMS = FACE_HW * FACE_HW;
-constexpr uint32_t FP32_BYTES = 4;
-constexpr uint32_t FACE_ROW_BYTES = FACE_HW * FP32_BYTES;
-
-// Byte offset of element (row, col) inside a 32x32 fp32 tile (face-major layout).
-FORCE_INLINE uint32_t fp32_tile_elem_offset(uint32_t row, uint32_t col) {
-    const uint32_t face = ((row >= FACE_HW) ? 2u : 0u) + ((col >= FACE_HW) ? 1u : 0u);
-    return (face * FACE_ELEMS + (row % FACE_HW) * FACE_HW + (col % FACE_HW)) * FP32_BYTES;
-}
 
 // Half-tile column-broadcast expansion: every element (rho, gamma) of half `half` (gamma in
-// [16*half, 16*half + 16)) of the tile at dst_tile_addr becomes raw(rho, col). See mhc_post_common.hpp.
-FORCE_INLINE void expand_half(
-    uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t half, uint32_t tile_rows) {
-    for (uint32_t rho = 0; rho < tile_rows; ++rho) {
-        const uint32_t bits =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_tile_addr + fp32_tile_elem_offset(rho, col));
-        dataflow_kernel_lib::fill_l1_range<FP32_BYTES>(
-            dst_tile_addr + fp32_tile_elem_offset(rho, half * FACE_HW), FACE_ROW_BYTES, bits);
+// [16*half, 16*half + 16)) of the fp32 tile at dst_tile_addr becomes raw(rho, col). See mhc_post_common.hpp.
+// The half is two contiguous faces (2*fh + half, fh = row half), each 16 rows x 16 words; one raw load per
+// row feeds 16 unrolled word stores (no per-element address math, no per-row helper call).
+FORCE_INLINE void expand_half(uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t half) {
+#pragma GCC unroll 1
+    for (uint32_t fh = 0; fh < 2; ++fh) {
+        const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_tile_addr) +
+                                                 (2 * fh) * FACE_ELEMS + (col % FACE_HW) + (col / FACE_HW) * FACE_ELEMS;
+        volatile tt_l1_ptr uint32_t* dst =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile_addr) + (2 * fh + half) * FACE_ELEMS;
+#pragma GCC unroll 1
+        for (uint32_t r = 0; r < FACE_HW; ++r) {
+            const uint32_t bits = src[r * FACE_HW];
+#pragma GCC unroll 16
+            for (uint32_t w = 0; w < FACE_HW; ++w) {
+                dst[w] = bits;
+            }
+            dst += FACE_HW;
+        }
     }
 }
 
@@ -67,6 +69,8 @@ void kernel_main() {
     constexpr auto post_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
 
+    static_assert(tile_rows == 2 * FACE_HW, "mhc_post reader: expansion assumes 32x32 tiles of 16x16 faces");
+
     constexpr uint32_t num_coef_tiles = n * coef_tiles_per_stream;
     constexpr uint32_t num_raw_tiles = post_tiles_per_row + comb_tiles_per_row;
     constexpr uint32_t residual_row_tiles = n * col_tiles_per_row;
@@ -90,6 +94,9 @@ void kernel_main() {
         const uint32_t f_base = get_write_ptr(cb_sublayer_tiles);
         const uint32_t x_base = get_write_ptr(cb_residual_tiles);
         const uint32_t f_page0 = row * col_tiles_per_row + col_start;
+#ifdef ABL_NO_DM
+        return;
+#endif
         for (uint32_t c = 0; c < valid_cols; ++c) {
             noc_async_read(
                 sublayer_acc.get_noc_addr(f_page0 + c), f_base + c * sublayer_page_bytes, sublayer_page_bytes);
@@ -128,7 +135,11 @@ void kernel_main() {
             cb_reserve_back(cb_residual_tiles, residual_block_tiles);
             issue_block_reads(seg.row, col_start, valid);
 
+#ifdef ABL_NO_EXPAND
+            if (false) {
+#else
             if (block_idx == 0) {
+#endif
                 // ---- load_coefficients, part 2: expansion in the first block's read-barrier shadow ----
                 cb_reserve_back(cb_coef_bcast, num_coef_tiles);
                 const uint32_t bcast_base = get_write_ptr(cb_coef_bcast);
@@ -137,14 +148,16 @@ void kernel_main() {
                         const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
                         const uint32_t raw_col = t == 0 ? j : (t - 1) * n + j;
                         const uint32_t tile = j * coef_tiles_per_stream + mhc_post::coef_tile_in_stream(t);
-                        expand_half(
-                            raw_addr, raw_col, bcast_base + tile * coef_page_bytes, mhc_post::coef_half(t), tile_rows);
+                        expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, mhc_post::coef_half(t));
                     }
                 }
             }
 
             noc_async_read_barrier();  // data block
             if (block_idx == 0) {
+#ifdef ABL_NO_EXPAND
+                cb_reserve_back(cb_coef_bcast, num_coef_tiles);
+#endif
                 cb_push_back(cb_coef_bcast, num_coef_tiles);
                 cb_pop_front(cb_coef_raw, num_raw_tiles);
             }

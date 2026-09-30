@@ -212,7 +212,11 @@ def create_program_descriptor(
     compute_cfg.dst_full_sync_en = DST_FULL_SYNC
     compute_cfg.unpack_to_dest_mode = unpack_modes
 
+    import os
+
+    _abl = [(d, "1") for d in os.environ.get("MHC_POST_ABLATE", "").split(",") if d]  # TEMP ablation
     reader = ttnn.KernelDescriptor(
+        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct,
@@ -220,6 +224,7 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
+        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,
@@ -227,6 +232,7 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
+        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct,

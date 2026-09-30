@@ -326,7 +326,9 @@ void kernel_main() {
             cb_wait_front(cb_residual_tiles, residual_block_tiles);
             cb_reserve_back(cb_output_tiles, output_block_tiles);
 
+#ifndef ABL_NO_COMPUTE
             mix_block(valid, data_first);
+#endif
 
             cb_push_back(cb_output_tiles, output_block_tiles);
             cb_pop_front(cb_residual_tiles, residual_block_tiles);
