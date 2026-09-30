@@ -42,10 +42,46 @@ TOPK_MIN, TOPK_ALIGN = 16, 16
 # re-reads the whole input row on each core; up to this width it splits rows over cores (measured on [640, 2048]
 # uint32: 2.8 ms by a 2048-wide index vs 0.14 ms by a 1024-wide one)
 GATHER_INDEX_WIDTH = 60 * 32
+# The candidate source's own top-k runs among its candidate blocks' rows (exact: its top-512 rows lie in its top-512
+# blocks, which are among the 2048 kept ones) once that is cheaper than a top-k over the whole row: measured on LB
+# 2x4 the gathered path costs ~12 ms at any width, the direct top-512 3.5 ms at 136K and 27 ms at 1.05M columns
+SUBSET_TOPK_MIN_WIDTH = 1 << 19
+
+
+WQ_B_GRID = (11, 10)  # the attention projections' 2D-multicast grid (tt/v41/attention.py MATMUL_GRID)
+WQ_B_L1_BUDGET = 1 << 20  # bytes of output / fp32 partials / double-buffered in0 and in1 blocks per core
 
 
 def _round_up(x: int, m: int) -> int:
     return -(-x // m) * m
+
+
+def _wq_b_program_config(m: int, k: int, n: int):
+    """2D-multicast config of the [m, k] x [k, n] bf16 x bf16 fp32-accumulating wq_b GEMM on ``WQ_B_GRID``, or None
+    (ttnn's default, 150 us at chunk 5120 on LB) when no in0 block width fits ``WQ_B_L1_BUDGET``."""
+    mt, kt, nt = m // 32, k // 32, n // 32
+    gx, gy = WQ_B_GRID
+    per_m, per_n = -(-mt // gy), -(-nt // gx)
+    tile = 2048
+    for block_w in (8, 4, 2, 1):
+        l1 = per_m * per_n * (tile + 2 * tile) + 2 * per_m * block_w * tile + 2 * block_w * per_n * tile
+        if kt % block_w == 0 and l1 <= WQ_B_L1_BUDGET:
+            break
+    else:
+        return None
+    sub_w = max(w for w in range(1, 5) if per_n % w == 0)  # fp32 accumulation: at most 4 tiles per subblock
+    sub_h = max(h for h in range(1, 5) if per_m % h == 0 and h * sub_w <= 4)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=WQ_B_GRID,
+        in0_block_w=block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=per_m,
+        per_core_N=per_n,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=None,
+    )
 
 
 @dataclass(frozen=True)
@@ -194,8 +230,10 @@ class TtV41Indexer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=rep,
         )
+        # both operands carry at most 4 significant bits (FP8 e4m3 with power-of-two block scales), so LoFi products
+        # are exact: bit-identical to HiFi4 (measured on [640, 1024] x [1024, 8192]) at a quarter of the math passes
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True
         )
         scale = self.head_dim**-0.5 * self.heads**-0.5
         self.weights_proj = ttnn.from_torch(
@@ -239,15 +277,20 @@ class TtV41Indexer(LightweightModule):
 
     def scores(self, x, qr, index_k, tables, start: int, length: int):
         """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] tiled,
-        ``tables`` the geometry's ``V41ChunkTables`` -> scores [1, 1, S/(sp*tp), T] bf16 row-major (T = visible rows
-        rounded up to tiles), -inf where not visible."""
+        ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
+        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows)."""
         rows = qr.shape[2]
         q_rows = rows // self.tp
         assert start % self.ratio == 0 and (start // self.ratio) % 32 == 0, f"chunk start {start} not tile-aligned"
         visible = (start + length) // self.ratio
         width = _round_up(max(visible, TOPK_MIN), 32)
         cos, sin = (self._query_shard(t) for t in tables.rope(True, 1, start))
-        q = ttnn.linear(fp8_qdq(self._query_shard(qr)), self.wq_b, compute_kernel_config=self.compute_kernel_config)
+        q = ttnn.linear(
+            fp8_qdq(self._query_shard(qr)),
+            self.wq_b,
+            program_config=_wq_b_program_config(q_rows, self.wq_b.shape[-2], self.wq_b.shape[-1]),
+            compute_kernel_config=self.compute_kernel_config,
+        )
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=self.heads, num_kv_heads=0, transpose_k_heads=False
         )
@@ -260,13 +303,16 @@ class TtV41Indexer(LightweightModule):
             return self._score(q, k, w, chunk_start_idx=start), visible
         # ratio 2: the kernel scores every row (pad K by one zero tile and start its causal window at `width`,
         # which masks nothing real); rows before the chunk's own are visible to all its queries, and the chunk's
-        # own rows follow the start-independent pattern of the tables' visibility tail
+        # own rows (and the pad tile) follow the start-independent pattern of the tables' visibility tail, which
+        # is added to that region only and written back in place
         k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
-        score = self._score(q, k, w, chunk_start_idx=width)
-        score = ttnn.slice(ttnn.to_layout(score, ttnn.TILE_LAYOUT), [0, 0, 0, 0], [1, 1, q_rows, width])
-        first = start // self.ratio
-        score = self._add_cols(score, first, tables.visibility_tail(self.ratio, width - first))
-        return ttnn.to_layout(score, ttnn.ROW_MAJOR_LAYOUT), visible
+        score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
+        first, end = start // self.ratio, score.shape[3]
+        tail = ttnn.to_layout(ttnn.slice(score, [0, 0, 0, first], [1, 1, q_rows, end]), ttnn.TILE_LAYOUT)
+        tail = ttnn.add(tail, tables.visibility_tail(self.ratio, end - first))
+        region = ([0, 0, 0, first], [1, 1, q_rows, end], [1, 1, 1, 1])
+        ttnn.experimental.slice_write(ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), score, *region)
+        return score, visible
 
     def _score(self, q, k, w, chunk_start_idx: int):
         # all heads resident, 256-row key chunks (bead F10: 7.7-8x the default q32/k32/h1 config at 128K-1M)
@@ -380,6 +426,9 @@ class TtV41Indexer(LightweightModule):
         published = None
         if self.is_candidate_source:
             published = self.candidates(score, tables, start)
+            in_blocks = self.config.CANDIDATE_TOPK_BLOCKS > k  # its top-k rows lie in its top-k blocks
+            if published.ids is not None and in_blocks and score.shape[3] > SUBSET_TOPK_MIN_WIDTH:
+                return self._topk_in_blocks(score, published.ids, tables, k), published
         elif self.uses_candidates:
             assert isinstance(candidates, CandidateBlocks), "a candidate index source needs the published candidates"
             if candidates.ids is not None:

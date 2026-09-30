@@ -108,7 +108,12 @@ def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int,
     else:
         dev_blocks = _rows(_per_query(published.ids)[0, 0])
         results[f"{tag}_candidates_exact"] = dev_blocks == _ref_blocks(ref_mask, cfg.CANDIDATE_BLOCK_SIZE)
-    results[f"{tag}_source_topk_exact"] = _rows(_per_query(idx)[0, 0]) == _ref_rows(scores, k)
+    ref_rows = _ref_rows(scores, k)
+    results[f"{tag}_source_topk_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
+    if published.ids is not None and cfg.CANDIDATE_TOPK_BLOCKS > k:
+        # the source's top-k among its own candidate blocks (its path on rows wider than SUBSET_TOPK_MIN_WIDTH)
+        idx = source._topk_in_blocks(feed, published.ids, tables, k)
+        results[f"{tag}_source_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     idx, _ = consumer.select(feed, tables, start, visible, published)
     masked = scores.masked_fill(~ref_mask, float("-inf"))
     results[f"{tag}_consumer_topk_exact"] = _rows(_per_query(idx)[0, 0]) == _ref_rows(masked, k)

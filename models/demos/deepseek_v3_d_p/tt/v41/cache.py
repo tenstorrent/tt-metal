@@ -162,9 +162,10 @@ class V41ChunkTables:
         return self._per_query_chip(rows, ttnn.int32)
 
     def _visibility_table(self, ratio: int):
-        """Additive [chunk, chunk / ratio]: query i sees the chunk's compressed row u iff u < (i + 1) // ratio."""
+        """Additive [chunk, chunk / ratio + 32]: query i sees the chunk's compressed row u iff u < (i + 1) // ratio
+        (the extra tile, past the chunk's rows, is -inf: the indexer's zero-key pad tile)."""
         i = torch.arange(self.chunk).view(-1, 1)
-        u = torch.arange(self.chunk // ratio).view(1, -1)
+        u = torch.arange(self.chunk // ratio + 32).view(1, -1)
         return self._per_query_chip(torch.where(u >= (i + 1) // ratio, float("-inf"), 0.0), ttnn.bfloat16)
 
     def _pin_table(self, block: int):

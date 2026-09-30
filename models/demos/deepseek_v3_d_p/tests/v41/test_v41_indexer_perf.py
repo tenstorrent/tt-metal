@@ -2,17 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Long-context indexer baseline (bead F10, phase 1): measured time of ``TtV41Indexer`` at chunk start P.
+"""Long-context indexer performance (bead F10): measured time of ``TtV41Indexer`` at chunk start P.
 
 One 5120-token chunk at start P on LoudBox 2x4 with synthetic weights and index keys, for the three indexer roles:
-layer 2 (ratio-2 index source), 20 (ratio-1 candidate source) and 24 (ratio-1 candidate index source, masked by
-layer 20's published candidates). Warm (program cache hot) measurements, host wall time with device synchronizes:
+layer 2 (ratio-2 index source), 20 (ratio-1 candidate source) and 24 (ratio-1 candidate index source, restricted to
+layer 20's published candidate blocks). Warm (program cache hot) measurements:
 
-* ``stage_ms``: the module's stages as the attention calls them (``scores``, ``candidates`` / candidate mask, top-k),
-  synchronized only at stage boundaries (dispatch pipelined inside a stage);
+* ``traced_ms``: the whole forward (``scores`` + ``select``) captured in one trace and replayed (min over replays of
+  the blocking replay wall): device time, as the forward uploads and reads nothing from the host;
+* ``stage_ms``: host wall time of the module's stages (``scores``, ``select``), synchronized only at stage
+  boundaries (dispatch pipelined inside a stage);
 * ``ops``: every ttnn call synchronized individually (serialized; sums exceed the stage times), with the bytes each
   output occupies per chip; outputs at least one score row wide (``[S/(sp*tp), >= T]``) are the [S, T] DRAM passes;
-* ``score_configs_ms``: ``indexer_score_dsa`` alone on the module's own inputs under alternative program configs;
 * ``model``: ``utils/v41_perf_model.py`` indexer ops (B9-B12) for the same workload.
 
 Logged as ``V41_INDEXER_PERF`` JSON lines, also appended to ``$V41_INDEXER_PERF_OUT`` (default
@@ -65,10 +66,16 @@ TTNN_OPS = (
     "reshape",
     "full",
     "scatter",
-    "repeat_interleave",
     "linear",
     "concat",
     "mesh_partition",
+    "embedding",
+    "gather",
+    "transpose",
+    "ge",
+    "bitwise_right_shift",
+    "bitwise_left_shift",
+    "repeat_interleave",
 )
 EXPERIMENTAL_OPS = (
     "indexer_score_dsa",
@@ -85,11 +92,6 @@ ELEMENT_BYTES = {
     ttnn.int32: 4,
     ttnn.uint16: 2,
     ttnn.bfloat8_b: 1088 / 1024,
-}
-SCORE_CONFIGS = {
-    "default_q32_k32_h1": dict(q_chunk_size=32, k_chunk_size=32, head_group_size=1),
-    "q32_k256_h0": dict(q_chunk_size=32, k_chunk_size=256, head_group_size=0),
-    "q64_k320_h0": dict(q_chunk_size=64, k_chunk_size=320, head_group_size=0),
 }
 
 
@@ -170,8 +172,8 @@ def _model_ms(layer: int, start: int) -> dict:
     }
 
 
-def _run(indexer, x, qr, index_k, tables, start, candidate_mask, timer=None):
-    """Indexer forward split into its stages (same calls as ``TtV41Indexer.forward``) -> (idx, published, ms)."""
+def _run(indexer, x, qr, index_k, tables, start, candidates, timer=None):
+    """Indexer forward split into its stages (same calls as ``TtV41Indexer.forward``) -> (idx, published, ms, ...)."""
     ms = {}
 
     def stage(name, fn, *args):
@@ -185,32 +187,37 @@ def _run(indexer, x, qr, index_k, tables, start, candidate_mask, timer=None):
         return out
 
     score, visible = stage("scores", indexer.scores, x, qr, index_k, tables, start, CHUNK)
-    q_rows = score.shape[2]
-    published = None
-    if indexer.is_candidate_source:
-        published = stage("candidates", indexer.candidates, score, tables, start, q_rows, visible)
-    elif indexer.uses_candidates:
-        score = stage(
-            "candidate_mask",
-            lambda s: ttnn.to_layout(
-                ttnn.add(ttnn.to_layout(s, ttnn.TILE_LAYOUT), candidate_mask), ttnn.ROW_MAJOR_LAYOUT
-            ),
-            score,
-        )
-    k = min(C.INDEX_TOPK, visible)
-    idx = stage("topk", lambda s: ttnn.experimental.topk_large_indices(s, k=max(16, -(-k // 16) * 16)), score)
+    idx, published = stage("select", indexer.select, score, tables, start, visible, candidates)
     ms["total"] = sum(ms.values())
     return idx, published, ms, score, visible
 
 
+def _traced_ms(indexer, x, qr, index_k, tables, start, candidates, replays: int = 3) -> float:
+    """Min blocking replay wall of one captured forward (device time; nothing crosses the host inside it)."""
+    mesh = indexer.mesh_device
+    indexer(x, qr, index_k, tables, start, CHUNK, candidates)  # compile
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    indexer(x, qr, index_k, tables, start, CHUNK, candidates)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)  # warm
+    best = float("inf")
+    for _ in range(replays):
+        t0 = time.perf_counter()
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        best = min(best, (time.perf_counter() - t0) * 1e3)
+    ttnn.release_trace(mesh, tid)
+    return best
+
+
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize("start", [16384, 131072, 262144, 1048576], ids=lambda p: f"P{p}")
+@pytest.mark.parametrize("start", [0, 16384, 131072, 262144, 1048576], ids=lambda p: f"P{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(trace_region_size=64 << 20),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         )
@@ -252,25 +259,27 @@ def test_v41_indexer_perf(mesh_device, device_params, start):
 
 
 def _measure(mesh_device, sp, tp, x, qr, weights, index_k, start, t0):
-    candidate_mask = None
+    candidates = None
     tables = V41ChunkTables(mesh_device, C, start + CHUNK, CHUNK, list(LAYERS))  # position tables up to this chunk
     for layer in LAYERS:
         _log(f"P={start} L{layer}: start")
         ratio = C.compress_ratio(layer)
         indexer = TtV41Indexer(mesh_device, C, layer, weights)
-        mask = candidate_mask if indexer.uses_candidates else None
+        cands = candidates if indexer.uses_candidates else None
         t1 = time.perf_counter()
-        _, published, warm_ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, mask)
+        _, published, warm_ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, cands)
         _log(f"P={start} L{layer}: warm-up {time.perf_counter() - t1:.1f}s {warm_ms}")
         stage_ms = defaultdict(list)
         for _ in range(TIMED_ITERS):
-            _, _, ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, mask)
+            _, _, ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, cands)
             for key, value in ms.items():
                 stage_ms[key].append(value)
         _log(f"P={start} L{layer}: stages {dict(stage_ms)}")
+        traced = _traced_ms(indexer, x, qr, index_k[ratio], tables, start, cands)
+        _log(f"P={start} L{layer}: traced {traced:.3f} ms")
 
         with _OpProfiler(mesh_device) as prof:
-            _, _, _, score, visible = _run(indexer, x, qr, index_k[ratio], tables, start, mask, timer=prof)
+            _, _, _, score, visible = _run(indexer, x, qr, index_k[ratio], tables, start, cands, timer=prof)
         q_rows = CHUNK // (sp * tp)
         width = score.shape[-1]
         per_op = defaultdict(lambda: {"calls": 0, "ms": 0.0, "bytes": 0.0})
@@ -284,21 +293,7 @@ def _measure(mesh_device, sp, tp, x, qr, weights, index_k, start, t0):
                 st_passes += 1
                 st_bytes += nbytes
         _log(f"P={start} L{layer}: op profile {len(prof.calls)} calls, [S,T] outputs {st_passes}")
-
-        score_cfg_ms = {}
-        args, kwargs = prof.captured["indexer_score_dsa"]
-        for cfg_name, cfg in SCORE_CONFIGS.items():
-            call = dict(kwargs, program_config=ttnn.IndexerScoreProgramConfig(**cfg))
-            try:
-                ttnn.experimental.indexer_score_dsa(*args, **call)  # compile
-                ttnn.synchronize_device(mesh_device)
-                t2 = time.perf_counter()
-                ttnn.experimental.indexer_score_dsa(*args, **call)
-                ttnn.synchronize_device(mesh_device)
-                score_cfg_ms[cfg_name] = (time.perf_counter() - t2) * 1e3
-            except RuntimeError as err:  # a config the op rejects (e.g. L1) is recorded, not fatal
-                score_cfg_ms[cfg_name] = f"rejected: {str(err).splitlines()[0][:160]}"
-        _log(f"P={start} L{layer}: score configs {score_cfg_ms}")
+        uploads = [c for c in prof.calls if c[1] in ("from_torch", "full")]
 
         record = {
             "start": start,
@@ -307,17 +302,18 @@ def _measure(mesh_device, sp, tp, x, qr, weights, index_k, start, t0):
             "visible": visible,
             "score_width": width,
             "q_rows_per_chip": q_rows,
+            "traced_ms": traced,
             "stage_ms": {k: min(v) for k, v in stage_ms.items()},
             "stage_ms_all": dict(stage_ms),
+            "host_uploads_in_forward": len(uploads),
             "ops": dict(sorted(per_op.items(), key=lambda kv: -kv[1]["ms"])),
             "st_output_passes": st_passes,
             "st_output_bytes_per_chip": st_bytes,
             "score_unit_bytes_per_chip": q_rows * width * 2,
-            "score_configs_ms": score_cfg_ms,
             "model": _model_ms(layer, start),
         }
         _log("V41_INDEXER_PERF " + json.dumps(record))
         if indexer.is_candidate_source:
-            candidate_mask = published
+            candidates = published
         del score
     _log(f"P={start}: done {time.perf_counter() - t0:.1f}s")
