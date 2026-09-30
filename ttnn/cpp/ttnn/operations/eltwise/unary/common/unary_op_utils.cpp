@@ -693,6 +693,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};
         case UnaryOpType::POLYGAMMA: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 2 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f800000u &&
+                std::bit_cast<uint32_t>(params[1]) == 0x3f800000u) {
+                return {
+                    "polygamma_tt_poly_bf16_tile_init();",
+                    fmt::format("polygamma_tt_poly_bf16_tile({}, 0x3f800000u, 0x3f800000u);", idst)};
+            }
+#endif
+
             TT_ASSERT(params.size() == 2, "Expected polygamma to take 2 parameters (n, scale)");
             float param1 = static_cast<float>(params[1]);
             return {
