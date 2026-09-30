@@ -131,11 +131,19 @@ class AccuracyContract:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(self) -> Dict[str, Any]:
+    def passed_test_kwargs(self, flush_subnormals: bool = False) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
-        so a call site is one ``**`` expansion and switching metrics is a table edit."""
+        so a call site is one ``**`` expansion and switching metrics is a table edit.
+
+        *flush_subnormals* asks the ULP arm to rank with the subnormal band collapsed,
+        which only changes anything on an fp16 output: the golden keeps IEEE fp16
+        subnormals the pack does not reproduce. The tolerance arm has no such notion, so
+        it is dropped there rather than passed on for ``passed_test`` to refuse."""
         if self.metric is Metric.ULP:
-            return {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            if flush_subnormals:
+                kwargs["flush_subnormals"] = True
+            return kwargs
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
 

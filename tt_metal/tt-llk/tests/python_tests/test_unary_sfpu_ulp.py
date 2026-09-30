@@ -91,9 +91,25 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         input_dimensions_B=SWEEP_DIMENSIONS,
         spec_A=sweep_spec(),
     )
+    # The walk's one data zero is -0.0, and the unpack drops the sign: the kernel is
+    # handed +0.0. So the golden is computed on what the kernel receives, or every op
+    # whose answer depends on the sign of zero -- signbit's 1.0 against 0.0 is 16129
+    # bf16 steps, rsqrt's -inf against +inf a non-finite failure -- reads one lane as
+    # a whole-cell error that is the unpack's, not the op's. The dedicated signed-zero
+    # tests in test_eltwise_unary_sfpu.py hold that path to account.
+    #
+    # Not for a block-float input: the golden quantizes that itself, and it turns the
+    # zero lane of the subnormal block it sits in into +inf as -0.0 and into ~6e-39 as
+    # +0.0 -- neither of them zero, so canonicalizing moved Ceil/Sqrt/Log/Rsqrt's
+    # Bfp8_b cells rather than fixing them.
+    golden_src = (
+        src_A
+        if stimuli_format != formats.input_format
+        else torch.where(src_A == 0, torch.zeros_like(src_A), src_A)
+    )
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop,
-        src_A,
+        golden_src,
         formats.output_format,
         dest_acc,
         formats.input_format,
