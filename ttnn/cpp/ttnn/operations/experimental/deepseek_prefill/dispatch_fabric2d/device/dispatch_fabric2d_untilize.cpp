@@ -83,13 +83,18 @@ UntilizerPoolFallback add_untilizer_pool(
     const uint32_t pool_size = static_cast<uint32_t>(pool.size());
     const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 
+    // One source for the two CB indices: the descriptors below and the kernels' compile-time args must name
+    // the same buffers.
+    constexpr auto kTileCbIndex = tt::CBIndex::c_0;
+    constexpr auto kRowCbIndex = tt::CBIndex::c_11;
+
     // Tiles, reader -> compute. Two blocks of block_ct_dim tiles: a whole number of blocks, so a block
     // never wraps around the end of the CB, and two so the reader can work one block ahead of the packer.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2u * plan.block_ct_dim * plan.tile_bytes,
         .core_ranges = pool_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .buffer_index = static_cast<uint8_t>(kTileCbIndex),
             .data_format = plan.tile_format,
             .page_size = plan.tile_bytes,
         }}},
@@ -101,37 +106,25 @@ UntilizerPoolFallback add_untilizer_pool(
         .total_size = 2u * tt::constants::TILE_HEIGHT * plan.token_bytes,
         .core_ranges = pool_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
+            .buffer_index = static_cast<uint8_t>(kRowCbIndex),
             .data_format = plan.row_format,
             .page_size = plan.token_bytes,
         }}},
     });
 
-    std::vector<uint32_t> ct(dspf2d::UntilizeCtArgs::kCount, 0u);
-    ct[dspf2d::UntilizeCtArgs::kTileCb] = static_cast<uint32_t>(tt::CBIndex::c_0);
-    ct[dspf2d::UntilizeCtArgs::kRowCb] = static_cast<uint32_t>(tt::CBIndex::c_11);
-    ct[dspf2d::UntilizeCtArgs::kNumTileRows] = plan.num_tile_rows;
-    ct[dspf2d::UntilizeCtArgs::kPoolSize] = pool_size;
-    ct[dspf2d::UntilizeCtArgs::kTilesPerRow] = plan.tiles_per_row;
-    ct[dspf2d::UntilizeCtArgs::kBlockCtDim] = plan.block_ct_dim;
-    ct[dspf2d::UntilizeCtArgs::kTileBytes] = plan.tile_bytes;
-    ct[dspf2d::UntilizeCtArgs::kTokenBytes] = plan.token_bytes;
-    ct[dspf2d::UntilizeCtArgs::kRowsPerTileRow] = tt::constants::TILE_HEIGHT;
-    ct[dspf2d::UntilizeCtArgs::kStreamCount] = static_cast<uint32_t>(streams.size());
-    ct[dspf2d::UntilizeCtArgs::kUntilizeSemAddr] = plan.sem_addr;
-    ct[dspf2d::UntilizeCtArgs::kStreamCoordsBase] = dspf2d::UntilizeCtArgs::kCount;
     // Virtual, because this is what a NoC write off this core addresses.
+    std::vector<uint32_t> stream_coords;
     for (const auto& [stream, placement] : streams) {
-        ct.push_back(static_cast<uint32_t>(placement.worker_virtual.x));
-        ct.push_back(static_cast<uint32_t>(placement.worker_virtual.y));
+        stream_coords.push_back(static_cast<uint32_t>(placement.worker_virtual.x));
+        stream_coords.push_back(static_cast<uint32_t>(placement.worker_virtual.y));
     }
-    // The kernels read the stream coordinates from this base and their accessor arguments after them, so
-    // the kernels and this block must agree on its size.
-    TT_FATAL(
-        ct.size() == dspf2d::UntilizeCtArgs::kCount + 2u * streams.size(),
-        "dispatch_fabric2d: untilizer compile-time args are {} words but the kernels index {}",
-        ct.size(),
-        dspf2d::UntilizeCtArgs::kCount + 2u * streams.size());
+    const dspf2d::UntilizeCtArgs args(
+        plan,
+        static_cast<uint32_t>(kTileCbIndex),
+        static_cast<uint32_t>(kRowCbIndex),
+        pool_size,
+        static_cast<uint32_t>(streams.size()));
+    const std::vector<uint32_t> ct = args.to_ct_word_arr(stream_coords);
 
     tt::tt_metal::KernelDescriptor rdr;
     rdr.kernel_source = std::string(kKernelDir) + "dataflow/untilize_reader_dispatch_fabric2d.cpp";
