@@ -12,4 +12,5 @@ void kernel_main() {
     auto* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     report[0] = cb.fifo_page_size;
     report[1] = cb.fifo_num_pages;
+    report[2] = get_read_ptr(cb_index);
 }

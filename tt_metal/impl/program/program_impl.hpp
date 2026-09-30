@@ -779,6 +779,11 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
+    // For lockstep allocation without service-core claims, a single live L1 frontier
+    // check covers every static CB and DFB region validated during layout.
+    bool simple_l1_validation_cached_{false};
+    SubDeviceManagerId simple_l1_validation_manager_id_;
+    uint64_t simple_l1_validation_region_end_{0};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

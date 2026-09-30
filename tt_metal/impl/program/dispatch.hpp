@@ -190,6 +190,9 @@ void reserve_space_in_kernel_config_buffer(
     uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
 
+// Refresh cached CB payloads without reserving or submitting queue commands.
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence);
+
 void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
