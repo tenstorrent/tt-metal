@@ -93,6 +93,23 @@ def _unrounded_compressed_kv(model, spec, layer: int, attn_in: torch.Tensor) -> 
     return latent[0]
 
 
+def unrounded_kv(spec, tokens, reference, result) -> dict[int, torch.Tensor]:
+    """KV source layer -> its unrounded compressed KV (what the SCALED_FP8 cache encodes), disk-cached next to the
+    oracle ``result`` of ``tokens``; ``reference`` (a LazyReference) is built only on a miss."""
+    unrounded = {}
+    for l in (l for l in spec.layer_ids if l in C.KV_SOURCE_LAYERS):
+        base = orc.cache_path(spec, tokens)
+        unrounded[l] = host_weights(
+            base.parent,
+            f"{base.stem}-unrounded-kv{l}",
+            lambda l=l: _unrounded_compressed_kv(reference(), spec, l, result["blocks"][l]["attn_in"]),
+        )
+        # the derivation is the reference's: its FP4 QDQ reproduces the oracle's compressed rows bit for bit
+        fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
+        assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
+    return unrounded
+
+
 def setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format):
     """Everything before the device forward: oracle result, reference-derived expectations, device weights (MoE
     tensors from / into the weight cache) and the blocks. Shared by the test and the CPU-only cache prepare step
@@ -118,18 +135,7 @@ def setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format):
     reference = orc.LazyReference(spec)
     result = orc.oracle(spec, tokens, model=reference)
     fmt = KV_FORMATS[kv_format]
-    unrounded = {}
-    if fmt == MlaKvCacheFormat.SCALED_FP8 and any(l in C.KV_SOURCE_LAYERS for l in LAYERS):
-        for l in (l for l in LAYERS if l in C.KV_SOURCE_LAYERS):
-            base = orc.cache_path(spec, tokens)
-            unrounded[l] = host_weights(
-                base.parent,
-                f"{base.stem}-unrounded-kv{l}",
-                lambda l=l: _unrounded_compressed_kv(reference(), spec, l, result["blocks"][l]["attn_in"]),
-            )
-            # the derivation is the reference's: its FP4 QDQ reproduces the oracle's compressed rows bit for bit
-            fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
-            assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
+    unrounded = unrounded_kv(spec, tokens, reference, result) if fmt == MlaKvCacheFormat.SCALED_FP8 else {}
 
     # MoE device tensors are cached on disk (tests/v41/weight_cache.py key): the first build converts 1152 expert
     # matrices per layer on the host (minutes); later builds load them. A marker records a completed layer.

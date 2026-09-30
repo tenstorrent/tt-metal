@@ -42,13 +42,21 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
-from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import BLOCK_PCC, CACHE_PCC, _pack, _pcc, _unpack
+from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import (
+    BLOCK_PCC,
+    CACHE_PCC,
+    KV_FORMATS,
+    _pack,
+    _pcc,
+    _unpack,
+    unrounded_kv,
+)
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import (  # noqa: F401 (WEIGHT_CACHE re-export)
     WEIGHT_CACHE,
     host_weights,
     weight_cache_dir,
 )
-from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT
+from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -57,6 +65,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import (
     load_layer_dense,
     resolve_checkpoint,
 )
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCHEDULES = {"sharing": (0, 2, 3, 20, 21, 24), "engram": (0, 1, 2, 3), "dspark": (20, 36, 37, 38, 39)}
@@ -83,7 +92,11 @@ PRODUCTION_CASES = {
     "one_chunk": (PRODUCTION_SEQ, PRODUCTION_SEQ, PRODUCTION_CANDIDATE_BLOCKS),
     "two_chunks": (PRODUCTION_SEQ, PRODUCTION_SEQ // 2, PRODUCTION_CANDIDATE_BLOCKS),
     **{f"{n}x{LONG_CHUNK}": (n * LONG_CHUNK, LONG_CHUNK, None) for n in (2, 4, 11)},
+    "4x5120_scaled_fp8": (4 * LONG_CHUNK, LONG_CHUNK, None),
 }
+# cases whose compressed KV uses another format (test_block_v41 KV_FORMATS): the transformer's free-running prefill
+# has no format choice, so these gate only the teacher-forced block acceptance at the last chunk, in that format
+KV_FORMAT_CASES = {"4x5120_scaled_fp8": "scaled_fp8"}
 MESH = [
     pytest.param(
         (2, 4),
@@ -209,6 +222,13 @@ def reference_data(spec, tokens, reference, last_chunk=None):
     return clean, expected, drifts, token_floor
 
 
+def kv_format_reference(spec, tokens, reference):
+    """What a KV_FORMAT_CASES case compares against (disk-cached; the prepare step fills it): the clean oracle and
+    the KV sources' unrounded compressed KV."""
+    clean = orc.oracle(spec, tokens, reference)
+    return clean, unrounded_kv(spec, tokens, reference, clean)
+
+
 def _check(model, spec, tokens, reference, name, last_chunk=None):
     """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows, the last
     SCORED rows and, with ``last_chunk``, the last chunk's rows) no further from the reference than its drift under
@@ -262,15 +282,20 @@ def _check(model, spec, tokens, reference, name, last_chunk=None):
     return state, clean
 
 
-def _teacher_forced_last_chunk(model, clean, total, name):
+def _teacher_forced_last_chunk(model, clean, total, name, kv_format=MlaKvCacheFormat.BF16_RM, unrounded=None):
     """The block acceptance of test_block_v41 at the last chunk of a chunked prefill of ``total`` tokens: every chunk
     through every block on the oracle's inputs (streams and pre-mix) over a fresh state, so each block reads caches
     it wrote itself from teacher-forced inputs. Gates the last chunk's block outputs (>= BLOCK_PCC real), the KV
-    sources' compressed-KV and index-K rows (all rows) and every window carry (>= CACHE_PCC)."""
+    sources' compressed-KV and index-K rows (all rows) and every window carry (>= CACHE_PCC). With ``kv_format``
+    SCALED_FP8 the compressed KV is compared with ``unrounded`` (test_block_v41.unrounded_kv; vs the FP4-QDQ rows
+    reported)."""
     mesh, cfg, chunk = model.mesh_device, model.config, model.chunk
     shape, tp, n = tuple(mesh.shape), mesh.shape[1], cfg.HC_MULT
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, shape, dims=(2, 3)))
-    state = model._new_state()
+    if kv_format == MlaKvCacheFormat.BF16_RM:
+        state = model._new_state()
+    else:
+        state = V41PrefillState(mesh, cfg, model.max_seq_len, chunk, model.layers, kv_format=kv_format)
     last = {}
     for start in range(0, total, chunk):
         length = min(chunk, total - start)
@@ -314,10 +339,12 @@ def _teacher_forced_last_chunk(model, clean, total, name):
         if layer in C.KV_SOURCE_LAYERS:
             pub = clean["shared"][layer]
             rows, w0 = pub["compress_kv"].shape[0], state.geometry.window_rows
-            entry["compressed_kv"] = (
-                _pcc(pub["compress_kv"], state.to_host(state.kv[layer])[w0 : w0 + rows]),
-                CACHE_PCC,
-            )
+            stored = state.to_host(state.kv[layer])[w0 : w0 + rows]
+            if kv_format == MlaKvCacheFormat.SCALED_FP8:
+                entry["compressed_kv"] = (_pcc(unrounded[layer], stored), CACHE_PCC)
+                entry["compressed_kv_vs_fp4"] = (_pcc(pub["compress_kv"], stored), None)
+            else:
+                entry["compressed_kv"] = (_pcc(pub["compress_kv"], stored), CACHE_PCC)
             entry["index_k"] = (_pcc(pub["index_k"], state.to_host(state.index_k[layer])[:rows]), CACHE_PCC)
         logger.info(
             f"transformer {name} teacher-forced last chunk [{first}, {total}) layer {layer}: "
@@ -403,6 +430,12 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
     seq, chunk, _ = PRODUCTION_CASES[chunks]
     long = chunk == LONG_CHUNK
     name = f"production {weights} chunks={chunks}"
+    if chunks in KV_FORMAT_CASES:
+        with _stage(f"{name} reference (cached unless precomputed)", "oracle"):
+            clean, unrounded = kv_format_reference(spec, tokens, reference)
+        with _stage(f"{name} teacher-forced blocks", "compute"):
+            _teacher_forced_last_chunk(model, clean, seq, name, KV_FORMATS[KV_FORMAT_CASES[chunks]], unrounded)
+        return
     _, clean = _check(model, spec, tokens, reference, name, last_chunk=chunk if long else None)
     if long:
         with _stage(f"{name} teacher-forced blocks", "compute"):
