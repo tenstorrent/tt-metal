@@ -1866,6 +1866,28 @@ class _TTPolyBackwardFactor(TemplateParameter):
         )
 
 
+def _tt_poly_declared_celu_bw(x):
+    def _declared_derivative(x):
+        abs = np.abs
+        exp = np.exp
+        return np.broadcast_to(
+            np.asarray(exp((x - abs(x)) / 2), dtype=np.float64), x.shape
+        )
+
+    return _declared_derivative(x)
+
+
+def _tt_poly_declared_elu_bw(x):
+    def _declared_derivative(x):
+        abs = np.abs
+        exp = np.exp
+        return np.broadcast_to(
+            np.asarray(exp((x - abs(x)) / 2), dtype=np.float64), x.shape
+        )
+
+    return _declared_derivative(x)
+
+
 def _tt_poly_declared_erf_bw(x):
     def _declared_derivative(x):
         exp = np.exp
@@ -1882,6 +1904,8 @@ def _tt_poly_declared_erf_bw(x):
 @pytest.mark.parametrize(
     "op,mask_only,declared_reference,boundaries",
     [
+        ("celu_bw", False, _tt_poly_declared_celu_bw, ()),
+        ("elu_bw", False, _tt_poly_declared_elu_bw, ()),
         ("erf_bw", False, _tt_poly_declared_erf_bw, ()),
     ],
 )
