@@ -456,6 +456,14 @@ def test_perf_eltwise_binary_sfpu_int_extended(
     unsigned = formats.input_format == DataFormat.UInt32
     if unsigned != (mathop in _EXTENDED_UINT32_OPS):
         pytest.skip(f"{mathop.name} is not a {formats.input_format.name} op")
+    if get_chip_architecture() == ChipArchitecture.BLACKHOLE and mathop in (
+        MathOperation.SfpuDivInt32,
+        MathOperation.SfpuDivInt32Floor,
+    ):
+        # Pre-existing: with TT_LLK_DISABLE_ASSERTS=1, which every perf run sets, the
+        # BH div_int32 kernels do not compile ("too few lregs to hold live values");
+        # test_eltwise_binary_sfpu.py fails the same way under that flag.
+        pytest.skip("BH div_int32 does not compile with TT_LLK_DISABLE_ASSERTS=1")
     if (
         get_chip_architecture() == ChipArchitecture.BLACKHOLE
         and mathop == MathOperation.SfpuLcm

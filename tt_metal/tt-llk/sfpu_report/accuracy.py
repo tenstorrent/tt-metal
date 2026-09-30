@@ -37,7 +37,10 @@ def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
         "SFPU_REPORT_BINARY_OPS": ",".join(binary),
         "SFPU_REPORT_FORMATS": ",".join(formats),
     }
-    runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs)
+    # A variant that fails on one side shows up as missing in the comparison.
+    runner.produce_consume(
+        side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs, check=False
+    )
     return out_dir
 
 
