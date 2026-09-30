@@ -65,7 +65,7 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     const auto& gate_shape = in.gate.logical_shape();
     const auto& weight_shape = in.weight.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
-    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be [B,T,H*V]");
+    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be rank 3 [B,T,W]");
     TT_FATAL(weight_shape.rank() == 1, "sigmoid_gated_rms_norm: weight must be [V]");
     TT_FATAL(
         input_shape[0] == attrs.batch * attrs.num_heads && input_shape[1] == attrs.sequence &&
@@ -76,9 +76,11 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
     TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
-            gate_shape[2] >= attrs.gate_column_offset + attrs.num_heads * attrs.value_dim &&
-            (attrs.gate_column_offset > 0 || gate_shape[2] == attrs.num_heads * attrs.value_dim),
-        "sigmoid_gated_rms_norm: gate must have shape [B,T,H*V], or hold H*V columns at gate_column_offset");
+            gate_shape[2] >= attrs.gate_column_offset + attrs.num_heads * attrs.value_dim,
+        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold H*V = {} columns at gate_column_offset {}",
+        gate_shape,
+        attrs.num_heads * attrs.value_dim,
+        attrs.gate_column_offset);
     TT_FATAL(in.weight.logical_volume() == attrs.value_dim, "sigmoid_gated_rms_norm: weight volume must equal V");
     TT_FATAL(attrs.batch > 0, "sigmoid_gated_rms_norm: batch must be positive");
     TT_FATAL(

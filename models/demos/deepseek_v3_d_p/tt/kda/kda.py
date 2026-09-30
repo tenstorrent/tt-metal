@@ -306,7 +306,8 @@ class ttKDA:
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
-            # The gated norm reads its gate columns straight from the fused projection.
+            # The gated norm reads its gate columns straight from the fused projection, which therefore
+            # stays allocated until the norm instead of only its gate slice.
             output_gate=projected,
             output_gate_offset=auxiliary_start + config.head_k_dim,
             beta=_slice_width(
@@ -368,7 +369,7 @@ class ttKDA:
         self,
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
-        output_gate_offset: int = 0,
+        output_gate_offset: int,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights

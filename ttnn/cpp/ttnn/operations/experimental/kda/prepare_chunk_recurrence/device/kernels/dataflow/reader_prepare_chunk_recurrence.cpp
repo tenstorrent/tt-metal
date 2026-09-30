@@ -107,7 +107,7 @@ template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
-    uint32_t beta_rows,
+    uint32_t beta_token_major,
     uint32_t beta_width_tiles,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
@@ -204,9 +204,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
         enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
         const uint32_t head = head_chunk_index / num_chunks;
-        if constexpr (beta_rows) {
-            // Row-major beta [1, T, H]: the chunk's tile holds every head as a column.
-            static_assert(Ct == 1, "row-major beta supports one tile row per chunk");
+        if constexpr (beta_token_major) {
+            // Token-major beta [1, T, H]: the chunk's tile holds every head as a column.
+            static_assert(Ct == 1, "token-major beta supports one tile row per chunk");
             const uint32_t chunk = head_chunk_index % num_chunks;
             enqueue_contiguous_read(
                 beta_accessor, beta, chunk * beta_width_tiles + head / tt::constants::TILE_WIDTH, 1);
@@ -216,7 +216,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
-        if constexpr (beta_rows) {
+        if constexpr (beta_token_major) {
             // Compute broadcasts column 0; move this head's column there. Each row reads its source before
             // overwriting column 0, so the in-place move is safe.
             auto* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr());

@@ -180,7 +180,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             {{"Ct", Ct},
              {"Kt", Kt},
              {"Vt", Vt},
-             {"beta_rows", static_cast<uint32_t>(in.beta.logical_shape().rank() == 3)},
+             {"beta_token_major", static_cast<uint32_t>(in.beta.logical_shape().rank() == 3)},
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),

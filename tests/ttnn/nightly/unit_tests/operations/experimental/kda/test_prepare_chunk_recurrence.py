@@ -457,13 +457,13 @@ def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(
     [_UNIT_TEST_CASE, _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)],
     ids=lambda case: case.case_id,
 )
-def test_prepare_chunk_recurrence_row_major_beta_matches_by_chunk_beta(device: ttnn.Device, case: _TestCase) -> None:
-    """Row-major [1, rows, heads] beta must give the same outputs as [heads, chunks, 32, 1] beta."""
+def test_prepare_chunk_recurrence_token_major_beta_matches_by_chunk_beta(device: ttnn.Device, case: _TestCase) -> None:
+    """Token-major [1, rows, heads] beta must give the same outputs as [heads, chunks, 32, 1] beta."""
     host_inputs = _case_host_inputs(case, seed=1913)
     beta_by_chunk = host_inputs[4]
-    beta_rows = beta_by_chunk.reshape(case.num_heads, case.num_chunks * CHUNK_SIZE).T.unsqueeze(0).contiguous()
+    beta_token_major = beta_by_chunk.reshape(case.num_heads, case.num_chunks * CHUNK_SIZE).T.unsqueeze(0).contiguous()
     by_chunk_inputs = _device_inputs(host_inputs, device)
-    rows_beta = _to_device(beta_rows, device, ttnn.float32)
+    token_major_beta = _to_device(beta_token_major, device, ttnn.float32)
     # Production always passes the start metadata, so bind it explicitly.
     start = make_actual_start(device, 0)
 
@@ -474,10 +474,10 @@ def test_prepare_chunk_recurrence_row_major_beta_matches_by_chunk_beta(device: t
             )
 
     by_chunk = run(by_chunk_inputs)
-    by_rows = run((*by_chunk_inputs[:4], rows_beta))
-    for name, expected, actual in zip(OUTPUT_NAMES, by_chunk, by_rows, strict=True):
-        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} row-major beta")
-    for tensor in (*by_chunk, *by_rows, *by_chunk_inputs, rows_beta, start):
+    by_token = run((*by_chunk_inputs[:4], token_major_beta))
+    for name, expected, actual in zip(OUTPUT_NAMES, by_chunk, by_token, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} token-major beta")
+    for tensor in (*by_chunk, *by_token, *by_chunk_inputs, token_major_beta, start):
         ttnn.deallocate(tensor)
 
 
