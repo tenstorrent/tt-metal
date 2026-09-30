@@ -112,9 +112,10 @@ struct UngeneralizedDemotion {
 constexpr TensorMemoryLayout kInterleaved = TensorMemoryLayout::INTERLEAVED;
 constexpr TensorMemoryLayout kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
 constexpr TensorMemoryLayout kWidth = TensorMemoryLayout::WIDTH_SHARDED;
-const std::array<UngeneralizedDemotion, 13> kUngeneralizedDemotions = {{
+const std::array<UngeneralizedDemotion, 15> kUngeneralizedDemotions = {{
     // No mechanism identified; each entry is one measured case. Replace with a predicate once the cause
     // of the loss is known.
+    {{1, 2, 4, 4}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 6, 12}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 8, 16}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 12, 24}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
@@ -129,15 +130,14 @@ const std::array<UngeneralizedDemotion, 13> kUngeneralizedDemotions = {{
     // native avoids by repeating each shard where it lies. The output is interleaved, so no split keeps
     // both sides local. Kept exact because the edge of that loss in shard count and size is unmeasured.
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 8, kInterleaved, BufferType::L1},
-    // Identified, and addressed in the factory, but the only measurement taken predates that fix, so
-    // these stay demoted until a measurement against the current factory says otherwise. A last-dim
-    // row-major repeat from one HEIGHT_SHARDED placement to the same rows per shard is split over the
-    // shard cores themselves, so every row is read and written locally instead of crossing the NoC
-    // twice (shard_local_split).
+    // A last-dim row-major repeat between HEIGHT_SHARDED placements with the same rows per shard. The
+    // factory splits it over the shard cores themselves (shard_local_split) so every row stays local,
+    // and it still measures slower than native; whether the few-core split or the per-row work is the
+    // cost is unmeasured.
+    {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::BFLOAT16, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
     {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
-    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output reads each source tile once and writes
-    // every copy from the reader, instead of re-reading the source once per output page from every
-    // core of the grid (direct_outer_tile).
+    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output. The factory already reads each source
+    // tile once and writes every copy from the reader (direct_outer_tile); kept demoted as measured.
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::BFLOAT16, Layout::TILE, kHeight, 8, kHeight, {}},
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::TILE, kHeight, 8, kHeight, {}},
 }};
@@ -340,8 +340,9 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        // A one-element bfloat16 stick is served: the last-dim reader replicates a 2-byte stick with
-        // halfword stores, and every other leg moves whole aligned pages.
+        // No width floor here: a leg cannot tell a caller's row-major input from the round trip's
+        // untilized copy of a TILE input, which may be one element wide. The whole-call gate refuses a
+        // row-major input narrower than two elements before any leg is planned.
         if (input.dtype() == DataType::BFLOAT8_B) {
             return false;
         }
@@ -408,6 +409,12 @@ bool supported_by_codegen(
     }
     // Every leg below runs row-major, the round trip's included.
     if (input.dtype() == DataType::BFLOAT8_B) {
+        return false;
+    }
+    // A row-major input narrower than two elements is outside the scope the codegen path was verified
+    // over. The round trip's untilized copy of a TILE input can still be one element wide; that case
+    // is verified through its TILE input.
+    if (input.layout() == ttnn::ROW_MAJOR_LAYOUT && shape[-1] < 2) {
         return false;
     }
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
