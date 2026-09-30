@@ -28,7 +28,6 @@ from .chunk_gated_delta_rule_fwd_program_descriptor import (
     default_compute_kernel_config,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS — over `inputs = ((B, T, H, K, V), chunk_size)`; chunk_size first so
 #    seq_alignment can read it.
@@ -93,7 +92,9 @@ def _shape(t):
     return [int(d) for d in t.shape]
 
 
-def validate(q, k, v, g, beta, *, initial_state=None, chunk_size=64, compute_kernel_config=None, **_):
+def validate(
+    q, k, v, g, beta, *, initial_state=None, chunk_size=64, compute_kernel_config=None, memory_config=None, **_
+):
     qs, ks, vs, gs, bs = (_shape(t) for t in (q, k, v, g, beta))
     if len(qs) != 4 or len(ks) != 4 or len(vs) != 4:
         raise ValueError("chunk_gated_delta_rule_fwd: q, k must be [B,T,H,K] and v [B,T,H,V] (rank 4)")
@@ -153,6 +154,19 @@ def validate(q, k, v, g, beta, *, initial_state=None, chunk_size=64, compute_ker
             f"chunk_gated_delta_rule_fwd: H={H} exceeds the mechanism cap of {MAX_HEADS} "
             "(the page index assumes ceil(H/32) == 1)"
         )
+    # Interleaved I/O only (the face-row gather / scatter and the full-page state I/O address pages
+    # through interleaved TensorAccessors; there is no memory_layout axis in TARGET).
+    for name, t in [("q", q), ("k", k), ("v", v), ("g", g), ("beta", beta)] + (
+        [("initial_state", initial_state)] if initial_state is not None else []
+    ):
+        if t.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            raise ValueError(
+                f"chunk_gated_delta_rule_fwd: {name} must be interleaved (DRAM or L1); sharded input is not supported"
+            )
+    if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError(
+            "chunk_gated_delta_rule_fwd: memory_config must be interleaved (DRAM or L1); sharded output is not supported"
+        )
     if compute_kernel_config is not None and q.dtype == ttnn.float32 and not compute_kernel_config.fp32_dest_acc_en:
         raise ValueError("chunk_gated_delta_rule_fwd: float32 inputs require fp32_dest_acc_en=True")
     return axes
@@ -204,6 +218,7 @@ def chunk_gated_delta_rule_fwd(
         initial_state=initial_state,
         chunk_size=chunk_size,
         compute_kernel_config=compute_kernel_config,
+        memory_config=memory_config,
     )
     global _LAST_DEBUG
     outputs, debug = build_program(

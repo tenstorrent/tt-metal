@@ -1,0 +1,1006 @@
+{
+  "summary": {
+    "total": 90,
+    "supported_pass": 76,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 14
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x32x1x32x32_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x32x1x32x32_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x32x1x32x32_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x32x1x32x32_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x64x1x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x64x1x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x64x1x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x64x1x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x64x4x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x64x4x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x64x4x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x64x4x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[4x128x16x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[4x128x16x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[4x128x16x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[4x128x16x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x64x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x32x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x32x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x32x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x128x2x32x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x4x128x256_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x4x128x256_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x4x128x256_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x4x128x256_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x100x2x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x100x2x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x100x2x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x100x2x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x72x2x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x72x2x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x72x2x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x72x2x64x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x200x2x32x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x200x2x32x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x200x2x32x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x200x2x32x64_c32-chunk_size=32-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x160x2x64x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x160x2x64x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x160x2x64x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x160x2x64x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=wide_v-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "wide_v"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x48x3x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x48x3x64x64_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x48x3x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x48x3x64x64_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x1000x4x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x1000x4x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x1000x4x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x1000x4x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_ragged-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_ragged",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x512x8x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x512x8x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x512x8x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x512x8x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x1024x4x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x1024x4x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x1024x4x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[2x1024x4x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x2048x2x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x2048x2x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x2048x2x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x2048x2x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x32x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x32x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x32x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op[1x256x32x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op_loose[1x4096x16x128x128_c64-chunk_size=64-dtype=BFLOAT16-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op_loose[1x4096x16x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=no_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "no_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op_loose[1x128x2x64x64_c32-chunk_size=32-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 32,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_golden.py::test_op_loose[1x2048x2x128x128_c64-chunk_size=64-dtype=FLOAT32-head_dims=square-layout=TILE-seq_alignment=chunk_aligned-state_mode=with_h0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "state_mode": "with_h0",
+          "chunk_size": 64,
+          "seq_alignment": "chunk_aligned",
+          "head_dims": "square"
+        },
+        "status": "passed"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[no_decay-fp32]",
+        "test_name": "test_gate_strength[no_decay-fp32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[no_decay-bf16]",
+        "test_name": "test_gate_strength[no_decay-bf16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[weak_decay-fp32]",
+        "test_name": "test_gate_strength[weak_decay-fp32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[weak_decay-bf16]",
+        "test_name": "test_gate_strength[weak_decay-bf16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[saturated_decay-fp32]",
+        "test_name": "test_gate_strength[saturated_decay-fp32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_gate_strength[saturated_decay-bf16]",
+        "test_name": "test_gate_strength[saturated_decay-bf16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_beta_zero_passes_state_through",
+        "test_name": "test_beta_zero_passes_state_through",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_h0_is_first_state",
+        "test_name": "test_h0_is_first_state",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_no_h0_first_state_is_zero",
+        "test_name": "test_no_h0_first_state_is_zero",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_chunk_chaining[fp32]",
+        "test_name": "test_chunk_chaining[fp32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_chunk_chaining[bf16]",
+        "test_name": "test_chunk_chaining[bf16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_explicit_scale",
+        "test_name": "test_explicit_scale",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_explicit_default_compute_kernel_config",
+        "test_name": "test_explicit_default_compute_kernel_config",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/chunk_gated_delta_rule_fwd/test_regression.py::test_output_memory_config_l1",
+        "test_name": "test_output_memory_config_l1",
+        "status": "passed"
+      }
+    ]
+  }
+}

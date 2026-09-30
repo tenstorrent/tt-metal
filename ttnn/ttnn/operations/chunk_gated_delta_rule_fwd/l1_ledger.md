@@ -9,7 +9,8 @@ Block axes (every row accounts for all of them): `bh` (item's batch·head), `chu
 
 `F` = Float32 tile (4096 B); `I` = input-dtype tile (4096 B fp32 / 2048 B bf16).
 `Da = ACCUM_DEPTH = 2`, `Ds = SCAN_STREAM_DEPTH = 2`, `De = EGRESS_DEPTH = 2`, `Dg = GATHER_DEPTH = 2`.
-Push quanta: `Qf = Ct·max(Kt, Ct, Vi)`, `Qo = max(Ct², Ct, Kt·Vs, Ct·Vi)`, `Qv = max(Ct, Kt)·Vi`.
+Push quanta (as built, `_quanta()`): `Qf = Ct·max(Kt, Ct, Vi, Vs)`, `Qo = max(Ct², Ct, Kt·Vs, Ct·Vi)`,
+`Qv = max(Ct·Vi, Kt·Vs, Kt·Vi)` (equal to `max(Ct,Kt)·Vi` whenever `Vs ≤ Vi`, i.e. at every INPUTS shape).
 Page format audit: `fp32_dest_acc_en = True` by default ⇒ every compute-produced CB is `Float32`
 (no *under* finding). With a caller-supplied `fp32_dest_acc_en = False` (bfloat16 only) the `Float32`
 pages are an audit-2 *over* case, accepted deliberately: the prompt mandates Float32 internal CBs
@@ -33,14 +34,14 @@ regardless, and it is a non-default configuration.
 | `cb_cc_b` | `Ct²` | `Ct²` (`X`; earlier in the item `g_full` `[Ct,1]` in a `Ct²` quantum) | `{C: spans ×2}` | F | compute | compute | P | `X` and `diag(g)` are live simultaneously (matmul operands). **Implementation:** also the `g_full` temporary of `gate_columns_block` (disjoint lifetime; pushed at the CB's one quantum `Ct²`) |
 | `cb_T` | `Da·Ct²` | `Ct²` | `{C: spans ×2}` | F | compute | compute | P | in-place accumulator (`T ← T + T@Pw`) — ACCUM_DEPTH |
 | `cb_pow` | `Da·Ct²` | `Ct²` | `{C: spans ×2}` | F | compute | compute | P | in-place squaring (`Pw ← Pw@Pw`) — ACCUM_DEPTH; concurrent with `cb_T` |
-| `cb_vmat` | `Ct·Vi` | `Ct·Vi` (`vβ`) | `{C: spans; V: spans → Vi; K: —}` | F | compute | compute | P | `v_corr` is packed straight into egress (no CB); cannot share with `cb_vnew_in` (reader-produced) |
-| `cb_intra_in` | `Ct²` | `Ct²` | `{C: spans ×2}` | F | reader | compute | E | disjoint from S's reader CBs, but a different quantum from all of them (`Ct²` vs `Kt·Ct`, `Ct·Vs`, 1) — sharing would force the larger quantum on the scan stream |
+| `cb_vmat` | `Ct·Vi` | `Ct·Vi` (`vβ`) | `{C: spans; V: spans → Vi; K: —}` | F | compute | compute | P | `v_corr` is packed straight into egress (no CB); cannot share with `cb_vnew_in` (reader-produced). **Disjoint from `cb_scan_vnew` (S, compute→compute, F)** — not shared: the two roles push different quanta (`Ct·Vi` vs `Ct·Vs`), so one CB would need the larger quantum for both; ≤ 8 KB at every INPUTS shape and L1 is not binding (verifier audit) |
+| `cb_intra_in` | `Ct²` | `Ct²` | `{C: spans ×2}` | F | reader | compute | E | disjoint from S's reader CBs, but a different quantum from all of them (`Ct²` vs `Kt·Ct`, `Ct·Vs`, 1) — sharing would force the larger quantum on the scan stream. Disjoint from `cb_L` / `cb_cc_a` / `cb_cc_b` (P, same `Ct²` quantum, F) but those are compute-produced — one CB may not have two producer kernels |
 | `cb_vnew_in` | `Ct·Vi` | `Ct·Vi` | `{C: spans; V: spans → Vi}` | F | reader | compute | E | sharing with `cb_scan_vcorr` would force quantum `Ct·Vi` at depth `Ds` (`2·Ct·Vi` > `Ct·Vi + 2·Ct·Vs` whenever `Vs < Vi/2`) |
 | `cb_kmat_in` | `Ds·Ct·Kt` | S: `2·Ct·Kt` (two chunks of `nkcd` in flight); E: `Ct·Kt` (`Q`) | `{chunk: streams (depth 2 in S); C, K: spans; V: —}` | F | reader | compute | S, E | **shares** S `nkcd` stream and E `Q` (same quantum, same producer/consumer, disjoint lifetime) |
 | `cb_scan_pt` | `Ds·Kt·Ct` | `2·Kt·Ct` | `{chunk: streams; C, K: spans; V: —}` | F | reader | compute | S | concurrent with `cb_kmat_in` in S; its E-lifetime twin would be `intra` (quantum mismatch, see `cb_intra_in`) |
 | `cb_scan_vcorr` | `Ds·Ct·Vs` | `2·Ct·Vs` | `{chunk: streams; C: spans; V: spans → Vs}` | F | reader | compute | S | see `cb_vnew_in` |
 | `cb_scan_gamma` | `Ds` | 2 tiles (`Γ_full`) | `{chunk: streams; others: —}` | F | reader | compute | S | a 1-tile quantum; no other CB has quantum 1 |
-| `cb_state` | `Da·Kt·Vs` | `Kt·Vs` | `{chunk: streams (resident across all NC steps); K: spans; V: spans → Vs; C: —}` | F | compute | compute | S | in place across every chunk step — ACCUM_DEPTH. Cannot share with `cb_vblock_in` (producer and, for bf16, format differ) |
+| `cb_state` | `Da·Kt·Vs` | `Kt·Vs` | `{chunk: streams (resident across all NC steps); K: spans; V: spans → Vs; C: —}` | F | compute | compute | S | in place across every chunk step — ACCUM_DEPTH. Cannot share with `cb_vblock_in` (producer and, for bf16, format differ). **Disjoint from the P-only compute→compute F CBs (`cb_T`, `cb_pow` `Da·Ct²`; `cb_kb` `Da·Ct·Kt`)** — not shared: different in-place quanta (`Kt·Vs` vs `Ct²` / `Ct·Kt`) break the one-quantum ring invariant unless both roles adopt the max; the saving (≤ 32 KB at `K=128, Vs=1, Ct=2`) is not needed while the worst INPUTS footprint (1181 KB) is under budget (≈ 1416 KB). Folded into op_requirements Refinement 3 (where depth-2 input buffers need L1 headroom) |
 | `cb_scan_vnew` | `Ct·Vs` | `Ct·Vs` | `{C: spans; V: spans → Vs}` | F | compute | compute | S | `v_new` must be resident as `in1` of `Pᵀ@v_new` while also leaving via egress (two packs, one DEST tile) |
 | `cb_scratch_egress` | `De·Qf` | `De` blocks in flight | `{C: spans; K or C or Vi: spans (max); chunk: streams}` | F | compute | writer | P, S | one quantum `Qf` for `nkcd, Pᵀ, Γ_full, Q, intra, v_corr` (P) and `v_new` (S); capacity − live = the uniform-quantum tail + double buffering |
 | `cb_out_egress` | `De·Qo` | `De` blocks in flight | `{C: spans; K/V: spans (max of Kt·Vs, Ct·Vi); chunk: streams}` | I | compute | writer | P, S, E | one quantum `Qo` for `Tinv→A`, `decay→g_cumsum` (P), `h_i`, `final_state` (S), `o`, `v_new` (E). Separate from `cb_scratch_egress` because the page format differs (I vs F) for bf16 |
@@ -88,8 +89,8 @@ footprint(Vi, Vs) =
         + Ct·Vi + Ct² + Ct·Vi                 # cb_vmat, cb_intra_in, cb_vnew_in
         + Ds·Ct·Kt + Ds·Kt·Ct + Ds·Ct·Vs + Ds # cb_kmat_in, cb_scan_pt, cb_scan_vcorr, cb_scan_gamma
         + Da·Kt·Vs + Ct·Vs                    # cb_state, cb_scan_vnew
-        + De·Ct·max(Kt, Ct, Vi) ]             # cb_scratch_egress
-  + I · [ 2·Ct·Kt + max(Ct,Kt)·Vi + 2Ct       # cb_q_in, cb_k_in, cb_vblock_in, cb_gate_in
+        + De·Ct·max(Kt, Ct, Vi, Vs) ]         # cb_scratch_egress
+  + I · [ 2·Ct·Kt + max(Ct·Vi, Kt·Vs, Kt·Vi) + 2Ct   # cb_q_in, cb_k_in, cb_vblock_in, cb_gate_in
         + De·max(Ct², Ct, Kt·Vs, Ct·Vi) ]     # cb_out_egress
   + Dg·(gather_stage_tokens·row_span_stride + 64) + 512
 ```
@@ -193,3 +194,45 @@ that is not intrinsic is the `NV×` re-read of the scan's shared operands.
 The `q,k,v` face-row gather is ~54% of the wall at both measured shapes and the scatter ~10%, confirming the
 Traffic-ranking verdict: the governing term is the per-row transaction count, whose structural fix is R3
 (page-harvest), layered on this R1 build.
+
+## Verifier audit (Phase 0)
+
+- **Currency**: every CB declared by `_cb_pages()` has a row and every row a CB; page counts match
+  the descriptor. The closed-form total and the quanta line were brought in line with `_quanta()`
+  (the `Vs` terms were missing from `Qv` / `Qf`; identical values at every INPUTS shape).
+- **Capacity vs live set**: over-capacity rows (`cb_kb`, `cb_T`, `cb_pow`, `cb_state` at `Da = 2`;
+  the uniform-quantum tails of `cb_vblock_in`, `cb_scratch_egress`, `cb_out_egress`) are each
+  justified. No span-without-capacity (collapsed extent) found: every spanned axis scales the
+  capacity (`Ct`, `Kt`, `Vi`, `Vs`), every streamed axis (`bh`, `chunk`, `NC`) appears in no capacity.
+- **Page format vs DEST**: all compute-produced CBs Float32 with `fp32_dest_acc_en = True` (default).
+  A caller-chosen `fp32_dest_acc_en = False` (bfloat16 only) makes them an *over* case — accepted:
+  the prompt mandates Float32 internal CBs regardless of config.
+- **Disjoint lifetimes**: three pairs had no recorded reason (`cb_vmat`↔`cb_scan_vnew`,
+  `cb_T`/`cb_pow`/`cb_kb`↔`cb_state`, `cb_L`/`cb_cc_*`↔`cb_intra_in`); reasons added in their rows
+  above. None is fixed in place: L1 is not binding at any INPUTS shape.
+- **Bounds**: every capacity symbol is bounded by a validated predicate or the host solve.
+- **Data-movement budget**: consistent with the built R1 split. The cheapest-traffic split (R3
+  page-harvest) and R4 (scan-operand mcast) are `deferred` without a *positive* reason (R3 is
+  reachable and serves the LOOSE / `H ≥ 4` shapes R1 serves slowly) — they are filed as
+  op_requirements Refinements 1 and 2 (measured perf refinements), which discharges the finding.
+
+### Verifier measurements (Blackhole p300a, 110 worker cores, device kernel duration, 2nd dispatch)
+
+| Case | Phase 0 as handed over [µs] | After verifier fixes [µs] |
+|---|---|---|
+| LOOSE (1,4096,16,128,128) c64 bf16 with_h0 | 4418 | 4425 |
+| LOOSE (1,4096,16,128,128) c64 fp32 no_h0 | 5477 | 5341 |
+| (1,256,32,128,128) c64 fp32 | 852 | 813 |
+| (4,128,16,64,64) c32 fp32 with_h0 | 361 | 339 |
+| (1,256,4,128,256) c64 bf16 with_h0 (48 cores) | 387 | 344 |
+| (1,2048,2,128,128) c64 fp32 with_h0 (72 cores) | 520 | 472 |
+| (1,1000,4,128,128) c64 bf16 (80 cores) | 373 | 331 |
+| (1,32,1,32,32) c32 fp32 (2 cores) | 76 | 56 |
+
+The verifier fix that moved these is the constant-tile build (47 µs of per-lane non-inlined stores
+on every core's reader before the first gather → face-pattern + NoC copies). Stage-marker zones at
+the LOOSE bf16 shape (Phase 0 build): constants 47 µs; stage P ends between **1.22 ms and 3.66 ms**
+per core (9–10 items each — a 3× per-core spread); the scan cores finish their own P at ~1.2 ms and
+then wait on the segment releases of the slowest P cores (their stage S spans ~2.0–2.4 ms); stage E
+runs the last ~0.45–0.6 ms. `GATHER_DEPTH ∈ {2,4}` × `GATHER_STAGE_TOKENS ∈ {16,32}` moved no case
+by more than run-to-run noise (±2%): the gather is RISC-issue / transaction-bound, not latency-bound.

@@ -56,9 +56,16 @@ static __attribute__((noipa)) void store_word(uint32_t addr, uint32_t elem, uint
 
 // ---------------------------------------------------------------------------
 // build_constant_tiles — once per core.  Zero the whole block over the NoC, then write only the
-// lanes that carry a pattern.  The all-ones tiles (ONES, and the off-diagonal blocks of LT / SL /
-// SU) are produced by NoC doubling copies from one 16-word face row — no whole-tile CPU fill.
+// lanes that carry a pattern.  All-ones data (ONES, the off-diagonal blocks of LT / SL / SU, and
+// the all-ones faces of the diagonal blocks) is produced by NoC copies from one all-ones tile
+// built by doubling a 16-word face row.  The diagonal blocks are four faces each: of the 16x16
+// faces, face 0 and face 3 carry the triangle / identity pattern, face 2 (LT, SL) or face 1 (SU)
+// is all ones, the other is zero.  So only three 16x16 triangle faces and one identity face are
+// written by the CPU (~400 stores), once, into the first diagonal tile; every other diagonal tile
+// is a NoC copy of it.
 // ---------------------------------------------------------------------------
+constexpr uint32_t FACE_BYTES = 256u * 4u;
+
 void build_constant_tiles() {
     cb_reserve_back(cb_const, NCONST);
     const uint32_t base = get_write_ptr(cb_const);
@@ -77,37 +84,59 @@ void build_constant_tiles() {
         l1_copy(ones, ones + t * F32_TILE, F32_TILE);
     }
 
+    // Off-diagonal blocks: whole all-ones tiles.
     for (uint32_t ti = 0; ti < Ct; ++ti) {
         for (uint32_t si = 0; si < Ct; ++si) {
             const uint32_t t = ti * Ct + si;
-            const uint32_t lt = base + (CST_LT + t) * F32_TILE;
-            const uint32_t sl = base + (CST_SL + t) * F32_TILE;
-            const uint32_t su = base + (CST_SU + t) * F32_TILE;
-            const uint32_t ey = base + (CST_EYE + t) * F32_TILE;
             if (ti > si) {  // strictly below the diagonal block: LT = SL = 1
-                l1_copy(ones, lt, F32_TILE);
-                l1_copy(ones, sl, F32_TILE);
+                l1_copy(ones, base + (CST_LT + t) * F32_TILE, F32_TILE);
+                l1_copy(ones, base + (CST_SL + t) * F32_TILE, F32_TILE);
             } else if (ti < si) {  // strictly above: SU = 1
-                l1_copy(ones, su, F32_TILE);
-            } else {  // diagonal block: triangles and the identity, lane by lane
-                for (uint32_t r = 0; r < 32; ++r) {
-                    for (uint32_t c = 0; c < 32; ++c) {
-                        const uint32_t e = tile_elem_off(r, c);
-                        if (c <= r) {
-                            store_word(lt, e, ONE_F32);
-                        }
-                        if (c < r) {
-                            store_word(sl, e, ONE_F32);
-                        }
-                        if (c > r) {
-                            store_word(su, e, ONE_F32);
-                        }
-                    }
-                    store_word(ey, tile_elem_off(r, r), ONE_F32);
-                }
+                l1_copy(ones, base + (CST_SU + t) * F32_TILE, F32_TILE);
             }
         }
     }
+
+    // First diagonal tile (t = 0): face 0 patterns by CPU, then face 3 = face 0 and the all-ones face.
+    const uint32_t lt0 = base + CST_LT * F32_TILE;
+    const uint32_t sl0 = base + CST_SL * F32_TILE;
+    const uint32_t su0 = base + CST_SU * F32_TILE;
+    const uint32_t ey0 = base + CST_EYE * F32_TILE;
+    {
+        volatile tt_l1_ptr uint32_t* lt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lt0);
+        volatile tt_l1_ptr uint32_t* sl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl0);
+        volatile tt_l1_ptr uint32_t* su = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(su0);
+        volatile tt_l1_ptr uint32_t* ey = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ey0);
+        for (uint32_t r = 0; r < 16; ++r) {
+            for (uint32_t c = 0; c < r; ++c) {
+                lt[r * 16 + c] = ONE_F32;
+                sl[r * 16 + c] = ONE_F32;
+            }
+            lt[r * 16 + r] = ONE_F32;
+            ey[r * 16 + r] = ONE_F32;
+            for (uint32_t c = r + 1; c < 16; ++c) {
+                su[r * 16 + c] = ONE_F32;
+            }
+        }
+    }
+    l1_copy(lt0, lt0 + 3 * FACE_BYTES, FACE_BYTES);
+    l1_copy(sl0, sl0 + 3 * FACE_BYTES, FACE_BYTES);
+    l1_copy(su0, su0 + 3 * FACE_BYTES, FACE_BYTES);
+    l1_copy(ey0, ey0 + 3 * FACE_BYTES, FACE_BYTES);
+    l1_copy(ones, lt0 + 2 * FACE_BYTES, FACE_BYTES);  // rows 16..31, cols 0..15: below the diagonal
+    l1_copy(ones, sl0 + 2 * FACE_BYTES, FACE_BYTES);
+    l1_copy(ones, su0 + 1 * FACE_BYTES, FACE_BYTES);  // rows 0..15, cols 16..31: above the diagonal
+    noc_async_read_barrier();
+
+    // Remaining diagonal tiles are copies of the first.
+    for (uint32_t d = 1; d < Ct; ++d) {
+        const uint32_t t = d * Ct + d;
+        l1_copy(lt0, base + (CST_LT + t) * F32_TILE, F32_TILE);
+        l1_copy(sl0, base + (CST_SL + t) * F32_TILE, F32_TILE);
+        l1_copy(su0, base + (CST_SU + t) * F32_TILE, F32_TILE);
+        l1_copy(ey0, base + (CST_EYE + t) * F32_TILE, F32_TILE);
+    }
+
     const uint32_t erow = base + CST_EROW0 * F32_TILE;
     for (uint32_t c = 0; c < 32; ++c) {
         store_word(erow, tile_elem_off(0, c), ONE_F32);
@@ -151,6 +180,10 @@ void gather_block(
     const uint32_t stage64 = (get_write_ptr(cb_gather_stage) + 63u) & ~63u;
     const uint32_t line_shift = src_off & 63u;
     // A staging window is GATHER_TOKENS rows of ONE destination tile.
+    static_assert(GATHER_TOKENS > 0 && 32u % GATHER_TOKENS == 0, "gather_stage_tokens must divide 32");
+    static_assert(
+        GATHER_DEPTH >= 1 && GATHER_DEPTH <= 15,
+        "one NoC transaction id per staging slot (trids 1..GATHER_DEPTH, 4-bit)");
     constexpr uint32_t WPT = 32u / GATHER_TOKENS;
     const uint32_t nwin = Ct * WPT * dn;
 
@@ -197,28 +230,45 @@ void gather_block(
     cb_push_back(cb, block_pages);
 }
 
-// Column gather of a rank-3 gate tensor: head h is COLUMN h of page (b, t/32).  One whole-page read
-// per token tile, then one scalar per row into column 0 of the destination tile (the consumers
-// read column 0 only; the tile was zeroed first so every other lane is finite).
-template <typename ACC>
-void gather_gate(const ACC& acc, uint32_t dst_base, uint32_t b, uint32_t t0, uint32_t h) {
+// Column gather of the rank-3 gate tensors g and beta: head h is COLUMN h of page (b, t/32).  All
+// 2*Ct whole-page reads of the item are issued back to back into the gather staging buffer and
+// retired by ONE barrier; then one scalar per row lands in column 0 of each destination tile (the
+// consumers read column 0 only; the tiles were zeroed first so every other lane is finite).
+constexpr uint32_t GATE_STAGE_BYTES = 2 * Ct * IN_TILE;
+static_assert(
+    GATE_STAGE_BYTES + 64 <= GATHER_DEPTH * GATHER_SLOT_BYTES,
+    "gate page staging (2*Ct input tiles) must fit in cb_gather_stage");
+
+template <typename GACC, typename BACC>
+void gather_gates(const GACC& g_acc, const BACC& b_acc, uint32_t dst_base, uint32_t b, uint32_t t0, uint32_t h) {
     const uint32_t stage64 = (get_write_ptr(cb_gather_stage) + 63u) & ~63u;
     for (uint32_t ct = 0; ct < Ct; ++ct) {
         const uint32_t tbase = t0 + ct * 32;
         if (tbase >= gT) {
             break;
         }
-        noc_async_read(acc.get_noc_addr(b * Tt + (tbase >> 5), 0), stage64, IN_TILE);
-        noc_async_read_barrier();
-        const uint32_t tile_addr = dst_base + ct * IN_TILE;
-        const uint32_t rows = (gT - tbase) < 32 ? (gT - tbase) : 32;
-        for (uint32_t r = 0; r < rows; ++r) {
-            if constexpr (ESZ == 4) {
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr)[tile_elem_off(r, 0)] =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage64)[tile_elem_off(r, h)];
-            } else {
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr)[tile_elem_off(r, 0)] =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage64)[tile_elem_off(r, h)];
+        const uint32_t page = b * Tt + (tbase >> 5);
+        noc_async_read(g_acc.get_noc_addr(page, 0), stage64 + ct * IN_TILE, IN_TILE);
+        noc_async_read(b_acc.get_noc_addr(page, 0), stage64 + (Ct + ct) * IN_TILE, IN_TILE);
+    }
+    noc_async_read_barrier();
+    for (uint32_t which = 0; which < 2; ++which) {
+        for (uint32_t ct = 0; ct < Ct; ++ct) {
+            const uint32_t tbase = t0 + ct * 32;
+            if (tbase >= gT) {
+                break;
+            }
+            const uint32_t src_addr = stage64 + (which * Ct + ct) * IN_TILE;
+            const uint32_t tile_addr = dst_base + (which * Ct + ct) * IN_TILE;
+            const uint32_t rows = (gT - tbase) < 32 ? (gT - tbase) : 32;
+            for (uint32_t r = 0; r < rows; ++r) {
+                if constexpr (ESZ == 4) {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr)[tile_elem_off(r, 0)] =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr)[tile_elem_off(r, h)];
+                } else {
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr)[tile_elem_off(r, 0)] =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_addr)[tile_elem_off(r, h)];
+                }
             }
         }
     }
@@ -306,8 +356,7 @@ void kernel_main() {
         {
             const uint32_t gbase = get_write_ptr(cb_gate_in);
             zero_cb(cb_gate_in, 0, 2 * Ct * IN_TILE);
-            gather_gate(g_acc, gbase, b, t0, h);
-            gather_gate(b_acc, gbase + Ct * IN_TILE, b, t0, h);
+            gather_gates(g_acc, b_acc, gbase, b, t0, h);
         }
         cb_push_back(cb_gate_in, 2 * Ct);
 
