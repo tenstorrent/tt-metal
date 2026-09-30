@@ -29,15 +29,23 @@ is scoped after them; their existing contributions are not duplicated in a
 new prerequisite review. The source's explicit local-combine and idle-expert
 handling remains part of the additional port.
 
-The public GDN operation reuses Izajasz Wrosz's merged upstream
+Applicable public GDN callers reuse Izajasz Wrosz's merged upstream
 [PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
 `96cc4a7937f19ee205717577fcf4d10269d043b4`. The port does not add another public
-prep/scan binding. Its fused producers retain their normalized, scaled query
-and key bytes; the model adapter restores the public rank-four token-major
-layout and passes `scale=1.0`. Existing unfused inputs keep their original
-scale contract. This upstream dependency changes phase arithmetic, so its
-numerical, source-regression, reuse and task results must be identified
-separately from measurements on the earlier native implementation.
+prep/scan binding. Raw flat query/key and multi-lane inputs retain that public
+route and their existing scale contract.
+
+The frozen model's normalized prefill producers instead use the model-owned
+`gdn_source_chunk` policy through the public `ttnn.generic_op` API. Its six
+kernels retain Samuel Jett's exact source bytes and original preparation,
+packing, readout and state-update sequence. The shared GDN operation passes
+independent numerical controls, but its combined arithmetic changes words
+required by the frozen source gate. The model policy keeps the admitted query
+scale and normalization without changing shared operation defaults or kernels.
+Its source-word and independent reference controls cover complete 32-row
+chunks at 32, 128, 2048 and 4096 rows, zero/nonzero states and masked commits.
+These operator results do not qualify whole-model source trajectories, serving,
+task quality or another hardware topology.
 
 Port adaptations preserve the model's numerical policy while using current
 trace-allocation APIs and the current native build. The shared MoE streaming
