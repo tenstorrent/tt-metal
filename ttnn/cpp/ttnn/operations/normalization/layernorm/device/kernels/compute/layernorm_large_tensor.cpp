@@ -20,6 +20,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -192,7 +194,13 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
-    dfb_eps.wait_front(1);  // comes from the reader
+    // The reader pushes the scaler (2 tiles if W isn't tile-aligned) and eps once. Wait here, pop after the loop.
+    static_assert(
+        tile_width == tt::constants::TILE_WIDTH,
+        "reader sizes the scaler with TILE_WIDTH, so compute must use the same tile width");
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
+    dfb_scaler.wait_front(num_scaler_tiles);
+    dfb_eps.wait_front(1);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int dst0 = 0;
@@ -411,4 +419,6 @@ void kernel_main() {
 #endif
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
+    dfb_eps.pop_front(1);
+    dfb_scaler.pop_front(num_scaler_tiles);
 }
