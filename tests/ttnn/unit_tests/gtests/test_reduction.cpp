@@ -105,7 +105,8 @@ TEST(ReduceHostPlanner, FidelitySelectsArchitectureAdditiveCrossover) {
                         const auto sequence = make_reduce_sequence_plan({{0, call}}, {1, 2, 16}, hardware);
                         EXPECT_EQ(
                             sequence.calls[0].plan.algorithm,
-                            tiles >= cutoffs[d] ? Algorithm::AccumulateViaAdd : Algorithm::ReduceTile);
+                            tiles >= cutoffs[d] && (dims[d] != ReduceOpDim::HW || fp32) ? Algorithm::AccumulateViaAdd
+                                                                                        : Algorithm::ReduceTile);
                         // Explicit choices bypass the performance heuristic in both directions.
                         for (const auto forced : {Algorithm::ReduceTile, Algorithm::AccumulateViaAdd}) {
                             EXPECT_EQ(

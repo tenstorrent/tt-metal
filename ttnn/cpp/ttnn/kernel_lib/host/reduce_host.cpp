@@ -429,8 +429,11 @@ ReducePlan make_tiled_plan(
 
     const bool add_legal = add_is_legal(block, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
                            !(dim == ReduceOpDim::H && input_policy == ReduceInputPolicy::WaitAndPopPerTile);
+    // The HW add finalize runs two SFPU collapses that round to a 16-bit DEST without fp32
+    // accumulation, so it is only chosen automatically when DEST accumulates in fp32.
+    const bool add_precise_enough = dim != ReduceOpDim::HW || hardware.fp32_dest_acc_en;
     const auto automatic_algorithm =
-        add_legal && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim, hardware)
+        add_legal && add_precise_enough && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim, hardware)
             ? ReduceAlgorithm::AccumulateViaAdd
             : ReduceAlgorithm::ReduceTile;
     TT_FATAL(
