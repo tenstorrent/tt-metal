@@ -254,9 +254,16 @@ class GemmaTokenizerEncoderPair:
         """Hold the encode trace back until ``open_trace_gate`` (see ``_trace_gate_open``)."""
         self._trace_gate_open = False
 
-    def open_trace_gate(self) -> None:
-        """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
+    def open_trace_gate(self, capture_prompt: str | None = None) -> None:
+        """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``).
+
+        With ``capture_prompt``, a gate that was closed is followed by an encode of it right away, so the capture
+        is paid here instead of by the next caller's encode (~1.6 s on 4x8). The inputs are padded to
+        ``sequence_length``, so one capture serves every prompt."""
+        was_closed = not self._trace_gate_open
         self._trace_gate_open = True
+        if was_closed and capture_prompt is not None and self._encoder_trace:
+            self._encode_prompt_device(capture_prompt)
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.

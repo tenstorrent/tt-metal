@@ -2020,7 +2020,8 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
-        # capture is last and nothing left will reclaim its activation region.
+        # capture is last and nothing left will reclaim its activation region. Capturing it here keeps
+        # that cost out of the next request's encode.
         if self._traced and not self.dynamic_load:
-            self.gemma_encoder_pair.open_trace_gate()
+            self.gemma_encoder_pair.open_trace_gate(capture_prompt=prompt)
         return output_path
