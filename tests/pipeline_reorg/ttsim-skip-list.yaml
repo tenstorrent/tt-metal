@@ -31,9 +31,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_std_var_wide_low_variance
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
 
-  # Likely a bug exposed by reporting the correct harvesting mask for N150
-  - tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_unstable_all_ones_permutation
-
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
