@@ -61,6 +61,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.embeddings import TtNomicBertEmbeddings
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 
 class TtNomicBertModel(LightweightModule):
@@ -129,7 +130,7 @@ class TtNomicBertModel(LightweightModule):
             weight=self.emb_ln_weight,
             bias=self.emb_ln_bias,
             epsilon=self.config.layer_norm_epsilon,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)
 
@@ -153,9 +154,11 @@ def encode(
 ) -> torch.Tensor:
     """Turn text into normalized embeddings on device, the counterpart of reference.embedding.encode.
 
-    Row i is the embedding of texts[i] and is independent of the other rows: padding is masked
-    out at pooling, so a short text gets the same vector whether encoded alone or in a ragged
-    batch. The dot product of two rows is their cosine similarity.
+    Row i is the embedding of texts[i]: padding is masked out at pooling, so a short text gets
+    the same vector, to within 1e-2 in cosine, whether encoded alone or in a ragged batch. It is
+    not bit-identical, since the expert layout is chosen from the batch's token count and a
+    transposed expert pass shares bfloat8_b exponents across 16 neighbouring tokens. The dot
+    product of two rows is their cosine similarity.
 
     Args:
         model: A constructed TtNomicBertModel.
@@ -172,7 +175,7 @@ def encode(
     """
     encoded = tokenize(tokenizer, apply_prompt(texts, prompt_prefix), max_length=max_length)
     attention_mask = encoded["attention_mask"]
-    kernel_config = model.tt_config.compute_kernel_config
+    kernel_config = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
 
     hidden = model(encoded["input_ids"], attention_mask)
 

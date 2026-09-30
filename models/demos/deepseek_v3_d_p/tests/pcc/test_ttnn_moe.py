@@ -24,7 +24,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
@@ -534,7 +534,7 @@ def run_model(
         routed_expert_activation=routed_activation,
         # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
-        # fused-only sentinel for K2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
+        # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
         routed_expert_hybrid_token_threshold=getattr(
             variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
@@ -964,7 +964,7 @@ def test_ds_moe(
 
 
 # ---------------------------------------------------------------------------
-# GLM-5.2 MoE
+# GLM-5.3 MoE
 # ---------------------------------------------------------------------------
 #
 # 256 experts / top-8, emb 6144, moe_int 2048. Exercises the >64-expert unfused
@@ -977,8 +977,8 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
         # fmt: on
     ],
 )
@@ -1017,9 +1017,9 @@ def test_ds_moe(
     ],
     indirect=["mesh_device", "device_params"],
 )
-# Deliberately the DSv3 variant, not glm_5_2: the GLM adapter bundles no upstream MoE reference,
+# Deliberately the DSv3 variant, not glm_5_3: the GLM adapter bundles no upstream MoE reference,
 # so running under it would silently drop the CPU cross-check this test still gets. The MoE dims
-# all come from GLM52Config above; the variant only supplies the generic gate config and the
+# all come from GLM53Config above; the variant only supplies the generic gate config and the
 # reference class.
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
 def test_glm_moe(

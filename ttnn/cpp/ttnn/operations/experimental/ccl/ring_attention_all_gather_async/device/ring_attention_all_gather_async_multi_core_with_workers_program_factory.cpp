@@ -148,6 +148,8 @@ constexpr uint32_t kWidthDimension = 3;
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
 constexpr uint32_t kPrefetchPackets = 4;
+// The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
+constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
 constexpr uint32_t kDoubleBufferingFactor = 2;
 constexpr uint32_t kMaxScatterPagesPerPacket = 2;
@@ -229,7 +231,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     auto unicast_forward_args = std::get<0>(ccl::get_forward_backward_line_unicast_configuration(
         target_device_coord, unicast_destination_coord, std::nullopt, mesh_device));
     if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
-        unicast_forward_args[1] = halo.unicast_hops;
+        unicast_forward_args[1] = halo.distance;
     }
 
     const auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
@@ -244,7 +246,7 @@ void ring_attention_neighbor_halo_exchange_helper(
 
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxScatterPagesPerPacket);
+    const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxHaloPagesPerPacket);
     const uint32_t cb_pages = kDoubleBufferingFactor * kPrefetchPackets * pages_per_packet;
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.front().dtype());
     constexpr uint32_t data_cb = tt::CB::c_in2;
@@ -300,7 +302,8 @@ void ring_attention_neighbor_halo_exchange_helper(
         kPrefetchPackets,
         reader_meta_cb,
         static_cast<uint32_t>(halo.collects_arrivals()),
-        halo.arrivals_expected};
+        halo.arrivals_expected,
+        static_cast<uint32_t>(halo.multicast())};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
@@ -331,6 +334,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         unicast_forward_args[1],
         static_cast<uint32_t>(halo.send_backward),
         writer_meta_cb,
+        static_cast<uint32_t>(halo.multicast()),
     };
     for (uint32_t input = 0; input < num_inputs; ++input) {
         writer_kernel.compile_time_args.push_back(page_size);
@@ -371,11 +375,17 @@ void ring_attention_neighbor_halo_exchange_helper(
         reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
-        // Every hop increments the SAME core's semaphore on the receiver, so one reader can wait for
-        // the whole halo. Sender and receiver lay out workers identically, so the sender's
-        // rendezvous core is also the receiver's.
-        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_x : worker_physical.x);
-        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_y : worker_physical.y);
+        // Every exchange increments the SAME per-link core's semaphore on the receiver, so one reader
+        // per link can wait for the whole halo. Sender and receiver lay out workers identically, so the
+        // sender's rendezvous cores are also the receiver's.
+        TT_FATAL(
+            !halo.has_rendezvous() || halo.rendezvous_noc.size() == num_links,
+            "Neighbor halo has {} rendezvous cores for {} links",
+            halo.rendezvous_noc.size(),
+            num_links);
+        const CoreCoord arrival_core = halo.has_rendezvous() ? halo.rendezvous_noc[link] : worker_physical;
+        writer_args.push_back(arrival_core.x);
+        writer_args.push_back(arrival_core.y);
         writer_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
@@ -465,6 +475,18 @@ void ring_attention_neighbor_halo_exchange_helper(
             // Where this hop's block starts in the receiver's compact buffer.
             writer_args.push_back(halo.dest_row_base * output_Wt);
             halo_input_Wt.push_back(input_Wt);
+        }
+
+        if (halo.multicast()) {
+            for (auto* args : {&reader_args, &writer_args}) {
+                args->push_back(halo.hop_origin_rows.size());
+                for (const uint32_t origin : halo.hop_origin_rows) {
+                    args->push_back(origin);
+                }
+            }
+            for (const uint32_t wt : halo_input_Wt) {
+                reader_args.push_back(wt);
+            }
         }
 
         // Runtime metadata follows the tensor descriptors and precedes accessor addresses.

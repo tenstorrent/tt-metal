@@ -29,7 +29,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <cstdint>
@@ -188,16 +187,34 @@ std::vector<Tensor> rdiv_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
     if (rounding_mode == std::nullopt) {
+        // -grad * scalar / input^2, evaluated as -grad * ((scalar / input) / input).
+        //
+        // Forming input^2 first loses the answer at both ends of the range. Below
+        // |input| = 1.0842e-19 the square falls under the smallest normal and flushes to zero,
+        // so the reciprocal returns infinity. Above |input| = 2^63 it is the reciprocal of the
+        // square that falls under the smallest normal, so the gradient comes back as zero --
+        // and that starts a full octave before the square itself overflows at 2^64, because in
+        // between the square is still perfectly representable. The exact gradient is an
+        // ordinary float32 throughout.
+        //
+        // Taking the reciprocal first, with the scalar folded in between the two multiplies,
+        // keeps every intermediate in range for the same op count -- one reciprocal and two
+        // multiplies either way.
+        Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(
                 ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
-                    ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
+                    ttnn::multiply(recip_input, scalar, std::nullopt, output_mem_config),
+                    recip_input,
+                    std::nullopt,
+                    output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
             output_mem_config);
+        recip_input.deallocate();
         if (scalar > 0) {
             result = ttnn::where(
                 ttnn::logical_and(
@@ -307,8 +324,13 @@ std::vector<std::optional<Tensor>> tanh_bw(
 
     DataType output_dtype = input.dtype();
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
-        grad, input, output_dtype, output_memory_config, input_grad);
+    auto result_tensor = ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW,
+        grad,
+        input,
+        output_dtype,
+        output_memory_config,
+        input_grad);
     grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
@@ -496,7 +518,6 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(grad);
     }
-    float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
     ttnn::rsqrt(input, false, output_mem_config, input_grad);
@@ -507,7 +528,10 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
         std::nullopt,
         output_mem_config,
         input_grad);
-    where(ttnn::eqz(input, output_mem_config), t_inf, input_grad.value(), output_mem_config, input_grad);
+    // d/dx rsqrt(x) is -0.5 * x^-3/2, so at zero the answer is -inf for a positive gradient
+    // and +inf for a negative one -- which is what the arithmetic above already produces,
+    // since rsqrt(0) is inf and the -0.5f carries the sign. Writing +inf unconditionally
+    // inverted it for every positive gradient.
     where(ttnn::ltz(input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
     where(
         ttnn::logical_and(

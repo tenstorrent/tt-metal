@@ -77,6 +77,7 @@
 #include "ttnn/operations/experimental/kda/kda_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/dispatch_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
@@ -167,6 +168,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
     deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
+    deepseek_prefill::dispatch_fabric2d::detail::bind_experimental_dispatch_fabric2d_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::moe_padding_config::detail::bind_moe_padding_config(mod);
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
@@ -191,8 +193,11 @@ void py_module(nb::module_& mod) {
     reshape::detail::bind_view(mod);
 
     test::bind_test_hang_device_operation(mod);
-    test::bind_test_dram_prefetcher_consumer(mod);
+    // Before the consumer bench: bind_tensor_prefetcher registers the PrefetcherPipe class the
+    // consumer's and validator's signatures name, so binding it first is what makes those
+    // signatures print the Python type rather than a mangled C++ one.
     bind_tensor_prefetcher(mod);
+    test::bind_test_dram_prefetcher_consumer(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
