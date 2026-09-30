@@ -116,7 +116,14 @@ def test_sdpa_recipe_compute_throughput(device, q_chunk, k_chunk, variant, recor
     chunks = SEQ_K // k_chunk
     block_flops = 4 * q_chunk * k_chunk * D
     jobs = max(1, math.ceil(TARGET_FLOPS / (block_flops * chunks)))
+    profile = os.getenv("SDPA_BENCH_PROFILE") == "1"
+    if profile:
+        jobs = 1  # one Q chunk: the per-phase zones fit the device profiler buffer
     invoke = build(device, inputs, variant, q_chunk // 32, k_chunk // 32, jobs, chunks)
+    if profile:
+        ttnn.to_torch(invoke())
+        ttnn.ReadDeviceProfiler(device)
+        return
     try:
         expected = digest(ttnn.to_torch(invoke()))
     except RuntimeError as error:

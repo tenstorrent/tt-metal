@@ -357,6 +357,9 @@ void blocked_matmul_and_pack(
     if (!skip_pack_configure) {
         configure_row_pack_width(out_cb, subblock_w);
     }
+#ifdef SDPA_KO_SPACK
+    if constexpr (!transpose)
+#endif
     pack_contiguous_rows_nocfg(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     tile_regs_release();
@@ -1440,6 +1443,9 @@ static void sdpa_inner_loop_step(
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
     {
+#ifdef SDPA_PERF_PHASE_ZONES
+        DeviceZoneScopedN("P2");
+#endif
 #ifdef SDPA_RECIPE_FP32
         // FP32 recipes use single-row PV groups (their in-place numerator and row-wise FP32
         // state updates assume one row per group), including narrower D64 subblocks.
@@ -2077,6 +2083,9 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
     }
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+#ifdef SDPA_PERF_PHASE_ZONES
+        DeviceZoneScopedN("STEP");
+#endif
 #ifdef SDPA_RECIPE_K_PRIMARY_ROWS
         recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
 #endif
