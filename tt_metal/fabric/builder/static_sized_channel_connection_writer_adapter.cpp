@@ -22,12 +22,19 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
     uint32_t sender_channel_idx,
+    uint32_t downstream_vc_idx,
+    uint32_t downstream_vc_channel_idx,
     eth_chan_directions downstream_direction,
     tt::tt_metal::CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
     // Track connections per VC for packing
     downstream_edms_connected_by_vc.at(inbound_vc_idx)
-        .push_back({downstream_direction, tt::tt_metal::CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
+        .push_back(DownstreamConnection{
+            .direction = downstream_direction,
+            .noc_xy = tt::tt_metal::CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y),
+            .landing_vc = downstream_vc_idx,
+            .landing_channel = downstream_vc_channel_idx,
+        });
 
     if (is_2D_routing) {
         // Calculate compact index based on downstream_direction relative to my_direction
@@ -67,6 +74,13 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
 
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
+}
+
+// 1D has a single downstream connection, in slot 0.
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_slot(
+    eth_chan_directions downstream_direction) const {
+    return is_2D_routing ? static_cast<uint32_t>(get_receiver_channel_compact_index(my_direction, downstream_direction))
+                         : 0;
 }
 
 uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const {
@@ -230,7 +244,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {
             return 0;
         }
-        return downstream_edms_connected_by_vc[vc_idx].front().second.y;
+        return downstream_edms_connected_by_vc[vc_idx].front().noc_xy.y;
     }
 
     // 2D routing: dense pack based on mask (get mask internally)
@@ -244,10 +258,10 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg
     for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
-            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+            for (const auto& connection : downstream_edms_connected_by_vc[vc_idx]) {
+                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, connection.direction);
                 if (conn_compact_idx == compact_idx) {
-                    noc_y_packed |= (noc_xy.y << (dense_idx * 8));
+                    noc_y_packed |= (connection.noc_xy.y << (dense_idx * 8));
                     dense_idx++;
                     break;
                 }
@@ -263,7 +277,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {
             return 0;
         }
-        return downstream_edms_connected_by_vc[vc_idx].front().second.x;
+        return downstream_edms_connected_by_vc[vc_idx].front().noc_xy.x;
     }
 
     // 2D routing: dense pack based on mask (get mask internally)
@@ -277,10 +291,10 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
     for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
-            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+            for (const auto& connection : downstream_edms_connected_by_vc[vc_idx]) {
+                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, connection.direction);
                 if (conn_compact_idx == compact_idx) {
-                    noc_x_packed |= (noc_xy.x << (dense_idx * 8));
+                    noc_x_packed |= (connection.noc_xy.x << (dense_idx * 8));
                     dense_idx++;
                     break;
                 }
@@ -294,7 +308,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
  * X and Y have separate uint32s
  */
 uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
-    const std::array<std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>, builder_config::num_max_receiver_channels>&
+    const std::array<std::vector<DownstreamConnection>, builder_config::num_max_receiver_channels>&
         downstream_edms_connected_by_vc,
     uint32_t vc_idx,
     const std::function<uint32_t(tt::tt_metal::CoreCoord)>& get_noc_ord) const {
@@ -308,14 +322,14 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
             "Downstream edms connected by vc should be 1 for non-2D routing. vc_idx: {}, size: {}",
             vc_idx,
             downstream_edms_connected_by_vc[vc_idx].size());
-        auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
+        auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().noc_xy);
         return ord;
     }  // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
     uint32_t ord = 0;
-    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+    for (const auto& connection : downstream_edms_connected_by_vc[vc_idx]) {
         // Calculate compact index based on direction relative to my_direction
-        size_t compact_index = get_receiver_channel_compact_index(my_direction, direction);
-        ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
+        size_t compact_index = get_receiver_channel_compact_index(my_direction, connection.direction);
+        ord |= (get_noc_ord(connection.noc_xy) << (compact_index * 8));
     }
     return ord;
 }

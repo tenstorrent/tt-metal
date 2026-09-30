@@ -558,7 +558,13 @@ std::set<std::string> expected_vc_keys(const std::vector<std::vector<Channel>>& 
     return keys;
 }
 
-// A sibling producer is the router facing that way on this router's chip and routing plane.
+// A sibling is the router facing `direction` on this router's chip and routing plane.
+std::string expected_sibling_path(const RouterEntry& entry, eth_chan_directions direction) {
+    const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
+    return fmt::format(
+        "{}/{}/{}", mesh_key(entry.node.mesh_id), chip_key(entry.node.chip_id), router_key(direction, plane));
+}
+
 json expected_producer(const RouterEntry& entry, const std::optional<manifest::SenderChannelProducer>& producer) {
     if (!producer.has_value()) {
         return nullptr;
@@ -566,10 +572,47 @@ json expected_producer(const RouterEntry& entry, const std::optional<manifest::S
     if (std::holds_alternative<manifest::LocalWorker>(*producer)) {
         return "worker";
     }
-    const auto direction = std::get<manifest::SiblingRouterRef>(*producer).direction;
-    const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
-    return fmt::format(
-        "{}/{}/{}", mesh_key(entry.node.mesh_id), chip_key(entry.node.chip_id), router_key(direction, plane));
+    return expected_sibling_path(entry, std::get<manifest::SiblingRouterRef>(*producer).direction);
+}
+
+// Each edge is what the builder published: keyed by its kernel edge number, landing on a sender channel of the
+// sibling it targets that is in this manifest.
+void expect_downstream_edges(
+    const json& manifest,
+    const json& edges,
+    const RouterEntry& entry,
+    const std::vector<manifest::DownstreamEdge>& published,
+    bool serviced) {
+    std::set<std::string> keys;
+    for (const auto& edge : published) {
+        keys.insert(fmt::format("edge{}", edge.edge));
+    }
+    EXPECT_EQ(keys_of(edges), keys);
+    ASSERT_EQ(keys.size(), published.size());
+
+    for (const auto& expected : published) {
+        SCOPED_TRACE(fmt::format("edge{}", expected.edge));
+        const auto& edge = edges.at(fmt::format("edge{}", expected.edge));
+        EXPECT_EQ(keys_of(edge), (std::set<std::string>{"downstream_channel", "free_slots", "teardown_sem"}));
+
+        const auto target = expected_sibling_path(entry, expected.target.direction);
+        EXPECT_EQ(
+            edge.at("downstream_channel"),
+            fmt::format("{}/senders/vc{}/ch{}", target, expected.landing_vc, expected.landing_channel));
+        const json* target_router = find_router(manifest, target);
+        ASSERT_NE(target_router, nullptr) << target;
+        EXPECT_TRUE(target_router->at("channels")
+                        .at("senders")
+                        .at(fmt::format("vc{}", expected.landing_vc))
+                        .contains(fmt::format("ch{}", expected.landing_channel)));
+
+        expect_stream(edge.at("free_slots"), expected.free_slots);
+        if (serviced) {
+            EXPECT_NE(expected.free_slots.stream_id, k_unused_stream_id);
+        }
+        expect_region(edge.at("teardown_sem"), expected.teardown_sem);
+        EXPECT_EQ(edge.at("teardown_sem").at("schema"), "u32");
+    }
 }
 
 // Each sender channel is what the builder published, over the router's shape. Its credits are on the backing
@@ -663,8 +706,8 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
 }
 
 // Each receiver channel is what the builder published, over the router's shape. Its producer is the link's
-// peer, and only VC2's receiver has a free-slots register.
-void check_router_receivers(const std::vector<RouterEntry>& routers) {
+// peer, only VC2's receiver has a free-slots register, and VC2's receiver never forwards.
+void check_router_receivers(const json& manifest, const std::vector<RouterEntry>& routers) {
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& receivers = entry.router->at("channels").at("receivers");
@@ -695,7 +738,8 @@ void check_router_receivers(const std::vector<RouterEntry>& routers) {
                     "forward_noc",
                     "local_write_noc",
                     "ring_buffer",
-                    "pkts_sent"};
+                    "pkts_sent",
+                    "downstream_edges"};
                 if (has_free_slots) {
                     keys.insert("free_slots");
                 }
@@ -733,6 +777,16 @@ void check_router_receivers(const std::vector<RouterEntry>& routers) {
                         EXPECT_NE(expected.free_slots->stream_id, k_unused_stream_id);
                     }
                 }
+
+                if (vc == 2) {
+                    EXPECT_TRUE(expected.downstream_edges.empty());
+                }
+                expect_downstream_edges(
+                    manifest,
+                    receiver.at("downstream_edges"),
+                    entry,
+                    expected.downstream_edges,
+                    !expected.serviced_by.empty());
             }
         }
     }
@@ -826,7 +880,7 @@ TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_coun
 TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 
-TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(routers_); }
+TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

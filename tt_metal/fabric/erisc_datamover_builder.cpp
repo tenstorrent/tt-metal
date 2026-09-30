@@ -1803,7 +1803,14 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec,
+        upstream_vc_idx,
+        absolute_channel_id,
+        downstream_vc_idx,
+        vc_relative_channel_id,
+        ds_dir,
+        tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y),
+        is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
