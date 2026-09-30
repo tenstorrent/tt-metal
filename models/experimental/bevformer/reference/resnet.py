@@ -2,6 +2,29 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+ResNet backbone with DCNv2 in PyTorch.
+
+This module implements the image backbone of BEVFormer-base: a caffe-style ResNet101 with
+modulated deformable convolution (DCNv2) in layer3 and layer4, run on every camera image.
+It returns the C3, C4 and C5 feature maps (512, 1024 and 2048 channels at strides 8, 16
+and 32) that the FPN neck consumes, and is the reference the TTNN backbone in
+``tt/tt_resnet.py`` is checked against. The ``img_backbone`` weights of the BEVFormer-base
+checkpoint load into it with no key changes.
+
+Only what BEVFormer-base uses is kept: Bottleneck blocks, BatchNorm, and DCNv2 as the only
+conv besides Conv2d. The deformable convolution runs through ``torchvision.ops.deform_conv2d``
+instead of mmcv's compiled op, so the reference needs no mmcv and runs on CPU.
+
+Adapted from the UniAD port in ``models/experimental/uniad/reference/resnet.py``, which is
+based on the mmdetection and mmcv versions BEVFormer is built on:
+https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/models/backbones/resnet.py
+https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/ops/modulated_deform_conv.py
+
+BEVFormer-base backbone configuration:
+https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py
+"""
+
 import warnings
 
 import torch
@@ -44,6 +67,16 @@ def modulated_deform_conv2d(
 
 
 class ModulatedDeformConv2dPack(nn.Module):
+    """
+    DCNv2 convolution that predicts its own sampling offsets and mask.
+
+    ``conv_offset`` shares the deformable conv's geometry and emits
+    ``3 * deform_groups * K * K`` channels from the input: the first two thirds are the
+    per-position offsets in pixels, in ``(y, x)`` order, and the last third the mask logits,
+    which go through a sigmoid. Parameter names follow mmcv's module, so mmcv checkpoints
+    load unchanged.
+    """
+
     _version = 2
 
     def __init__(
@@ -107,6 +140,8 @@ class ModulatedDeformConv2dPack(nn.Module):
 
 
 def build_conv_layer(cfg: Optional[Dict], *args, **kwargs) -> nn.Module:
+    """mmcv's ``build_conv_layer`` reduced to the two convs this backbone uses: Conv2d for
+    ``cfg=None``, ``ModulatedDeformConv2dPack`` for a DCNv2 config."""
     if cfg is None:
         layer = nn.Conv2d(*args, **kwargs)
     else:
@@ -117,10 +152,20 @@ def build_conv_layer(cfg: Optional[Dict], *args, **kwargs) -> nn.Module:
 
 
 def build_norm_layer(cfg: Dict, num_features: int, postfix: Union[int, str] = "") -> Tuple[str, nn.Module]:
+    """mmcv's ``build_norm_layer`` reduced to BatchNorm2d. The layer is named ``bn<postfix>``,
+    as mmcv names BatchNorm layers, so checkpoint keys match."""
     return "bn" + str(postfix), nn.BatchNorm2d(num_features)
 
 
 class ResLayer(Sequential):
+    """
+    One ResNet stage: ``num_blocks`` blocks of type ``block``.
+
+    The first block changes the stride and the width to ``planes * block.expansion`` and
+    carries the downsample shortcut, a 1x1 conv and BatchNorm (after average pooling when
+    ``avg_down`` is set). The remaining blocks keep the shape.
+    """
+
     def __init__(
         self,
         block,
@@ -194,6 +239,20 @@ class ResLayer(Sequential):
 
 
 class Bottleneck(nn.Module):
+    """
+    ResNet bottleneck block.
+
+    Each block performs:
+    1. 1x1 conv reducing to ``planes`` channels, BatchNorm, ReLU
+    2. 3x3 conv (DCNv2 when ``dcn`` is set), BatchNorm, ReLU
+    3. 1x1 conv expanding to ``planes * expansion`` channels, BatchNorm
+    4. Residual add of the input, through ``downsample`` when given, then ReLU
+
+    ``style`` places the block's stride: on the 3x3 conv for ``"pytorch"``, on the first
+    1x1 conv for ``"caffe"``, which BEVFormer-base uses. Plugins are not supported, and
+    ``with_cp`` and ``init_cfg`` are accepted for config compatibility only.
+    """
+
     expansion = 4
 
     def __init__(
@@ -324,6 +383,30 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
+    """
+    ResNet backbone returning the outputs of the stages in ``out_indices``.
+
+    The stem is a 7x7 stride-2 conv, BatchNorm and ReLU (three 3x3 convs with
+    ``deep_stem``), then a 3x3 stride-2 max pool, followed by ``num_stages`` stages of
+    Bottleneck blocks. BEVFormer-base uses depth 101, ``style="caffe"``,
+    ``out_indices=(1, 2, 3)`` and DCNv2 in the last two stages.
+
+    Args:
+        depth (int): 50, 101 or 152.
+        out_indices (tuple[int]): Stages whose outputs are returned, 0 being layer1.
+        style (str): ``"pytorch"`` or ``"caffe"``, see ``Bottleneck``.
+        dcn (dict, optional): DCNv2 config for the 3x3 convs of the stages flagged in
+            ``stage_with_dcn``.
+
+    The training-only arguments (``frozen_stages``, ``norm_eval``, ``pretrained``,
+    ``init_cfg``, ``zero_init_residual``, ``with_cp``) are accepted so mmdetection configs
+    apply unchanged, but have no effect: weights come from a checkpoint or from the tests'
+    initializers.
+
+    Returns:
+        tuple[torch.Tensor]: One (N, C, H, W) tensor per stage in ``out_indices``.
+    """
+
     arch_settings = {
         50: (Bottleneck, (3, 4, 6, 3)),
         101: (Bottleneck, (3, 4, 23, 3)),
