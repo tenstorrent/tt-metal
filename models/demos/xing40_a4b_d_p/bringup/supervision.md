@@ -125,3 +125,8 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   59.7 / 70.2 s vs 99.8 / 131.0 s. Owner: enable HiFi2 and fix the gate. Overseer: attention.py switch HiFi2 (default)
   | HiFi4 only (HiFi3 removed), q64 at HiFi2; P.1 gate drops test_c_moe_attention.py (owner decision), keeps dense
   attention, swaps, rung last, profile. Known-issues entry states the end-to-end result. Resumed.
+- 19:05 P.1 PASS b1ce2062dc1 (HiFi2 ring_mla q64 / k256): attention 1104 -> 783 ms, chunk 1735 -> 1413 ms device, pcc
+  chunk out 0.9990. Owner: measure SDPA exp_approx_mode=True (only the online-softmax correction exp; the softmax exp is
+  always the fast approx, investigation agent). Added XING_MLA_EXP_APPROX (default 0 = unchanged). End to end at HiFi2:
+  rung last min layer 0.99236 (0.99242 without), s56320 min layer 0.99151 (0.99193), logits 0.99915 (0.99838), top1
+  0.977 (0.963): within noise; default kept. Resumed (P.2).
