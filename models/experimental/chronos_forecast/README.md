@@ -4,10 +4,22 @@
 
 ## Setup
 
+All commands are run from the tt-metal repo root, with the tt-metal build and
+Python environment active (`ttnn` comes from that build, not PyPI):
+
 ```bash
+cd "$TT_METAL_HOME"   # or wherever your tt-metal checkout is
+source python_env/bin/activate
 git submodule update --init models/experimental/chronos_forecast/third_party/chronos-forecasting
 pip install -r models/experimental/chronos_forecast/requirements.txt
+pip install -U "huggingface_hub[cli]"
+hf download amazon/chronos-2 --local-dir models/experimental/chronos_forecast/weights/chronos-2
 ```
+
+`weights/` is gitignored. The demo and the real-checkpoint accuracy tests need
+the download above; tests that need it skip or error without it. The TTNN
+tests and benchmarks need Blackhole hardware (the paper-shape numbers below
+were measured on p150a cards).
 
 Pinned Chronos-2 copy: commit `10afa9ebe016e514f9d7dc1aa873f66af57e116b`. See [reference/PROVENANCE.md](reference/PROVENANCE.md).
 
@@ -85,7 +97,7 @@ while replay i runs, for back-to-back batches.
 Paper shape (1024 series, performance precision, L1-resident, unique groups) on
 p150a cards, at `86be1507afa`:
 
-Note: over PCIe gen4, benchmarks start on host
+Note: benchmarks start with inputs on the host and are transferred over PCIe gen4.
 
 | Chips | Series per chip | Replay | Serial end-to-end | Streamed per batch | Streamed series/s |
 |---|---|---|---|---|---|
@@ -102,7 +114,7 @@ also overlaps the replay.
 ### After the optimization round (`10ec7ff655e`)
 
 Same shape and configuration (`performance_l1`), measured at `10ec7ff655e` on
-`avan/chronos-forecast-experi`:
+`chronos-forecast-experi`:
 
 | Chips | Series per chip | Replay | Serial end-to-end | Streamed per batch | Streamed series/s |
 |---|---|---|---|---|---|
@@ -144,10 +156,10 @@ Blackhole Galaxy bring-up:
   `sweeps/sweep_l1_chunk.py`.
 
 
-## tests/meanings
+## Running the tests
 
 
-From `/home/andy/tt-metal`:
+From the tt-metal repo root:
 
 ```bash
 source python_env/bin/activate
@@ -186,7 +198,7 @@ PYTHONPATH=. pytest \
   --timeout=3600
 ```
 
-Trace-replay performance test—the approximately 2.7 s benchmark(0.26 now):
+Trace-replay performance test (paper shape):
 
 ```bash
 PYTHONPATH=. pytest \
@@ -195,8 +207,12 @@ PYTHONPATH=. pytest \
   --timeout=3600
 ```
 
-```
-pytest -s "models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py" -k "performance_l1 and not groups"
+Single-chip, unique groups only:
+
+```bash
+PYTHONPATH=. pytest -s \
+  models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py \
+  -k "performance_l1 and not groups"
 ```
 
 `TtChronosTraceRunner` is TT Metal trace capture/replay, not a resident
