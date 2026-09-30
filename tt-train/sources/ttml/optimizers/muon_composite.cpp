@@ -74,6 +74,10 @@ void MuonComposite::step() {
 
         const auto gradients = tensor_ptr->get_grad();
 
+        // By value: ttnn::add/subtract relabel their outputs with the union of their inputs, gradient included
+        // (see core::with_tensor_topology). The momentum buffer follows the parameter's distribution.
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         if (m_steps > 0 && m_config.momentum != 0.0F) {
             buffer = ttnn::multiply(buffer, m_config.momentum);
             buffer = ttnn::add(buffer, gradients);
@@ -81,12 +85,18 @@ void MuonComposite::step() {
             buffer = gradients;
         }
 
-        buffer_ptr->set_value(buffer);
+        // At step 0 (or with momentum == 0) `buffer` IS the gradient tensor, so pinning it relabels the
+        // parameter's gradient too: a gradient's topology label is undefined after a Muon step (an on_step_end
+        // hook must not gather by it). Nothing in tt-train reads it before zero_grad() replaces the gradient.
+        buffer_ptr->set_value(core::with_tensor_topology(buffer, topology));
 
         const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
 
-        tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
+        tensor_ptr->set_value(core::with_tensor_topology(
+            ttnn::subtract(
+                tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
+                ttnn::multiply(update_direction, m_config.lr)),
+            topology));
     }
     m_steps++;
 }
