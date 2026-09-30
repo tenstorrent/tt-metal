@@ -27,8 +27,9 @@ import torch
 import ttnn
 
 
-def _allocate(device, batch_size, topk, enable_sigmoid, output_softmax, seed):
-    """Build the 5 height-sharded tensors. The caller keeps the returned tensors alive."""
+def _allocate(device, batch_size, topk, enable_sigmoid, output_softmax, seed, interleaved_input=False):
+    """Build the 5 height-sharded tensors (the input as [tokens, 256] tile rows in DRAM when interleaved_input).
+    The caller keeps the returned tensors alive."""
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)
     input_tile = ttnn.Tile((32, 32))
@@ -49,14 +50,22 @@ def _allocate(device, batch_size, topk, enable_sigmoid, output_softmax, seed):
     in_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard)
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
 
-    ttnn_input = ttnn.from_torch(
-        torch.reshape(torch_input, reshaped_input_shape),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=in_mem,
-        tile=input_tile,
-    )
+    if interleaved_input:
+        ttnn_input = ttnn.from_torch(
+            torch.reshape(torch_input, (1, 1, batch_size, 256)),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+    else:
+        ttnn_input = ttnn.from_torch(
+            torch.reshape(torch_input, reshaped_input_shape),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in_mem,
+            tile=input_tile,
+        )
     ttnn_bias = ttnn.from_torch(
         torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1),
         dtype=ttnn.bfloat16,
@@ -184,6 +193,18 @@ def test_gate_cache_reuse_same_config(device, isolate_program_cache):
     first = _allocate(device, batch_size=1, topk=8, enable_sigmoid=True, output_softmax=False, seed=42)
     # Hold the first allocation until the second dispatch so the allocator cannot hand back the same addresses.
     second = _allocate(device, batch_size=1, topk=8, enable_sigmoid=True, output_softmax=False, seed=201)
+    assert not torch.equal(first["torch_input"], second["torch_input"])
+
+    _run(device, first)
+    res, res_idx = _run(device, second)
+    _assert_matches_own_inputs(second, res, res_idx)
+    assert device.cache_entries_counter.total == 1
+
+
+def test_gate_cache_reuse_interleaved_input(device, isolate_program_cache):
+    """The interleaved input reaches the reader through its runtime args, which a cache hit has to patch."""
+    first = _allocate(device, 4, 8, True, False, seed=42, interleaved_input=True)
+    second = _allocate(device, 4, 8, True, False, seed=201, interleaved_input=True)
     assert not torch.equal(first["torch_input"], second["torch_input"])
 
     _run(device, first)

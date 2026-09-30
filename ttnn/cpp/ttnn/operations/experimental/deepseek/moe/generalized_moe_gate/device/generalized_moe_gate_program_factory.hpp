@@ -20,7 +20,8 @@ struct GeneralizedMoeGateProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    // Tensor-backed circular-buffer bases. Compile-time args stay in the default program hash.
+    // Tensor-backed circular-buffer bases, and the reader's input address for an interleaved input. Compile-time
+    // args stay in the default program hash.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
