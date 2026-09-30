@@ -11,8 +11,13 @@ validate_combine_output the combine unit test uses. A slot combine read before t
 writing it holds unrelated data, so a handoff bug fails that slot however close the rest is.
 
 seq 640, because shorter sequences finish every expert before combine reaches it and never exercise
-the wait. Both cases run the threshold the model ships: on (8, 1) balanced leaves every expert under it
-so the fused pass takes them all, and hot-expert is the only case that lifts one into the unified half.
+the wait. Every case runs the threshold the model ships: on (8, 1) balanced leaves every expert under it
+so the fused pass takes them all, hot-expert lifts one into the unified half, and real (8x4 only) replays
+measured routing from one layer and chunk of each model.
+
+The perf test times the overlap both eagerly and replayed from a trace. On 8x4 the eager overlap loses to
+dispatch skew: the host writes each chip's program in turn, so a ring's chips start apart. The traced
+overlap is what it asserts beats RE + combine.
 
 TtMoe turns this overlap on by default wherever the op exists, so the model suites cover the production
 path; this module is pruned from CI and run by hand.
