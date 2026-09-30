@@ -2210,3 +2210,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: e2e
+
+# CI validation of PR #57764 (mirror branch, not part of the PR). Full model on device vs the torch reference, 3 precisions.
+- name: Chronos-2 e2e tests
+  cmd: |
+    export CHRONOS2_CHECKPOINT=$(ls -d /mnt/MLPerf/huggingface/hub/models--amazon--chronos-2/snapshots/29ec376*)
+    export CHRONOS2_TEST_DEVICE=0
+    pytest --timeout 600 models/experimental/chronos2/tests/test_ttnn_chronos2.py
+  model: chronos-2
+  model_family: Chronos
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: e2e

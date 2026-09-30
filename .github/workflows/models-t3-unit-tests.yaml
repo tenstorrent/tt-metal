@@ -47,6 +47,7 @@ on:
           - vadv2
           - openpdn-mnist
           - yunet
+          - chronos-2
           - xtts-v2
           - vibevoice-1.5b
       sku:

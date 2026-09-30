@@ -150,6 +150,7 @@ it is classified differently on different systems.
 | VAD v2 | WH N150 |
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
+| Chronos-2 | BH P150 |
 | VibeVoice-1.5B | BH P150 |
 
 

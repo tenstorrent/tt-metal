@@ -2248,3 +2248,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI validation of PR #57764 (mirror branch, not part of the PR). Host + reference tests; checkpoint tests opt in via CHRONOS2_CHECKPOINT.
+- name: Chronos-2 unit tests
+  cmd: |
+    export CHRONOS2_CHECKPOINT=$(ls -d /mnt/MLPerf/huggingface/hub/models--amazon--chronos-2/snapshots/29ec376*)
+    pytest --timeout 300 models/experimental/chronos2/tests/test_package.py \
+      models/experimental/chronos2/tests/test_components.py \
+      models/experimental/chronos2/tests/test_reference_port_ops.py
+  model: chronos-2
+  model_family: Chronos
+  skus:
+    bh_p150:
+      timeout: 8
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: unit
