@@ -120,6 +120,7 @@ def test_gdn_long_select_tiles_pick_the_window_rows_and_the_last_three_new_rows(
 def fake(monkeypatch):
     chunk = step4.FakeChunk()
     fake_ttnn = step4.make_fake_ttnn(chunk)
+    step4.install_source_chunk_fake(monkeypatch, chunk)
     for module in (gdn_module, ple_module, layer_module, decode_matmul_module):
         monkeypatch.setattr(module, "ttnn", fake_ttnn)
         monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)

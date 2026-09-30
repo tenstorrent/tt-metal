@@ -2983,14 +2983,20 @@ class Qwen38TTNNGDN:
         """Source recurrence for normalized rows; existing public path for raw flat q/k.
 
         Unlike the fused producer adapter, these q inputs still require the original
-        HEAD_DIM**-0.5 fold performed by the public operation.
+        HEAD_DIM**-0.5 fold retained by the source recurrence adapter.
         """
 
         if len(q_rows.shape) == 4:
             return fused.gdn_source_chunk.chunk_token_major(
-                q_rows, k_rows, v_rows, g_rows, beta_rows, initial_state,
+                q_rows,
+                k_rows,
+                v_rows,
+                g_rows,
+                beta_rows,
+                initial_state,
                 (constants.eye, constants.tril, constants.ones, constants.masks),
-                rows_total=constants.tile_rows, scale=HEAD_DIM**-0.5,
+                rows_total=constants.tile_rows,
+                scale=HEAD_DIM**-0.5,
             )
         return ttnn.transformer.chunk_gated_delta_rule(
             q_rows,
