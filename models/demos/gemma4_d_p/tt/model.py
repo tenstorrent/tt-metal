@@ -296,16 +296,19 @@ class Gemma4Model:
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
-        The caller owns trace staging. Migration acknowledgements follow each
-        layer's KV writes. Inputs use block-cyclic CP order; starts are 32-token
-        aligned. Before trace replay, stage the full request with
+        ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
+        ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
+        trace staging. Migration acknowledgements follow each layer's KV writes.
+        Inputs use block-cyclic CP order; starts are 32-token aligned. Before trace
+        replay, stage the full request with
         ``prefill_metadata.update(slot_idx=..., actual_start=..., actual_end=...)``.
         """
         if actual_start is not None:
             if chunk_start_idx not in (0, actual_start):
                 raise ValueError("actual_start and chunk_start_idx disagree")
             chunk_start_idx = actual_start
-        seq_len = hidden_states.shape[2]
+        tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
+        seq_len = hidden_states.shape[2] * tp
         if seq_len * self.mesh_config.cp_degree != self.prefill_chunk_size:
             raise ValueError("hidden_states must contain one full CP-sharded prefill chunk")
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
@@ -331,9 +334,6 @@ class Gemma4Model:
                     ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
                     ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
                 )
-
-        # The layers carry this TP device's 1/TP of the rows.
-        hidden_states = ccl_partition_rows(hidden_states, self.mesh_config)
 
         packed_rope_by_type = {}
         for i, layer in enumerate(self.layers):
@@ -388,8 +388,11 @@ class Gemma4Model:
         return embeds
 
     def transform_and_embed_prefill_inputs_device(self, tokens):
-        """Embed CP-sharded tokens into tiled hidden states."""
+        """Embed CP-sharded tokens into tiled hidden states, keeping this TP device's 1/TP of the rows.
+
+        The partition sits right after the embedding's hidden-dim all-gather; the layers carry these rows.
+        """
         assert (
             len(tokens.shape) == 2 and tokens.shape[0] == 1
         ), f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
-        return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)
+        return ccl_partition_rows(ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT), self.mesh_config)
