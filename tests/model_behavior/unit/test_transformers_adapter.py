@@ -151,6 +151,48 @@ def test_qwen_opens_mesh_with_gdn_scratch_and_linear_fabric(monkeypatch, backend
     assert closed == ["adapter", mesh]
 
 
+@pytest.mark.parametrize(
+    "backend, sku, arch, device_count, shape, fabric, l1_small_size",
+    [
+        # The Galaxy throughput-experts path builds a fabric mux in selective_reduce_combine,
+        # which TT_FATALs when the mesh is opened with l1_small_size=0 (#56784, #56769).
+        ("gpt-oss-120b", "wh_galaxy_perf", "wormhole_b0", 32, (4, 8), "ring", 16384),
+        ("gpt-oss-120b", "bh_quietbox_2", "blackhole", 4, (1, 4), "ring", 16384),
+        # Families outside the table keep the ttnn default.
+        ("llama3.1-8b", "wh_llmbox_perf", "wormhole_b0", 8, (1, 8), "ring", 0),
+    ],
+)
+def test_open_adapter_reserves_l1_small_by_family(
+    monkeypatch, backend, sku, arch, device_count, shape, fabric, l1_small_size
+):
+    opened, fabrics, closed = [], [], []
+    mesh = SimpleNamespace(enable_program_cache=lambda: None)
+    adapter = SimpleNamespace(warmup=lambda: None, close=lambda: closed.append("adapter"))
+    runtime = SimpleNamespace(
+        get_arch_name=lambda: arch,
+        get_num_devices=lambda: device_count,
+        FabricConfig=SimpleNamespace(DISABLED="disabled", FABRIC_1D="linear", FABRIC_1D_RING="ring"),
+        set_fabric_config=fabrics.append,
+        MeshShape=lambda *shape: shape,
+        open_mesh_device=lambda **kwargs: opened.append(kwargs) or mesh,
+        close_mesh_device=lambda device: closed.append(device),
+    )
+    monkeypatch.setitem(sys.modules, "ttnn", runtime)
+    monkeypatch.setitem(
+        sys.modules,
+        "models.demos.utils.trace_region_sizes",
+        SimpleNamespace(resolve_trace_region_size=lambda model, sku: 123456),
+    )
+    monkeypatch.setattr(adapters, "TransformersAdapter", lambda *args, **kwargs: adapter)
+
+    with adapters.open_adapter("eager", backend=backend, sku=sku) as result:
+        assert result is adapter
+        assert opened == [dict(mesh_shape=shape, trace_region_size=123456, l1_small_size=l1_small_size)]
+        assert fabrics == [fabric]
+    assert fabrics == [fabric, "disabled"]
+    assert closed == ["adapter", mesh]
+
+
 @pytest.mark.parametrize("backend", ["qwen3.6-27b", "qwen3.6-35b-a3b"])
 @pytest.mark.parametrize("warmup_mode", ["eager", "traced"])
 def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, backend, warmup_mode):
