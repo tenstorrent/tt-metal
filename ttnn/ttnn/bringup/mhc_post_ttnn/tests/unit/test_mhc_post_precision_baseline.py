@@ -17,7 +17,8 @@ import ttnn
 
 from models.common.utility_functions import comp_allclose
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.bringup.mhc_post_ttnn import mhc_post
+
+mhc_post = ttnn.bringup.mhc_post  # the C++ op (the Python builder is the parity reference)
 
 N = 4
 
