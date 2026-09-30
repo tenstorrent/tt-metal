@@ -27,7 +27,7 @@ def reference(spec, layers=None, dtype=None):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm", "mlp"},
-    "moe": {"router"},
+    "moe": {"router", "experts"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -51,6 +51,9 @@ _MLP_STEPS = {"mlp"}
 # MoE router (tt/router.py:TtRouter): row-split ffn_norm [S, H] (replicated over axis 1) in -> replicated fp32 gate,
 # sigmoid, bias, top-4, renorm x 2.0 -> row-split dense routing [S, 64] fp32 (+ idx / weights for dispatch). No CCL.
 _ROUTER_STEPS = {"router"}
+# Routed experts (tt/experts.py:TtExperts): row-split ffn_norm [S, H] bf16 + the router's (idx, wts) -> dispatch /
+# combine over axis 0 (dispatch groups = columns) -> reduce_scatter axis 1 -> column-split experts_out [S, H] fp32.
+_EXPERTS_STEPS = {"experts"}
 
 
 def _max_rows(spec):
@@ -60,6 +63,11 @@ def _max_rows(spec):
     if "chunk" in tgt:
         chunks.append(tgt["chunk"])
     return max(chunks) // spec.mesh[0]
+
+
+def _max_chunk(spec):
+    """Largest chunk (all mesh rows together) of any ladder rung or the target."""
+    return _max_rows(spec) * spec.mesh[0]
 
 
 def _loader(spec):
@@ -224,6 +232,36 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H] fp32 (harness boundary:
+    the dense routing is turned back into the router's (idx uint16, wts fp32) [S, K] here, row-split over axis 0 and
+    replicated over axis 1 like x and like TtRouter's outputs; the column-split output is read back)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_host, row_split_to_device
+
+    def fn(ctx, x, routing):
+        s = x.shape[0]
+        tw, ti = torch.topk(routing.float(), k=module.K, dim=-1, sorted=True)
+        xd = row_split_to_device(mesh, x, dtype=ttnn.bfloat16)
+        idd = ttnn.from_torch(
+            ti.to(torch.int32).reshape(1, 1, s, module.K),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None)),
+        )
+        wd = row_split_to_device(mesh, tw, dtype=ttnn.float32)
+        yd = module(xd, idd, wd)
+        y = col_split_to_host(mesh, yd).float()
+        for t in (xd, idd, wd, yd):
+            ttnn.deallocate(t)
+        return y
+
+    fn.module = module
+    return fn
+
+
 class _AttentionHostFn:
     """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 768]) -> attn_out host [S, H] fp32.
 
@@ -302,6 +340,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.router import build_router
 
         return _router_host_fn(mesh, build_router(mesh, loader, cfg, layer, _max_rows(spec)))
+    if step in _EXPERTS_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.experts import build_experts
+
+        return _experts_host_fn(mesh, build_experts(mesh, loader, cfg, layer, _max_chunk(spec)))
     if step in _QA_STEPS:
         from models.demos.xing40_a4b_d_p.tt.q_a import build_q_a
 
