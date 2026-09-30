@@ -1465,3 +1465,65 @@ fits). The matmul side is roughly neutral since §63 (4 × 266 = 1064 µs vs 2 �
 would be SDPA's 61 µs per layer minus two more heads-op launches. It needs `fused_add_rmsnorm_split` to write four
 output tensors (its writer has two accessors) and `decoder_fusion.py` / `qkv_chunks.py` to allow `QWEN_QKV_CHUNKS=4`.
 Not tried.
+
+## 65. Batched SDPA: compute-bound with data movement close behind; the pack thread paced the softmax; row sums moved to the math thread (landed) (2026-09-30)
+
+Tools: `sdpa_kernel_variants.py` (patched kernel trees), `bench_sdpa_floors.py` (traced, optional device-profiler
+parse), `bench_sdpa_zones.py` (per-unit zones). Run them from a directory with no `ttnn/` tree: kernel lookup tries the
+cwd before `TT_METAL_KERNEL_PATH`, and from the repo root every variant silently compiles the repo's kernels (the first
+attempt here timed all variants equal to the control).
+
+**Floors.** Traced replays under the device profiler, µs of 1.35 GHz device cycles, at the in-model placements (eager
+back-to-back runs of the data-movement-only variant swing between ~484 and ~640 µs at bs32; traced ones do not):
+
+| | control | compute only (no NoC reads / writes) | data movement only (compute stubbed) |
+|---|---|---|---|
+| bs8, K / V in L1 | 178.5 | 164.9 | 102.0 |
+| bs16, K / V in L1 | 284.7 | 268.2 | 183.3 |
+| bs32, all DRAM | 596.8 | 519.4 | 483.1 |
+
+Compute is the larger floor everywhere; at bs32 data movement is within 7% of it, and the kernel runs 6-12% above the
+larger floor because the two do not fully overlap. All DRAM at bs8 / 16: DM-only 145.0 / 257.1 against compute 164.9 /
+268.2. The device-profile artifact's SDPA rows now use these floors as the roofline ("compute + DM").
+
+**Where a unit goes** (one q128 chunk of one head against its KV head's 512 tokens; math-thread zones at the bs8 shape,
+compute only, cycles): Q·Kᵀ 5,528 (2 × 128 tile matmuls), x − max + exp not hidden 5,175, P·V 5,934, normalize 2,887,
+row max 466, other 312; 20,302 total, 15.0 µs. The matmuls run at 71% of the LoFi peak (8,192). Data waits add 1,249
+cycles with K / V in L1 and 3,926 all DRAM (next Q chunk before the first Q·Kᵀ, V in the drain).
+
+**Why MATH waits on PACK's exp.** Dest holds two 8-tile halves. Per column block of the second row group MATH does x −
+max (half A) and a 2×4 Q·Kᵀ subblock (half B, ~690 cycles); PACK does exp on half A (500-540 cycles, SFPU from the pack
+thread), packs it back in place and L1-accumulates the 8 row-sum packs (455-465 together), then packs half B. PACK is
+the slower thread, so MATH blocks in `tile_regs_acquire` (its "SUB" zone reads 725-750 cycles for an 8-tile subtract).
+Probes (compute only, wrong output): no row-sum packs 18,004 cycles per unit (−11%), no exp 16,517 (−19%, so almost
+none of the exp overlapped anything).
+
+**Row sums on the math thread (landed).** With one K chunk (no online-softmax correction), `sub_exp` skips the row-sum
+packs and normalize computes each row group's sums from the exp'd scores still in `cb_qkt_im`:
+
+| normalize's row sum | unit (cycles) | normalize |
+|---|---|---|
+| L1-accumulated by the pack thread (before) | 20,302 | 2,887 |
+| `reduce_tile<SUM, REDUCE_ROW>`, 16 tiles per tile row | 20,007 | 4,852 |
+| 1×1 matmul against `col_identity` per score tile | 20,059 | ~4,850 |
+| **one matmul per score column over the row group** (`rt_dim` 2, `col_identity` unpacked once) | **18,766** | 3,615 |
+
+Re-reading a score tile through unpack costs ~57 cycles either way (the main matmuls reach ~22 per tile-product by
+reusing unpacked operands across an 8-tile subblock); batching the row group halves the calls and puts both rows'
+reciprocals in one dest acquire. `matmul_block` on Blackhole has no MOP over K (`kt_dim` is only in0's row stride), so a
+16-tile `col_identity` would not have streamed. The batched init has to be followed by a 1×1 `matmul_block_init`: the
+next row group's V matmul only re-inits short and hung on the leftover `rt_dim` / `kt_dim` (every q_chunk ≥ 256 shape;
+q128 never runs a V matmul after a normalize in the same unit, so the model shapes did not show it). Scope: Blackhole,
+single K chunk, not ring / in-place V / attention sink; `SDPA_SUM_ON_PACK` restores the old path; the recip scratch CB
+grows to the normalize row-group height (2 tiles).
+
+Traced, device µs per call: bs8 179.3 → 168.7 (−5.9%), bs16 286.1 → 266.1 (−7.0%), bs32 600.4 → 566.2 (−5.7%). PCC vs
+torch at the model config 0.999248 → 0.999234 (max error unchanged; causal, padded-Sk and two-K-chunk cases also
+match). ttnn SDPA unit tests pass (reuse_kv 97, pack_gqa_heads 29, windowed 68, prefill 8, output_heads_concat 8).
+STS-B through `eval_accuracy_batched.py` bs8 / 16 / 32: 0.8110 / 0.8132 / 0.8156 → 0.8120 / 0.8174 / 0.8148; per-text
+cosine new vs old mean 0.9946 (min 0.86), inside the model's own spread (old kernel bs8 vs bs16: mean 0.9942, min 0.80).
+End to end SDPA is ~8% of the replay: cold bs8 77.0 → 76.7 ms, bs16 144.0 → 143.1, bs32 within noise (same chip, 2
+alternating rounds).
+
+**Next: a cheaper exp.** It is the largest piece left on the pack thread's critical path (~510 of ~1,300 cycles per
+column block).

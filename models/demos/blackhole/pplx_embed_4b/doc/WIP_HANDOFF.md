@@ -18,6 +18,9 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
    −15 / −13%, cold −1.7 / −0.8%, sustained 0.0 / −0.6%, bit-identical. bs1 already has Q/K/V in L1. **Open at bs32:**
    K / V are 190 KB per core short beside the first QKV chunk; 4 QKV chunks would fit and the matmuls are ~neutral
    since §63 (needs a 4-output `fused_add_rmsnorm_split`). The head-major QKV write (#57722) is untried.
+4. SDPA compute (§65). Compute-only / DM-only floors measured (bs32: 519 / 483 µs against 597); the pack thread paced
+   the Q·Kᵀ / exp loop. Landed: row sums on the math thread (SDPA −6 / −7 / −6%). **Next:** a cheaper exp (~510 of
+   ~1,300 pack cycles per column block; the no-exp probe is −19% of a compute-only unit).
 
 `sustained_run.sh` reports AICLK / power over the sustained window and J/inference, but tt-smi samples swing 30-155 W
 within a window (host gaps), so J/inference is too noisy to rank variants yet.
