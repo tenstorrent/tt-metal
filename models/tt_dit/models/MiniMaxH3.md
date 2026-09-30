@@ -461,6 +461,7 @@ described in the next paragraph.
 | `MINIMAX_H3_SDPA_CHUNKS=q,k`, `MINIMAX_H3_AGMM_BLOCKS=K,N:Mb,Kb,Nb[,sh,sw];...`, `MINIMAX_H3_MMRS_BLOCKING=gx,gy,Mb,Kb,Nb,sh,sw[,workers[,window]]` | sweep overrides for the ring SDPA chunking and the linears' blockings |
 | `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
 | `MINIMAX_H3_SDPA_V_DTYPE=bfloat8_b` | typecast only V (K stays bf16 for the logits): V is the operand the LoFi PV matmul streams, so this halves its unpack bytes and its share of the ring traffic; one typecast per block until fused; gate with the 2-step comparison |
+| `MINIMAX_H3_FUSED_HEADS=1` | the two output heads as one 128-wide matmul, one SP all-gather and a tile-aligned column slice per modality (the columns are independent, so each head's values are its own); saves one read of the TP-gathered hidden, one CCL and one gather per step; opt-in until measured |
 | `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
 
 Cross-step reuse (`step_reuse.py`) is a different kind of knob: it changes the output. It is off unless set, eager path

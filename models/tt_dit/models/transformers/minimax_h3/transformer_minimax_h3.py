@@ -17,6 +17,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -313,6 +314,11 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        # MINIMAX_H3_FUSED_HEADS=1: both heads as one [video | audio]-wide matmul and one SP all-gather, then a
+        # column slice per modality; the columns are independent, so each head's values are its own.
+        self.fused_heads = os.environ.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
+        self._fused_head_weight: ttnn.Tensor | None = None
+        self._fused_head_bias: ttnn.Tensor | None = None
 
     def prepare_static_sources(
         self,
@@ -456,6 +462,22 @@ class MiniMaxH3Transformer3DModel(Module):
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
 
+        def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
+            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+
+        if self.fused_heads:
+            both = self._fused_heads_matmul(hidden)
+            if self.sp_factor > 1:
+                both = self.ccl_manager.all_gather(both, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
+            n_video, n_all = self.proj_out.out_features, both.shape[3]
+            video_rows = select(both, video_out_indices)
+            audio_rows = select(both, audio_out_indices)
+            return (
+                ttnn.slice(video_rows, [0, 0, 0, 0], [1, 1, video_rows.shape[2], n_video]),
+                ttnn.slice(audio_rows, [0, 0, 0, n_video], [1, 1, audio_rows.shape[2], n_all]),
+            )
+
         video_all = self.proj_out(hidden)
         audio_all = self.audio_proj_out(hidden)
         if self.sp_factor > 1:
@@ -465,12 +487,21 @@ class MiniMaxH3Transformer3DModel(Module):
             audio_all = self.ccl_manager.all_gather(
                 audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
             )
-
-        def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
-            table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
-
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+
+    def _fused_heads_matmul(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
+        """Both heads as one matmul on the [video | audio] column-concatenated weights, built once on device."""
+        if self._fused_head_weight is None:
+            self._fused_head_weight = ttnn.concat([self.proj_out.weight.data, self.audio_proj_out.weight.data], dim=-1)
+            self._fused_head_bias = ttnn.concat([self.proj_out.bias.data, self.audio_proj_out.bias.data], dim=-1)
+        M, K, N = hidden.padded_shape[-2], hidden.padded_shape[-1], self._fused_head_weight.padded_shape[-1]
+        return ttnn.experimental.minimal_matmul(
+            input_tensor=hidden,
+            weight_tensor=self._fused_head_weight,
+            bias_tensor=self._fused_head_bias,
+            config=get_matmul_config(M, K, N, get_matmul_core_grid(self.mesh_device)),
+            compute_kernel_config=self.proj_out.compute_config,
+        )
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
