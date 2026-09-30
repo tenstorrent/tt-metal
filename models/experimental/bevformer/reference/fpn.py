@@ -2,6 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Feature Pyramid Network (FPN) neck in PyTorch.
+
+This module implements the image neck of BEVFormer-base, which turns the backbone's C3,
+C4 and C5 (512, 1024 and 2048 channels) into four 256-channel levels for the encoder's
+spatial cross-attention. It is the reference the TTNN neck in ``tt/tt_fpn.py`` is checked
+against. The ``img_neck`` weights of the BEVFormer-base checkpoint load into it with no
+key changes.
+
+The FPN performs:
+1. A 1x1 lateral conv on every input level
+2. A top-down path adding each coarser lateral, upsampled, to the next finer one
+3. A 3x3 output conv on every level
+4. Extra levels from stride-2 3x3 convs, on the last output for BEVFormer-base
+
+BEVFormer-base's convs carry no norm or activation, so mmcv's ConvModule is reduced to a
+bare conv.
+
+Adapted from the UniAD port in ``models/experimental/uniad/reference/fpn.py``, which is
+based on the mmdetection version BEVFormer is built on:
+https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/models/necks/fpn.py
+https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/cnn/bricks/conv_module.py
+
+BEVFormer-base neck configuration:
+https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,6 +61,26 @@ class ConvModule(nn.Module):
 
 
 class FPN(nn.Module):
+    """
+    Feature Pyramid Network over the backbone levels ``start_level`` .. ``end_level``.
+
+    Args:
+        in_channels (list[int]): Channels of each backbone level.
+        out_channels (int): Channels of every output level.
+        num_outs (int): Number of output levels; those beyond the backbone levels are extra.
+        add_extra_convs (bool | str): False makes the extra levels by max pooling the last
+            output. Otherwise a stride-2 3x3 conv makes each one, the first reading
+            ``"on_input"`` (the last backbone input, also what True means), ``"on_lateral"``
+            (the last lateral) or ``"on_output"`` (the last output).
+        relu_before_extra_convs (bool): Apply ReLU before every extra conv after the first.
+
+    ``init_cfg`` is accepted for config compatibility only: weights come from a checkpoint
+    or from the tests' initializers.
+
+    Returns:
+        tuple[torch.Tensor]: ``num_outs`` (N, out_channels, H, W) tensors, finest first.
+    """
+
     def __init__(
         self,
         in_channels,
