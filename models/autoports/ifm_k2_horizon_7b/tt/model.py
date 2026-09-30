@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,18 +33,46 @@ HF_MODEL = "IFM/K2-Horizon-7B"
 HF_REVISION = "036114ce8d46c32b24c15423211069abb9c5d25e"
 
 
+def _local_snapshot():
+    """Pre-downloaded checkpoint directory supplied by a serving harness, if any.
+
+    TTI mounts the weights and exports HF_MODEL / MODEL_WEIGHTS_DIR as a local
+    snapshot path; reading it avoids a second full download inside the container.
+    """
+    for key in ("HF_MODEL", "MODEL_WEIGHTS_DIR"):
+        value = os.environ.get(key)
+        if value and (Path(value) / "model.safetensors.index.json").is_file():
+            return Path(value)
+    return None
+
+
+def _from_pretrained(loader, local):
+    if local is not None:
+        try:
+            return loader.from_pretrained(str(local), trust_remote_code=True)
+        except Exception:  # e.g. a weights-only snapshot without the custom code
+            pass
+    return loader.from_pretrained(HF_MODEL, revision=HF_REVISION, trust_remote_code=True)
+
+
 class Checkpoint:
     def __init__(self):
-        self.config = AutoConfig.from_pretrained(HF_MODEL, revision=HF_REVISION, trust_remote_code=True)
-        self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL, revision=HF_REVISION, trust_remote_code=True)
-        index = hf_hub_download(HF_MODEL, "model.safetensors.index.json", revision=HF_REVISION)
+        self.local = _local_snapshot()
+        self.config = _from_pretrained(AutoConfig, self.local)
+        self.tokenizer = _from_pretrained(AutoTokenizer, self.local)
+        index = self._file("model.safetensors.index.json")
         self.mapping = json.loads(Path(index).read_text())["weight_map"]
+
+    def _file(self, filename):
+        if self.local is not None:
+            return str(self.local / filename)
+        return hf_hub_download(HF_MODEL, filename, revision=HF_REVISION)
 
     def load(self, prefix):
         names = [k for k in self.mapping if k.startswith(prefix)]
         result = {}
         for filename in sorted({self.mapping[k] for k in names}):
-            path = hf_hub_download(HF_MODEL, filename, revision=HF_REVISION)
+            path = self._file(filename)
             with safe_open(path, framework="pt") as f:
                 result.update({k: f.get_tensor(k) for k in names if self.mapping[k] == filename})
         return result
