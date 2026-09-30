@@ -14,10 +14,11 @@ Branch reset onto the t36 line (16ba9a383dc, what blx03 runs). Commit 9a02249fdf
   older 145f entries (which were 4x8/8x4). C_in/C_out/T blocks identical -> expect bit-identical output.
 
 ## Device A/B (single config)
-blx03 job 882: W=~/fasth3/t17 run25.sh conv145_t17 LTX25_DIFFVAE=0 (commit 9a02249fdfb), same test/prompts as
+blx03 job 884 (882 was killed: new TT_METAL_HOME made the JIT cache cold; 884 runs t17 python with TT_METAL_HOME=main tree):
 baseline job 879 (conv145_t20, 16ba9a383dc): gen#1 VAE decode (conv) 0.72s, E2E 8.761s.
 Output: blx03:~/fasth3/out/ltx25_1080p_6s/conv145_t17/{run.log,ltx_av_fast_*.mp4}
-Check: ssh g14blx03 tt-device-mcp status 1 | grep -w 882
+Check: ssh g14blx03 tt-device-mcp status 1 | grep -w 884
 Next: grep -E "LTX_TIME|decode|E2E" run.log for gen#1; compare mp4 vs conv145_t20 (ffmpeg psnr / md5 of decoded
 frames). Faster + identical -> keep, fix comments with measured numbers. Slower -> revert 9a02249fdfb.
 Cleanup after: ssh g14blx03 'cd ~/fasth3/tt-metal && git worktree remove --force ~/fasth3/t17'.
+Compare: ssh g14blx03 bash -s < tmp/t17/compare.sh
