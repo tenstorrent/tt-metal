@@ -588,6 +588,75 @@ def _read_fullpipe_best_1cq():
         return (None, "")
 
 
+def _pcc_gate_baseline(repo_root: Path, mcp_env: dict, devices: str) -> None:
+    """Run the correctness file ONCE on the unedited model and record which of its cases fail there.
+
+    The gate's verdict (agent/pcc_runner._verdict_from_output) tolerates exactly those; any other
+    failing case blocks a win, whatever the PCC. Without the record NOTHING is tolerated -- right
+    for a model whose file passes clean, wrong for one that ships a bring-up case failing on its
+    own baseline (nemotron's Gate-2), which is why this runs before the first round instead of
+    being inferred later. perf_mcp reuses the record while HEAD is the sha it was taken at, so a
+    --persist relaunch does not pay for the run again. PERF_MCP_PCC_BASELINE=0 skips it (the
+    strict rule stays in force)."""
+    if os.environ.get("PERF_MCP_PCC_BASELINE", "1") != "1":
+        return
+    code = (
+        "import sys, json; sys.path.insert(0, sys.argv[1]); import perf_mcp as P\n"
+        "r = P.record_pcc_baseline()\n"
+        "print('PCC_BASELINE=' + json.dumps({k: r.get(k) for k in "
+        "('status', 'pcc', 'failed_tests', 'recorded', 'reused', 'error')}))\n"
+    )
+    env = cc_env(repo_root, devices)
+    env.update(mcp_env)
+    print(
+        "  [optimize/cc] correctness file on the UNEDITED model (BEFORE) — every case runs once, so a "
+        "win is judged against what already passes..."
+    )
+    from agent.probes import adaptive_backstop
+
+    _op = "pcc"
+    rc, out = _run_device_step(
+        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+        repo_root / PERF_DIR,
+        env,
+        devices,
+        # never shorter than the runner's own inner backstop, or this outer bound would kill a gate
+        # the runner was still prepared to wait for
+        max(adaptive_timer(repo_root, _op, env_key="PERF_MCP_PCC_BACKSTOP"), adaptive_backstop()),
+        "correctness gate (BEFORE)",
+        observe_op=_op,
+        observe_root=repo_root,
+    )
+    doc = {}
+    for line in (out or "").splitlines():
+        if line.startswith("PCC_BASELINE="):
+            try:
+                doc = json.loads(line.split("=", 1)[1]) or {}
+            except ValueError:
+                doc = {}
+    failed = doc.get("failed_tests") if isinstance(doc.get("failed_tests"), list) else None
+    if rc is None or not doc.get("recorded") or failed is None:
+        why = str(doc.get("status") or ("killed" if rc is None else "unknown"))
+        if doc.get("error"):
+            why += "; " + str(doc.get("error"))[:200]
+        print(
+            "  [optimize/cc] WARNING: the correctness file could not be run on the unedited model "
+            "(%s) -- NO failing case will be tolerated this run" % why
+        )
+        return
+    how = "reused: recorded at this HEAD" if doc.get("reused") else "recorded"
+    if failed:
+        print(
+            "  [optimize/cc] correctness file on the UNEDITED model: %d case(s) already fail and are "
+            "tolerated: %s (%s); any OTHER failing case blocks a win" % (len(failed), ", ".join(failed), how)
+        )
+    else:
+        print(
+            "  [optimize/cc] correctness file on the UNEDITED model: every case passes (%s, PCC %s); "
+            "any failing case now blocks a win" % (how, doc.get("pcc"))
+        )
+
+
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
     _fp_t0 = time.monotonic()
     try:
@@ -5828,6 +5897,7 @@ def optimize_pipeline(
         )
     else:
         before_ms, before_mode = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
+    _pcc_gate_baseline(repo_root, mcp_env, devices)
     rounds, can_stop, halted = 0, False, False
     stall_sec = adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_STALL_SEC", mult=0.5)
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")

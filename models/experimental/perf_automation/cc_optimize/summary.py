@@ -1037,6 +1037,12 @@ def _attempt_result(a, won: bool, rows) -> str:
     if _led is not None and _led.pcc_failed(a):
         _st = str(a.get("pcc_status") or "")
         _p, _t = a.get("pcc"), a.get("pcc_threshold")
+        # the PCC cleared but a case of the correctness file that passes on the unedited model did
+        # not: name the case, not the number that was fine
+        _broke = a.get("new_failed_tests") or a.get("failed_tests")
+        if _st == "tests_failed" and isinstance(_broke, list) and _broke:
+            _names = ", ".join(str(t) for t in _broke[:3])
+            return "✗ tests failed: %s%s" % (_names, " +%d" % (len(_broke) - 3) if len(_broke) > 3 else "")
         if isinstance(_p, (int, float)) and isinstance(_t, (int, float)):
             return "✗ PCC %.3f < %.2f" % (_p, _t)
         return "✗ PCC %s" % _st

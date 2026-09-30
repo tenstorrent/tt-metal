@@ -48,11 +48,10 @@ def test_run_pcc_ok_when_passed(monkeypatch, tmp_path):
 
 
 def test_run_pcc_high_pcc_nonzero_exit_is_ok(monkeypatch, tmp_path):
-    # PCC>=threshold but pytest exited non-zero on a BRING-UP gate (Gate-2 modules-invoked)
-    # or nanobind teardown -> NOT an edit-induced regression (fails on the baseline too).
-    # The perf loop's correctness signal is PCC, so this must be ok, not crash.
-    v = _patch_run(monkeypatch, tmp_path, "e2e PCC=0.999\nGate 2 failed: modules not invoked\n1 failed", 1)
-    assert v["status"] == "ok" and v["pcc"] == 0.999
+    # PCC>=threshold but pytest exited non-zero for nanobind teardown leaks (no case failed): NOT
+    # an edit-induced regression. The exit code is not the signal; the file's cases are.
+    v = _patch_run(monkeypatch, tmp_path, "e2e PCC=0.999\nnanobind: leaked 3 types\n===== 11 passed in 9.0s =====", 1)
+    assert v["status"] == "ok" and v["pcc"] == 0.999 and v["failed_tests"] == []
 
 
 # Verbatim pytest -sv output for a device fatal raised INSIDE the compare helper

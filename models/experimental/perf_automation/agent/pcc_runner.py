@@ -72,9 +72,43 @@ def _operator_pcc_floor() -> float:
         return 0.0
 
 
-def _verdict_from_output(out: str, threshold: float) -> dict:
+# One line per failed or errored case in pytest's short test summary (-rfE, on by default):
+#   FAILED models/.../test_e2e.py::test_signal_quality_wer_and_mos - AssertionError: ...
+#   ERROR models/.../test_e2e.py::test_x - ...
+# The status word leads there, so a `-s` print cannot split it from the name the way it can on the
+# per-case `path::name PASSED` lines of a -v transcript.
+_SUMMARY_FAIL_LINE = re.compile(r"^(?:FAILED|ERROR)\s+\S+::(\S+)", re.MULTILINE)
+# pytest's closing tally: `===== 10 passed, 1 failed, 5 warnings in 900.12s (0:15:00) =====`
+_FINAL_TALLY = re.compile(r"^=+ .*\bin\s+[0-9.]+s\b.*=+\s*$", re.MULTILINE)
+_FAILED_COUNT = re.compile(r"\b([1-9]\d*)\s+(?:failed|errors?)\b", re.IGNORECASE)
+UNNAMED_FAILURE = "<unnamed>"
+
+
+def parse_failed_tests(out: str) -> list:
+    """Names of the cases pytest reported FAILED or ERROR, in output order, without duplicates.
+
+    Read from the short test summary, which names each case on its own line. When no summary
+    survived (a transcript cut before it, or a -r switch that hid it) but pytest's closing tally
+    still counts failures, the count is kept as UNNAMED_FAILURE entries so a failure never
+    disappears just because its name did.
+    """
+    text = out or ""
+    names = list(dict.fromkeys(_SUMMARY_FAIL_LINE.findall(text)))
+    if names:
+        return names
+    tallies = _FINAL_TALLY.findall(text)
+    scope = tallies[-1] if tallies else text
+    total = sum(int(n) for n in _FAILED_COUNT.findall(scope))
+    return [UNNAMED_FAILURE] * total
+
+
+def _verdict_from_output(out: str, threshold: float, baseline_failed=None) -> dict:
     """Correctness verdict for a captured pytest run. Split out of run_pcc so the gate's own
-    logic is testable without a device -- these branches decide whether an edit is kept."""
+    logic is testable without a device -- these branches decide whether an edit is kept.
+
+    `baseline_failed`: the cases of the correctness file that already fail on the UNEDITED model
+    (recorded by the loop's BEFORE gate, perf_mcp.record_pcc_baseline). Only those are tolerated;
+    every other failing case is `tests_failed`, whatever the PCC. None or [] tolerates nothing."""
     pcc = parse_pcc(out)
 
     # A SKIPPED e2e test verified NOTHING -- never accept it as correct just because a stale
@@ -123,19 +157,36 @@ def _verdict_from_output(out: str, threshold: float) -> dict:
     if pcc is None:
         return {"status": "crash", "error": _useful_tail(out)}
 
-    # PCC IS the correctness signal for a perf edit. A non-zero pytest EXIT with PCC>=threshold
-    # is NOT an edit-induced regression: the e2e gate also enforces BRING-UP checks (Gate-2
-    # "graduated modules invoked") and the process prints benign nanobind teardown leaks at
-    # interpreter shutdown -- BOTH set a non-zero exit while the math is perfect, and BOTH fail
-    # on the UNEDITED baseline too (verified: clean nemotron e2e exits 1 on Gate-2 with PCC
-    # 0.999). Gating on the raw return code here rejected every edit. So gate on PCC: a genuine
-    # device crash already yields pcc=None above; below-threshold PCC is pcc_low (repairable).
+    # PCC is the first correctness signal for a perf edit, but not the only one. This used to gate
+    # on PCC alone: the raw pytest EXIT code was useless because the e2e file also enforces
+    # BRING-UP checks (Gate-2 "graduated modules invoked") and nanobind prints teardown leaks at
+    # interpreter shutdown -- both set a non-zero exit while the math is perfect, and both fail on
+    # the UNEDITED model too (a clean nemotron e2e exited 1 on Gate-2 with PCC 0.999), so gating
+    # on the exit code rejected every edit. Ignoring failures altogether over-corrected: the file's
+    # OTHER cases (rendered-speech WER/MOS, stop rule, batch independence) print no PCC, so a win
+    # could be banked while one of them failed (voxtral, 2026-09-30). The rule is now RELATIVE TO
+    # THE UNEDITED MODEL: a case that fails there is tolerated, a case that passed there and fails
+    # now is the edit's doing and blocks the win. A genuine device crash already yields pcc=None
+    # above; below-threshold PCC is pcc_low (repairable).
     effective = max(float(threshold or 0.0), _operator_pcc_floor())
-    return (
-        {"status": "ok", "pcc": pcc, "pcc_verified": True, "threshold": effective}
-        if pcc >= effective
-        else {"status": "pcc_low", "pcc": pcc, "pcc_verified": True, "threshold": effective}
-    )
+    failed = parse_failed_tests(out)
+    verdict = {"pcc": pcc, "pcc_verified": True, "threshold": effective, "failed_tests": failed}
+    if pcc < effective:
+        return {"status": "pcc_low", **verdict}
+    tolerated = set(baseline_failed or ())
+    new_failed = [t for t in failed if t not in tolerated]
+    if new_failed:
+        return {
+            "status": "tests_failed",
+            **verdict,
+            "new_failed_tests": new_failed,
+            "error": (
+                "PCC %.6f clears %.2f, but %d case(s) of the correctness file fail that pass on the "
+                "unedited model: %s. Every case in the gate file must pass -- fix or revert the edit."
+                % (pcc, effective, len(new_failed), ", ".join(new_failed))
+            ),
+        }
+    return {"status": "ok", **verdict}
 
 
 def _inside_repo(resolved: Path, model_root, repo) -> Path:
@@ -178,9 +229,10 @@ def _inside_repo(resolved: Path, model_root, repo) -> Path:
 def run_pcc(ctx) -> dict:
     """Run the e2e PCC test, parse the measured PCC, compare the manifest threshold.
 
-    Returns {status: ok|pcc_low|crash, pcc?, error?}. A parsed number below
-    threshold is pcc_low (expected pytest non-zero exit); an unparseable result
-    or an exception is crash.
+    Returns {status: ok|pcc_low|tests_failed|crash, pcc?, failed_tests?, error?}. A parsed
+    number below threshold is pcc_low (expected pytest non-zero exit); a case of the file that
+    fails here but passes on the unedited model (ctx.baseline_failed_tests(), when the context
+    has one) is tests_failed; an unparseable result or an exception is crash.
     """
     entry = ctx.manifest["pathmap"]["pcc"]["end_to_end"]
     file_part, sep, fn = str(entry["path"]).partition("::")
@@ -234,7 +286,9 @@ def run_pcc(ctx) -> dict:
     except Exception as exc:  # a stall (TracyHangError), the ceiling, an OS error, etc.
         return {"status": "crash", "error": str(exc)}
     out = (r.stdout or "") + (r.stderr or "")
-    return _verdict_from_output(out, threshold)
+    # A context without the record (the kernel_test shim, older callers) tolerates no failure.
+    baseline_failed = getattr(ctx, "baseline_failed_tests", lambda: None)()
+    return _verdict_from_output(out, threshold, baseline_failed=baseline_failed)
 
 
 # Lines that pollute the crash excerpt: nanobind dumps ~hundreds of "leaked ..." lines at

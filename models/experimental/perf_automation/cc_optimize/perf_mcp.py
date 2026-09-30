@@ -1906,6 +1906,10 @@ class _Ctx:
     def model_root(self):
         return _MODEL_ROOT
 
+    def baseline_failed_tests(self):
+        """Cases of the correctness file that fail on the unedited model (see record_pcc_baseline)."""
+        return read_baseline_failed_tests()
+
 
 def _reap_measurement_dir(path) -> bool:
     p = Path(path)
@@ -2476,8 +2480,10 @@ def measure_candidate() -> dict:
 @mcp.tool()
 def check_pcc() -> dict:
     """Run the model's end-to-end PCC correctness test on-device (the SAME gate the FSM uses).
-    Returns {status: ok|pcc_low|crash, pcc?}. An edit is only acceptable if status==ok. A crash
-    or pcc_low means the edit broke correctness — fix or revert it; never keep it."""
+    Returns {status: ok|pcc_low|tests_failed|crash, pcc?, failed_tests?}. An edit is only
+    acceptable if status==ok. crash or pcc_low means the edit broke the math; tests_failed means
+    a case of the correctness file that passes on the unedited model fails with the edit (named in
+    `new_failed_tests`) — fix or revert it; never keep it."""
     try:
         res = run_pcc(_Ctx())
     except Exception as exc:  # noqa: BLE001
@@ -2501,6 +2507,8 @@ def check_pcc() -> dict:
         res.get("status"),
         pcc=res.get("pcc"),
         threshold=res.get("threshold"),
+        failed_tests=res.get("failed_tests"),
+        new_failed_tests=res.get("new_failed_tests"),
         measurement_id=_measurement_id(),
     )
     return res
@@ -4293,6 +4301,77 @@ def _gate_verdict_path():
     return state_dir() / ("perf_mcp_gate_verdicts_%s_%s.json" % (model, task))
 
 
+def _gate_baseline_tests_path():
+    """Which cases of the correctness file fail on the UNEDITED model, keyed like the verdicts."""
+    model = _model_key()
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return state_dir() / ("perf_mcp_gate_baseline_tests_%s_%s.json" % (model, task))
+
+
+def read_baseline_failed_tests():
+    """The recorded list, or None when no baseline gate was recorded. None tolerates NOTHING in
+    the verdict (agent/pcc_runner._verdict_from_output): a missing record is the strict case."""
+    try:
+        doc = json.loads(_gate_baseline_tests_path().read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    failed = doc.get("failed_tests")
+    return [str(t) for t in failed] if isinstance(failed, list) else None
+
+
+def _write_baseline_failed_tests(failed, sha: str) -> None:
+    doc = {
+        "sha": str(sha or ""),
+        "failed_tests": [str(t) for t in (failed or [])],
+        "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    p = _gate_baseline_tests_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc, indent=2))
+
+
+def record_pcc_baseline() -> dict:
+    """Run the correctness file on the tree AS IT STANDS -- the loop calls this before any edit --
+    and record which of its cases fail there. From then on the gate tolerates exactly those and
+    blocks a win on any other failing case (check_pcc -> tests_failed).
+
+    Not an MCP tool on purpose: the agent must not be able to move the bar. Reused while HEAD is
+    the sha it was recorded at, so a --persist relaunch does not pay for the run again. A run that
+    produced no PCC (a crash) records nothing, which leaves the strict rule in force."""
+    head = _head_sha_quiet()
+    try:
+        prior = json.loads(_gate_baseline_tests_path().read_text()) or {}
+    except Exception:  # noqa: BLE001
+        prior = {}
+    if head and prior.get("sha") == head and isinstance(prior.get("failed_tests"), list):
+        return {
+            "status": "ok",
+            "recorded": True,
+            "reused": True,
+            "sha": head,
+            "failed_tests": list(prior["failed_tests"]),
+        }
+    res = run_pcc(_Ctx())
+    recorded = res.get("pcc") is not None and isinstance(res.get("failed_tests"), list)
+    if recorded:
+        _write_baseline_failed_tests(res["failed_tests"], head)
+    out = dict(res)
+    out.update({"recorded": recorded, "reused": False, "sha": head})
+    return out
+
+
+def _bank_failed_tests_baseline(sha: str) -> None:
+    """After a win is banked, its own gate run describes the new unedited model: its failing cases
+    (a subset of the baseline's, or the gate would have refused it) are the baseline from here on.
+    Fail-open like _bank_pcc: never raises, so it cannot break a commit."""
+    try:
+        v = gate_verdicts().get("pcc") or {}
+        if str(v.get("status")) == "ok" and isinstance(v.get("failed_tests"), list):
+            _write_baseline_failed_tests(v["failed_tests"], sha)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def record_gate_verdict(gate: str, status: str, **extra) -> None:
     """Persist a gate's verdict so the WRITE PATH can enforce it.
 
@@ -5501,6 +5580,7 @@ def git_commit(message: str) -> dict:
     if sha:
         _record_committed_win(message, sha)
         _bank_pcc()
+        _bank_failed_tests_baseline(sha)
         _promote_fullpipe_pending()
         _write_untracked_baseline()
     return {"committed": bool(sha), "sha": sha}
@@ -5713,6 +5793,10 @@ def _attempt_pcc_verdict() -> dict:
     for k, key in (("pcc", "pcc"), ("threshold", "pcc_threshold")):
         if isinstance(v.get(k), (int, float)):
             out[key] = float(v[k])
+    # the names travel with the status, so the report can say WHICH case the edit broke
+    for k in ("failed_tests", "new_failed_tests"):
+        if isinstance(v.get(k), list) and v[k]:
+            out[k] = [str(t) for t in v[k]]
     return out
 
 
