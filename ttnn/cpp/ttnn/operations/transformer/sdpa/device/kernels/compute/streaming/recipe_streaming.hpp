@@ -965,6 +965,10 @@ void salad_correct_fused(
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
     static_assert((sbh_t == 1 || sbh_t == 2) && sbw_t >= 1 && dst_size == 8);
+#ifdef SDPA_KO_FOLD
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    return;
+#endif
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
