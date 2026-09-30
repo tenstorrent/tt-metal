@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     rotated_chip_positions,
-    rotated_rows_are_contiguous,
 )
 
 
@@ -88,17 +87,14 @@ def prepare_prefill_mtp_tokens(
     """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard.
 
     Chip ``c`` takes the ids past the LAST POSITION IT CARRIES, so concatenated onto its trunk row
-    every MTP level reads the same local slice. Block-cyclic only.
+    every MTP level reads the same local slice -- except, on a chunk starting off a per-chip
+    boundary, the seam chip's first run, which ``MTPSeam`` mends on device. Block-cyclic only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
     assert len(token_ids) == sp_factor * isl_per_chip + num_mtp_tokens, (
         f"got {len(token_ids)} ids, expected sp_factor*L + num_mtp_tokens = "
         f"{sp_factor}*{isl_per_chip} + {num_mtp_tokens}"
-    )
-    assert rotated_rows_are_contiguous(chunk_start, isl_per_chip), (
-        f"chunk_start={chunk_start} must be a multiple of the per-chip shard {isl_per_chip}: off that "
-        "boundary a chip's positions are discontiguous, so 'the ids following its shard' is not a run"
     )
     trunk_ends = [row[-1] for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip)]
     index = torch.tensor(
@@ -230,6 +226,12 @@ def build_mtp_generation_select(
         if u is not None:
             select[c, 0, u, source_row] = 1.0
     return _upload_sp_sharded(select, mesh_device, mesh_shape, sp_axis, dtype)
+
+
+def build_sp_chip_index(mesh_device: ttnn.MeshDevice, sp_factor: int, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
+    """``[1, 1, 1, 1]`` bf16 per chip holding its SP index. Built once; ``MTPSeam`` compares against it."""
+    index = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1, 1)
+    return _upload_sp_sharded(index, mesh_device, mesh_shape, sp_axis, ttnn.bfloat16)
 
 
 def _upload_sp_sharded(

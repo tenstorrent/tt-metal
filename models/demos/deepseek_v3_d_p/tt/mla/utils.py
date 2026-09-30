@@ -171,15 +171,6 @@ def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, globa
     return None
 
 
-def rotated_rows_are_contiguous(kv_actual_isl: int, chunk_local: int) -> bool:
-    """Does every chip's rotated row carry a CONTIGUOUS run of positions?
-
-    True exactly when kv_actual_isl is a multiple of chunk_local. Consumers that shift by a ROW to
-    mean a shift by a POSITION -- the MTP union window is one -- are only correct where this holds.
-    """
-    return kv_actual_isl % chunk_local == 0
-
-
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
     """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
     split of the cache's seq dim yields each chip's rows).

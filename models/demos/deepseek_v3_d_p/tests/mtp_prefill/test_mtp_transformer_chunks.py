@@ -60,15 +60,22 @@ TOTAL = CHUNK * NUM_CHUNKS
 
 # A last chunk whose real end sits inside a tile.
 PARTIAL_TAIL = 2540
-# Two turns on one cache; not a chunk multiple, so the second chunk is ROTATED across the chips. Must
-# stay a multiple of CHUNK // sp_factor -- see TtPrefillTransformer.run_mtp, which asserts it.
+# Two turns on one cache; not a chunk multiple, so the second chunk is ROTATED across the chips.
 MT_PREFIX = 5 * 640
 MT_TURN2 = 2500
+# A resume inside chip 5's rows: that chip then carries two position runs, joined at the seam.
+MT_SEAM_PREFIX = MT_PREFIX + 96
+MT_SEAM = 6 * 640
 
 
 def _one_turn(actual_isl: int, num_chunks: int = NUM_CHUNKS) -> list[tuple[int, int]]:
     """``num_chunks`` chunks of a single request of ``actual_isl`` tokens, starting at 0."""
     return [(i * CHUNK, actual_isl) for i in range(num_chunks)]
+
+
+def _resumed_turn(prefix: int, actual_isl: int) -> list[tuple[int, int]]:
+    """A first turn of ``prefix`` tokens, then a second turn resuming the same cache at its end."""
+    return [(0, prefix)] + [(s, actual_isl) for s in range(prefix, actual_isl, CHUNK)]
 
 
 SCHEDULE_AXIS = {
@@ -77,11 +84,16 @@ SCHEDULE_AXIS = {
     "provided-none": lambda k: _one_turn(TOTAL),
     "partial": lambda k: _one_turn(2 * CHUNK + PARTIAL_TAIL),
     "multiturn": lambda k: [(0, MT_PREFIX), (MT_PREFIX, MT_PREFIX + MT_TURN2)],
+    "multiturn-seam": lambda k: _resumed_turn(MT_SEAM_PREFIX, MT_SEAM_PREFIX + CHUNK + MT_TURN2),
+    "multiturn-seam-end": lambda k: _resumed_turn(MT_SEAM_PREFIX, MT_SEAM - 2),
 }
 """Name -> K -> the ``(actual_start, actual_isl)`` of every chunk this test drives, in order.
 
 ``provided-*`` vary how much of the final chunk's lookahead is already in the stream; ``partial``
-ends mid-chunk, and ``multiturn`` resumes one cache at a tile-aligned but not chunk-aligned start.
+ends mid-chunk, and ``multiturn`` resumes one cache at a chip-aligned but not chunk-aligned start.
+``multiturn-seam`` resumes inside a chip's rows, for a second turn of two chunks;
+``multiturn-seam-end`` stops that turn just short of the seam, so generation writes the rows the
+seam chip splices in.
 """
 
 MTP_LEVEL_AXIS = (4, 7)
@@ -339,7 +351,7 @@ def test_mtp_transformer_chunks(
     """GLM-5.3 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
-    teacher-forced reference, row 0 of every window, and the last chunk's generated tokens.
+    teacher-forced reference, row 0 and the seam rows of every window, and the last chunk's generated tokens.
     """
     torch.manual_seed(42)
     if not skip_pcc and num_layers == 78 and schedule == "provided-all":
@@ -360,6 +372,7 @@ def test_mtp_transformer_chunks(
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape[SP_AXIS], mesh_shape[TP_AXIS]
+    isl_per_chip = CHUNK // sp_factor
 
     config = copy.copy(config_only)
     config.max_seq_len = TOTAL
@@ -711,6 +724,16 @@ def test_mtp_transformer_chunks(
                     f"[mtp chunks] chunk {chunk_idx} L{level}: generation seam PCC {msg}"
                     f"{'' if seam_is_decisive else ' (duplicate ids -- swap-blind, see warning above)'}"
                 )
+            if sp_factor > 1 and start % isl_per_chip:
+                seam_row = isl_per_chip - start % isl_per_chip
+                rows = slice(seam_row - level - 1, min(seam_row, real_len))
+                if rows.start < rows.stop:
+                    _, msg = assert_with_pcc(
+                        ref_xs[level].unsqueeze(0)[:, :, rows], dev_x[level][:, :, rows], FUSED_MTP_PCC
+                    )
+                    logger.info(
+                        f"[mtp chunks] chunk {chunk_idx} L{level}: MTP seam rows {rows.start}:{rows.stop} PCC {msg}"
+                    )
 
         del dev_x, dev_out, dev_normed, ref_hiddens, ref_xs, ref_outs, ref_normeds
 

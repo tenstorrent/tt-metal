@@ -206,8 +206,8 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
-    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    last_chip = ((meta["actual_end"] - 1) % CHUNK_SIZE) // (CHUNK_SIZE // _sp)
+    ids = ttnn.to_torch(ttnn.get_device_tensors(mtp_tokens)[last_chip * _tp]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():

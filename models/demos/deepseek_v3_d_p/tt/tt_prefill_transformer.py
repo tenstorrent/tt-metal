@@ -29,14 +29,18 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     global_to_local_token_id,
     reverse_reorder_tensor_chunks,
     rotated_row_of_position,
-    rotated_rows_are_contiguous,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDeviceEmbedSource, MTPDeviceGeneration
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
+    MTPDeviceEmbedSource,
+    MTPDeviceGeneration,
+    MTPSeam,
+)
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
+    build_sp_chip_index,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -390,6 +394,11 @@ class TtPrefillTransformer(LightweightModule):
                 "TtMTPModule's **block_kwargs)"
             )
             assert self.embed is not None, "MTP needs the embedding table on this rank (see --- Embedding ---)"
+        self._mtp_chip_index = (
+            build_sp_chip_index(mesh_device, self.sp_factor, self.mesh_shape, sp_axis)
+            if mtp_predictor is not None and self.sp_factor > 1
+            else None
+        )
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
@@ -670,11 +679,15 @@ class TtPrefillTransformer(LightweightModule):
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
             return emb
-        gathered = ttnn.all_gather(
-            emb, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
-        )
+        gathered = self._mtp_sp_gather(emb)
         ttnn.deallocate(emb)
         return gathered
+
+    def _mtp_sp_gather(self, rows: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
+        return ttnn.all_gather(
+            rows, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
+        )
 
     def _mtp_build_generation(
         self, union, actual_isl: int, actual_start: int, actual_end: int, *, provided_levels: int = 0
@@ -737,31 +750,35 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             0 <= provided_levels <= self.num_mtp_levels
         ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
-        isl_per_chip = self.seq_len // self.sp_factor
-        assert rotated_rows_are_contiguous(fwd_kwargs["actual_start"], isl_per_chip), (
-            f"MTP needs a chunk start that is a multiple of the per-chip shard {isl_per_chip}; got "
-            f"{fwd_kwargs['actual_start']}. Off that boundary the rotated chunk leaves the boundary chip's "
-            "rows position-discontiguous, and an MTP window is a ROW shift, so level k would read the wrong "
-            "position on that chip. Resume on a multiple of chunk_size // sp_factor."
+        seam = MTPSeam.for_chunk(
+            fwd_kwargs["actual_start"],
+            self.seq_len // self.sp_factor,
+            self.sp_factor,
+            self._mtp_chip_index,
+            self._mtp_sp_gather,
         )
         generation = None
-        if provided_levels < self.num_mtp_levels:
-            generation = self._mtp_build_generation(
+        try:
+            union.set_seam(seam)
+            if provided_levels < self.num_mtp_levels:
+                generation = self._mtp_build_generation(
+                    union,
+                    actual_isl,
+                    fwd_kwargs["actual_start"],
+                    fwd_kwargs["actual_end"],
+                    provided_levels=provided_levels,
+                )
+            source = MTPDeviceEmbedSource(
                 union,
-                actual_isl,
-                fwd_kwargs["actual_start"],
-                fwd_kwargs["actual_end"],
+                generation=generation,
                 provided_levels=provided_levels,
             )
-        source = MTPDeviceEmbedSource(
-            union,
-            generation=generation,
-            provided_levels=provided_levels,
-        )
-        fwd_kwargs["actual_isl"] = actual_isl
-        try:
+            fwd_kwargs["actual_isl"] = actual_isl
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
         finally:
             if generation is not None:
                 generation.deallocate()
+            if seam is not None:
+                union.clear_seam()
+                seam.deallocate()
         return out, source.generated_tokens
