@@ -41,3 +41,8 @@ Woke on probe, but g14blx03 is unreachable (ping 100% loss, ssh "No route to hos
 Driver state, dumps and broker state unknown. Nothing submitted, nothing changed on blx03.
 Next: once blx03 answers ssh, check ~/fasth3/drive19.log and `tt-device-mcp status 1` (HELD?). If DRIVE19_DONE, follow steps 1-4.
 If the driver is gone and no dumps exist, relaunch drive19.sh detached (setsid nohup, log ~/fasth3/drive19.log).
+
+## 2026-09-30 15:05 PT (run 179 wake)
+blx03 had rebooted again (up 3 min at wake). drive19.log was empty, driver gone, no dumps. Broker not held; t37 job 937 running.
+Relaunched drive19.sh detached (pid 9695, log ~/fasth3/drive19.log); it submits once 937 and any other smarton job finish.
+Same next steps as above.
