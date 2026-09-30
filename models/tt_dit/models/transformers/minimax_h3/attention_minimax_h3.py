@@ -199,11 +199,11 @@ class MiniMaxH3Attention(Module):
                 self.sdpa_k_dtype = self.sdpa_v_dtype = _sdpa_dtype(kv)
             if v_only:
                 self.sdpa_v_dtype = _sdpa_dtype(v_only)
-            for name, dtype in (("dummy_joint_k", self.sdpa_k_dtype), ("dummy_joint_v", self.sdpa_v_dtype)):
-                if dtype is not None:
-                    setattr(
-                        self, name, typed_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), dtype, mesh_device)
-                    )
+            empty = torch.zeros((1, self.n_local_heads, 0, head_dim))
+            if self.sdpa_k_dtype is not None:
+                self.dummy_joint_k = typed_tensor(empty, self.sdpa_k_dtype, mesh_device)
+            if self.sdpa_v_dtype is not None:
+                self.dummy_joint_v = typed_tensor(empty, self.sdpa_v_dtype, mesh_device)
 
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid

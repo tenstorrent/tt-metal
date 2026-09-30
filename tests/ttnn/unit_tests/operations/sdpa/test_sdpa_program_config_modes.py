@@ -183,5 +183,7 @@ def test_sdpa_fixed_offset_requires_fixed_offset_softmax(device):
     """A non-zero fixed_offset without fixed_offset_softmax is rejected by the program factory."""
     tensors = to_device(device, *make_inputs(1.0))
     pc = program_config(device, fixed_offset=1.0)
-    with pytest.raises(RuntimeError, match="fixed_offset requires fixed_offset_softmax"):
+    with pytest.raises(
+        RuntimeError, match="fixed_offset requires fixed_offset_softmax"
+    ):  # allow-pytest.raises: the TT_FATAL text is the contract
         run_sdpa(device, tensors, pc)
