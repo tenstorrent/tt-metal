@@ -484,18 +484,6 @@ inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// DEST address mode whose increment the last store of a recorded compare-exchange group carries, so the loops
-// pay no INCRWC between groups: the merge advances 4 rows per group, the phase >= 4 step loops 8. Programmed at
-// the entry of every network call for that call's stride (matmul programs the same mode in its init, so nothing
-// here relies on it surviving between calls).
-constexpr std::uint8_t TOPK_STRIDE_ADDR_MOD = ADDR_MOD_4;
-
-template <std::uint32_t ROWS>
-inline void topk_program_stride_addr_mod()
-{
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = static_cast<std::int16_t>(ROWS)}}.set(TOPK_STRIDE_ADDR_MOD);
-}
-
 // Advance the dest counter by rows with plain increments (the INCRWC dest field holds 15 at most).
 inline void topk_dest_counter_advance(std::uint32_t rows)
 {
@@ -532,27 +520,25 @@ inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
     }
 }
 
-// stride_addr_mod: the last store advances the dest counter by the stride programmed in TOPK_STRIDE_ADDR_MOD.
-template <bool is_fp32_dest_acc_en, bool FUSED = false, bool RANK_STAMPED = false, bool stride_addr_mod = false>
+template <bool is_fp32_dest_acc_en, bool FUSED = false, bool RANK_STAMPED = false>
 inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
     constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED || RANK_STAMPED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
-    constexpr std::uint8_t last_mod             = stride_addr_mod ? TOPK_STRIDE_ADDR_MOD : ADDR_MOD_7;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
 
     // Load 16 consecutive numbers
     TT_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, ld_offset);
-    TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, FUSED ? last_mod : ADDR_MOD_7, ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, ld_offset + dist);
 
     if constexpr (!FUSED)
     {
         // Load 16 consecutive indices
         TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);
-        TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, last_mod, dst_indices_offset + ld_offset + dist);
+        TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
     }
 }
 
@@ -597,16 +583,15 @@ inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
     }
 }
 
-// The last store of the window (LREG3 fused, LREG7 otherwise) advances the dest counter: by 32 rows (ADDR_MOD_6,
-// the next 16-datum group of the phase 0 to 3 loops) with alt_addr_mod, by the stride of TOPK_STRIDE_ADDR_MOD with
-// stride_addr_mod (the recorded step windows), else not at all.
-template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false, bool FUSED = false, bool RANK_STAMPED = false, bool stride_addr_mod = false>
+// With alt_addr_mod the last store of the window (LREG3 fused, LREG7 otherwise) advances the dest counter by 32
+// rows (ADDR_MOD_6, the next 16-datum group of the phase 0 to 3 loops).
+template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false, bool FUSED = false, bool RANK_STAMPED = false>
 inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
     constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED || RANK_STAMPED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
-    constexpr std::uint8_t last_mod             = alt_addr_mod ? ADDR_MOD_6 : (stride_addr_mod ? TOPK_STRIDE_ADDR_MOD : ADDR_MOD_7);
+    constexpr std::uint8_t last_mod             = alt_addr_mod ? ADDR_MOD_6 : ADDR_MOD_7;
     constexpr std::uint8_t value_last_mod       = FUSED ? last_mod : ADDR_MOD_7;
 
     // Load 16 consecutive numbers
@@ -929,9 +914,11 @@ inline void bitonic_topk_inc_x4_dest(std::uint32_t inc, bool cr)
 // One step ss (6 or 5) of a phase >= 4 over one quadrant: compare-exchanges at distance 2^(ss-1) positions in
 // 16-datum groups, over the total_datums_to_compare positions from the quadrant base (64 for the whole slab,
 // 32 for the second tile alone), with the direction flipping every sorted_seq_length positions. The load16 and
-// store16 windows are recorded at the first group of the step and replayed after; the window's last store
-// advances the dest counter by 8 rows (TOPK_STRIDE_ADDR_MOD, programmed by the caller), so only the jumps
-// between faces and sequences cost INCRWC issues. Used by the local sort and by the rebuild.
+// store16 windows are recorded at the first group of the step and replayed after; the loads and stores are
+// addressed from the dest counter, which one INCRWC per group advances by 8 rows and a run of INCRWC moves at the
+// jumps between faces and sequences (an SFPSTORE whose address mode increments the counter costs the following
+// loads a wait of about 20 cycles on the hardware; INCRWC writes the counter at once). Used by the local sort
+// and by the rebuild.
 template <bool is_fp32_dest_acc_en, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER>
 inline void bitonic_topk_step_pass(const std::uint32_t ss, bool dir, const std::uint32_t sorted_seq_length, const std::uint32_t total_datums_to_compare)
 {
@@ -971,14 +958,15 @@ inline void bitonic_topk_step_pass(const std::uint32_t ss, bool dir, const std::
                 load_replay_buf<Exec>(
                     TOPK_STEP_STORE_REPLAY_START,
                     step_io_replay_count,
-                    [dist] { bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED, true>(4, 2 * dist); });
+                    [dist] { bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED>(4, 2 * dist); });
                 init_step_replay = false;
             }
             else
             {
                 lltt::replay(TOPK_STEP_STORE_REPLAY_START, step_io_replay_count);
             }
-            counter += 8; // the window's last store
+            TTI_INCRWC(0, 8, 0, 0);
+            counter += 8;
             datums_compared += 16;
             // The next group: 8 rows on, the face 32 rows below the sequence base after positions 0 to 15, or
             // the next sequence 4 * dist rows on (2 * dist positions).
@@ -1077,8 +1065,6 @@ inline void _bitonic_topk_local_sort_(
     // Fused packed keys halve the load/store footprint; replay window bases stay put
     // (slots 4-7 / 12-15 simply go unused in fused mode).
     constexpr int ldst_count = FUSED ? 4 : 8;
-    // The step loops' store windows advance the dest counter by one 8-row group.
-    topk_program_stride_addr_mod<8>();
 
     if constexpr (STABLE_SORT)
     {
@@ -1311,13 +1297,11 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     topk_uint16_clear_value_tiles_high_bits();
 
     topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
-    // The group's last store advances the dest counter by one 4-row group.
-    topk_program_stride_addr_mod<4>();
-    // The compare-exchange group (load8, one swap or the stable comparator, store8), addressed from the dest
-    // counter, recorded once per call and replayed for every other group: the distance between the two runs is
-    // constant within a call. The rank-stamped group carries a per-group prologue and is issued inline on the same
-    // walk of the dest counter.
-    constexpr int merge_group_count = 2 * (FUSED ? 2 : 4) + (STABLE_SORT ? 6 : 1);
+    // The compare-exchange group (load8, one swap or the stable comparator, store8, and the INCRWC that moves the
+    // dest counter to the next 4-row group), addressed from the dest counter, recorded once per call and replayed
+    // for every other group: the distance between the two runs is constant within a call. The rank-stamped group
+    // carries a per-group prologue and is issued inline on the same walk of the dest counter.
+    constexpr int merge_group_count = 2 * (FUSED ? 2 : 4) + (STABLE_SORT ? 6 : 1) + 1;
     bool init_merge                 = !RANK_STAMPED;
 
     if constexpr (STABLE_SORT)
@@ -1393,7 +1377,8 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                 {
                     TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
                 }
-                bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, true>(0, ld_dist);
+                bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                TTI_INCRWC(0, 4, 0, 0);
             };
 
             while (datums_compared < total_datums_to_compare)
@@ -1445,7 +1430,8 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                         // Advance to the next 4 run positions.
                         TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
                         TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                        bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, true>(0, ld_dist);
+                        bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                        TTI_INCRWC(0, 4, 0, 0);
                     }
                     else if (init_merge)
                     {
@@ -1456,7 +1442,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                     {
                         lltt::replay(TOPK_MERGE_REPLAY_START, merge_group_count);
                     }
-                    counter += 4; // the group's last store
+                    counter += 4; // the group's INCRWC
                     datums_compared += 8;
                     if (ii == (inner_d - 1))
                     {
@@ -1497,8 +1483,6 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     topk_uint16_clear_value_tiles_high_bits();
 
     topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
-    // The step loops' store windows advance the dest counter by one 8-row group.
-    topk_program_stride_addr_mod<8>();
     // Fused packed keys halve the load/store parts of the composite replay windows.
     constexpr int ldst_count       = FUSED ? 4 : 8;   // bare load16/store16 windows
     constexpr int rebuild_win_ld8  = FUSED ? 18 : 22; // load8 + ph1 body + store8 + 8x INCRWC
