@@ -286,6 +286,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
 
     try:
         per_chunk = []
+        cumulative_wall_s = []
         stage_s = 0.0
         t_run = time.time()
         for chunk_idx in range(n_chunks):
@@ -296,11 +297,12 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
             ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
+            cumulative_wall_s.append(time.time() - t_run)
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
                 f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk) * 1000:.1f}ms wall={(time.time() - t_run) * 1000:.1f}ms"
+                f"total device={sum(per_chunk) * 1000:.1f}ms wall={cumulative_wall_s[-1] * 1000:.1f}ms"
             )
         total_s = time.time() - t_run
     finally:
@@ -327,6 +329,21 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     logger.info(
         f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
         f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
+    )
+
+    # Use measured elapsed time through the last whole chunk needed for each context.
+    context_rows = [f"{'Context':>8} | {'Chunks':>6} | {'Wall (ms)':>12}"]
+    for context_k in (1, 10, 100, 256):
+        required_chunks = (context_k * 1024 + chunk_size - 1) // chunk_size
+        wall_ms = (
+            f"{cumulative_wall_s[required_chunks - 1] * 1000:.1f}"
+            if required_chunks <= len(cumulative_wall_s)
+            else "N/A"
+        )
+        context_rows.append(f"{str(context_k) + 'k':>8} | {required_chunks:>6} | {wall_ms:>12}")
+    logger.info(
+        f"[traced_perf] context wall times (chunk_size={chunk_size}, 1k=1024 tokens; "
+        "rounded up to whole chunks; N/A = context not reached):\n" + "\n".join(context_rows)
     )
 
 
