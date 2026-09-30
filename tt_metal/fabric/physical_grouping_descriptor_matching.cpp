@@ -3782,17 +3782,33 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     // Same mode and host cap: next() is another model from the live session. The growth loop uses ONLY the
     // normal PGD candidates -- MGD fallbacks are a strict last resort below, never mixed into the pool while
     // the normal enumeration can still grow or has an untried solve.
-    MappingResult<MeshId, const Candidate*> result = master_solve_->next(/*drop_cap=*/false);
+    //
+    // Solve the CURRENT pool with the host-count cap enforced, then -- if that fails -- immediately retry with
+    // the cap dropped at the SAME pool size, before any further growth. Trying drop_cap after every growth round
+    // (rather than only once after all growth is exhausted) lets a solvable smaller pool be solved before growth
+    // overshoots it into an intractably large SAT instance. Previously drop_cap ran only at the very end, so a
+    // large grow budget could blow past the smallest solvable pool (e.g. ~192 seats) straight into a much bigger
+    // one (~320 seats) whose capped solve hangs -- the end-of-loop drop_cap was never reached. Doing it per round
+    // makes the solve converge at the first solvable size regardless of grow budget.
+    auto solve_capped_then_dropped = [&]() -> MappingResult<MeshId, const Candidate*> {
+        MappingResult<MeshId, const Candidate*> r = master_solve_->next(/*drop_cap=*/false);
+        if (!r.success) {
+            r = master_solve_->next(/*drop_cap=*/true);
+        }
+        return r;
+    };
+
+    MappingResult<MeshId, const Candidate*> result = solve_capped_then_dropped();
     while (!result.success && cycle_ < kMaxGrowthCycles) {
         ++cycle_;
         const bool at_cap = cycle_ >= kMaxGrowthCycles;
-        std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
+        const std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
         if (grown == 0) {
             break;
         }
         // Growth reallocates candidate pointers, so the live encoding cannot be reused.
         master_solve_->reset();
-        result = master_solve_->next(/*drop_cap=*/false);
+        result = solve_capped_then_dropped();
         if (at_cap) {
             break;
         }
@@ -3812,10 +3828,10 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
             }
             // Growth reallocates candidate pointers, so the live encoding cannot be reused.
             master_solve_->reset();
-            result = master_solve_->next(/*drop_cap=*/false);
+            result = solve_capped_then_dropped();
         }
     }
-    // Growth is exhausted and the capped solve still failed. Dropping the cap changes the encoding.
+    // Safety net: growth exhausted (or a grown==0 break above skipped the per-round drop_cap) and still unsolved.
     if (!result.success) {
         result = master_solve_->next(/*drop_cap=*/true);
     }

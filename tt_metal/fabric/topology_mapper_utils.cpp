@@ -1814,7 +1814,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
         physical_system_descriptor,
         mesh_graph_descriptor,
         config,
-        /*unique_shapes=*/false,  // reverted: unique_shapes=true regressed Phase-1 SAT on bh_glx_split_4x2 (CI timeout)
+        /*unique_shapes=*/true,  // Unique shapes commit fewer orientations than necessary, shrinking the SAT sweep
         pinnings,
         asic_id_to_mesh_rank,
         fabric_node_id_to_mesh_rank);
@@ -1841,7 +1841,7 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical(
         physical_grouping_descriptor,
         parts,
         config,
-        /*unique_shapes=*/false);
+        /*unique_shapes=*/true);
     return enumerator.next();
 }
 
