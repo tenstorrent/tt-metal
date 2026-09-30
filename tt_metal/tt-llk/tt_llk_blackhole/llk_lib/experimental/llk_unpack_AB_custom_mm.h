@@ -277,10 +277,14 @@ inline void _llk_unpack_AB_custom_mm_run_(
         }
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    // Release the configuration context only once the unpacker has drained the queued unpacks, so the next call's
+    // configuration writes cannot reach a context that is still being read (the stall of tt-metal#58450).
+    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
+    // No second poll of the context semaphore here: the release above, the context reset and the counter resets are
+    // Tensix instructions that execute in order behind the MOP, and the next call polls the semaphore before it writes
+    // its configuration. Returning at once lets the RISC compute and prepare the next call while the unpacker drains
+    // this one instead of idling the unpacker for that work.
     reset_config_context();
 
     // Reset counters at the end

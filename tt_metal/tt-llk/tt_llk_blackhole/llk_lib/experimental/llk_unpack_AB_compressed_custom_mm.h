@@ -289,7 +289,9 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     // to precede the next call's unpacks, so it goes after the SEMGET to keep it out of the context handshake.
     TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
 
-    wait_for_next_context(1);
+    // No second poll of the context semaphore: the next call polls it before it writes its configuration, so the RISC
+    // returns at once and decodes the next call's metadata while the unpacker drains this one (see
+    // llk_unpack_AB_custom_mm.h).
     reset_config_context();
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
