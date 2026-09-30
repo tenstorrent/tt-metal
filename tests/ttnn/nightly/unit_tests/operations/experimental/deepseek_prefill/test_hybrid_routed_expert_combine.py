@@ -11,9 +11,11 @@ validate_combine_output the combine unit test uses. A slot combine read before t
 writing it holds unrelated data, so a handoff bug fails that slot however close the rest is.
 
 seq 640, because shorter sequences finish every expert before combine reaches it and never exercise
-the wait. Threshold 0 runs the unified half alone; the median count splits the experts across both.
+the wait. Both cases run the threshold the model ships: on (8, 1) balanced leaves every expert under it
+so the fused pass takes them all, and hot-expert is the only case that lifts one into the unified half.
 
-The op is not wired into any model; nothing here should run in CI.
+TtMoe turns this overlap on by default wherever the op exists, so the model suites cover the production
+path; this module is pruned from CI and run by hand.
 """
 
 from types import SimpleNamespace
