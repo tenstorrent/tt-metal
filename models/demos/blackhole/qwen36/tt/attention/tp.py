@@ -1000,12 +1000,29 @@ class TPAttention:
         # 2^6 cores/head) because its B=1 draft steps scan the whole prompt-length KV K times per
         # iteration. Base-model layers leave it None and are byte-identical to before.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        _sdpa_max_cores = self.decode_sdpa_max_cores
+        # QWEN36_DECODE_SDPA_PIN_MIN_WIDTH=W (unset = 16 at TP=2, 0 elsewhere; "0" off): decode widths B >= W take the
+        # KV split of the full width Bmax (cores_per_head = min(grid, 16 * B * NKV) / B / NKV in
+        # sdpa_decode_program_factory.cpp: at TP=2, Bmax=32 that is 1 core per KV head, while width 16 gets 3). Decode
+        # bucketing picks the width per step from the number of active requests (and a slot remap forces Bmax), so without
+        # the pin a row's attention reduction order, hence its bits, depended on how many requests shared that step:
+        # the TP=2 run-to-run drift of concurrent decoders (profiles/opt_round5/FASTSLOT.md). Widths below W keep their
+        # wider split (it matters for 1..8-user long-context TPOT); at W=16 the pin is free (2k/8k x 16 users ITL p50
+        # unchanged within 0.5 ms).
+        _pin_env = os.environ.get("QWEN36_DECODE_SDPA_PIN_MIN_WIDTH")
+        try:
+            _pin_w = (16 if self.mesh.get_num_devices() == 2 else 0) if _pin_env is None else int(_pin_env or 0)
+        except ValueError:
+            _pin_w = 0
+        if _pin_w and _sdpa_max_cores is None and not spec_verify_mode and B >= _pin_w and self.B >= _pin_w:
+            _grid_n, _bmax = _sdpa_grid.x * _sdpa_grid.y, self.B
+            _sdpa_max_cores = max(1, (min(_grid_n, 16 * _bmax * NKV) // _bmax) // NKV)
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
             exp_approx_mode=False,
             q_chunk_size=0,
             k_chunk_size=0,
-            **({} if self.decode_sdpa_max_cores is None else {"max_cores_per_head_batch": self.decode_sdpa_max_cores}),
+            **({} if _sdpa_max_cores is None else {"max_cores_per_head_batch": _sdpa_max_cores}),
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
