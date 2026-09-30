@@ -72,6 +72,7 @@ Tensor copy(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
-    bool backwards = false);
+    bool backwards = false,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -9,7 +9,10 @@
 
 namespace ttnn {
 
-Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
+Tensor copy(
+    const Tensor& src_tensor,
+    const Tensor& dst_tensor,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor assign(
     const Tensor& input,

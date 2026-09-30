@@ -13,8 +13,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn {
 
-Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor) {
-    return ttnn::prim::copy(src_tensor, dst_tensor.memory_config(), dst_tensor.dtype(), std::make_optional(dst_tensor));
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::prim::copy(
+        src_tensor,
+        dst_tensor.memory_config(),
+        dst_tensor.dtype(),
+        std::make_optional(dst_tensor),
+        false,
+        sub_core_grids);
 }
 
 Tensor assign(

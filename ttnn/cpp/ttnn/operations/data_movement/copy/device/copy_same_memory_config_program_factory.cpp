@@ -82,11 +82,11 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     MeshDevice* device = output.device();
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-            split_work_to_cores(compute_with_storage_grid_size, num_units);
+            operation_attributes.sub_core_grids.has_value()
+                ? split_work_to_cores(operation_attributes.sub_core_grids.value(), num_units, false)
+                : split_work_to_cores(compute_with_storage_grid_size, num_units);
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t num_input_units = 2;
@@ -158,7 +158,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     uint32_t start_id = backwards ? num_units - 1 : 0;
 
     const uint32_t g1_numcores = core_group_1.num_cores();
-    const std::vector<CoreCoord> cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    const std::vector<CoreCoord> cores = corerange_to_cores(all_cores, num_cores, false);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);

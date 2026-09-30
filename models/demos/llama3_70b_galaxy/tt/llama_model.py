@@ -777,7 +777,7 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
 
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            x = self._select_last_token_row(x, last_token_idx_i)
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
@@ -992,6 +992,10 @@ class TtTransformer(LightweightModule):
                     # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
 
+    def prepare_decode_global_cb(self):
+        if self.use_prefetcher:
+            self.global_cb_trace_state.prepare(self.prefetcher_setup.global_circular_buffer)
+
     def validate_decode_global_cb(self):
         if self.use_prefetcher:
             global_cb = getattr(self.prefetcher_setup, "global_circular_buffer", None)
@@ -1096,6 +1100,10 @@ class TtTransformer(LightweightModule):
             None if mode == "prefill" or not self.use_prefetcher else self.prefetcher_setup.worker_sub_device_id,
             mode=mode,
         )
+        if mode == "decode" and not getattr(self.args, "is_blackhole", False):
+            # The reduction has copied its result to DRAM. This L1 workspace
+            # belongs to this forward and must not survive a trace capture.
+            self.tt_ccl.tt_lm_head_buffer_l1 = None
         # if mode is decode and Qwen model
         if mode == "decode" and self.args.is_qwen:
             ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)

@@ -40,7 +40,7 @@ constexpr const char* KERNEL_WRITER =
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::create_program_artifacts(
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input;
@@ -74,11 +74,14 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
 
     const std::uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
+        operation_attributes.sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grids.value(), total_logical_rows, true)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    constexpr std::uint32_t MAX_SUBBLOCK_SIZE_BYTES =
-        65536 * 4;  // Chosen empirically to prevent large row OOM DFB error
+    // Bound staging beside resident sub-device buffers: one input scratchpad
+    // and two output pages use at most 192 KiB with an explicit worker grid.
+    const std::uint32_t MAX_SUBBLOCK_SIZE_BYTES = operation_attributes.sub_core_grids.has_value() ? 65536 : 65536 * 4;
     std::uint32_t input_page_size = input.buffer()->page_size();
     std::uint32_t aligned_output_page_size =
         output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so

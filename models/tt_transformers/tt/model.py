@@ -348,46 +348,32 @@ class Transformer(LightweightModule):
                 f"Showing up to 10: {sample}"
             )
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
-        get_last_token = (last_token_idx // 32) * 32
-        seq_len = int(logits.shape[-2])
-        # Pass the offset as a runtime argument rather than a compile-time attribute. With literal
-        # bounds every distinct prompt offset compiles its own slice program, and since this runs
-        # after the prefill traces are captured - once per data-parallel group - that was the single
-        # largest source of buffers left live across trace replays on a DP run. Warmup cannot cover
-        # it either: it only ever sees bucket-length mock prompts, and real prompts are shorter.
-        #
-        # The tensor-args path needs the slice tile-aligned, which this one already is: it takes 32
-        # rows starting at a multiple of 32. num_devices splits the sequence into equal parts, so
-        # seq_len // 32 gives exactly the 32-row window, and the program then keys on the padded
-        # prefill bucket instead of the offset.
+    def _slice_last_token_tile(self, hidden_states, last_token_idx):
+        """Slice a runtime-selected tile without compiling a program per prompt length."""
+        tile_start = (last_token_idx // 32) * 32
+        seq_len = int(hidden_states.shape[-2])
+        starts = [0, 0, tile_start, 0]
+        ends = [int(hidden_states.shape[0]), int(hidden_states.shape[1]), tile_start + 32, int(hidden_states.shape[-1])]
         if seq_len % 32 == 0:
-            for device_tensor, values in (
-                (self._tail_slice_start, [0, 0, get_last_token, 0]),
-                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
-            ):
+            for buffer, values in ((self._tail_slice_start, starts), (self._tail_slice_end, ends)):
                 ttnn.copy_host_to_device_tensor(
                     ttnn.from_torch(
                         torch.tensor(values, dtype=torch.int32),
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     ),
-                    device_tensor,
+                    buffer,
                 )
-            logits = ttnn.slice(
-                input_tensor=logits,
+            return ttnn.slice(
+                input_tensor=hidden_states,
                 starts=self._tail_slice_start,
                 ends=self._tail_slice_end,
                 slice_dim=2,
                 num_devices=seq_len // 32,
             )
-        else:
-            logits = ttnn.slice(
-                logits,
-                (0, 0, get_last_token, 0),
-                (1, 1, get_last_token + 32, logits.shape[-1]),
-            )
-        logits = self._apply_norm_and_lm_head(logits)
-        return logits
+        return ttnn.slice(hidden_states, starts, ends)
+
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        return self._apply_norm_and_lm_head(self._slice_last_token_tile(logits, last_token_idx))
 
     def extract_last_tokens_batched_prefill(
         self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
@@ -414,13 +400,8 @@ class Transformer(LightweightModule):
 
         if all_same and active_indices:
             common_last = active_indices[0]
-            get_last = (common_last // 32) * 32
             R = common_last % 32
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
-            )
+            block = self._slice_last_token_tile(hidden_states, common_last)
         else:
             block = hidden_states
             R = None

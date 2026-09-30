@@ -26,7 +26,7 @@ _UINT64_MASK = (1 << 64) - 1
 
 
 def _acknowledge_trace_buffers_corruptible(bucket, value):
-    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    """Acknowledge bucketed logits that another live model trace may overwrite."""
     if bucket is None or value is None:
         return
     if isinstance(value, (list, tuple)):
@@ -131,6 +131,20 @@ class SamplingGenerator:
 
         self._penalties_active = False
 
+        # Allocate before the model captures any traces. Sampling flags and bucket
+        # keys can share these outputs: callers consume each result before the next
+        # sampling operation that writes it. Keep argmax's rank-3 return shape.
+        batch_size = self.tt_sampling.max_batch_size
+        output_shapes = {False: (1, 1, 1, batch_size)}
+        if self.tt_sampling._allow_force_argmax_sampling:
+            output_shapes[True] = (1, 1, batch_size)
+        self._trace_token_outputs = {
+            force_argmax: ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for force_argmax, shape in output_shapes.items()
+        }
+
         self._trace_states: dict[_TraceKey, dict] = {}
         self._active_trace_bucket = None
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
@@ -170,6 +184,9 @@ class SamplingGenerator:
     def reset_trace(self):
         """
         Drop any cached trace metadata for all sampling configurations and bucket widths.
+
+        Keep the sampler-owned token outputs: reallocating them could expose them to model
+        traces that are still live, and caller-owned traces may also reference these buffers.
         """
         for key, slot in self._trace_states.items():
             if slot["id"] is None:
@@ -298,6 +315,18 @@ class SamplingGenerator:
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
 
+    def _trace_token_output(self, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
+        """Resolve a prepared output without allocating behind another trace."""
+        if tt_out_tok is not None:
+            return tt_out_tok
+        expected = (1, 1, self.tt_sampling.max_batch_size)
+        if tuple(logits.shape)[:-1] != expected:
+            raise ValueError(
+                f"Sampling trace logits must have shape {expected + ('vocab',)}, got {tuple(logits.shape)}. "
+                "Pad logits to the configured sampling batch before preparing traces."
+            )
+        return self._trace_token_outputs[self.tt_sampling.force_argmax_sampling]
+
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
             raise RuntimeError("Trace metadata missing. Call capture_trace first.")
@@ -376,6 +405,8 @@ class SamplingGenerator:
         left inline, this pass allocates device buffers that a live trace can corrupt on replay.
 
         ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+        Token outputs are the same persistent buffers used during capture. Supplying an optional
+        output changes the program-cache key, so warmup must use the explicit-output form too.
 
         ``all_configs`` compiles every ``_TraceKey`` flag combination rather than just the one active
         now. Traces are keyed on (penalties, log_probs, force_argmax), but warmup only ever runs one of
@@ -383,6 +414,8 @@ class SamplingGenerator:
         callers pass ``skip_precompile=True``, executes its program for the first time inside a live
         trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
+        # Validate before the warmup copy can allocate device memory.
+        self._trace_token_output(logits, tt_out_tok)
         # Capture's penalty precompile uses a copy because penalties rewrite
         # logits in place. Warm that copy program before any trace is live too.
         if all_configs or self._penalties_active:
@@ -392,7 +425,7 @@ class SamplingGenerator:
             self._run_sampling(
                 logits,
                 penalties_on=self._penalties_active,
-                tt_out_tok=tt_out_tok,
+                tt_out_tok=self._trace_token_output(logits, tt_out_tok),
                 count_tokens=False,
             )
             return
@@ -416,7 +449,7 @@ class SamplingGenerator:
                 self._run_sampling(
                     logits,
                     penalties_on=penalties_on,
-                    tt_out_tok=tt_out_tok,
+                    tt_out_tok=self._trace_token_output(logits, tt_out_tok),
                     count_tokens=False,
                 )
         finally:
@@ -435,11 +468,16 @@ class SamplingGenerator:
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
+
+        Returned device tensors are borrowed reusable buffers. Consume or copy them before
+        another sampling call or precompile writes the same output. A caller-provided token
+        buffer follows the caller's lifetime contract. Capturing does not execute the trace.
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
 
+        tt_out_tok = self._trace_token_output(logits, tt_out_tok)
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
         if not skip_precompile:
@@ -458,33 +496,26 @@ class SamplingGenerator:
             if scratch is not logits:
                 ttnn.deallocate(scratch)
 
-        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
-        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
-        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
-        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
-        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-            sampled = self._run_sampling(
-                logits,
-                penalties_on=penalties_on,
-                tt_out_tok=tt_out_tok,
-            )
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-            ttnn.synchronize_device(self.mesh_device)
+        # Token and log-probability outputs already exist. Keep allocation tracking
+        # active so an accidental persistent allocation during capture is visible.
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        sampled = self._run_sampling(
+            logits,
+            penalties_on=penalties_on,
+            tt_out_tok=tt_out_tok,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+        ttnn.synchronize_device(self.mesh_device)
 
-        if tt_out_tok is not None:
-            if isinstance(sampled, tuple):
-                output = (tt_out_tok, sampled[-1])
-            else:
-                output = (tt_out_tok, sampled)
-        else:
-            output = sampled
+        output = (tt_out_tok, sampled[1])
 
         slot["id"] = trace_id
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
+        # Bucketed model logits are still managed by the model's trace lifecycle.
+        # Our early-allocated outputs must remain checked, including caller outputs.
+        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, logits)
 
         return slot["output"]
 
@@ -510,6 +541,10 @@ class SamplingGenerator:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        Traced token outputs are reused across compatible trace keys, and log-probability
+        outputs are reused by both traced and eager sampling. Consume or copy them before
+        the next operation that writes the same buffer. Host copies remain independent.
 
         ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
         the trace at capture time, so a replay always performs it.

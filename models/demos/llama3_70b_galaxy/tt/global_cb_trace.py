@@ -63,11 +63,15 @@ class GlobalCBTraceState:
         if not trace_ids:
             self._trace_groups.pop(group, None)
             return
+        self.prepare(global_cb)
+        self._trace_groups[group] = trace_ids
+
+    def prepare(self, global_cb):
+        """Reserve decode's GCB before related prefill traces are captured."""
         layout = self.validate(global_cb)
         if self._layout is None:
             self._layout = layout
         self.global_cb = global_cb
-        self._trace_groups[group] = trace_ids
 
     def restore(self, global_cb):
         self.validate(global_cb)

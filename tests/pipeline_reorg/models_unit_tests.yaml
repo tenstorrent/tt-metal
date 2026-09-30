@@ -700,7 +700,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick
     python3 -m unittest models.demos.llama3_70b_galaxy.tests.unit_tests.test_global_cb_trace_state
-    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_global_cb_trace_lifecycle.py
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_global_cb_trace_lifecycle.py models/demos/llama3_70b_galaxy/tests/unit_tests/test_prepared_trace_io.py tests/ttnn/unit_tests/operations/data_movement/test_copy_sub_core_grids.py
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
@@ -743,6 +743,21 @@
       # throws in FabricFirmwareInitializer::compile_and_configure_fabric() and no test runs.
       # Worker cores stay watched, which is where the #50886 faults have been.
       watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: unit
+
+- name: Qwen3-32B trace I/O cold start (Blackhole Galaxy)
+  cmd: |
+    export TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+    python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Expected 32 chips, got {s}'"
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_prepared_trace_io_blackhole.py tests/ttnn/unit_tests/operations/data_movement/test_copy_sub_core_grids.py
+  model: qwen3-32b-galaxy
+  model_family: Qwen
+  skus:
+    bh_galaxy:
+      timeout: 15
+      tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   budget_type: unit
@@ -1846,6 +1861,9 @@
     # device is enough, no weights are loaded, and both files finish in seconds.
     pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
       models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit_code=$?
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 \
+      pytest --timeout 300 models/common/tests/test_sampling_trace_outputs.py \
+        models/tt_transformers/tests/test_prepared_trace_io.py || exit_code=$?
     exit $exit_code
   model: tt-model-sampling
   skus:
@@ -1861,9 +1879,13 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
+    set -e
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 \
+      pytest --timeout 300 models/common/tests/test_sampling_trace_outputs.py \
+        models/tt_transformers/tests/test_prepared_trace_io.py
   model: tt-transformers-common
   model_family: TTTv2
   skus:
