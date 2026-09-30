@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -203,9 +204,11 @@ def run_pcc(ctx) -> dict:
     # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
     argv = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", *probes.PYTEST_NO_TIMEOUT]
     cmd = [*argv, test, "-sv"]
-    log = Path(tempfile.mkdtemp(prefix="pcc_run_")) / "run.log"
 
     def _once():
+        # a fresh log per attempt: run_with_low_memory_fallback may call this twice, and the first
+        # attempt's log is removed once it has been read
+        log = Path(tempfile.mkdtemp(prefix="pcc_run_")) / "run.log"
         # SUPERVISED LIKE EVERY OTHER DEVICE STEP. This was a plain subprocess.run with a wall-clock
         # kill, so a hung check sat until adaptive_backstop ran out: Qwen-Image-Edit, 2026-09-30, the
         # device went quiet 7 min in and the check was killed at 7210 s, then the retry did the same.
@@ -221,6 +224,9 @@ def run_pcc(ctx) -> dict:
             label="check_pcc",
         )
         out = log.read_text(errors="ignore") if log.exists() else ""
+        # read, so the log has served its purpose; a STALL raises above and keeps it (its path is in
+        # the error). Without this every check left a pytest -sv transcript behind in the tempdir.
+        shutil.rmtree(log.parent, ignore_errors=True)
         return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
 
     try:

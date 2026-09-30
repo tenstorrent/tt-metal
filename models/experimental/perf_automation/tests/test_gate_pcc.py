@@ -158,3 +158,21 @@ def test_the_pcc_check_is_supervised(monkeypatch, tmp_path):
     v = pcc_runner.run_pcc(_FakeCtx(tmp_path))
     assert v["status"] == "crash" and "no forward progress" in v["error"]
     assert seen.get("label") == "check_pcc" and "preexec_fn" in seen
+
+
+def test_a_finished_check_leaves_no_log_behind(monkeypatch, tmp_path):
+    """Each attempt gets its own log folder, removed once read -- a retry must not reuse a removed one."""
+    from agent import gitio, pcc_runner, probes
+
+    monkeypatch.setattr(gitio, "repo_root", lambda p: tmp_path)
+    monkeypatch.setattr(probes, "wait_for_memory_headroom_before_device_work", lambda *a, **k: None)
+    logs = []
+
+    def _fake_execute(cmd, cwd, env, timeout_s, log_path, **kw):
+        logs.append(Path(log_path))
+        Path(log_path).write_text("e2e PCC=0.999\n1 passed")
+        return 0
+
+    monkeypatch.setattr(probes, "_execute", _fake_execute)
+    v = pcc_runner.run_pcc(_FakeCtx(tmp_path))
+    assert v["status"] == "ok" and logs and not any(p.parent.exists() for p in logs)
