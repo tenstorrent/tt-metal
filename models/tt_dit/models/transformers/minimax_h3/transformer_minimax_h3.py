@@ -430,16 +430,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if local_assembly is not None:
             hidden = self._assemble_locally(static_prefix, audio_1BAC, video_1BVC, local_assembly, as_indices)
             if os.environ.get("MINIMAX_H3_LOCAL_ASSEMBLY_CHECK") == "1":
-                # Diagnostic: the arena path on the same inputs, compared on this host's device 0 shard.
-                arena = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
-                a = ttnn.to_torch(ttnn.get_device_tensors(hidden)[0]).float()
-                b = ttnn.to_torch(ttnn.get_device_tensors(arena)[0]).float()
-                diff = (a - b).abs().amax(dim=-1).reshape(-1)
-                logger.info(
-                    f"local assembly check: max|diff| {diff.max().item():.4g}, rows differing {(diff > 0).sum().item()}"
-                    f" of {diff.numel()}, first differing rows {torch.nonzero(diff > 0).reshape(-1)[:8].tolist()}"
-                )
-                ttnn.deallocate(arena)
+                self._check_local_assembly(hidden, static_prefix, audio_1BAC, video_1BVC, local_assembly, assembly_indices, as_indices)
         else:
             hidden = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
 
@@ -537,6 +528,52 @@ class MiniMaxH3Transformer3DModel(Module):
         hidden = gather(candidates, la["select_rows"])
         ttnn.deallocate(candidates)
         return hidden
+
+    def _check_local_assembly(self, hidden, static_prefix, audio_1BAC, video_1BVC, la, assembly_indices, as_indices) -> None:
+        """Diagnostic (MINIMAX_H3_LOCAL_ASSEMBLY_CHECK=1): compare the local path with the arena path on this host's
+        device 0 shard, stage by stage: raw gathers vs a host gather, projections of gathered rows vs gathered
+        projections, and the final select."""
+
+        def dev(t: ttnn.Tensor) -> torch.Tensor:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+        def gather(stream: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.reshape(stream, (stream.shape[2], stream.shape[3]))
+            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+
+        def report(name: str, a: torch.Tensor, b: torch.Tensor) -> None:
+            diff = (a.reshape(a.shape[-2], -1) - b.reshape(b.shape[-2], -1)).abs().amax(dim=-1)
+            bad = torch.nonzero(diff > 0).reshape(-1)
+            logger.info(
+                f"local assembly check [{name}]: max|diff| {diff.max().item():.4g}, rows differing {bad.numel()} of"
+                f" {diff.numel()}, first {bad[:6].tolist()}, |ref| max {b.abs().max().item():.4g}"
+            )
+
+        arena = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
+        report("hidden vs arena", dev(hidden), dev(arena))
+        ttnn.deallocate(arena)
+        for name, stream, proj in (("audio", audio_1BAC, self.audio_proj_in), ("video", video_1BVC, self.proj_in)):
+            idx = dev(la[f"{name}_rows"]).reshape(-1).long()
+            table = dev(stream).reshape(stream.shape[2], stream.shape[3])
+            raw = gather(stream, la[f"{name}_rows"])
+            report(f"{name} raw gather vs host gather", dev(raw).reshape(-1, stream.shape[3]), table[idx])
+            local_proj = dev(proj(raw)).reshape(idx.numel(), -1)
+            arena_proj = dev(proj(stream)).reshape(stream.shape[2], -1)[idx]
+            report(f"{name} proj(gathered) vs gathered(proj)", local_proj, arena_proj)
+            ttnn.deallocate(raw)
+        idx = dev(la["static_rows"]).reshape(-1).long()
+        report(
+            "static raw gather vs host gather",
+            dev(gather(static_prefix, la["static_rows"])).reshape(idx.numel(), -1),
+            dev(static_prefix).reshape(static_prefix.shape[2], -1)[idx],
+        )
+        sel = dev(la["select_rows"]).reshape(-1).long()
+        s_local = idx.numel()
+        logger.info(
+            f"local assembly check [select]: kinds per device-0 row: static {(sel < s_local).sum().item()},"
+            f" audio {((sel >= s_local) & (sel < 2 * s_local)).sum().item()}, video {(sel >= 2 * s_local).sum().item()};"
+            f" select min {sel.min().item()} max {sel.max().item()}"
+        )
 
     def _assemble_arena(
         self, static_prefix: ttnn.Tensor, audio_1BAC: ttnn.Tensor, video_1BVC: ttnn.Tensor, assembly_indices, as_indices
