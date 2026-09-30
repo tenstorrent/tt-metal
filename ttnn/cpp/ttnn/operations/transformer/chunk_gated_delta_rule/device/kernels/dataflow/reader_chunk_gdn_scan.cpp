@@ -110,9 +110,11 @@ void kernel_main() {
     // mechanism: a producer sends chunk c only once every receiver of the head has reserved chunk
     // c's slots, so at most one hand-off per receiver is in flight and VALIDs cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit (NP in the per-head form).
-    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6.
+    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6, then the kickoff wait:
+    // cycles to hold the initial-state read back so it stays out of chunk 0's input-read burst.
     const uint32_t NP = get_arg_val<uint32_t>(4);
     const uint32_t N_INIT = get_arg_val<uint32_t>(5);
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(6 + 2 * NP);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -188,9 +190,12 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
-    // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
+    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced.
+    // The fused receiver reads it after its first credits (below): the state is first needed when chunk 0 arrives,
+    // and a producer whose item is done must not wait on this read for its credit.
+#if !defined(GDN_FUSED_RECEIVER)
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+#endif
 
     // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
     // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC
@@ -391,6 +396,12 @@ void kernel_main() {
     for (; next < nmin; next++) {
         issue(next);
     }
+    // Initial state, after the first credits are out and, if asked, after a hold that keeps this read out of the
+    // kickoff burst of chunk 0's input reads (the state is needed one prep item from now).
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
     for (uint32_t c = 0; c < NC; c++) {
         {
             DeviceZoneScopedN("rx_wait_valid");
