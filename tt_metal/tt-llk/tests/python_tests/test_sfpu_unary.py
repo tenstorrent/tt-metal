@@ -61,8 +61,44 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
+# Element width of the L1 payload for each format the streamer can drive. The
+# streamer used to hardcode 4 bytes/element (fp32/int32), which is what blocked
+# every Float16_b row: a 4-byte payload against a 2048-byte bf16 tile is refused
+# by StimuliConfig.write. With the width read off the config's OWN formats a
+# Float16_b row packs 2 bytes/element, fills its tile exactly, and -- because a
+# bf16 row has only 65536 distinct inputs -- ONE 65536-pattern band is
+# EXHAUSTIVE over its whole input space.
+_LANEMK_ELEM_BYTES = {
+    DataFormat.Float32: 4,
+    DataFormat.Int32: 4,
+    DataFormat.UInt32: 4,
+    DataFormat.Float16_b: 2,
+    DataFormat.Float16: 2,
+    DataFormat.Int16: 2,
+    DataFormat.UInt16: 2,
+}
+
+
+def _lanemk_elem_bytes(fmt, which):
+    """Bytes per element of `fmt`, or a loud refusal naming the format."""
+    width = _LANEMK_ELEM_BYTES.get(fmt)
+    if width is None:
+        raise RuntimeError(
+            f"SFPU_STREAM cannot drive {which} format {getattr(fmt, 'name', fmt)}: "
+            "the raw band streamer needs a fixed-width non-block format "
+            f"(one of {sorted(f.name for f in _LANEMK_ELEM_BYTES)})"
+        )
+    return width
+
+
 def _lanemk_run_fp32_stream(configuration, spec):
-    """laneMK persistent-session fp32/int32 2^32 streamer (object-identity preserving).
+    """laneMK persistent-session raw-pattern band streamer (object-identity preserving).
+
+    Width-aware: the payload/result element width comes from this config's own
+    formats.  32-bit rows (Float32/Int32) stream the 2^32 raw space in bands as
+    before; 16-bit rows (Float16_b) stream the 2^16 raw space, where a single
+    65536-pattern band is EXHAUSTIVE -- the raw pattern is exactly the bf16 code
+    the SFPU receives, so there is nothing left over to sample.
 
     Runs the CERTIFIED corpus kernel (this exact `configuration` / ELF) over a
     [start, start+count) band of the raw-uint32 space in ONE open device session,
@@ -83,6 +119,20 @@ def _lanemk_run_fp32_stream(configuration, spec):
     st = configuration.variant_stimuli
     loc = TestConfig.TENSIX_LOCATION
     per_run = int(st.tile_count_A) * 1024  # elements the config processes per dispatch
+
+    # Payload/result element width, read off this config's own formats rather than
+    # assumed. in_bytes=2 is the 16-bit band mode: the raw pattern IS the bf16 code
+    # the SFPU receives (no truncation step), so [0, 65536) is the ENTIRE input
+    # space of the row and one band proves it exhaustively.
+    in_bytes = _lanemk_elem_bytes(st.stimuli_A_format, "input")
+    out_bytes = _lanemk_elem_bytes(st.stimuli_res_format, "result")
+    space = 1 << (8 * in_bytes)
+    if start < 0 or count < 0 or start + count > space:
+        raise RuntimeError(
+            f"band [{start},{start+count}) escapes the {8*in_bytes}-bit input space "
+            f"[0,{space}) of this row's {st.stimuli_A_format.name} operand"
+        )
+    _pack_code = {2: "H", 4: "I"}[in_bytes]
 
     configuration.prepare()
     configuration.write_runtimes_to_L1()
@@ -113,7 +163,9 @@ def _lanemk_run_fp32_stream(configuration, spec):
         _op_key, _leg = (_gold.split(",", 1) + ["?"])[:2]
         _spec = _tgm.get_spec(_op_key)
         if _spec is not None and _spec.checkable:
-            _acc = _tgm.CorrectnessAccumulator(_spec)
+            _acc = _tgm.CorrectnessAccumulator(
+                _spec, in_bytes=in_bytes, out_bytes=out_bytes
+            )
         else:
             _corr_note = (
                 _spec.note
@@ -134,13 +186,13 @@ def _lanemk_run_fp32_stream(configuration, spec):
         # Raw little-endian uint32 patterns; pad the tail of the final partial
         # dispatch with 0 so a full tile is always written (deterministic).
         pats = list(range(base, base + n)) + [0] * (per_run - n)
-        st.lanejn_raw_a = struct.pack(f"<{per_run}I", *pats)
+        st.lanejn_raw_a = struct.pack(f"<{per_run}{_pack_code}", *pats)
         st.write(loc)
         st.clear_result_buffer(loc)
         configuration.run_elf_files()
         configuration.wait_for_tensix_operations_finished(timeout=_wait_to)
         res = st.collect_raw_result_bytes(loc)
-        want = n * 4
+        want = n * out_bytes
         if len(res) < want:
             raise RuntimeError(f"chunk@{base}: got {len(res)} result bytes < {want}")
         # A chunk that is ENTIRELY the clear sentinel means the dispatch wrote no
@@ -149,7 +201,8 @@ def _lanemk_run_fp32_stream(configuration, spec):
         # was reported as a 6602-ULP "sem out-of-contract" finding for
         # hardshrink-fresh and did not reproduce. Refuse the chunk so the caller's
         # retry sees it and a persistent failure is loud. A real 65536-element
-        # chunk of distinct inputs is never uniformly 0xA5A5A5A5 (-2.87e-16).
+        # chunk of distinct inputs is never uniformly 0xA5 (0xA5A5A5A5 fp32 and
+        # 0xA5A5 bf16 are both -2.87e-16, which no op here returns everywhere).
         if res[:want] == b"\xa5" * want:
             raise RuntimeError(
                 f"chunk@{base}: result buffer is entirely the 0xA5 clear sentinel "
@@ -182,6 +235,7 @@ def _lanemk_run_fp32_stream(configuration, spec):
     line = (
         "SFPU_STREAM_RESULT,"
         f"start={start},count={patterns},runs={runs},per_run_patterns={per_run},"
+        f"in_bytes={in_bytes},out_bytes={out_bytes},input_space={space},"
         f"wall_s={dt:.3f},per_run_ms={(1000.0 * dt / runs) if runs else 0:.3f},"
         f"sum64=0x{sum64:016x},xor32=0x{xor32:08x},"
         f"output_sha256={sha.hexdigest()}"

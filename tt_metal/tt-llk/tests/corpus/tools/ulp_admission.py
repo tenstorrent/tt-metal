@@ -22,6 +22,24 @@ UNARY_DOMAIN_PARTITION_OPS = frozenset(
         "erfinv",  # |x| >= 1 undefined
         "sqrtcustom",  # x < 0 undefined
         "rsqrtcompat",  # x <= 0 undefined / pole
+        # laneMU 16-bit band mode. Mathematical domains only -- log(0) = -inf and
+        # log1p(-1) = -inf are LIMITS and therefore correct answers, so 0 / -1 are
+        # the domains' lower boundaries; only the strictly-outside half-line is
+        # out of domain. `recip` gets NO domain: 1/x is defined on every real but
+        # 0, and a (0,inf) domain would license the whole negative axis.
+        "log",
+        "log-fresh",
+        "log-fitted",
+        "log1p",
+        "log1p-fresh",
+        "log1p-fitted",
+        "sqrt",
+        "sqrt-fresh",
+        "rsqrt-fresh",
+        "rsqrt-fitted",
+        "acosh-fitted",
+        "trigonometry",
+        "trigonometry-fresh",
     }
 )
 

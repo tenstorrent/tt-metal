@@ -26,8 +26,13 @@ import stream_resume
 import ulp_admission
 
 TWO32 = 1 << 32
+# The input space each leg reported (from SFPU_STREAM_RESULT input_space=). 2^32
+# for a Float32/Int32 row, 2^16 for a Float16_b row. Collected rather than
+# assumed so "exhaustive" means "covered this row's whole space".
+_observed_space = set()
 _SHA_RE = re.compile(r"output_sha256=([0-9a-f]{64})")
 _RUNS_RE = re.compile(r"runs=(\d+)")
+_SPACE_RE = re.compile(r"input_space=(\d+)")
 
 
 def parse_corr(corr_file):
@@ -153,6 +158,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
             raise RuntimeError(f"golden cache has no correctness sidecar: {corr_file}")
         if args.golden:
             validate_corr(corr, args, leg, count)
+        sp = _SPACE_RE.search(txt)
+        if sp:
+            _observed_space.add(int(sp.group(1)))
         return m.group(1), 0.0, 0, corr
     env = dict(os.environ)
     env.update(
@@ -202,6 +210,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         raise RuntimeError(
             f"band [{start},{start+count}) leg {node} produced no SHA; see {log_file}"
         )
+    sp = _SPACE_RE.search(txt)
+    if sp:
+        _observed_space.add(int(sp.group(1)))
     corr = parse_corr(corr_file)
     if args.golden and corr is None:
         raise RuntimeError(f"golden run produced no correctness sidecar: {corr_file}")
@@ -360,16 +371,24 @@ def main():
         raise RuntimeError(f"coverage gap: {covered} != {args.total}")
     # A reduced sweep must not certify itself as exhaustive: covered==args.total
     # only proves internal consistency, not that the whole space was swept.
+    # The row's own input space, as both legs reported it. Disagreeing legs mean
+    # the two nodes are not the same row; refuse rather than pick one.
+    if len(_observed_space) > 1:
+        raise RuntimeError(
+            f"legs disagree on the input space: {sorted(_observed_space)}"
+        )
+    space = next(iter(_observed_space), TWO32)
     if not all_equal:
         verdict = "DIVERGENT"
-    elif covered == TWO32:
+    elif covered == space:
         verdict = "BIT-EXACT-ALL-INPUTS"
     else:
-        verdict = "BIT-EXACT-PARTIAL-%d-OF-2^32" % covered
+        verdict = "BIT-EXACT-PARTIAL-%d-OF-2^%d" % (covered, space.bit_length() - 1)
     summary = (
         f"OP={args.op} VERDICT={verdict} start={args.start_bit} "
         f"total={args.total} bands={n_bands} covered={covered} "
-        f"(full 2^32={covered==TWO32}) wall_s={wall:.1f} witness_bands={witness_bands}"
+        f"input_space={space} (exhaustive={covered==space}) "
+        f"wall_s={wall:.1f} witness_bands={witness_bands}"
     )
     print(summary, flush=True)
     (out / f"{args.op}-VERDICT.txt").write_text(summary + "\n")
@@ -377,7 +396,7 @@ def main():
     numeric_ok = True
     if args.golden:
         numeric_ok = write_correctness_ledger(
-            out, args.op, verdict, corr_legs, covered
+            out, args.op, verdict, corr_legs, covered, space
         )
     return 0 if all_equal and numeric_ok else 1
 
@@ -393,6 +412,15 @@ def _new_leg():
         "unchecked_reason": "",
         "max_ulp_true": -1.0,  # tanhderiv only
         "class_ulp": {},
+        # GRADED = inputs where the function is defined (inside spec.domain, not at
+        # a pole). On an exhaustive bf16 band this is the number that decides
+        # whether a row is defective; the global count also carries the licensed
+        # out-of-domain misses, which for acosh is 48640 of 65536 inputs.
+        "n_graded": 0,
+        "n_out_graded": 0,
+        "max_ulp_graded": -1.0,
+        "max_ulp_graded_input": "-",
+        "graded_witness": None,
     }
 
 
@@ -414,6 +442,26 @@ def _fold_leg(acc, corr):
         acc["max_ulp_true"] = max(acc["max_ulp_true"], mt)
     acc["n_out"] += int(corr["n_out_of_tol"])
     ulp_admission.fold_class_ulp(acc["class_ulp"], corr["class_ulp"])
+    if "n_out_graded" in corr:
+        acc["n_graded"] += int(corr["n_graded"])
+        acc["n_out_graded"] += int(corr["n_out_graded"])
+        mg = float(corr["max_ulp_graded"])
+        if mg > acc["max_ulp_graded"]:
+            acc["max_ulp_graded"] = mg
+            acc["max_ulp_graded_input"] = corr.get("max_ulp_graded_input", "-")
+        try:
+            gw = int(corr.get("graded_witness", "0x0"), 0)
+        except ValueError:
+            gw = 0
+        if int(corr["n_out_graded"]) > 0 and gw != 0:
+            cand = (
+                gw,
+                corr.get("graded_witness_class", "-"),
+                corr.get("graded_witness_dev", "?"),
+                corr.get("graded_witness_golden", "?"),
+            )
+            if acc["graded_witness"] is None or cand[0] < acc["graded_witness"][0]:
+                acc["graded_witness"] = cand
     fw = corr.get("first_witness", "0x00000000")
     try:
         fwi = int(fw, 0)
@@ -430,7 +478,7 @@ def _fold_leg(acc, corr):
             acc["first_witness"] = cand
 
 
-def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
+def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=TWO32):
     """Emit the tolerance ledger; max ULP is diagnostic, not a certified bound."""
     sem, hand = corr_legs["sem"], corr_legs["hand"]
     equiv = equiv_verdict.startswith("BIT-EXACT")
@@ -439,7 +487,20 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
         return a["checked"] and a["patterns"] == covered
 
     def leg_in(a):
-        return leg_complete(a) and a["n_out"] == 0
+        """Inside contract = no out-of-tolerance input where the function is DEFINED.
+
+        Graded rather than global: acosh's band has 48640 inputs below 1, where
+        acosh has no value at all and the golden is the NaN->+inf the packer
+        produces. Counting those as failures would call every domained op
+        defective; counting a pole or an out-of-domain point as a pass would be
+        the opposite error, so they are reported separately (n_out_licensed)
+        rather than dropped.
+        """
+        if not leg_complete(a):
+            return False
+        if a["n_graded"]:
+            return a["n_out_graded"] == 0
+        return a["n_out"] == 0
 
     ulp_ok, ulp_reason = ulp_admission.candidate_not_worse(
         sem["class_ulp"], hand["class_ulp"]
@@ -454,13 +515,25 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
     else:
         sem_in, hand_in = leg_in(sem), leg_in(hand)
         if sem_in and hand_in:
-            verdict = (
-                "TOLERANCE-BOTH-PASS"
-                if not equiv
-                else "TOLERANCE-PASS-AND-EQUAL"
-            )
+            # Both arms inside contract. If one is measurably CLOSER to the
+            # golden, say which: a semantic body that beats the production body
+            # is a deliverable, and a 2-way equivalence sweep cannot see it.
+            margin = hand["max_ulp_graded"] - sem["max_ulp_graded"]
+            if sem["max_ulp_graded"] < 0 or hand["max_ulp_graded"] < 0:
+                margin = hand["max_ulp"] - sem["max_ulp"]
+            if margin > 0:
+                verdict = "TOLERANCE-BOTH-PASS-SEM-CLOSER(by %.0f ULP)" % margin
+            elif margin < 0:
+                verdict = "TOLERANCE-BOTH-PASS-HAND-CLOSER(by %.0f ULP)" % -margin
+            elif not equiv:
+                verdict = "TOLERANCE-BOTH-PASS"
+            else:
+                verdict = "TOLERANCE-PASS-AND-EQUAL"
         elif sem_in and not hand_in:
-            verdict = "SEM-TOLERANCE-PASS(hand fails tolerance)"
+            # The production arm is out of contract where the semantic arm is
+            # inside it: a PRODUCTION defect, and evidence the semantic body is
+            # the better kernel. Named so it cannot be read as a sem problem.
+            verdict = "HAND-TOLERANCE-FAIL(production out of contract, sem inside)"
         elif hand_in and not sem_in:
             verdict = "SEM-TOLERANCE-FAIL"
         else:
@@ -473,13 +546,15 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
             "torch TRUE-MATH golden. Admission requires both tolerance gates and "
             "candidate max_bf16_ulp <= hand for every same-oracle input class; "
             "this is relative non-regression, not an absolute ULP certificate. "
-            "covered=%d full_2^32=%s\n"
-            % (covered, covered == TWO32)
+            "covered=%d input_space=%d exhaustive=%s\n"
+            % (covered, space, covered == space)
         )
         fh.write(
             "op\tequiv\tsem_max_bf16_ulp\thand_max_bf16_ulp\tsem_in_contract\t"
             "hand_in_contract\tsem_n_out\thand_n_out\tulp_nonregression\t"
-            "ulp_reason\tverdict\tfirst_witness\twitness_class\tnote\n"
+            "ulp_reason\tverdict\tfirst_witness\twitness_class\t"
+            "sem_max_ulp_graded\thand_max_ulp_graded\tsem_n_out_graded\t"
+            "hand_n_out_graded\tn_graded\tgraded_witness\tnote\n"
         )
 
         def fw(a):
@@ -516,6 +591,17 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
                     verdict,
                     witness,
                     wclass,
+                    ("%.0f" % sem["max_ulp_graded"]) if sem["checked"] else "n/a",
+                    ("%.0f" % hand["max_ulp_graded"]) if hand["checked"] else "n/a",
+                    sem["n_out_graded"] if sem["checked"] else "n/a",
+                    hand["n_out_graded"] if hand["checked"] else "n/a",
+                    sem["n_graded"] if sem["checked"] else "n/a",
+                    (
+                        "-"
+                        if (sem["graded_witness"] or hand["graded_witness"]) is None
+                        else "0x%08x"
+                        % (sem["graded_witness"] or hand["graded_witness"])[0]
+                    ),
                     note,
                 )
             )
@@ -523,7 +609,11 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
         )
     print(
         f"OP={op} 3WAY_VERDICT={verdict} sem_max_ulp={sem['max_ulp']:.0f} "
-        f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']}",
+        f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']} "
+        f"sem_out_graded={sem['n_out_graded']} hand_out_graded={hand['n_out_graded']} "
+        f"n_graded={sem['n_graded']} "
+        f"sem_max_ulp_graded={sem['max_ulp_graded']:.0f} "
+        f"hand_max_ulp_graded={hand['max_ulp_graded']:.0f}",
         flush=True,
     )
     gate_ok = leg_in(sem) and leg_in(hand) and ulp_ok

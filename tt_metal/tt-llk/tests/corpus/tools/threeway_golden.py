@@ -253,6 +253,30 @@ XIELU_ALPHA_N = 1.0
 XIELU_BETA = 0.5
 PRELU_SLOPE = 0.25
 POLYGAMMA_ORDER = 1
+# laneMU (16-bit band mode) additions, lifted from sfpu_dispatch_constants.py.
+THRESHOLD_T = 5.0          # torch.nn.functional.threshold(x, t, v)
+THRESHOLD_V = 10.0
+RELU_MAX_THRESHOLD = 5.0   # relu(min(x, thr))
+UNARY_MAX_MIN_VALUE = 0.0  # max(x, v) / min(x, v)
+FILL_CONST_VALUE = 5.0     # UnarySFPUGolden.__call__'s fill_const_value default
+CELU_ALPHA = 1.0
+ELU_ALPHA = 1.0
+# blaze / coverage vehicle constants, lifted from test_sfpu_blaze.py and
+# test_sfpu_coverage.py (the same literals their BLAZE_PARAMS / scalar_bits
+# template args carry into the kernel).
+CSILU_LIMIT = 2.0
+CSILU_ALPHA = 1.702  # the GPT-OSS SwiGLU alpha
+SITU_BETA = 8.0
+SOFTCAP_CAP = 30.0   # Gemma-style final-logit cap
+SILU_SCALE = 0.5
+ADD_RSQRT_EPS = 0.5
+SMOOTHSTEP_EDGE0 = -0.5
+SMOOTHSTEP_INV_DELTA = 1.0
+# The corpus `binopscalar` row is ScalarAdd at test_sfpu_binop_scalar's
+# _PRESUBMIT_SCALAR; the `sdpa` row is exp(x * scale) with the bf16 scale bits
+# 16256 = 0x3F80 = 1.0 its node id pins.
+BINOP_SCALAR_ADD = 2.0
+SDPA_EXP_SCALE = 1.0
 
 BF16_TINY = 2.0**-126  # FTZ threshold for Float16_b / Float32 (finfo.tiny)
 
@@ -445,9 +469,188 @@ def _polygamma(x):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# laneMU: the bodies the 16-bit band mode makes reachable. Same rule as every
+# body above -- ONE expression, lifted from the UnarySFPUGolden method of the
+# same name with its dispatch constants, vectorized in fp64. Nothing here is
+# trusted because it reads correctly: selftest_threeway_golden proves each one
+# against that scalar oracle over the WHOLE 65536-pattern bf16 space, which is
+# exactly the population the device leg covers.
+# ─────────────────────────────────────────────────────────────────────────────
+def _abs(x):
+    return np.abs(np.asarray(x, dtype=np.float64))
+
+
+def _neg(x):
+    return -np.asarray(x, dtype=np.float64)
+
+
+def _ceil(x):
+    # UnarySFPUGolden._ceil: math.ceil(x) if finite else x. np.ceil already
+    # returns inf/nan unchanged, so the guard is implicit.
+    return np.ceil(np.asarray(x, dtype=np.float64))
+
+
+def _square(x):
+    # UnarySFPUGolden._square: x*x, with handle_infinite_numbers -> the value
+    # itself for an exponent-B dst (both Float32 and Float16_b are exponent-B).
+    xf = np.asarray(x, dtype=np.float64)
+    return xf * xf
+
+
+def _tanh(x):
+    return _np(torch.tanh(_t(x)))
+
+
+def _tanhshrink(x):
+    # UnarySFPUGolden._tanhshrink: x - tanh(x).
+    xf = np.asarray(x, dtype=np.float64)
+    return xf - np.tanh(xf)
+
+
+def _exp(x):
+    return _np(torch.exp(_t(x)))
+
+
+def _exp2(x):
+    return _np(torch.exp2(_t(x)))
+
+
+def _log(x):
+    return _np(torch.log(_t(x)))
+
+
+def _log1p(x):
+    return _np(torch.log1p(_t(x)))
+
+
+def _acosh(x):
+    return _np(torch.acosh(_t(x)))
+
+
+def _reciprocal(x):
+    return _np(torch.reciprocal(_t(x)))
+
+
+def _silu(x):
+    return _np(torch.nn.functional.silu(_t(x)))
+
+
+def _celu(x):
+    return _np(torch.nn.functional.celu(_t(x), alpha=CELU_ALPHA))
+
+
+def _elu(x):
+    return _np(torch.nn.functional.elu(_t(x), alpha=ELU_ALPHA))
+
+
+def _hardsigmoid(x):
+    return _np(torch.nn.functional.hardsigmoid(_t(x)))
+
+
+def _threshold(x):
+    # UnarySFPUGolden._threshold with the dispatch t/v: x if x > t else v.
+    return _np(
+        torch.nn.functional.threshold(_t(x), THRESHOLD_T, THRESHOLD_V)
+    )
+
+
+def _relu_max(x):
+    # UnarySFPUGolden._relu_max: relu(min(x, RELU_MAX_THRESHOLD)).
+    xf = np.asarray(x, dtype=np.float64)
+    return np.maximum(0.0, np.minimum(xf, RELU_MAX_THRESHOLD))
+
+
+def _unary_max(x):
+    return np.maximum(np.asarray(x, dtype=np.float64), UNARY_MAX_MIN_VALUE)
+
+
+def _unary_min(x):
+    return np.minimum(np.asarray(x, dtype=np.float64), UNARY_MAX_MIN_VALUE)
+
+
+def _fill(x):
+    # UnarySFPUGolden._fill: the output is the fill constant for every input.
+    return np.full(np.shape(x), FILL_CONST_VALUE, dtype=np.float64)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# laneMU: the POINTWISE blaze / coverage vehicle bodies. Lifted from the
+# `_g_*` / local `golden` closures of test_sfpu_blaze.py and
+# test_sfpu_coverage.py, whose signatures are `(a, _b)` -- operand B is unused,
+# which is why these rows are one-operand rows and can ride a raw band at all.
+#
+# Only POINTWISE bodies are here. The vehicles also carry rows whose output
+# element is a function of other elements or of the element's index; those are
+# named in _NOT_POINTWISE below with the specific reason instead of being given a
+# golden that would mis-grade them.
+# ─────────────────────────────────────────────────────────────────────────────
+def _blaze_csilu_gate(x):
+    xf = np.minimum(np.asarray(x, dtype=np.float64), CSILU_LIMIT)
+    return _np(_t(xf) * torch.sigmoid(_t(CSILU_ALPHA * xf)))
+
+
+def _blaze_csilu_up(x):
+    return np.clip(np.asarray(x, dtype=np.float64), -CSILU_LIMIT, CSILU_LIMIT) + 1.0
+
+
+def _blaze_csilu_clamped(x):
+    return np.clip(np.asarray(x, dtype=np.float64), -CSILU_LIMIT, CSILU_LIMIT)
+
+
+def _blaze_situ_gate(x):
+    xf = np.asarray(x, dtype=np.float64)
+    return _np(SITU_BETA * torch.tanh(_t(xf / SITU_BETA)) * torch.sigmoid(_t(xf)))
+
+
+def _blaze_scaledtanh(x):
+    return _np(SITU_BETA * torch.tanh(_t(np.asarray(x, dtype=np.float64) / SITU_BETA)))
+
+
+def _blaze_logitsoftcap(x):
+    return _np(SOFTCAP_CAP * torch.tanh(_t(x)))
+
+
+def _blaze_siluscaled(x):
+    xf = SILU_SCALE * np.asarray(x, dtype=np.float64)
+    return _np(SILU_SCALE * (_t(xf) * torch.sigmoid(_t(xf))))
+
+
+def _blaze_addrsqrt(x):
+    return _np(torch.rsqrt(_t(np.asarray(x, dtype=np.float64) + ADD_RSQRT_EPS)))
+
+
+def _blaze_sdpaexp(x):
+    return _np(torch.exp(_t(x)))
+
+
+def _binop_scalar_add(x):
+    # ScalarBinopGolden for MathOperation.ScalarAdd: out = x + s.
+    return np.asarray(x, dtype=np.float64) + BINOP_SCALAR_ADD
+
+
+def _sdpa_exp_unclamped(x):
+    # SdpaExpUnclampedGolden: exp(x * scale), scale decoded from bf16 bits.
+    return _np(torch.exp(_t(np.asarray(x, dtype=np.float64) * SDPA_EXP_SCALE)))
+
+
+def _cov_smoothstep(x):
+    t = np.clip(
+        (np.asarray(x, dtype=np.float64) - SMOOTHSTEP_EDGE0) * SMOOTHSTEP_INV_DELTA,
+        0.0,
+        1.0,
+    )
+    return t * t * (3.0 - 2.0 * t)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Output-format pipeline for the streamer's Float32/Float32, dest_acc=No config
 # (dst_format = Float16_b). Mirrors UnarySFPUGolden.__call__ for that case.
 # ─────────────────────────────────────────────────────────────────────────────
+def _bf16_bits_to_f32(u16: np.ndarray) -> np.ndarray:
+    """Raw bf16 bit patterns (uint16) -> fp32 values (shift into the fp32 high half)."""
+    return (u16.astype(np.uint32) << np.uint32(16)).view(np.float32)
+
+
 def bf16_truncate(u32: np.ndarray) -> np.ndarray:
     """Input as the SFPU sees it: Float32 operand truncated to bf16 (& 0xFFFF0000)."""
     return (u32.astype(np.uint32) & np.uint32(0xFFFF0000)).view(np.float32)
@@ -670,6 +873,267 @@ _CORPUS_UNARY = [
     GoldenSpec("identity", _identity, note="x; EXACT (expect 0 ULP)"),
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# laneMU corpus extension (2026-09-29): the 62 Float16_b unary rows of
+# sweep_2x2_ops.tsv. Unreachable until the streamer became width-aware -- the
+# 4-bytes-per-element payload was refused against a 2048-byte bf16 tile. They are
+# the STRONGEST rows in the corpus, not the weakest: a bf16 row has only 65536
+# distinct inputs, so one 65536-pattern band is EXHAUSTIVE and these ops are
+# PROVEN over their whole input space rather than sampled at nine strata.
+#
+# The 19 `-fitted` rows are here too. They are the block a static audit called
+# the highest-suspicion class (12 of 21 *_fitted.h files predicted defective) and
+# the block no previous leg could reach at all.
+#
+# `domain` is the MATHEMATICAL domain as everywhere above, never the fit range.
+# ─────────────────────────────────────────────────────────────────────────────
+_CORPUS_BF16 = [
+    # -- exact / piecewise-linear: expect 0 ULP over the whole space.
+    GoldenSpec("abs", _abs, note="|x|; EXACT"),
+    GoldenSpec("negative", _neg, note="-x; EXACT"),
+    GoldenSpec("ceil-fresh", _ceil, note="ceil(x); EXACT (inf/nan pass through)"),
+    GoldenSpec("relu", _relu_max, note=f"relu(min(x,{RELU_MAX_THRESHOLD})); EXACT piecewise-linear"),
+    GoldenSpec("unarymaxmin-max", _unary_max, note=f"max(x,{UNARY_MAX_MIN_VALUE}); EXACT"),
+    GoldenSpec("unarymaxmin-min", _unary_min, note=f"min(x,{UNARY_MAX_MIN_VALUE}); EXACT"),
+    GoldenSpec("threshold", _threshold, note=f"x if x>{THRESHOLD_T} else {THRESHOLD_V}; EXACT"),
+    GoldenSpec("threshold-fresh", _threshold, note="threshold; fresh_cpp arm"),
+    GoldenSpec("threshold-fitted", _threshold, note="threshold; fitted_cpp arm"),
+    GoldenSpec("fill", _fill, note=f"constant {FILL_CONST_VALUE} for every input; EXACT"),
+    GoldenSpec("fill-fresh", _fill, note="fill; fresh_cpp arm"),
+    GoldenSpec("activations", _hardsigmoid, note="hardsigmoid = clamp(x/6+1/2,0,1); the corpus `activations` row IS Hardsigmoid"),
+    GoldenSpec("hardsigmoid-fresh", _hardsigmoid, note="hardsigmoid; fresh_cpp arm"),
+    GoldenSpec("square", _square, note="x*x"),
+    GoldenSpec("square-fresh", _square, note="x*x; fresh_cpp arm"),
+    # -- bounded / squashing. The softsign and erf defects were both this class:
+    #    a bounded function returning a value outside or at the wrong end of its
+    #    own range. Exhaustive coverage is worth most here.
+    GoldenSpec("tanh", _tanh, note="tanh(x); bounded on (-1,1)"),
+    GoldenSpec("tanh-fresh", _tanh, note="tanh; fresh_cpp arm"),
+    GoldenSpec("tanh-fitted", _tanh, note="tanh; fitted_cpp arm"),
+    GoldenSpec(
+        "tanhlut-fresh",
+        _tanh,
+        atol=0.16,
+        rtol=0.05,
+        note="tanh; LICENSED 3-region SFPLUT (row's own custom_atol=0.16) -- the "
+        "sister of the already-fixed sigmoid_lut_licensed",
+    ),
+    GoldenSpec("tanhshrink", _tanhshrink, note="x - tanh(x)"),
+    GoldenSpec("tanhshrink-fresh", _tanhshrink, note="x - tanh(x); fresh_cpp arm"),
+    GoldenSpec("tanhderivative-fitted", _tanh_derivative_true, note="TRUE sech^2; the fitted tanh_bw row"),
+    GoldenSpec("sigmoid-fitted", _sigmoid, note="torch.sigmoid; fitted_cpp arm"),
+    GoldenSpec(
+        "sigmoidappx",
+        _sigmoid,
+        atol=0.13,
+        rtol=0.05,
+        note="torch.sigmoid; SigmoidAppx is a LICENSED coarse LUT (CUSTOM_TOLERANCES 0.13/0.05)",
+    ),
+    GoldenSpec(
+        "sigmoidappx-tree",
+        _sigmoid,
+        atol=0.13,
+        rtol=0.05,
+        note="torch.sigmoid; the PWL-dataflow arm of the same licensed LUT contract",
+    ),
+    GoldenSpec("silu", _silu, note="x*sigmoid(x)"),
+    GoldenSpec("silu-fresh", _silu, note="x*sigmoid(x); fresh_cpp arm"),
+    GoldenSpec("gelu", _gelu_exact, note="exact (erf) gelu"),
+    GoldenSpec("gelu-fresh", _gelu_exact, note="exact (erf) gelu; fresh_cpp arm"),
+    GoldenSpec("gelu-fitted", _gelu_exact, note="exact (erf) gelu; fitted_cpp arm"),
+    GoldenSpec("gelu-licensed", _gelu_exact, note="exact (erf) gelu; licensed_cpp arm"),
+    # -- exponential family: the exp.h 255.0-clamp and the expm1 sign mechanisms.
+    GoldenSpec("exp", _exp, note="torch.exp"),
+    GoldenSpec("exp-fitted", _exp, note="torch.exp; fitted_cpp arm"),
+    GoldenSpec("exp2", _exp2, note="torch.exp2"),
+    GoldenSpec("exp2-fresh", _exp2, note="torch.exp2; fresh_cpp arm"),
+    GoldenSpec("expm1-fitted", _expm1, note="torch.expm1; fitted_cpp arm"),
+    GoldenSpec("celu", _celu, note=f"celu alpha={CELU_ALPHA}"),
+    GoldenSpec("celu-fitted", _celu, note="celu; fitted_cpp arm"),
+    GoldenSpec("elu", _elu, note=f"elu alpha={ELU_ALPHA}"),
+    GoldenSpec("elu-fresh", _elu, note="elu; fresh_cpp arm"),
+    GoldenSpec("elu-fitted", _elu, note="elu; fitted_cpp arm"),
+    GoldenSpec("selu-fitted", _selu, note="selu with the default scale/alpha; fitted_cpp arm"),
+    GoldenSpec("mish-fitted", _mish, note="x*tanh(softplus(x)); fitted_cpp arm"),
+    # -- series / fitted polynomial: the i0/i1 unreduced-Maclaurin and the
+    #    digamma/lgamma negative-branch mechanisms.
+    GoldenSpec("i0-fitted", _i0, note="torch.special.i0; fitted_cpp arm"),
+    GoldenSpec("i1-fitted", _i1, note="torch.special.i1; fitted_cpp arm"),
+    GoldenSpec(
+        "digamma-fitted",
+        _digamma,
+        note="torch.digamma; fitted_cpp arm; poles at the non-positive integers",
+    ),
+    GoldenSpec(
+        "polygamma-fitted",
+        _polygamma,
+        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x) trigamma; fitted_cpp arm; same pole set",
+    ),
+    # -- DOMAINED. The mathematical domain, never the fit range. log(0) = -inf is
+    #    a LIMIT and therefore the correct answer, so 0 is the domain's lower
+    #    boundary and not a licensed pole; only x < 0 is out of domain.
+    GoldenSpec("log", _log, domain=(0.0, float("inf")), note="torch.log; DOMAIN [0,inf) -- log(0)=-inf is correct, x<0 undefined"),
+    GoldenSpec("log-fresh", _log, domain=(0.0, float("inf")), note="torch.log; fresh_cpp arm"),
+    GoldenSpec("log-fitted", _log, domain=(0.0, float("inf")), note="torch.log; fitted_cpp arm"),
+    GoldenSpec("log1p", _log1p, domain=(-1.0, float("inf")), note="torch.log1p; DOMAIN [-1,inf) -- log1p(-1)=-inf is correct"),
+    GoldenSpec("log1p-fresh", _log1p, domain=(-1.0, float("inf")), note="torch.log1p; fresh_cpp arm"),
+    GoldenSpec("log1p-fitted", _log1p, domain=(-1.0, float("inf")), note="torch.log1p; fitted_cpp arm"),
+    GoldenSpec("sqrt", _sqrt, domain=(0.0, float("inf")), note="torch.sqrt; DOMAIN [0,inf)"),
+    GoldenSpec("sqrt-fresh", _sqrt, domain=(0.0, float("inf")), note="torch.sqrt; fresh_cpp arm"),
+    GoldenSpec("rsqrt-fresh", _rsqrt, domain=(0.0, float("inf")), note="torch.rsqrt; fresh_cpp arm; 0 is the pole"),
+    GoldenSpec("rsqrt-fitted", _rsqrt, domain=(0.0, float("inf")), note="torch.rsqrt; fitted_cpp arm; 0 is the pole"),
+    GoldenSpec(
+        "acosh-fitted",
+        _acosh,
+        domain=(1.0, float("inf")),
+        note="torch.acosh; DOMAIN [1,inf) -- acosh(1)=0 exactly, x<1 undefined",
+    ),
+    GoldenSpec(
+        "trigonometry",
+        _acosh,
+        domain=(1.0, float("inf")),
+        note="the corpus `trigonometry` row's mathop IS Acosh (trigonometry.h's "
+        "representative); DOMAIN [1,inf)",
+    ),
+    GoldenSpec(
+        "trigonometry-fresh",
+        _acosh,
+        domain=(1.0, float("inf")),
+        note="Acosh; fresh_cpp arm; DOMAIN [1,inf)",
+    ),
+    # -- reciprocal: defined on every real but 0, so NO domain -- the pole is
+    #    excluded pointwise by RECIPROCAL_POLE_OPS, the same way the gamma poles
+    #    are. A domain of (0,inf) here would license the entire negative axis,
+    #    where 1/x is an ordinary defined value.
+    GoldenSpec("recip", _reciprocal, note="1/x; pole at 0, no domain restriction"),
+    GoldenSpec("recip-ilv2", _reciprocal, note="1/x; the ilv2-scheduled arm; pole at 0"),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# laneMU: the blaze and coverage vehicles' POINTWISE rows. Their test files had
+# no SFPU_STREAM hook at all -- the hook now lives in `_run_blaze` /
+# `_run_coverage`, the single funnel every one of their correctness rows passes
+# through, so the whole family gained it in one place.
+#
+# `-t8` / `-t32` are the same op at tile_count 8 / 32. Identical math, so
+# identical golden; they are separate corpus rows and get separate specs because
+# the board is keyed on the row.
+#
+# Tolerances are each row's OWN (the custom_atol/custom_rtol its test passes),
+# not a blanket default: `clampedsilu-clamped` is an exact clamp and gets 0/0,
+# while `logitsoftcap` legitimately carries 0.25 absolute.
+# ─────────────────────────────────────────────────────────────────────────────
+def _blaze_rows(base, math, atol=0.05, rtol=0.05, note=""):
+    """One spec per corpus row of a blaze op: the 1-tile row and its t8/t32 twins."""
+    return [
+        GoldenSpec(f"blaze-{base}{suffix}", math, atol=atol, rtol=rtol,
+                   note=note + (f"; tile_count={tc}" if tc != 1 else ""))
+        for suffix, tc in (("", 1), ("-t8", 8), ("-t32", 32))
+    ]
+
+
+_CORPUS_BLAZE = (
+    _blaze_rows("clampedsilu-gate", _blaze_csilu_gate, 0.02, 0.05,
+                f"clamp(x,max={CSILU_LIMIT})*sigmoid({CSILU_ALPHA}*that) -- GPT-OSS SwiGLU gate")
+    + _blaze_rows("clampedsilu-up", _blaze_csilu_up, 0.05, 0.05,
+                  f"clamp(x,+-{CSILU_LIMIT})+1")
+    + _blaze_rows("clampedsilu-clamped", _blaze_csilu_clamped, 0.0, 0.0,
+                  f"clamp(x,+-{CSILU_LIMIT}); EXACT (the row's own gate is atol=rtol=0)")
+    + _blaze_rows("situ-gate", _blaze_situ_gate, 0.03, 0.05,
+                  f"{SITU_BETA}*tanh(x/{SITU_BETA})*sigmoid(x)")
+    + _blaze_rows("scaledtanh", _blaze_scaledtanh, 0.03, 0.05,
+                  f"{SITU_BETA}*tanh(x/{SITU_BETA})")
+    + _blaze_rows("logitsoftcap", _blaze_logitsoftcap, 0.25, 0.05,
+                  f"{SOFTCAP_CAP}*tanh(x); Gemma-style logit cap, bounded on (-{SOFTCAP_CAP},{SOFTCAP_CAP})")
+    + _blaze_rows("siluscaled", _blaze_siluscaled, 0.02, 0.05,
+                  f"s*(sx*sigmoid(sx)) with s={SILU_SCALE}")
+    + _blaze_rows("addrsqrt", _blaze_addrsqrt, 0.05, 0.05,
+                  f"rsqrt(x+{ADD_RSQRT_EPS}); RMSNorm idiom")
+    + _blaze_rows("sdpaexp", _blaze_sdpaexp, 0.05, 0.05, "exp(x); the SDPA exp row")
+)
+
+# Two further single-row vehicles whose test file had no hook and whose row IS
+# pointwise. Their siblings in the same families are NOT (see _NOT_POINTWISE):
+# sdpametal / sdpafw transform only SdpaSfpuGolden.TRANSFORMED_COLS and pass the
+# rest of the tile through, which is a column-index dependence.
+_CORPUS_VEHICLES = [
+    GoldenSpec(
+        "sdpa",
+        _sdpa_exp_unclamped,
+        note=f"exp(x*{SDPA_EXP_SCALE}); the upper-unclamped 21f exp row, whole tile",
+    ),
+    GoldenSpec(
+        "binopscalar",
+        _binop_scalar_add,
+        note=f"x + {BINOP_SCALAR_ADD} (MathOperation.ScalarAdd at the row's scalar)",
+    ),
+]
+
+_CORPUS_COVERAGE = [
+    GoldenSpec("addrsqrt-fresh", _blaze_addrsqrt, note=f"rsqrt(x+{ADD_RSQRT_EPS}); coverage vehicle"),
+    GoldenSpec("smoothstep-fresh", _cov_smoothstep,
+               note=f"t^2(3-2t) on t=clamp((x-{SMOOTHSTEP_EDGE0})*{SMOOTHSTEP_INV_DELTA},0,1)"),
+    GoldenSpec("copydest-fresh", _identity, atol=0.0, rtol=0.0,
+               note="identity move Dst tile 0 -> tile 1; EXACT (the row's own gate is atol=rtol=0)"),
+]
+
+# Rows whose test file now HAS the hook but which still carry no single-operand
+# POINTWISE float contract. Listed by their exact corpus row name and with the
+# mechanism, not as a category: "the file has no hook" has stopped being the
+# reason, so the real reason has to be stated per row.
+#
+# Two distinct reasons, kept apart because they are not the same answer:
+#   not-pointwise  out[i] is not a function of in[i] alone (neighbour element,
+#                  row reduction, or the element's index), so no value-indexed
+#                  band can express it.
+#   exact-int      out[i] IS a function of in[i], but the contract is
+#                  exact-integer. A bf16 ULP distance is the wrong metric for it
+#                  (the same reason absint32/bitwisenot are already refused
+#                  above); it wants an exact-int accumulator, not a float one.
+_NOT_POINTWISE = {}
+for _suffix in ("", "-t8", "-t32"):
+    _NOT_POINTWISE["blaze-zeropad" + _suffix] = (
+        "not-pointwise: the output depends on the element's ROW INDEX, not its "
+        "value -- rows [24,32) are scrubbed to +0.0 -- so out[i] is not a function "
+        "of in[i] and a value-indexed band cannot express it"
+    )
+    _NOT_POINTWISE["blaze-rope" + _suffix] = (
+        "not-pointwise: intra-face pair rotation. out[2k] and out[2k+1] are a "
+        "function of BOTH in[2k] and in[2k+1] and of the cos/sin tile in buffer_B "
+        "-- two input elements and a second operand per output element"
+    )
+for _pool in ("max", "sum"):
+    for _suffix in ("", "-t8", "-t32", "-cl", "-cl-t32", "-walk", "-walk-t32"):
+        _NOT_POINTWISE[f"blaze-sdpareducerow-{_pool}{_suffix}"] = (
+            f"not-pointwise: row reduction ({_pool.upper()} over 32 lanes) -- one "
+            "output element is a function of 32 input elements"
+        )
+_NOT_POINTWISE.update(
+    {
+        "rotate90-fresh": "not-pointwise: out[i] = -in[i^1] (even i) / in[i^1] (odd i) "
+        "-- the output reads its NEIGHBOUR element and flips sign on index parity",
+        "tiledprod-fresh": "not-pointwise: running elementwise product down 9 vector "
+        "rows -- out[r] is a function of in[0..r]",
+        "zeropad-fresh": "not-pointwise: rows [24,32) are scrubbed to +0.0 by INDEX, "
+        "so out[i] is not a function of in[i]",
+        "customadd-fresh": "not-pointwise: genuinely two-operand (a+b with b a second "
+        "full tile whose value varies per element index), so fixing b does not reduce "
+        "it to one operand",
+        "intsum-fresh": "not-pointwise: strided in-tile int32 row reductions -- out[i] "
+        "is a sum of 8 (COL) or 4 (ROW) input rows",
+        "blaze-sparsekfilter": "exact-int: pointwise, but the contract is an exact "
+        "int32 bank-address filter (y = bank-hit ? (slot+1)<<shift : 0) graded at "
+        "atol=rtol=0. A bf16 ULP distance is not its metric",
+        "blaze-sparsekfilter-t8": "exact-int: see blaze-sparsekfilter",
+        "blaze-sparsekfilter-t32": "exact-int: see blaze-sparsekfilter",
+        "sparsekfilter-fresh": "exact-int: same bank-address filter on the coverage "
+        "vehicle, graded at atol=rtol=0; exact-integer contract, not a float ULP one",
+        "unarybitwise-fresh": "exact-int: y = x XOR 0x5A5A0FF0 on the int32 view. "
+        "Exact by construction and pointwise, but a bit-pattern identity is not a "
+        "float ULP surface (the absint32/bitwisenot precedent)",
+    }
+)
+
 # The kernels' CLAIMED accuracy ranges, lifted from helpers/sfpu_domains.py
 # _OP_DOMAIN_REGISTRY (the stimulus interval the harness itself grades each op
 # over) and the kernel headers. REPORTING ONLY -- nothing in the ULP path reads
@@ -740,6 +1204,107 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
     "erf-fresh": (-3.0, 3.0),
     "erfc-fresh": (-3.0, 3.0),
     "erfinv-fresh": (-0.99, 0.99),
+    # laneMU additions. Read out of the LIVE helpers.sfpu_domains
+    # _OP_DOMAIN_REGISTRY (and for_op_pipeline for the four format-dependent ops
+    # Exp/Exp2/Reciprocal/Square), not inferred from kernel headers -- this table
+    # decides whether an out-of-contract stratum is written up as a defect or as
+    # a fit degrading where it never promised anything, so it has to be the
+    # interval the harness itself grades over.
+    "abs": (-10.0, 10.0),                    # Abs
+    "negative": (-10.0, 10.0),               # Neg
+    "ceil-fresh": (-10.0, 10.0),             # Ceil
+    "relu": (-5.0, 5.0),                     # ReluMax
+    "unarymaxmin-max": (-5.0, 5.0),          # UnaryMax
+    "unarymaxmin-min": (-5.0, 5.0),          # UnaryMin
+    "threshold": (-5.0, 5.0),                # Threshold
+    "threshold-fresh": (-5.0, 5.0),
+    "threshold-fitted": (-5.0, 5.0),
+    "fill": (0.0, 1.0),                      # Fill
+    "fill-fresh": (0.0, 1.0),
+    "activations": (-4.0, 4.0),              # Hardsigmoid
+    "hardsigmoid-fresh": (-4.0, 4.0),
+    "square": (-1000.0, 1000.0),             # Square (format-dependent -> same both)
+    "square-fresh": (-1000.0, 1000.0),
+    "tanh": (-5.0, 5.0),                     # Tanh
+    "tanh-fresh": (-5.0, 5.0),
+    "tanh-fitted": (-5.0, 5.0),
+    "tanhlut-fresh": (-5.0, 5.0),            # Tanh (the LUT row's own mathop)
+    "tanhshrink": (-5.0, 5.0),               # Tanhshrink
+    "tanhshrink-fresh": (-5.0, 5.0),
+    "tanhderivative-fitted": (-5.0, 5.0),    # TanhDerivative
+    "sigmoid-fitted": (-8.0, 8.0),           # Sigmoid
+    "sigmoidappx": (-5.0, 5.0),              # SigmoidAppx
+    "sigmoidappx-tree": (-5.0, 5.0),
+    "silu": (-5.0, 5.0),                     # Silu
+    "silu-fresh": (-5.0, 5.0),
+    "gelu": (-5.0, 5.0),                     # Gelu
+    "gelu-fresh": (-5.0, 5.0),
+    "gelu-fitted": (-5.0, 5.0),
+    "gelu-licensed": (-5.0, 5.0),
+    "exp": (-100.0, 16.0),                   # Exp (for_op_pipeline)
+    "exp-fitted": (-100.0, 16.0),
+    "exp2": (-100.0, 23.0),                  # Exp2 (for_op_pipeline)
+    "exp2-fresh": (-100.0, 23.0),
+    "expm1-fitted": (-5.0, 5.0),             # Expm1
+    "celu": (-5.0, 5.0),                     # Celu
+    "celu-fitted": (-5.0, 5.0),
+    "elu": (-5.0, 5.0),                      # Elu
+    "elu-fresh": (-5.0, 5.0),
+    "elu-fitted": (-5.0, 5.0),
+    "selu-fitted": (-5.0, 5.0),              # Selu
+    "mish-fitted": (-5.0, 5.0),              # Mish
+    "i0-fitted": (-3.75, 3.75),              # I0
+    "i1-fitted": (-3.75, 3.75),              # I1
+    "digamma-fitted": (0.1, 50.0),           # Digamma
+    "polygamma-fitted": (0.5, 10.0),         # Polygamma
+    "log": (1e-4, 1000.0),                   # Log
+    "log-fresh": (1e-4, 1000.0),
+    "log-fitted": (1e-4, 1000.0),
+    "log1p": (-0.99, 10.0),                  # Log1p
+    "log1p-fresh": (-0.99, 10.0),
+    "log1p-fitted": (-0.99, 10.0),
+    "sqrt": (0.0, 100.0),                    # Sqrt
+    "sqrt-fresh": (0.0, 100.0),
+    "rsqrt-fresh": (1e-4, 100.0),            # Rsqrt
+    "rsqrt-fitted": (1e-4, 100.0),
+    "acosh-fitted": (1.0, 10.0),             # Acosh
+    "trigonometry": (1.0, 10.0),
+    "trigonometry-fresh": (1.0, 10.0),
+    "recip": (0.0, 1.0),                     # Reciprocal (for_op_pipeline)
+    "recip-ilv2": (0.0, 1.0),
+    "sdpa": (-20.0, 0.0),          # the row's own swept input_range
+    "binopscalar": (-1.0, 1.0),    # Elwadd's _OP_DOMAIN_REGISTRY interval
+    # blaze / coverage rows: the interval each row's own StimuliSpec sweeps.
+    "blaze-clampedsilu-gate": (-4.0, 4.0),
+    "blaze-clampedsilu-gate-t8": (-4.0, 4.0),
+    "blaze-clampedsilu-gate-t32": (-4.0, 4.0),
+    "blaze-clampedsilu-up": (-4.0, 4.0),
+    "blaze-clampedsilu-up-t8": (-4.0, 4.0),
+    "blaze-clampedsilu-up-t32": (-4.0, 4.0),
+    "blaze-clampedsilu-clamped": (-4.0, 4.0),
+    "blaze-clampedsilu-clamped-t8": (-4.0, 4.0),
+    "blaze-clampedsilu-clamped-t32": (-4.0, 4.0),
+    "blaze-situ-gate": (-4.0, 4.0),
+    "blaze-situ-gate-t8": (-4.0, 4.0),
+    "blaze-situ-gate-t32": (-4.0, 4.0),
+    "blaze-scaledtanh": (-4.0, 4.0),
+    "blaze-scaledtanh-t8": (-4.0, 4.0),
+    "blaze-scaledtanh-t32": (-4.0, 4.0),
+    "blaze-logitsoftcap": (-4.0, 4.0),
+    "blaze-logitsoftcap-t8": (-4.0, 4.0),
+    "blaze-logitsoftcap-t32": (-4.0, 4.0),
+    "blaze-siluscaled": (-4.0, 4.0),
+    "blaze-siluscaled-t8": (-4.0, 4.0),
+    "blaze-siluscaled-t32": (-4.0, 4.0),
+    "blaze-addrsqrt": (0.05, 6.0),
+    "blaze-addrsqrt-t8": (0.05, 6.0),
+    "blaze-addrsqrt-t32": (0.05, 6.0),
+    "blaze-sdpaexp": (-8.0, 0.0),
+    "blaze-sdpaexp-t8": (-8.0, 0.0),
+    "blaze-sdpaexp-t32": (-8.0, 0.0),
+    "addrsqrt-fresh": (0.05, 6.0),
+    "smoothstep-fresh": (-1.0, 1.0),
+    "copydest-fresh": (-1.0, 1.0),
 }
 
 
@@ -752,7 +1317,16 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
 # Excluded POINTWISE, deliberately. Excluding the negative half-line instead would
 # license digamma(-1.5) = +0.703157, an ordinary defined value where the kernel
 # returns -10.2929 -- a sign flip, and a real defect.
-GAMMA_POLE_OPS = frozenset({"digamma", "digamma-fresh", "lgamma", "polygamma"})
+GAMMA_POLE_OPS = frozenset(
+    {
+        "digamma",
+        "digamma-fresh",
+        "digamma-fitted",
+        "lgamma",
+        "polygamma",
+        "polygamma-fitted",
+    }
+)
 
 
 def at_gamma_pole(op: str, x: float) -> bool:
@@ -774,7 +1348,9 @@ def at_gamma_pole(op: str, x: float) -> bool:
 # +inf is then the correct fp32 answer -- a kernel returning a finite value or a
 # -inf there is wrong, which is exactly the rpow/expm1cw signature. Only a genuine
 # singular input is undefined, and those are enumerable.
-RECIPROCAL_POLE_OPS = frozenset({"rsqrtcompat", "rdiv"})
+RECIPROCAL_POLE_OPS = frozenset(
+    {"rsqrtcompat", "rdiv", "recip", "recip-ilv2", "rsqrt-fresh", "rsqrt-fitted"}
+)
 
 
 def at_pole(op: str, x: float) -> bool:
@@ -786,6 +1362,18 @@ def at_pole(op: str, x: float) -> bool:
     except (TypeError, ValueError):
         return False
     return op in RECIPROCAL_POLE_OPS and xf == 0.0
+
+
+def _pole_mask(op: str, values: np.ndarray) -> np.ndarray:
+    """Vectorized at_pole over an array of fp32 inputs."""
+    x = np.asarray(values, dtype=np.float64)
+    finite = np.isfinite(x)
+    if op in GAMMA_POLE_OPS:
+        gamma = finite & (x <= 0.0) & (x == np.floor(x))
+    else:
+        gamma = np.zeros(x.shape, dtype=bool)
+    recip = (x == 0.0) if op in RECIPROCAL_POLE_OPS else np.zeros(x.shape, dtype=bool)
+    return gamma | recip
 
 
 def claim_status(op: str, x: float) -> str:
@@ -820,11 +1408,27 @@ _UNSUPPORTED = {
 }
 
 REGISTRY: dict[str, GoldenSpec] = {}
-for _s in _DIVERGENT + _BITEXACT + _CORPUS_UNARY:
+for _s in (
+    _DIVERGENT + _BITEXACT + _CORPUS_UNARY + _CORPUS_BF16 + _CORPUS_BLAZE
+    + _CORPUS_COVERAGE + _CORPUS_VEHICLES
+):
     REGISTRY[_s.op] = _s
 for _op, _why in _UNSUPPORTED.items():
     REGISTRY[_op] = GoldenSpec(
         _op, None, kind="unsupported", note=_why, checkable=False
+    )
+# A row with no pointwise contract is registered as such, with its mechanism, so
+# `--golden <row>` answers "this op has no single-operand pointwise contract
+# because <reason>" instead of "no golden registered", which reads as an omission.
+for _op, _why in _NOT_POINTWISE.items():
+    if _op in REGISTRY:
+        raise RuntimeError(f"{_op} is both graded and refused")
+    REGISTRY[_op] = GoldenSpec(
+        _op,
+        None,
+        kind=("exact-int" if _why.startswith("exact-int") else "not-pointwise"),
+        note=_why,
+        checkable=False,
     )
 if {op for op, spec in REGISTRY.items() if spec.domain is not None} != set(
     UNARY_DOMAIN_PARTITION_OPS
@@ -842,6 +1446,17 @@ def get_spec(op: str) -> Optional[GoldenSpec]:
 @dataclass
 class CorrectnessAccumulator:
     spec: GoldenSpec
+    # Element width of the raw band the device consumed / produced. 4 = the
+    # original fp32/int32 leg, where the raw u32 is bf16-TRUNCATED on the way
+    # into a 16-bit DEST. 2 = the 16-bit band mode, where the raw u16 IS the
+    # bf16 code the SFPU receives -- so a 65536-pattern band is the row's whole
+    # input space, not one value of it. The golden output pipeline is the same
+    # either way: UnarySFPUGolden.__call__ reaches bf16-round -> NaN->+inf ->
+    # _apply_ftz(2^-126) for (Float16_b, Float16_b, dest_acc=No) exactly as it
+    # does for (Float32, Float32, dest_acc=No), because dst_format is Float16_b
+    # in both and _FTZ_THRESHOLD is keyed on the OUTPUT format.
+    in_bytes: int = 4
+    out_bytes: int = 4
     patterns: int = 0
     max_ulp: float = 0.0
     max_ulp_input_u32: int = -1
@@ -850,6 +1465,20 @@ class CorrectnessAccumulator:
     first_witness_class: str = ""
     first_witness_dev: float = 0.0
     first_witness_golden: float = 0.0
+    # The same three numbers restricted to GRADED inputs: inside spec.domain and
+    # not at a pole. On a 1-value stratum this is the same as the global count; on
+    # an exhaustive 65536-pattern band it is the difference between "15982 out of
+    # tolerance" and "15982 out of tolerance, every one of them at an input where
+    # acosh is undefined". A licensed miss must not read as a defect, and a real
+    # defect must not hide behind thousands of licensed ones.
+    n_out_graded: int = 0
+    max_ulp_graded: float = 0.0
+    max_ulp_graded_input: int = -1
+    graded_witness_u32: int = -1
+    graded_witness_class: str = ""
+    graded_witness_dev: float = 0.0
+    graded_witness_golden: float = 0.0
+    n_graded: int = 0
     # tanhderiv extra: distance to the TRUE math (sech^2), reported alongside the LUT contract.
     max_ulp_true: float = 0.0
     class_ulp: dict[str, tuple[int, float]] = field(default_factory=dict)
@@ -872,20 +1501,58 @@ class CorrectnessAccumulator:
         if valid_count <= 0:
             return
         u32 = np.arange(chunk_start, chunk_start + valid_count, dtype=np.uint32)
-        xin = bf16_truncate(u32)  # what the SFPU actually sees
+        if self.in_bytes == 2:
+            # The raw pattern IS the bf16 code; no truncation to model.
+            xin = _bf16_bits_to_f32(u32 & np.uint32(0xFFFF))
+        else:
+            xin = bf16_truncate(u32)  # what the SFPU actually sees
         hp = self.spec.math(xin)  # fp64 true math
         golden = format_golden_f32_noacc(hp)  # fp32-container reference
-        dev = np.frombuffer(dev_bytes[: valid_count * 4], dtype="<f4").astype(
-            np.float32
-        )
+        if self.out_bytes == 2:
+            dev = _bf16_bits_to_f32(
+                np.frombuffer(dev_bytes[: valid_count * 2], dtype="<u2").astype(
+                    np.uint32
+                )
+            ).astype(np.float32)
+        else:
+            dev = np.frombuffer(dev_bytes[: valid_count * 4], dtype="<f4").astype(
+                np.float32
+            )
 
         ulp, within = numeric_comparison(golden, dev, self.spec.atol, self.spec.rtol)
-        _fold_class_ulps(
-            self.class_ulp,
-            ulp,
-            unary_input_classes(xin, self.spec.domain),
-        )
+        classes = unary_input_classes(xin, self.spec.domain)
+        _fold_class_ulps(self.class_ulp, ulp, classes)
         out = ~within
+
+        # GRADED mask: where the function is defined. Out-of-domain normals are
+        # excluded by the class partition; poles are excluded POINTWISE (the
+        # non-positive integers for the gamma family, 0 for the reciprocals) --
+        # never by excluding a half-line, which would license digamma(-1.5).
+        # A non-finite fp64 golden is NOT a pole and is NOT excluded: I1(3.3e38)
+        # is +inf because it overflowed fp64, so +inf is the correct answer there
+        # and a finite device result is a defect.
+        graded = np.ones(xin.shape, dtype=bool)
+        if self.spec.domain is not None:
+            graded &= ~classes["out_of_domain_finite_normal"]
+        if self.spec.op in GAMMA_POLE_OPS or self.spec.op in RECIPROCAL_POLE_OPS:
+            graded &= ~_pole_mask(self.spec.op, xin)
+        self.n_graded += int(np.count_nonzero(graded))
+        g_ulp = np.where(graded, ulp, -1.0)
+        if g_ulp.size:
+            gi = int(np.argmax(np.where(np.isfinite(g_ulp), g_ulp, -1.0)))
+            if graded[gi] and ulp[gi] > self.max_ulp_graded:
+                self.max_ulp_graded = float(ulp[gi])
+                self.max_ulp_graded_input = int(u32[gi])
+        g_out = out & graded
+        n_g = int(np.count_nonzero(g_out))
+        if n_g:
+            self.n_out_graded += n_g
+            if self.graded_witness_u32 < 0:
+                k = int(np.argmax(g_out))
+                self.graded_witness_u32 = int(u32[k])
+                self.graded_witness_class = self._classify(int(u32[k]), float(xin[k]))
+                self.graded_witness_dev = float(dev[k])
+                self.graded_witness_golden = float(golden[k])
 
         # running max ULP + its input
         if ulp.size:
@@ -927,10 +1594,18 @@ class CorrectnessAccumulator:
         return (
             f"SFPU_CORRECTNESS,leg={leg},op={self.spec.op},patterns={self.patterns},"
             f"max_bf16_ulp={self.max_ulp:.0f},max_ulp_input=0x{max(self.max_ulp_input_u32,0):08x},"
+            f"in_bytes={self.in_bytes},out_bytes={self.out_bytes},"
             f"n_out_of_tol={self.n_out_of_tol},"
             f"within_contract={self.n_out_of_tol == 0},"
             f"first_witness=0x{max(w,0):08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
+            f"n_graded={self.n_graded},n_out_graded={self.n_out_graded},"
+            f"max_ulp_graded={self.max_ulp_graded:.0f},"
+            f"max_ulp_graded_input=0x{max(self.max_ulp_graded_input,0):08x},"
+            f"graded_witness=0x{max(self.graded_witness_u32,0):08x},"
+            f"graded_witness_class={self.graded_witness_class or '-'},"
+            f"graded_witness_dev={self.graded_witness_dev!r},"
+            f"graded_witness_golden={self.graded_witness_golden!r},"
             f"atol={self.spec.atol},rtol={self.spec.rtol},"
             "zero_sign_policy=tolerance_equal_not_bitexact,"
             f"class_ulp={format_class_ulp(self.class_ulp)}{extra}"
@@ -948,11 +1623,6 @@ class CorrectnessAccumulator:
 BINARY_POW_ATOL = 0.05
 BINARY_POW_RTOL = 0.05
 _ELEMS_PER_TILE = 1024
-
-
-def _bf16_bits_to_f32(u16: np.ndarray) -> np.ndarray:
-    """Raw bf16 bit patterns (uint16) -> fp32 values (shift into the fp32 high half)."""
-    return (u16.astype(np.uint32) << np.uint32(16)).view(np.float32)
 
 
 def binary_pow_golden_bf16(base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
