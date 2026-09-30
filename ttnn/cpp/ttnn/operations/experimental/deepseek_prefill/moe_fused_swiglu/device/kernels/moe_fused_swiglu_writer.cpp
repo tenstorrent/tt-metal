@@ -123,7 +123,7 @@ constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
 
-// A complete writer-owned round.  Payload, linked flag, flush and the rotating-sender local reset
+// A complete writer-owned round.  Payload, flag, flush and the rotating-sender local reset
 // all stay on this RISC/NoC, which is the ownership boundary the earlier byte-wise split violated.
 inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
     Noc noc;
@@ -147,10 +147,11 @@ inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
             size,
             NOC_MULTICAST_WRITE_VC,
             /*mcast=*/true,
-            /*linked=*/true,
+            /*linked=*/false,
             ndest,
             /*multicast_path_reserve=*/true,
             /*posted=*/true);
+        noc.async_writes_flushed<NocOptions::POSTED>();
     } else {
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(l1),
@@ -159,8 +160,11 @@ inline void h_slot_send_posted_noc1(uint32_t slot, uint32_t l1, uint32_t size) {
             ndest,
             {},
             {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
-            /*linked=*/true);
+            /*linked=*/false);
+        noc.async_writes_flushed();
     }
+    // No-linked-mcast experiment: payload unlinked; the flag relies on same-NoC, same-VC issue
+    // order after the flush above.
     hf.set(VALID);
     hf.set_multicast(noc, rb.sx, rb.sy, rb.ex, rb.ey, ndest, /*linked=*/false);
     noc.async_writes_flushed();

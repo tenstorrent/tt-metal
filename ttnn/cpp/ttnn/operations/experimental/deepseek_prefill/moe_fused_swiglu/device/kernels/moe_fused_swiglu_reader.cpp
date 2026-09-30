@@ -203,8 +203,8 @@ constexpr uint32_t COMMON_WEIGHTS = 4;  // Common runtime arguments: shared expe
 constexpr uint32_t COMMON_HMCAST = COMMON_WEIGHTS + 2 * EXPERTS_PER_CHIP;
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
-// non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
-// that ordering ever fails a receiver reads a half-written slot, silently.
+// non-posted on the same VC. No-linked-mcast experiment: the payload is unlinked, so ordering relies
+// on same-NoC, same-VC issue order after the flush. If it fails a receiver reads a half-written slot.
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
@@ -228,7 +228,7 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
     const uint32_t ndest = hrect.area() - 1;
     Semaphore<> hf(SEM_H_RDY_BASE + slot);
 
-    // 1. the payload — LINKED, so the flag below cannot overtake it. `src == dst` on every
+    // 1. the payload — unlinked (no-linked-mcast experiment), flushed before the flag. `src == dst` on every
     //    destination, which is why one address serves as both the local source and the mcast offset.
     //    The two arms are the SAME transaction apart from `posted`: Noc::async_write_multicast
     //    static_asserts against POSTED, so that variant has to stay on the raw primitive.
@@ -241,10 +241,11 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
             size,
             NOC_MULTICAST_WRITE_VC,
             /*mcast=*/true,
-            /*linked=*/true,
+            /*linked=*/false,
             ndest,
             /*multicast_path_reserve=*/true,
             /*posted=*/true);
+        noc.async_writes_flushed<NocOptions::POSTED>();
     } else {
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(l1),
@@ -253,12 +254,13 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
             ndest,
             {},
             {.noc_x_start = rb.sx, .noc_y_start = rb.sy, .noc_x_end = rb.ex, .noc_y_end = rb.ey, .addr = l1},
-            /*linked=*/true);
+            /*linked=*/false);
+        noc.async_writes_flushed();
     }
     // 2. re-assert VALID locally: `set_multicast` broadcasts THIS core's own cell as the source, and
     //    a core that also receives on this cell left it INVALID after its last receive.
     hf.set(VALID);
-    // 3. the flag — NON-POSTED, on the same VC, terminating the link. This is the arrival proof.
+    // 3. the flag — NON-POSTED, on the same NoC and VC as the payload. This is the arrival proof.
     hf.set_multicast(noc, rb.sx, rb.sy, rb.ex, rb.ey, ndest, /*linked=*/false);
     // 4. SENT, so the flag cell is safe to rewrite; 5. rotating-sender reset.
     noc.async_writes_flushed();
@@ -787,7 +789,10 @@ void kernel_main() {
                                  .noc_x_end = xbounds.ex,
                                  .noc_y_end = xbounds.ey,
                                  .addr = src},
-                                /*linked=*/true);
+                                /*linked=*/false);
+                            // No-linked-mcast experiment: ordering relies on same-NoC, same-VC
+                            // issue order after this flush.
+                            noc.async_writes_flushed();
                             x_ready.set(VALID);
                             x_ready.set_multicast(
                                 noc, xbounds.sx, xbounds.sy, xbounds.ex, xbounds.ey, x_mcast_dests, /*linked=*/false);
@@ -1086,7 +1091,7 @@ void kernel_main() {
                         } else if (i_send) {
                             // This diagonal core is excluded from its writer's multicast, just like a
                             // reader-owned sender.  The writer publishes only after its NoC1 self-copy
-                            // and linked payload+flag chain have flushed, so this is both local-data
+                            // and payload+flag chain have flushed, so this is both local-data
                             // readiness and source-slot reuse safety.
                             while (mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] < hsend_seq) {
                                 invalidate_l1_cache();
@@ -1185,7 +1190,7 @@ void kernel_main() {
                                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
                                 wd_pending = false;
                             }
-                            // PER-SLOT FLAGS. Linked data+signal multicast, so still NO acked write
+                            // PER-SLOT FLAGS. Flushed data+signal multicast, so still NO acked write
                             // barrier, and the VALID cell is this SLOT's — round r+1's sender is not held
                             // behind every core clearing round r's. The ack accounting is the MONOTONE
                             // `h_free_expected` counter, because HACK_AHEAD deliberately breaks the
