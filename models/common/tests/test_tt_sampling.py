@@ -40,14 +40,14 @@ VOCAB_SIZE = 32000
 FAST_NUM_TRIES = 6
 FAST_NUM_STEPS = 5
 MULTI_DEVICE_MESHES = [1, (4, 8)]
-RING_FABRIC_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]
+# Fabric needs at least two participating chips; since #56669 opening a 1-chip mesh with a fabric
+# config is a fatal, so on N150 / P150 the same tests run without one (the ops fall back to the
+# single-device path, which is what these tests exercise there anyway).
+RING_FABRIC_DEVICE_PARAMS = (
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}] if len(ttnn.get_device_ids()) > 1 else [{}]
+)
 _TRACE_DEVICE_PARAMS = [{"trace_region_size": 23887872}]
-_GRAMMAR_TRACE_DEVICE_PARAMS = [
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        "trace_region_size": 23887872,
-    }
-]
+_GRAMMAR_TRACE_DEVICE_PARAMS = [{**RING_FABRIC_DEVICE_PARAMS[0], **_TRACE_DEVICE_PARAMS[0]}]
 
 # Lane positions used to sweep the "odd lane out" tests below. The sampling
 # writer kernel reads each user's candidates out of a 32x32 tile where users

@@ -119,63 +119,6 @@ def find_trace_dir(input_source: str, isl_total: int, padding_side: str) -> tupl
     return None
 
 
-def check_first_token_match_host_ref(
-    ref_snapshots: list | None,
-    number_of_non_padded_tokens: int,
-    padding_side: str,
-    first_token_id: int,
-    tokenizer,
-) -> bool | None:
-    """Check TT's first token vs HF reference argmax at the expected first token position.
-
-    Returns:
-        True if match, False if mismatch, None if no reference available.
-    """
-    if not ref_snapshots:
-        return None
-    hf_logits_full = ref_snapshots[-1]  # [1, seq_len, vocab]
-    last_real_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else hf_logits_full.shape[-2] - 1
-    hf_token_id = int(hf_logits_full[0, last_real_idx, :].argmax().item())
-    hf_token_text = tokenizer.decode([hf_token_id]) if tokenizer else "N/A"
-    match = hf_token_id == first_token_id
-    logger.info(
-        f"HF reference token at position {last_real_idx}: "
-        f"ID={hf_token_id} [{repr(hf_token_text)}] | TT==HF match: {match}"
-    )
-    return match
-
-
-def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_token_prob: float) -> bool | None:
-    """Check whether the produced first token matches the trace reference.
-
-    Looks up the expected token ID from trace metadata or output_metadata.json.
-
-    Returns:
-        True if match, False if mismatch, None if no reference available.
-    """
-    ref_token_id = trace.metadata.get("next_token_id")
-    ref_token_text = trace.metadata.get("next_token_text")
-
-    if ref_token_id is None or ref_token_text is None:
-        output_meta_path = (trace_dir / "output_metadata.json").resolve()
-        if output_meta_path.exists():
-            with open(output_meta_path) as f:  # noqa: S108
-                output_meta = json.load(f)
-            ref_token_id = ref_token_id or output_meta.get("next_token_id")
-            ref_token_text = ref_token_text or output_meta.get("next_token_text")
-
-    if ref_token_text is None:
-        ref_token_text = "N/A"
-
-    token_match = first_token_id == ref_token_id if ref_token_id is not None else None
-    logger.info(
-        f"Trace first token: TT={first_token_id} (prob={first_token_prob:.4f}), "
-        f"Trace={ref_token_id} [{repr(ref_token_text)}], "
-        f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
-    )
-    return token_match
-
-
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
     "passkey": "passkey.jsonl",
@@ -534,7 +477,6 @@ def extract_tt_state_dict(variant, hf_model):
 
     result = {
         "embed_weight": sd["embed_tokens.weight"].float(),
-        "norm_weight": sd["norm.weight"],
         "layers": [],
     }
 
@@ -552,7 +494,6 @@ def tt_state_dict_to_hf_state_dict(tt_sd):
     """
     hf_sd = {}
     hf_sd["embed_tokens.weight"] = tt_sd["embed_weight"]
-    hf_sd["norm.weight"] = tt_sd["norm_weight"]
 
     for i, layer in enumerate(tt_sd["layers"]):
         prefix = f"layers.{i}."
@@ -738,13 +679,13 @@ def load_and_compute_layer_by_layer(
 
     Returns:
         LayerByLayerResult(state_dict=None, ref_snapshots, ref_kvpe_list)
-        Note: state_dict is always None (cache built to disk instead)
+        Note: state_dict is always None (cache built to disk instead).
+        ref_snapshots layout: [embed, layer_0, ..., layer_{num_layers-1}]. There are no final-norm /
+        LM-head entries: the TT prefill transformer has no tail, so there is nothing to compare them to.
     """
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
-    from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
@@ -964,64 +905,8 @@ def load_and_compute_layer_by_layer(
         _log_memory(f"After layer {i} cleared")
         logger.debug(f"Layer {i} processed, cache cleared")
 
-    # --- Process Norm ---
-    logger.info("Processing norm...")
-    norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
-    norm_dequant = convert_state_dict(norm_sd, config)
-
-    if compute_reference:
-        norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
-        hf_model.load_state_dict(norm_with_prefix, strict=False)
-        logger.debug(f"[norm] h_ref {h_ref.dtype=}, norm_weight dtype={norm_dequant['weight'].dtype}")
-        with torch.no_grad():
-            h_ref = hf_model.norm(h_ref)
-        ref_snapshots.append(h_ref)
-        del norm_with_prefix
-
-    if build_ttnn_cache:
-        # Build norm cache
-        TtDistributedRmsNorm.build_ttnn_cache(
-            torch_weight=norm_dequant["weight"],
-            emb_dim=config.hidden_size,
-            mesh_device=mesh_device,
-            cache_path=weight_cache_path,
-            cache_name_prefix="norm",
-        )
-
-    for k in norm_sd.keys():
-        lazy_sd.evict(k)
-    del norm_sd, norm_dequant
-    gc.collect()
-
-    # --- Process LM Head ---
-    logger.info("Processing lm_head...")
-    lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
-    lm_head_dequant = convert_state_dict(lm_head_sd, config)
-
-    if compute_reference:
-        # Apply lm_head projection: logits = h_ref @ lm_head_weight.T
-        logger.debug(f"[lm_head] h_ref {h_ref.dtype=}, lm_head_weight.dtype={lm_head_dequant['weight'].dtype}")
-        lm_head_weight = lm_head_dequant["weight"].to(torch.bfloat16)
-        with torch.no_grad():
-            h_ref_lm = torch.nn.functional.linear(h_ref.to(torch.bfloat16), lm_head_weight)
-        ref_snapshots.append(h_ref_lm)
-        del lm_head_weight
-
-    if build_ttnn_cache:
-        TtLMHead.build_ttnn_cache(
-            torch_weight=lm_head_dequant["weight"],
-            vocab_size=config.vocab_size,
-            emb_dim=config.hidden_size,
-            mesh_device=mesh_device,
-            cache_path=weight_cache_path,
-            is_column_parallel=True,
-        )
-
-    for k in lm_head_sd.keys():
-        lazy_sd.evict(k)
-    del lm_head_sd, lm_head_dequant
-    gc.collect()
-    _log_memory("After lm_head processed and cleared")
+    # No final norm / LM head: the TT prefill transformer has no tail (the populated KV cache is its
+    # output), so neither their weight cache nor a reference logits snapshot is built.
 
     # Cleanup
     lazy_sd.close()
@@ -1042,6 +927,10 @@ class ReferenceCacheKey:
 
     Changing any field produces a different cache filename, so stale results
     are never reused silently.
+
+    The snapshot LAYOUT is not part of the key: a cache file written before the prefill tail
+    (final norm + LM head) was removed carries two extra trailing snapshots, and the consumer zips
+    labels against snapshots, so those entries are simply ignored and the file stays reusable.
     """
 
     weight_type: str  # "pretrained" or "random"
@@ -1144,6 +1033,138 @@ def slice_non_padded(tensor: torch.Tensor, num_real_tokens: int, padding_side: s
     else:
         start = tensor.shape[seq_dim] - num_real_tokens
         return tensor.narrow(seq_dim, start, num_real_tokens)
+
+
+# --- Host-side tail: first token from the last layer's hidden state ---
+#
+# The TT prefill transformer has no norm / LM-head / sampling tail (decode owns the LM head), so the
+# test derives the first token on the HOST from the last layer's hidden state, which the PCC run already
+# brings back as `intermediates["layer_{N-1}"]`. The tail math on the CPU is trusted, so the token is a
+# check of everything BEFORE it. Only meaningful for the full model (num_layers == num_hidden_layers).
+
+
+def load_host_tail_weights(model_path, config) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Load the final RMSNorm gain and the LM-head weight from the checkpoint, dequantized to bf16.
+
+    Returns ``(norm_weight [emb], lm_head_weight [vocab, emb])``, or ``None`` when the checkpoint does
+    not carry them (a partial per-layer download). Same loading path as ``load_and_compute_layer_by_layer``.
+    """
+    from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+    from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
+
+    lazy_sd = LazyStateDict(Path(model_path))
+    try:
+        prefix = detect_language_model_prefix(lazy_sd)
+        norm_key = f"{prefix}model.norm.weight"
+        lm_head_key = f"{prefix}lm_head.weight"
+        if norm_key not in lazy_sd or lm_head_key not in lazy_sd:
+            logger.warning(
+                f"Checkpoint at {model_path} has no {norm_key!r} / {lm_head_key!r} (partial download?); "
+                "host-side first-token check unavailable"
+            )
+            return None
+        norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
+        norm_weight = convert_state_dict(norm_sd, config)["weight"].to(torch.bfloat16)
+        lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
+        lm_head_weight = convert_state_dict(lm_head_sd, config)["weight"].to(torch.bfloat16)
+        for k in list(norm_sd.keys()) + list(lm_head_sd.keys()):
+            lazy_sd.evict(k)
+    finally:
+        lazy_sd.close()
+    assert (
+        lm_head_weight.shape[0] == config.vocab_size
+    ), f"lm_head weight rows {lm_head_weight.shape[0]} != config.vocab_size {config.vocab_size}"
+    logger.info(
+        f"Loaded host tail weights: norm {list(norm_weight.shape)}, lm_head {list(lm_head_weight.shape)} "
+        f"({lm_head_weight.numel() * 2 / 1024**3:.2f} GB bf16)"
+    )
+    return norm_weight, lm_head_weight
+
+
+def execute_tail_host(
+    hidden: torch.Tensor,
+    num_real_tokens: int,
+    padding_side: str,
+    norm_weight: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    eps: float,
+    activations_dtype: torch.dtype = torch.float32,
+    vocab_chunk: int = 16384,
+) -> torch.Tensor:
+    """Run the tail (final RMSNorm + LM head) on the CPU for the last real token of ``hidden``.
+
+    ``activations_dtype`` is the dtype every op takes in and gives out, matched to the reference:
+    bf16 when the reference is a GPU trace (its ops ran bf16 -> bf16, fp32 only inside the
+    accumulation), fp32 when the reference is the fp32 HF model. Returns the token's logits ``[vocab]``.
+    """
+    # --- Pick the last real token ---
+    h = hidden.reshape(-1, hidden.shape[-1])  # [seq, emb]
+    last_idx = num_real_tokens - 1 if padding_side == "right" else h.shape[0] - 1
+    x = h[last_idx : last_idx + 1].to(activations_dtype)  # [1, emb]
+
+    # --- Final RMSNorm (same op order as the HF reference: fp32 variance, cast back, then gain) ---
+    xf = x.to(torch.float32)
+    xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
+    normed = norm_weight.to(activations_dtype) * xf.to(activations_dtype)  # [1, emb]
+
+    # --- LM head: logits = normed @ W^T ---
+    with torch.no_grad():
+        if activations_dtype == torch.bfloat16:
+            # bf16 in, bf16 out; torch accumulates in fp32 inside, like the GPU kernel.
+            return (normed @ lm_head_weight.to(torch.bfloat16).T).reshape(-1)
+        # fp32: cast W in vocab chunks so it is never copied whole to fp32.
+        vocab = lm_head_weight.shape[0]
+        logits = torch.empty(vocab, dtype=torch.float32)
+        for start in range(0, vocab, vocab_chunk):
+            w = lm_head_weight[start : start + vocab_chunk].to(torch.float32)  # [chunk, emb]
+            logits[start : start + w.shape[0]] = (normed.to(torch.float32) @ w.T).reshape(-1)
+        return logits
+
+
+def first_token_from_logits(
+    logits: torch.Tensor, tokenizer, top_k: int = 5
+) -> tuple[int, list[tuple[int, float, str]]]:
+    """argmax token id and the ``top_k`` ``(token_id, probability, text)`` candidates of one logits row."""
+    row = logits.reshape(-1).to(torch.float32)
+    probs = torch.softmax(row, dim=-1)
+    top_probs, top_ids = torch.topk(probs, min(top_k, row.numel()))
+    top = [
+        (int(i), float(p), tokenizer.decode([int(i)]) if tokenizer is not None else "N/A")
+        for i, p in zip(top_ids.tolist(), top_probs.tolist())
+    ]
+    return int(row.argmax().item()), top
+
+
+def log_and_compare_first_token(tt_token_id: int, ref_token_id: int, tokenizer, ref_source: str) -> bool:
+    """Log the host-derived TT first token next to the reference's and return whether they are equal."""
+
+    def _text(tid):
+        return repr(tokenizer.decode([tid])) if tokenizer is not None else "N/A"
+
+    match = tt_token_id == ref_token_id
+    logger.info(
+        f"First token: TT={tt_token_id} [{_text(tt_token_id)}] | ref({ref_source})={ref_token_id} "
+        f"[{_text(ref_token_id)}] | match={'YES' if match else 'NO'}"
+    )
+    return match
+
+
+def trace_first_token_id(trace, trace_dir: Path) -> tuple[int | None, str | None]:
+    """The golden's recorded next token ``(id, text)`` from ``metadata.json`` or ``output_metadata.json``.
+
+    Returns ``(None, None)`` when the trace records neither; the caller then logs N/A and does not fail.
+    """
+    ref_token_id = trace.metadata.get("next_token_id")
+    ref_token_text = trace.metadata.get("next_token_text")
+    if ref_token_id is None or ref_token_text is None:
+        output_meta_path = (Path(trace_dir) / "output_metadata.json").resolve()
+        if output_meta_path.exists():
+            with open(output_meta_path) as f:
+                output_meta = json.load(f)
+            ref_token_id = ref_token_id if ref_token_id is not None else output_meta.get("next_token_id")
+            ref_token_text = ref_token_text if ref_token_text is not None else output_meta.get("next_token_text")
+    return (int(ref_token_id) if ref_token_id is not None else None), ref_token_text
 
 
 # --- Tokenization helpers ---
@@ -1270,7 +1291,6 @@ class DebugTraceData:
     token_ids: torch.Tensor  # [1, seq_len] int64
     ref_snapshots: dict[str, torch.Tensor]  # label -> [1, seq, hidden_dim] bfloat16
     ref_kvpe_list: list[torch.Tensor]  # per-layer [1, 1, seq, kv_lora_rank + qk_rope_head_dim]
-    logits: torch.Tensor | None  # [seq, vocab_size] float32
     metadata: dict  # raw metadata.json contents
 
 
@@ -1305,7 +1325,9 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None, isl: int | 
         num_layers: Number of layers to load (default: all layers from metadata)
 
     Returns:
-        DebugTraceData with token_ids, per-layer reference snapshots, KVPE cache, and logits
+        DebugTraceData with token_ids, per-layer reference snapshots, and KVPE cache. A trace's
+        `logits.safetensors` is not read: the TT prefill transformer has no LM head. `metadata` is kept
+        whole, so `trace_first_token_id` can look up `next_token_id` for the full-model first-token check.
     """
     from safetensors import safe_open
 
@@ -1399,18 +1421,10 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None, isl: int | 
         kv_format = "post-transform" if use_post_transform else "pre-transform (legacy)"
         logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache.safetensors ({kv_format})")
 
-    logits = None
-    logits_path = trace_dir / "logits.safetensors"
-    if logits_path.exists():
-        with safe_open(logits_path, framework="pt") as f:
-            logits = f.get_tensor("logits")
-        logger.info(f"Loaded logits: shape={list(logits.shape)}, dtype={logits.dtype}")
-
     return DebugTraceData(
         token_ids=token_ids,
         ref_snapshots=ref_snapshots,
         ref_kvpe_list=ref_kvpe_list,
-        logits=logits,
         metadata=metadata,
     )
 
@@ -1424,10 +1438,8 @@ def slice_debug_trace(trace: DebugTraceData, isl_total: int) -> DebugTraceData:
     RoPE), so they are identical whether the full sequence or only its first ``isl_total``
     tokens are prefilled.
 
-    The stored ``logits`` / ``next_token_id`` are the FULL sequence's final-position
-    products and are meaningless for the shorter prefill, so ``logits`` is dropped
-    (set to ``None``); callers must skip the logits / first-token checks for a sliced
-    trace (``metadata`` is left untouched, so ``next_token_id`` must not be trusted).
+    ``metadata`` is left untouched, so its ``next_token_id`` (the FULL sequence's final-position
+    product) does not describe the sliced prefix: the first-token check is skipped for a sliced trace.
 
     Args:
         trace: Trace to slice (typically longer than the requested isl).
@@ -1443,7 +1455,6 @@ def slice_debug_trace(trace: DebugTraceData, isl_total: int) -> DebugTraceData:
         token_ids=trace.token_ids[:, :isl_total],
         ref_snapshots={label: snap[:, :isl_total, :] for label, snap in trace.ref_snapshots.items()},
         ref_kvpe_list=[kv[:, :, :isl_total, :] for kv in trace.ref_kvpe_list],
-        logits=None,  # full-sequence final-position logits are invalid after slicing
         metadata=trace.metadata,
     )
 

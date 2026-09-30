@@ -68,13 +68,7 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
 
-// Re-point every per-dispatch address in a cached slice program, for the factory that built it.
-// MeshPartition drives these factories directly and shares this so the slot layout has one home.
-void patch_slice_program_addresses(
-    tt::tt_metal::Program& program,
-    const SliceDeviceOperation::program_factory_t& factory,
-    const SliceParams& operation_attributes,
-    const SliceInputs& tensor_args,
-    Tensor& output);
+// Row-major factories retain keyed scalar assignments and refresh only tensor bindings.
+tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output);
 
 }  // namespace ttnn::prim

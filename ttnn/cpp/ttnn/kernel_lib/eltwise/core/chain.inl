@@ -94,8 +94,7 @@ constexpr bool is_legal_output_policy_with_base(ReservePolicy reserve, PushPolic
 // from input() itself so new reader elements and policy additions
 // cannot drift through copied per-element flags.
 constexpr bool input_owns_cb_window(InputSpec spec) noexcept {
-    return spec.wait == WaitPolicy::Upfront ||
-           ((spec.wait == WaitPolicy::Cumulative) && (spec.pop == PopPolicy::AtEnd));
+    return spec.wait == WaitPolicy::Upfront || spec.wait == WaitPolicy::Cumulative;
 }
 
 // A peer which pops a staged CB front invalidates the owner's absolute window indices.
@@ -947,8 +946,14 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     using Base::tile_base;
     // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve
     // policies and caller-pre-reserved windows write distinct tiles; front-advancing policies stay pinned.
-    static constexpr bool walk = L1AccumulationMode == L1Accumulation::Disabled &&
-                                 (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None);
+    // `walk` emits `base + i_flat`, and out-of-order pack adds that to `fifo_wr_ptr` — the start of the
+    // window that is currently open. So it is only correct for policies that never push mid-walk, leaving
+    // the window start fixed for the whole shape. Front-advancing policies (PerOuter above all) push per
+    // outer iteration, so the window start already carries the row while the shape-global `i_flat` would
+    // add it a second time; they stay pinned and let the packer's own in-window counter address the tile.
+    static constexpr bool walk =
+        L1AccumulationMode == L1Accumulation::Disabled &&
+        (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None);
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_output_policy(Reserve, Push), "PackTile: output reserve/push policy pair is invalid");
@@ -959,17 +964,21 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         "PackTile: L1 accumulation requires (OneUpfront, OneAtEnd) or caller-managed (None, None)");
     static_assert(
         !((Reserve == ReservePolicy::OneUpfront) && (Push == PushPolicy::OneAtEnd)) ||
-            L1AccumulationMode != L1Accumulation::Disabled,
-        "PackTile: (OneUpfront, OneAtEnd) requires L1 accumulation");
+            L1AccumulationMode != L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::WholeShape,
+        "PackTile: (OneUpfront, OneAtEnd) requires L1 or whole-shape DEST accumulation");
     static_assert(
         DestAccumulationMode == DestAccumulation::Disabled ||
-            ((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter)) ||
+            ((DestAccumulationMode == DestAccumulation::PerRow) && (Reserve == ReservePolicy::PerOuter) &&
+             (Push == PushPolicy::PerOuter)) ||
+            ((DestAccumulationMode == DestAccumulation::WholeShape) && (Reserve == ReservePolicy::OneUpfront) &&
+             (Push == PushPolicy::OneAtEnd)) ||
             ((Reserve == ReservePolicy::None) && (Push == PushPolicy::None)),
-        "PackTile: DEST accumulation requires (PerOuter, PerOuter) or caller-managed (None, None)");
+        "PackTile: PerRow DEST accumulation requires (PerOuter, PerOuter); WholeShape requires "
+        "(OneUpfront, OneAtEnd); caller-managed uses (None, None)");
     static_assert(
         !((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter)) ||
-            DestAccumulationMode != DestAccumulation::Disabled,
-        "PackTile: (PerOuter, PerOuter) requires DEST accumulation");
+            DestAccumulationMode != DestAccumulation::WholeShape,
+        "PackTile: whole-shape DEST accumulation cannot use the per-outer output lifecycle");
     static_assert(
         L1AccumulationMode == L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::Disabled,
         "PackTile: L1 and DEST accumulation cannot be combined");
@@ -996,7 +1005,10 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         ((Reserve == ReservePolicy::OneUpfront) && (Push == PushPolicy::OneAtEnd));
     static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode != DestAccumulation::Disabled;
     static constexpr bool manages_dest_accumulation_lifecycle =
-        ((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter));
+        (DestAccumulationMode == DestAccumulation::PerRow && (Reserve == ReservePolicy::PerOuter) &&
+         (Push == PushPolicy::PerOuter)) ||
+        (DestAccumulationMode == DestAccumulation::WholeShape && (Reserve == ReservePolicy::OneUpfront) &&
+         (Push == PushPolicy::OneAtEnd));
     static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
     static constexpr bool uses_per_block_pack =
         ((Reserve == ReservePolicy::PerBlockSize) && (Push == PushPolicy::PerBlockSize));
@@ -2375,6 +2387,14 @@ constexpr bool reserves_upfront() {
 }
 
 template <class E>
+constexpr bool reserves_upfront_pushes_per_block() {
+    if constexpr (is_cb_writer_op_v<E>) {
+        return E::Reserve == ReservePolicy::Upfront && E::Push == PushPolicy::PerBlockSize;
+    }
+    return false;
+}
+
+template <class E>
 constexpr bool pops_at_end() {
     if constexpr (is_binary_fpu_op_v<E>) {
         return E::APop == PopPolicy::AtEnd || (!E::same_dfb && E::BPop == PopPolicy::AtEnd);
@@ -2919,13 +2939,13 @@ ALWI void emit_pop_per_row(uint32_t cb_a, uint32_t cb_b) {
 }
 
 template <bool Reserve>
-ALWI void emit_reserve_per_row(uint32_t cb) {
-    emit_reserve<Reserve>(cb, 1);
+ALWI void emit_reserve_per_outer(uint32_t cb, uint32_t count) {
+    emit_reserve<Reserve>(cb, count);
 }
 
 template <bool Push>
-ALWI void emit_push_per_row(uint32_t cb) {
-    emit_push<Push>(cb, 1);
+ALWI void emit_push_per_outer(uint32_t cb, uint32_t count) {
+    emit_push<Push>(cb, count);
 }
 
 }  // namespace detail
@@ -3034,6 +3054,9 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     if (shape.Ht == 0 || shape.Wt == 0) {
         return;
     }
+    if constexpr ((detail::reserves_upfront_pushes_per_block<Es>() || ...)) {
+        ASSERT(shape.tail_sync != BlockTailSync::FullBlock);
+    }
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
@@ -3069,13 +3092,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
-    // Assertions are intentionally absent in normal kernels.  Keep the debug
-    // contract, but normalize a malformed zero block size so the outer walk
-    // still makes forward progress in a release kernel.
+    // Normalize a zero block size so the outer walk makes forward progress.
     uint32_t block_size = shape.block_tiles == 0 ? 1 : shape.block_tiles;
-    ASSERT(shape.Ht > 0);
-    ASSERT(shape.Wt > 0);
-    ASSERT(shape.block_tiles > 0);
     const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
         ASSERT(!synchronize_full_blocks || block_size == 1);
@@ -3102,9 +3120,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
     }
     if constexpr (whole_shape_dest_accumulation) {
-        (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].pack_dfb),
-         ...);
         tile_regs_acquire();
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -3116,10 +3131,14 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
          ...);
         if constexpr (per_row_dest_accumulation) {
-            (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb),
+            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
              ...);
             tile_regs_acquire();
+        } else if constexpr (!dest_accumulation) {
+            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
+             ...);
         }
         for (uint32_t wt_base = 0; wt_base < Wt;) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
@@ -3206,8 +3225,12 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  Wt),
              ...);
             tile_regs_release();
-            (detail::emit_push_per_row<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb),
+            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
+             ...);
+        } else if constexpr (!dest_accumulation) {
+            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
              ...);
         }
         (detail::emit_pop_per_row<
@@ -3238,9 +3261,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              Wt),
          ...);
         tile_regs_release();
-        (detail::emit_push_per_row<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].pack_dfb),
-         ...);
     }
     if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
         pack_reconfig_l1_acc(0);

@@ -8,6 +8,13 @@ import torch
 import ttnn
 
 
+def _mesh_kwargs(*, mesh_shape=(2, 2), shard_dims=(0, 1)):
+    return {
+        "_ttnn_golden_mesh_shape": mesh_shape,
+        "_ttnn_golden_mesh_shard_dims": shard_dims,
+    }
+
+
 def _two_group_collective_inputs():
     return [
         torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16),
@@ -17,14 +24,14 @@ def _two_group_collective_inputs():
     ]
 
 
+# Checks the all_broadcast golden produces the expected per-group broadcast for every collective group.
 def test_all_broadcast_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_broadcast)
 
     outputs = golden_function(
         _two_group_collective_inputs(),
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
+        **_mesh_kwargs(),
     )
 
     assert len(outputs) == 2
@@ -32,6 +39,7 @@ def test_all_broadcast_golden_composes_every_collective_group():
     assert torch.equal(outputs[1], torch.tensor([[3.0, 4.0], [30.0, 40.0]], dtype=torch.bfloat16))
 
 
+# Checks the all_gather golden concatenates shards within each collective group independently.
 def test_all_gather_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_gather)
 
@@ -39,27 +47,27 @@ def test_all_gather_golden_composes_every_collective_group():
         _two_group_collective_inputs(),
         dim=1,
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
+        **_mesh_kwargs(),
     )
 
     expected = torch.tensor([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]], dtype=torch.bfloat16)
     assert torch.equal(output, expected)
 
 
+# Checks the all_reduce golden sums shards within each collective group independently.
 def test_all_reduce_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_reduce)
 
     output = golden_function(
         _two_group_collective_inputs(),
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
+        **_mesh_kwargs(),
     )
 
     assert torch.equal(output, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
 
 
+# Checks the reduce_scatter golden reduces each group and returns the correct per-rank chunk.
 def test_reduce_scatter_golden_composes_every_rank_chunk():
     golden_function = ttnn.get_golden_function(ttnn.reduce_scatter)
 
@@ -67,8 +75,7 @@ def test_reduce_scatter_golden_composes_every_rank_chunk():
         _two_group_collective_inputs(),
         dim=1,
         cluster_axis=1,
-        _ttnn_golden_mesh_shape=(2, 2),
-        _ttnn_golden_mesh_shard_dims=(0, 1),
+        **_mesh_kwargs(),
     )
 
     assert torch.equal(output, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
@@ -115,23 +122,26 @@ def test_all_to_all_combine_golden_masks_duplicate_device_slots():
     assert torch.equal(output._ttnn_comparison_config.mask, expected_mask)
 
 
+# Verifies reduce_to_root reduces the per-device l/s/m states onto the root
+# and tags the outputs with the root's mesh index.
 def test_reduce_to_root_golden_reduces_four_device_states():
     input_tensors_l = [torch.full((1, 1, 1, 32), value, dtype=torch.float32) for value in (1.0, 2.0, 3.0, 4.0)]
     input_tensors_s = [torch.ones((1, 1, 1, 32), dtype=torch.float32) for _ in range(4)]
     input_tensors_m = [torch.zeros((1, 1, 1, 32), dtype=torch.float32) for _ in range(4)]
     golden_function = ttnn.get_golden_function(ttnn.reduce_to_root)
+    root_coord = ttnn.MeshCoordinate(1, 0)
 
     output_l, output_s, output_m = golden_function(
         input_tensors_l,
         input_tensors_s,
         input_tensors_m,
-        root_coord=(1, 0),
-        _ttnn_golden_mesh_shape=(2, 2),
+        root_coord=root_coord,
+        **_mesh_kwargs(shard_dims=(None, None)),
     )
 
-    assert torch.equal(output_l, torch.full_like(output_l, 2.5))
-    assert torch.equal(output_s, torch.full_like(output_s, 4.0))
-    assert torch.equal(output_m, torch.zeros_like(output_m))
+    assert torch.equal(output_l, torch.full_like(input_tensors_l[0], 2.5))
+    assert torch.equal(output_s, torch.full_like(input_tensors_s[0], 4.0))
+    assert torch.equal(output_m, torch.zeros_like(input_tensors_m[0]))
     assert output_l._ttnn_mesh_index == 2
     assert output_s._ttnn_mesh_index == 2
     assert output_m._ttnn_mesh_index == 2
@@ -144,33 +154,36 @@ def _expected_moe_routing_outputs(
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
     outputs = [torch.zeros_like(routing_weights) for _ in range(mesh_shape[0] * mesh_shape[1])]
 
-    for cluster_index in range(mesh_shape[1 - cluster_axis]):
-        for member_index in range(mesh_shape[cluster_axis]):
-            coordinate = [0, 0]
-            coordinate[cluster_axis] = member_index
-            coordinate[1 - cluster_axis] = cluster_index
-            device_index = coordinate[0] * mesh_shape[1] + coordinate[1]
-            local_start = member_index * local_non_zero_size
-            local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
-            outputs[device_index].flatten()[local_indices] = routing_weights.flatten()[local_indices]
+    member_stride = 1
+    for dimension in mesh_shape[cluster_axis + 1 :]:
+        member_stride *= dimension
+    for device_index in range(len(outputs)):
+        member_index = (device_index // member_stride) % mesh_shape[cluster_axis]
+        local_start = member_index * local_non_zero_size
+        local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
+        outputs[device_index].flatten()[local_indices] = routing_weights.flatten()[local_indices]
     return torch.cat(outputs, dim=0)
 
 
+# Verifies point_to_point delivers the sender's shard to the receiver coordinate
+# and tags the output with the receiver's mesh index.
 def test_point_to_point_golden_selects_nonzero_receiver_shard():
     input_tensors = [torch.full((1, 4), index, dtype=torch.bfloat16) for index in range(4)]
     golden_function = ttnn.get_golden_function(ttnn.point_to_point)
 
     output = golden_function(
         input_tensors,
-        sender_coord=(0, 1),
-        receiver_coord=(1, 0),
-        _ttnn_golden_mesh_shape=(2, 2),
+        sender_coord=(1, 0),
+        receiver_coord=(0, 1),
+        **_mesh_kwargs(shard_dims=(None, None)),
     )
 
-    assert torch.equal(output, input_tensors[1])
-    assert output._ttnn_mesh_index == 2
+    # sender_coord (1, 0) is row-major index 2; receiver_coord (0, 1) is row-major index 1.
+    assert torch.equal(output, input_tensors[2])
+    assert output._ttnn_mesh_index == 1
 
 
+# Checks moe_routing_remap partitions non-zero routing weights across mesh members along the cluster axis.
 @pytest.mark.parametrize("cluster_axis, expert_parallel_size", [(0, 2), (1, 4)])
 def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expert_parallel_size):
     routing_weights = torch.zeros((1, 32), dtype=torch.bfloat16)
@@ -184,7 +197,7 @@ def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expe
         non_zero_weight_size,
         expert_parallel_size,
         cluster_axis,
-        _ttnn_golden_mesh_shape=mesh_shape,
+        **_mesh_kwargs(mesh_shape=mesh_shape, shard_dims=(None, None)),
     )
     expected = _expected_moe_routing_outputs(
         routing_weights,

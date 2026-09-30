@@ -390,9 +390,10 @@ inline void _llk_math_matmul_load_replay_()
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
-    // Unpacker will always load faces in f0,f1,f2,f3 order
-    // if in1 is transposed then faces 1&2 need to be swapped during read
-    // by changing address increment amount via addr_mods
+    // Unpacker accounts for transposing if required.
+    // if TRANSPOSE_EN = true, unpacker loads f0/f2/f1/f3
+    // else, unpacker loads f0/f1/f2/f3
+    // Math LLKs do not need any transpose handling for Quasar
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     if constexpr (ENABLE_2X_FORMAT)
@@ -503,9 +504,10 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
-    // Unpacker will always load faces in f0,f1,f2,f3 order
-    // if in1 is transposed then faces 1&2 need to be swapped during read
-    // by changing address increment amount via addr_mods
+    // Unpacker accounts for transposing if required.
+    // if TRANSPOSE_EN = true, unpacker loads f0/f2/f1/f3
+    // else, unpacker loads f0/f1/f2/f3
+    // Math LLKs do not need any transpose handling for Quasar
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
     const bool reuse_a                      = ct_dim >= rt_dim;
 
@@ -715,7 +717,6 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         if (strided_dest)
         {
             TT_SETRWC(p_setrwc::CLR_NONE, 0, dst_rows_per_tile * (t + 1), p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }
     _reset_counters_<p_setrwc::SET_ABD_F>();

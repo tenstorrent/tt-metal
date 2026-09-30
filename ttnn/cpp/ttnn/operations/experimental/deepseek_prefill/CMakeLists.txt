@@ -6,9 +6,11 @@ add_subdirectory(combine)
 add_subdirectory(combine_fabric2d)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
+add_subdirectory(hybrid_routed_expert_ffn)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
 add_subdirectory(masked_bincount)
+add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_fused_swiglu)
 add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
@@ -39,8 +41,10 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
+        TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
@@ -78,8 +82,10 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>

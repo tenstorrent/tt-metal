@@ -311,3 +311,47 @@ def test_tanh_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
+    """Equal padded volume, different alignment, must be two cache entries.
+
+    logical 32x32 padded to 64x32 versus padded to 32x64. Both volumes are 2048.
+    """
+    device.enable_program_cache()
+    logical = (1, 1, 32, 32)
+
+    def pair(padded):
+        grad = torch.rand(logical, dtype=torch.bfloat16)
+        x = torch.rand(logical, dtype=torch.bfloat16)
+        tt_grad = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(grad, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        tt_x = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+            padded,
+            0.0,
+        )
+        return tt_grad, tt_x
+
+    torch.manual_seed(0)
+    wide = pair([1, 1, 64, 32])
+    tall = pair([1, 1, 32, 64])
+
+    def volume(shape):
+        n = 1
+        for dim in shape:
+            n *= int(dim)
+        return n
+
+    assert volume(wide[1].padded_shape) == volume(tall[1].padded_shape)
+    assert list(wide[1].padded_shape) != list(tall[1].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.tanh_bw(*wide)
+    assert device.num_program_cache_entries() == 1
+    ttnn.tanh_bw(*tall)
+    assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()

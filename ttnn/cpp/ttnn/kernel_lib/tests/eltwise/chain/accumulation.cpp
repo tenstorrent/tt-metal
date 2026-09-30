@@ -57,8 +57,8 @@ void kernel_main() {
             DestAccumulation::WholeShape>;
         using WholeShapeManagedPack = PackTile<output(
             cb_out,
-            ReservePolicy::PerOuter,
-            PushPolicy::PerOuter,
+            ReservePolicy::OneUpfront,
+            PushPolicy::OneAtEnd,
             DataFormatReconfig::Enabled,
             TileAddressing::Direct,
             DestAccumulation::WholeShape)>;

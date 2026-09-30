@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.sampling import (
@@ -21,8 +22,8 @@ from models.common.sampling import (
 from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
+    _acknowledge_trace_buffers_corruptible,
     _hash_request_seed_to_device_seed,
-    _mark_trace_buffers_corruptible,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.sampling.tt_sampling import format_grammar_bitmask
@@ -30,12 +31,52 @@ from models.common.utility_functions import comp_pcc, is_blackhole
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 
 
+@pytest.mark.parametrize("all_configs", [False, True])
+def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all_configs):
+    """Compiling an in-place penalty path must not penalize the next real replay."""
+    logits = torch.tensor([1.0, 2.0, 3.0])
+    original = logits.clone()
+    monkeypatch.setattr(ttnn, "clone", torch.clone)
+    log_probs = SimpleNamespace(logprobs_enabled=[False], num_logprobs=[0], enable_log_probs=False)
+
+    def set_log_probs_mode(enabled, num_logprobs):
+        log_probs.logprobs_enabled = enabled if isinstance(enabled, list) else [enabled]
+        log_probs.num_logprobs = num_logprobs if isinstance(num_logprobs, list) else [num_logprobs]
+        log_probs.enable_log_probs = any(log_probs.logprobs_enabled)
+
+    log_probs.set_log_probs_mode = set_log_probs_mode
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.sub_core_grids = None
+    sampling._penalties_active = True
+    sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(
+        log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
+    )
+    compiled = []
+
+    def run_sampling(scratch, *, penalties_on, grammar_on, tt_out_tok, count_tokens):
+        assert not count_tokens, "Warmup must not add dummy samples to request history"
+        if penalties_on:
+            scratch.sub_(2.0)
+        compiled.append(penalties_on)
+
+    sampling._run_sampling = run_sampling
+    sampling.precompile(logits, all_configs=all_configs)
+
+    assert compiled
+    torch.testing.assert_close(logits, original, rtol=0, atol=0)
+    assert sampling._penalties_active is True
+    assert sampling.tt_sampling._force_argmax_sampling is True
+    assert log_probs.logprobs_enabled == [False]
+    assert log_probs.num_logprobs == [0]
+
+
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
-    _mark_trace_buffers_corruptible(None, ["default"])
-    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+    _acknowledge_trace_buffers_corruptible(None, ["default"])
+    _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
 
     assert marked == ["input", "output"]
 
@@ -105,8 +146,7 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
     sampling.tt_sampling = StubSampling()
     sampling._penalties_active = False
     sampling._log_probs_active = False
-    penalty_resets = []
-    sampling.tt_penalties = SimpleNamespace(reset_output_tokens=lambda: penalty_resets.append(True))
+    sampling._copy_warmup_logits = lambda logits: logits
     calls = []
     sampling._run_sampling = lambda _logits, **kwargs: calls.append(
         (
@@ -132,15 +172,13 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
     sampling.precompile(
         object(),
         grammar_bitmask=grammar,
-        compile_token_update=True,
         all_configs=True,
     )
 
     assert sampling.tt_sampling.grammar_updates == [grammar]
     assert set(calls) == {
-        (penalties, False, force_argmax, True, True) for penalties in (False, True) for force_argmax in (False, True)
+        (penalties, False, force_argmax, True, False) for penalties in (False, True) for force_argmax in (False, True)
     }
-    assert len(penalty_resets) == 2
     assert sampling._penalties_active is False
     assert sampling.tt_sampling._force_argmax_sampling is False
     assert sampling._log_probs_active is False
@@ -185,15 +223,8 @@ def test_grammar_warmup_excludes_logprobs():
         def __init__(self):
             self.calls = []
 
-        def _create_sampling_params(
-            self,
-            can_sample_on_device,
-            batch_size,
-            greedy_only=False,
-            include_greedy_penalties=False,
-        ):
+        def _create_sampling_params(self, can_sample_on_device, batch_size, greedy_only=False):
             assert can_sample_on_device
-            assert include_greedy_penalties
             return [
                 SamplingParams(
                     temperature=[1.0] * batch_size,
@@ -228,72 +259,6 @@ def test_grammar_warmup_excludes_logprobs():
 
     grammar_calls = [call for call in harness.calls if call.get("grammar_bitmask") is not None]
     assert len(grammar_calls) == 1
-    assert grammar_calls[0]["skip_trace_precompile"] is True
-
-
-def test_plain_trace_warmup_precompiles():
-    """The first ordinary traced warmup still precompiles its sampler."""
-
-    class WarmupHarness(WarmupForwardMixin):
-        def __init__(self):
-            self.calls = []
-
-        def _create_sampling_params(
-            self,
-            can_sample_on_device,
-            batch_size,
-            greedy_only=False,
-            include_greedy_penalties=False,
-        ):
-            return [
-                SamplingParams(
-                    temperature=[1.0] * batch_size,
-                    top_k=[8] * batch_size,
-                    top_p=[0.9] * batch_size,
-                )
-            ]
-
-        def decode_forward(self, **kwargs):
-            self.calls.append(kwargs)
-
-    harness = WarmupHarness()
-    harness.warmup_model_decode(
-        kv_cache=None,
-        enable_trace=True,
-        max_batch_size=4,
-        num_blocks=1,
-        can_sample_on_device=True,
-        can_sample_device_grammar=False,
-    )
-
-    assert "skip_trace_precompile" not in harness.calls[0]
-
-
-@pytest.mark.parametrize(
-    ("lean", "temperature"),
-    [(False, 0.0), (True, 1.0)],
-    ids=["greedy", "lean-stochastic"],
-)
-def test_grammar_warmup_keeps_penalties(monkeypatch, lean, temperature):
-    """Grammar warmup keeps every supported no-logprobs penalty trace."""
-    if lean:
-        monkeypatch.setenv("TT_LEAN_DECODE_WARMUP", "1")
-    else:
-        monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
-
-    params = WarmupForwardMixin()._create_sampling_params(
-        can_sample_on_device=True,
-        batch_size=4,
-        include_greedy_penalties=True,
-    )
-
-    assert any(
-        param is not None
-        and param.temperature == [temperature] * 4
-        and param.presence_penalty == [1.2] * 4
-        and param.enable_log_probs == [False] * 4
-        for param in params
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -838,46 +803,6 @@ def test_grammar_activation_requires_no_traces(expect_error):
     assert generator.device_grammar_enabled is False
     assert events == []
     generator.model = []
-
-
-def test_grammar_warmup_prepares_both_paths():
-    """Grammar warmup prepares host and device decode traces together."""
-    from collections import defaultdict
-
-    from models.tt_transformers.tt.generator import Generator
-
-    generator = Generator.__new__(Generator)
-    generator.data_parallel = 1
-    generator.trace_ids_decode = defaultdict(lambda: None)
-    generator._prepared_device_grammar_decode_traces = []
-    generator._uses_prefetcher = lambda: False
-    generator._create_sampling_params = lambda **_kwargs: ["sampling"]
-    generator._create_decode_warmup_inputs = lambda *_args: (
-        torch.zeros((4, 1)),
-        torch.zeros((4,)),
-        torch.zeros((4, 2)),
-    )
-    prepared = []
-
-    def prepare_trace(**kwargs):
-        prepared.append(kwargs["on_device_sampling"])
-        return {"on_device_sampling": kwargs["on_device_sampling"]}
-
-    captured = []
-    generator._prepare_decode_trace_for_warmup = prepare_trace
-    generator._record_prepared_decode_trace = lambda trace: captured.append(trace["on_device_sampling"])
-
-    assert generator.prepare_device_grammar_decode_trace_warmup(
-        kv_cache=None,
-        max_batch_size=4,
-        num_blocks=2,
-    )
-    assert prepared == [True, False]
-
-    generator.capture_prepared_device_grammar_decode_trace()
-
-    assert captured == [True, False]
-    assert generator._prepared_device_grammar_decode_traces == []
 
 
 def test_deferred_sampling_uses_owned_state_once(
@@ -2030,10 +1955,26 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
         (151936, 4),  # Qwen3
         (256000, 4),  # Gemma-2
         (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+        (262208, 5),  # Gemma-3: 8194 tiles has no even tile-aligned cut in 5..10 -> minimum count, uneven
     ],
 )
 def test_untilize_chunk_count(width, expected):
     assert TTSampling._untilize_chunk_count(width) == expected
+
+
+@pytest.mark.parametrize(
+    "width, num_chunks, expected_split, expected_last",
+    [
+        (151936, 4, 37984, 37984),  # even cut: split size is the exact chunk width
+        (262208, 5, 52448, 52416),  # uneven cut: tile-aligned split, shorter tile-aligned remainder
+    ],
+)
+def test_untilize_chunk_width(width, num_chunks, expected_split, expected_last):
+    split = TTSampling._untilize_chunk_width(width, num_chunks)
+    assert split == expected_split
+    assert split % 32 == 0
+    assert -(-width // split) == num_chunks
+    assert width - split * (num_chunks - 1) == expected_last
 
 
 @pytest.mark.parametrize(
@@ -2065,6 +2006,15 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
     assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
 
     logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    # Exercise both sides of every chunk boundary, including the last element.
+    # Negative logits make accidental zero padding observable as a wrong argmax.
+    logits_host = -logits_host.abs() - 2
+    split = TTSampling._untilize_chunk_width(vocab_size, TTSampling._untilize_chunk_count(vocab_size))
+    boundary_indices = [0, vocab_size - 1]
+    for boundary in range(split, vocab_size, split):
+        boundary_indices.extend((boundary - 1, boundary))
+    for user in range(batch_size):
+        logits_host[0, 0, user, boundary_indices[user % len(boundary_indices)]] = -1
     logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
 
@@ -2079,6 +2029,47 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
             f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
             f"but the row maximum is {row_max[user].item():.6f}"
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
+def test_uneven_untilize_preserves_logits_and_argmax_under_trace(mesh_device):
+    # Isolate the argmax conversion: the single-device constructor also validates
+    # a top-k split, which deliberately does not support this padded width.
+    sampler = TTSampling.__new__(TTSampling)
+    sampler._force_argmax_sub_core_grids = None
+    width = 262208
+    split = sampler._untilize_chunk_width(width, sampler._untilize_chunk_count(width))
+    boundaries = [0, width - 1]
+    for boundary in range(split, width, split):
+        boundaries.extend((boundary - 1, boundary))
+    expected = torch.tensor([boundaries[row % len(boundaries)] for row in range(32)])
+    logits = torch.full((1, 1, 32, width), -2.0, dtype=torch.bfloat16)
+    logits[0, 0, torch.arange(32), expected] = -1.0
+    device_logits = ttnn.from_torch(logits, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    untilized = sampler._untilize_for_argmax(device_logits)
+    assert torch.equal(ttnn.to_torch(untilized), logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    ttnn.deallocate(tokens)
+    ttnn.deallocate(untilized)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    untilized = sampler._untilize_for_argmax(device_logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        # Reuse the capture with different maxima to detect stale inputs/outputs.
+        for expected in (expected.flip(0), expected):
+            logits.fill_(-2)
+            logits[0, 0, torch.arange(32), expected] = -1
+            host_logits = ttnn.from_torch(logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_logits, device_logits)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
 
 
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):

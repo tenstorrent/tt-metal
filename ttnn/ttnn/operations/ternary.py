@@ -93,4 +93,14 @@ def _golden_function_where(predicate, true_value, false_value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)
 
 
+def _golden_function_snake_beta(input_tensor, alpha, beta, *args, **kwargs):
+    import torch
+
+    # BigVGAN-style Snake activation: x + sin^2(alpha * x) / beta.
+    return input_tensor + torch.sin(alpha * input_tensor) ** 2 / beta
+
+
+ttnn.attach_golden_function(ttnn.snake_beta, golden_function=_golden_function_snake_beta)
+
+
 __all__ = []
