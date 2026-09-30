@@ -20,7 +20,9 @@
 // op-boundary barrier; reader on NOC0 / writer on NOC1).
 
 #include <cstdint>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -42,6 +44,7 @@
 #include "impl/program/program_impl.hpp"
 
 #include "command_queue_fixture.hpp"
+#include "device_fixture.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -84,6 +87,7 @@ const char* kWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazar
 const char* kReaderKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_reader.cpp";
 const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_writer_raw.cpp";
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
+const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -590,6 +594,85 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     // And the slot->binding name map resolves correctly too.
     EXPECT_EQ(name_set(rw.reads), (std::set<std::string_view>{"in0", "in2"}));
     EXPECT_EQ(name_set(rw.writes), (std::set<std::string_view>{"out"}));
+}
+
+// Coverage of op-to-op R/W inference beyond plain Noc::async_read/async_write on a TensorAccessor
+// (hazard_buf_rw_paths.cpp): each binding is touched through one other transfer path or endpoint kind, and must
+// resolve as that path implies. A path the notes miss shows up as its binding missing from a set -- the unsafe
+// failure (a detector would see no access and relax a real hazard). Compile + one launch; no hazard is timed, so it
+// runs on any architecture and either dispatch mode.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
+    auto md = devices_.at(0);
+    IDevice* dev = md->get_devices()[0];
+    const exp::NodeCoord node{0, 0};
+
+    // DRAM interleaved unless the path needs otherwise: LocalTensorAccessor needs L1, ShardView a sharded tensor.
+    const std::vector<std::string> dram_names = {
+        "view", "iter", "state", "zero", "legacy_r", "legacy_w", "wrap", "escape", "unused"};
+    std::vector<MeshTensor> tensors;
+    std::vector<std::pair<std::string, const MeshTensor*>> bound;
+    tensors.reserve(dram_names.size() + 3);
+    for (size_t i = 0; i < dram_names.size(); ++i) {
+        tensors.push_back(alloc(*md, BufferType::DRAM));
+    }
+    tensors.push_back(alloc(*md, BufferType::L1));
+    for (int i = 0; i < 2; ++i) {  // "shard", "shard_iter"
+        ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {1, 32}, ShardOrientation::ROW_MAJOR);
+        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+        TensorLayout layout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config);
+        tensors.push_back(MeshTensor::allocate_on_device(*md, TensorSpec(Shape{1, 32}, layout)));
+    }
+    for (size_t i = 0; i < dram_names.size(); ++i) {
+        bound.emplace_back(dram_names[i], &tensors[i]);
+    }
+    bound.emplace_back("local", &tensors[dram_names.size()]);
+    bound.emplace_back("shard", &tensors[dram_names.size() + 1]);
+    bound.emplace_back("shard_iter", &tensors[dram_names.size() + 2]);
+
+    exp::KernelSpec k{
+        .unique_id = exp::KernelSpecName{"paths"},
+        .source = kPathsKernel,
+        .num_threads = 1,
+        .hw_config = exp::DataMovementHardwareConfig{},
+    };
+    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    exp::ProgramSpec spec{
+        .name = "hazard_buf_rw_paths",
+        .kernels = {},
+        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+            .name = "wu", .kernels = {exp::KernelSpecName{"paths"}}, .target_nodes = node}},
+    };
+    exp::ProgramRunArgs params;
+    for (const auto& [name, tensor] : bound) {
+        BindTensorParameterToKernel(k, name, name);
+        spec.tensor_parameters.push_back(
+            exp::TensorParameter{.unique_id = exp::TensorParamName{name}, .spec = tensor->tensor_spec()});
+        params.tensor_args.emplace(exp::TensorParamName{name}, exp::TensorArgument{*tensor});
+    }
+    spec.kernels = {k};
+    Program program = exp::MakeProgramFromSpec(*md, spec);
+    exp::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+    auto kernel =
+        wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl().get_kernel_by_spec_name("paths");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev);
+    auto names = [](const auto& accesses) {
+        std::set<std::string_view> s;
+        for (const auto& a : accesses) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+    EXPECT_FALSE(rw.opaque);
+    // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
+    EXPECT_EQ(
+        names(rw.reads),
+        (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
+    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
 }
 
 }  // namespace tt::tt_metal
