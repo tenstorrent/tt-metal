@@ -1263,6 +1263,11 @@ class MiniMaxH3Pipeline:
         # reference than the running-max kernel on Blackhole. MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=off restores it.
         if os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS") is None and is_blackhole():
             self._transformer._set_fixed_softmax_blocks("auto")
+        # adaLN scale/shift through the per-tile-row map (exact, measured faster); a request whose boundary tiles
+        # exceed the slots falls back to the per-token gather below. MINIMAX_H3_ADALN_GATHER=matmul restores it.
+        if os.environ.get("MINIMAX_H3_ADALN_GATHER") is None and is_blackhole():
+            for block in self._transformer.transformer_blocks:
+                block._adaln_gather = "tilerow"
         return self._transformer
 
     @property
@@ -2496,18 +2501,23 @@ class MiniMaxH3Pipeline:
         if transformer.adaln_tilerow:
             # MINIMAX_H3_ADALN_GATHER=tilerow: the norms read scale/shift through a per-tile-row map.
             padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
-            tile_map, expanded = tilerow_remap(
-                padded_adaln,
-                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
-                sp_factor=self.sp_factor,
-                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
-            )
-            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
-            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
-            tilerow_kwargs = {
-                "adaln_tile_map": state.adaln_tile_map.value,
-                "adaln_expanded_indices": state.adaln_expanded.value,
-            }
+            try:
+                tile_map, expanded = tilerow_remap(
+                    padded_adaln,
+                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                    sp_factor=self.sp_factor,
+                    max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+                )
+            except ValueError as err:
+                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+                tile_map = None
+            if tile_map is not None:
+                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+                tilerow_kwargs = {
+                    "adaln_tile_map": state.adaln_tile_map.value,
+                    "adaln_expanded_indices": state.adaln_expanded.value,
+                }
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
