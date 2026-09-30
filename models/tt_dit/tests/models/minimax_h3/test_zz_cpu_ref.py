@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.minimax_h3.quant_config import apply_env_quant_config
+from ....models.transformers.minimax_h3.quant_config import FAST_RECIPE, apply_env_quant_config
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....utils.tensor import typed_tensor
 from ....utils.test import skip_if_unsupported_num_links
@@ -59,11 +59,33 @@ def _configs() -> list[tuple[str, dict[str, str]]]:
     return out
 
 
+_NOT_IN_PLACE = (
+    "MINIMAX_H3_ADALN_GATHER",
+    "MINIMAX_H3_STEP_SKIP",
+    "MINIMAX_H3_ATTN_CACHE",
+    "MINIMAX_H3_LOCAL_ASSEMBLY",
+)
+
+
 def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
-    """Put the model into the state a fresh process with exactly `knobs` in its environment would build."""
+    """Put the model into the state a fresh process with exactly `knobs` in its environment would build.
+
+    Constructor-derived state is set on the objects (fixed-offset blocks, SDPA fidelities and dtypes, the adaLN
+    schedule cache, the fused heads, the bf8 weights and MM fidelity overrides); MINIMAX_H3_FAST=1 is expanded the way
+    quant_config does at import. Knobs that need pipeline-built inputs or several forwards (tile-row gather, step reuse,
+    local assembly) cannot be applied to one forward here and are rejected."""
+    knobs = dict(knobs)
+    if knobs.pop("MINIMAX_H3_FAST", None) == "1":
+        for key, value in FAST_RECIPE.items():
+            knobs.setdefault(key, value)
+    unsupported = sorted(k for k in knobs if k in _NOT_IN_PLACE)
+    if unsupported:
+        raise ValueError(f"{unsupported} cannot be applied in place by this harness; use the pipeline's 2-step gate")
     for k in [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]:
         del os.environ[k]
     os.environ.update(knobs)
+    tt_model._adaln_cache_enabled = knobs.get("MINIMAX_H3_ADALN_CACHE") == "1"
+    tt_model._modulation_cache.clear()
     fidelity = getattr(ttnn.MathFidelity, knobs.get("MINIMAX_H3_SDPA_FIDELITY", "HiFi2"))
     kv_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_KV_DTYPE"]) if "MINIMAX_H3_SDPA_KV_DTYPE" in knobs else None
     v_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_V_DTYPE"]) if "MINIMAX_H3_SDPA_V_DTYPE" in knobs else kv_dtype
@@ -91,12 +113,13 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     if spec:
         tt_model._set_fixed_softmax_blocks(spec)
     # The bf8 typecast cannot be undone, so a config can only add linears to the set already cast; cast just those.
+    # The MM fidelity / fp32-accumulate overrides go through the same call and are re-applied for every config.
     applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
     wanted = {name for name in knobs.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name}
-    if wanted - applied:
+    if wanted - applied or "MINIMAX_H3_MM_FIDELITY" in knobs or "MINIMAX_H3_MM_FP32_ACC" in knobs:
         os.environ["MINIMAX_H3_BF8_WEIGHTS"] = ",".join(sorted(wanted - applied))
         apply_env_quant_config(tt_model)
-        os.environ["MINIMAX_H3_BF8_WEIGHTS"] = knobs["MINIMAX_H3_BF8_WEIGHTS"]
+        os.environ["MINIMAX_H3_BF8_WEIGHTS"] = knobs.get("MINIMAX_H3_BF8_WEIGHTS", "")
         tt_model._cpu_ref_bf8_applied = applied | wanted
     applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
     weights = "bf8:" + ",".join(sorted(applied)) if applied else "bf16"

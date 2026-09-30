@@ -654,7 +654,12 @@ class MiniMaxH3Transformer3DModel(Module):
     def _set_fixed_softmax_blocks(self, spec: str | None) -> None:
         """`spec`: "all", a block-range list ("0-35,39,41,42"), or "auto[:threshold]" which reads the checkpoint's q/k
         norm gains and enables the mode where sqrt(d) * max|g_q| * max|g_k| <= threshold (default 70), using that
-        bound as the constant offset. Explicit lists use the same bounds when the checkpoint is readable, else 0."""
+        bound as the constant offset. Explicit lists use the same bounds when the checkpoint is readable, else 0.
+
+        With offset = bound B every exp input lies in [-2B, 0]; the kernel clamps inputs below -88.5 to 0 and
+        seeds the row sum, so a row whose largest scaled logit is more than 88.5 below B gets a zero attention
+        output (residual only) instead of NaN. auto:44 rules that out for every row; the default 70 keeps 40
+        of the 50 blocks on the fast kernel (44 keeps 14) and such rows were not observed on the reference clip."""
         if not spec or spec.strip().lower() in ("off", "none", "0"):
             return
         spec = spec.strip()

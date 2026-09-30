@@ -458,7 +458,7 @@ described in the next paragraph.
 | `MINIMAX_H3_ADALN_CACHE=1` | keep every block's modulation tables per timestep vector (eager path; a 50-step schedule holds ~1.3 GB of tables per device) |
 | `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]` | typecast those linears' weights to bfloat8_b after loading (`out`/`ff2` need a bf8 residual for the fused addcmul, so they are normally left bf16) |
 | `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA fidelity per matmul phase or for both (`SDPAProgramConfig.qk_math_fidelity` / `pv_math_fidelity`). LoFi on PV keeps the logits at HiFi2; LoFi on both phases degrades the output |
-| `MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=auto[:threshold]` | ring SDPA without a running row max on the blocks whose q/k RMSNorm gains bound the scaled logits (`SDPAProgramConfig.fixed_offset_softmax`, offset = the block's bound); a block range list or `all` also works. **Default on Blackhole in the pipeline** (`auto`): it measured faster and slightly closer to the fp32 reference than the running-max kernel; `off` restores the standard kernel |
+| `MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=auto[:threshold]` | ring SDPA without a running row max on the blocks whose q/k RMSNorm gains bound the scaled logits (`SDPAProgramConfig.fixed_offset_softmax`, offset = the block's bound); a block range list or `all` also works. **Default on Blackhole in the pipeline** (`auto`): it measured faster and slightly closer to the fp32 reference than the running-max kernel; `off` restores the standard kernel. Exp inputs lie in [-2B, 0] for a block bound B: a row whose largest scaled logit is more than 88.5 below B underflows entirely and gets a zero attention output (the kernel seeds the row sum, so no NaN); `auto:44` excludes that for every row at the cost of 26 of the 40 fast blocks |
 | `MINIMAX_H3_MM_FIDELITY`, `MINIMAX_H3_MM_FP32_ACC=0` | fidelity / fp32 accumulation of the five block matmuls (bandwidth-bound at this shape: no gain) |
 | `MINIMAX_H3_SDPA_CHUNKS=q,k`, `MINIMAX_H3_AGMM_BLOCKS=K,N:Mb,Kb,Nb[,sh,sw];...`, `MINIMAX_H3_MMRS_BLOCKING=gx,gy,Mb,Kb,Nb,sh,sw[,workers[,window]]` | sweep overrides for the ring SDPA chunking and the linears' blockings |
 | `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
@@ -468,8 +468,8 @@ described in the next paragraph.
 | `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
 
 Cross-step reuse (`step_reuse.py`) is a different kind of knob: it changes the output. It is off unless set, eager path
-only, and meant for measurement: `MINIMAX_H3_STEP_SKIP=first-last/N[,...]` skips the whole block stack on the listed
-forwards and adds the previous computed forward's stack delta instead; `MINIMAX_H3_ATTN_CACHE=a-b:N[:first-last]` reuses
+only, and meant for measurement: `MINIMAX_H3_STEP_SKIP=first-last/N[,...]` skips the whole block stack on the forwards of the range whose offset from
+`first` is not a multiple of N (`first-last` without `/N` lists every forward; `/1` is rejected) and adds the previous computed forward's stack delta instead; `MINIMAX_H3_ATTN_CACHE=a-b:N[:first-last]` reuses
 the attention-branch delta of blocks a..b on the forwards of the window whose offset is not a multiple of N, still
 running the FFN. Neither can pass the 2-step gate by construction (a reused forward is one step stale); judge them on
 the decoded clip against the plain schedule and against the same time spent on fewer steps.

@@ -35,7 +35,10 @@ def _parse_range(text: str) -> tuple[int, int]:
 
 
 def parse_step_mask(spec: str | None, total: int) -> frozenset[int]:
-    """Forward indices selected by a MINIMAX_H3_STEP_SKIP spec, clipped to [1, total)."""
+    """Forward indices selected by a MINIMAX_H3_STEP_SKIP spec, clipped to [1, total).
+
+    'a', 'a-b' select every listed index; 'a-b/N' selects the indices of the range whose offset from a is not a
+    multiple of N (so every N-th forward from a is computed and the others reuse)."""
     if not spec:
         return frozenset()
     chosen: set[int] = set()
@@ -43,14 +46,16 @@ def parse_step_mask(spec: str | None, total: int) -> frozenset[int]:
         part = part.strip()
         if not part:
             continue
-        rng, _, stride = part.partition("/")
+        rng, has_stride, stride = part.partition("/")
         lo, hi = _parse_range(rng)
-        n = int(stride) if stride else 1
-        if n < 1:
-            raise ValueError(f"stride must be >= 1 in {part!r}")
-        for i in range(lo, hi + 1):
-            if n == 1 or (i - lo) % n != 0:
-                chosen.add(i)
+        if has_stride:
+            # 'a-b/N' keeps the offsets that are not multiples of N; N=1 would keep nothing, so it is an error.
+            n = int(stride)
+            if n < 2:
+                raise ValueError(f"stride must be >= 2 in {part!r} (omit '/N' to select the whole range)")
+            chosen.update(i for i in range(lo, hi + 1) if (i - lo) % n != 0)
+        else:
+            chosen.update(range(lo, hi + 1))
     return frozenset(i for i in chosen if 1 <= i < total)
 
 
