@@ -1,0 +1,153 @@
+{
+ "metrics": {
+  "auto_attn_norm_L00_big_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.000492393970489502
+  },
+  "auto_attn_norm_L00_big_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.0004290342330933
+  },
+  "auto_attn_norm_L00_big_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9985805153846741
+  },
+  "auto_attn_norm_L00_big_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0018235145835205913
+  },
+  "auto_attn_norm_L00_big_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.03
+  },
+  "auto_attn_norm_L00_big_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0022343923337757587
+  },
+  "auto_attn_norm_L00_layer39_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.000546574592590332
+  },
+  "auto_attn_norm_L00_layer39_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.00153648853302
+  },
+  "auto_attn_norm_L00_layer39_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9977543354034424
+  },
+  "auto_attn_norm_L00_layer39_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0017938948003575206
+  },
+  "auto_attn_norm_L00_layer39_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.03
+  },
+  "auto_attn_norm_L00_layer39_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.003237698692828417
+  },
+  "auto_attn_norm_L00_mixed_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.0004735589027404785
+  },
+  "auto_attn_norm_L00_mixed_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.000272274017334
+  },
+  "auto_attn_norm_L00_mixed_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9986488223075867
+  },
+  "auto_attn_norm_L00_mixed_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0018099336884915829
+  },
+  "auto_attn_norm_L00_mixed_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.03
+  },
+  "auto_attn_norm_L00_mixed_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.002210653852671385
+  },
+  "auto_attn_norm_L00_small_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.0002238154411315918
+  },
+  "auto_attn_norm_L00_small_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.0003739595413208
+  },
+  "auto_attn_norm_L00_small_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9989407658576965
+  },
+  "auto_attn_norm_L00_small_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.001783005311153829
+  },
+  "auto_attn_norm_L00_small_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.03
+  },
+  "auto_attn_norm_L00_small_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.002048579975962639
+  },
+  "auto_attn_norm_L00_vs_cpu_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.0005530714988708496
+  },
+  "auto_attn_norm_L00_vs_cpu_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.0002684593200684
+  },
+  "auto_attn_norm_L00_vs_cpu_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9986821413040161
+  },
+  "auto_attn_norm_L00_vs_cpu_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0018188516842201352
+  },
+  "auto_attn_norm_L00_vs_cpu_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.006194812245666981
+  },
+  "auto_attn_norm_L00_vs_cpu_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.002179726492613554
+  },
+  "auto_attn_norm_L00_vs_golden_bias": {
+   "t": "2026-09-30T06:13:41",
+   "value": -0.000531613826751709
+  },
+  "auto_attn_norm_L00_vs_golden_ratio_max": {
+   "t": "2026-09-30T06:13:41",
+   "value": 1.0003056526184082
+  },
+  "auto_attn_norm_L00_vs_golden_ratio_min": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9986163973808289
+  },
+  "auto_attn_norm_L00_vs_golden_rel": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0029180829878896475
+  },
+  "auto_attn_norm_L00_vs_golden_rel_limit": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.008540834300220013
+  },
+  "auto_attn_norm_L00_vs_golden_row": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.0036488582845777273
+  },
+  "pcc_attn_norm_L00": {
+   "t": "2026-09-30T06:13:41",
+   "value": 0.9999958777964875
+  }
+ },
+ "task": "C.dense.attn_norm"
+}
