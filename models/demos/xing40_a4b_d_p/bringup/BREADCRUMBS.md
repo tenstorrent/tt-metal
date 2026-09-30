@@ -263,3 +263,26 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   mixed / small / big rel 0. (Precompile collect pass prints FAIL lines with rel 1; only the real pass counts.)
 - Next (perf): the experts' and shared expert's reduce_scatters could be fused by adding partials before one RS.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_moe_add.py`
+
+## M.1 assemble (run1, attempt 1)
+- New `tt/model.py`: `TtXingModel` (TtEmbedding -> TtXingBlock x N -> TtFinalNorm) and `TtXingBlock` (glm53's
+  TtGlmBlock pattern: step fns keyed by the reference block graph `xing_ref.HC_ATTN + HC_FFN + DENSE/MOE_FFN +
+  FFN_RESIDUAL`, run through `run_block`, every boundary freed after its last reader). The step modules are the
+  validated ones, built by the same `build_*` functions the component hooks use; no module was changed.
+- Residual on the device: [1, 1, S/4, 4 x 1792] fp32 per chip (tt/layout.py streams layout), from the embedding to
+  the final norm. Boundaries are the hybrid harness's minus the host; the one difference: the router step hands
+  `(idx uint16, wts fp32)` straight to the experts and frees its dense [S/4, 64] matrix (the hybrid rebuilt top-k
+  on the host from the dense matrix).
+- TtEmbedding: bf16 table split by hidden columns over axis 1 ([131072, 1792] per chip, ROW_MAJOR, tensorbin
+  `generated/xing40_a4b_d_p/tt_cache/embed_bf16_colsplit`), ids [1, 1, 1, S/4] uint32 row split, typecast fp32,
+  concat x4 for the streams. TtFinalNorm: fp32 sum of the 4 stream slices x 1/4 -> TtDistributedRmsNorm
+  (model.norm.weight, fp32 out) -> [S/4, 1792] column split. LM head on the host (ladder sampled rows).
+- hooks: `XingDeviceModel` is the `device_model` default; `BRINGUP_HYBRID=1` keeps `HybridDeviceModel`.
+  `_DeviceState(model, max_seq)` (new_state, outside the forward) calls `setup(chunk, max_seq)` on every block for
+  the chunk(s) of the rungs / target with that seq (attention RoPE tables, latent cache, gather scratch, SDPA config;
+  experts' dispatch / combine) and zeroes the caches, so prefix loads (rung `last`) have a geometry and warm chunks
+  do no host work. load_prefix / to_torch go to `TtMlaAttention.load_state` / `read_state`.
+- Gotcha: if two rungs with the same seq used different chunks, the first listed is the current geometry; a block
+  asserts the geometry matches the chunk it is called with.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
+  (`BRINGUP_HYBRID=1` for the hybrid harness).
