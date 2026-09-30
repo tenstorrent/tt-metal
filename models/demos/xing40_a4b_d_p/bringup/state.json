@@ -2264,8 +2264,126 @@
   "status": "TODO"
  },
  "M.1": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "788d4dfe-d347-4d57-b31a-79ffac08aff2"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/M.1.assemble.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/M.1.assemble.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "assemble",
+    "seconds": 875.4,
+    "session_id": "788d4dfe-d347-4d57-b31a-79ffac08aff2",
+    "t": "2026-09-30T16:09:37"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 68.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:55:01"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T16:36:54"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T16:49:18"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T16:50:32"
+   }
+  ],
+  "last_run": "2026-09-30T16:50:32",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/M.1.log",
+  "metrics": {
+   "host_transfers_per_layer": 0,
+   "pcc_layer_L00": 0.9999961026592195,
+   "pcc_layer_L01": 0.9999922118761689,
+   "pcc_layer_L02": 0.9999794501347913,
+   "pcc_layer_L03": 0.9999646344228097,
+   "pcc_layer_L04": 0.9999512935265811,
+   "pcc_layer_L05": 0.9999331784714204,
+   "pcc_layer_L06": 0.999907042416924,
+   "pcc_layer_L07": 0.9998556655716462,
+   "pcc_layer_L08": 0.9997688212242103,
+   "pcc_layer_L09": 0.9997747937605559,
+   "pcc_layer_L10": 0.9998154743266215,
+   "pcc_layer_L11": 0.9998163768267623,
+   "pcc_layer_L12": 0.9997902275543806,
+   "pcc_layer_L13": 0.9997442066301296,
+   "pcc_layer_L14": 0.9997130782298945,
+   "pcc_layer_L15": 0.99963055548107,
+   "pcc_layer_L16": 0.9995482647707626,
+   "pcc_layer_L17": 0.9993997102545963,
+   "pcc_layer_L18": 0.9992298327904212,
+   "pcc_layer_L19": 0.9987844795939821,
+   "pcc_layer_L20": 0.9984260460930809,
+   "pcc_layer_L21": 0.9979901073078344,
+   "pcc_layer_L22": 0.9975527549411854,
+   "pcc_layer_L23": 0.9968243021917045,
+   "pcc_layer_L24": 0.9966370281560758,
+   "pcc_layer_L25": 0.9956366654740989,
+   "pcc_layer_L26": 0.9953824132998337,
+   "pcc_layer_L27": 0.9960977420805749,
+   "pcc_layer_L28": 0.9967444586864398,
+   "pcc_layer_L29": 0.9967314442170588,
+   "pcc_layer_L30": 0.9970458894130972,
+   "pcc_layer_L31": 0.9970577669746333,
+   "pcc_layer_L32": 0.9970278261054586,
+   "pcc_layer_L33": 0.9971262622850823,
+   "pcc_layer_L34": 0.9974142299556413,
+   "pcc_layer_L35": 0.9973540927207528,
+   "pcc_layer_L36": 0.997241623991588,
+   "pcc_layer_L37": 0.9972745592601815,
+   "pcc_layer_L38": 0.9977559190588947,
+   "pcc_layer_L39": 0.9986639892488032,
+   "pcc_state_min": 0.9976174320154718
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "assemble",
+  "started": "2026-09-30T16:49:23",
+  "status": "PASS",
+  "waiting": null
  },
  "O.1": {
   "attempts": 0,
