@@ -11,6 +11,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include <vector>
 
@@ -24,6 +25,20 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
+
+struct LocalHostShard {
+    distributed::MeshCoordinate coord;
+    HostBuffer buffer;
+};
+
+struct LocalHostShards {
+    ttsl::SmallVector<LocalHostShard> shards;
+    size_t size_bytes = 0;
+};
+
+// Host presence does not imply destination ownership on a mesh shared by multiple processes.
+LocalHostShards select_local_host_shards(
+    const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device);
 
 // Converts logical data into physical data based on tensor spec
 // - Logical data: Flat container of row major data corresponding to some ND logical shape

@@ -67,6 +67,7 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
+#include "slow_dispatch.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -1840,7 +1841,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", bind.name);
         PrefetcherPipeParameterBinding& binding = it->second;
 
-        if (binding.bound_pipe == &prefetcher_pipe) {
+        if (binding.bound_pipe != nullptr && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
@@ -1887,6 +1888,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 *checked.pipe);
         }
         checked.binding->bound_pipe = checked.pipe;
+        checked.binding->bound_pipe_identity = checked.pipe->identity();
     }
 }
 
@@ -3082,7 +3084,8 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    TTZoneScopedD(PROGRAM);
+    // Always-on zone: tools/tracy reports "CompileProgram" as a default child call of ops.
+    TTZoneScopedDN(PROGRAM, "CompileProgram");
 
     const ContextId device_context_id = extract_context_id(device);
     // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
@@ -3677,7 +3680,7 @@ void detail::ProgramCompileGroup::finalize_offsets() {
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
-        detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
+        slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, force_slow_dispatch);
     }
 }
 

@@ -127,7 +127,7 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
 def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
     """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
 
-    GLM-5.2 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
+    GLM-5.3 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
     a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
     """
     from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix

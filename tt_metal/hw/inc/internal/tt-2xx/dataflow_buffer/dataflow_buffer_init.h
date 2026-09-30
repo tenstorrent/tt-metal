@@ -651,26 +651,7 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
     WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
 }
 
-// Clear ClientL valid for packer remapper pairs in [lo, hi). Called from trisc.cc after the kernel
-// so pairs from launch N cannot leak into launch N+1. lo==0xFF means nothing was programmed.
-FORCE_INLINE void dfb_clear_packer_remapper_window(uint8_t lo, uint8_t hi) {
-    if (lo == 0xFFu) {
-        return;
-    }
-    for (uint32_t i = lo; i < hi; i++) {
-        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
-    }
-    asm volatile("fence" ::: "memory");
-}
-
 #endif  // COMPILE_FOR_TRISC && UCK_CHLKC_PACK
-
-// Contiguous packer remapper pairs programmed this launch ([lo, hi); lo==0xFF if none).
-// Pack trisc.cc tears this range down after the kernel. DM/unpack ignore the return.
-struct DfbPackerRemapperRange {
-    uint8_t lo = 0xFFu;
-    uint8_t hi = 0;
-};
 
 // DM2-7 + TRISC: walk this hart's pre-computed sequential init blob; TC readiness is published
 // via store to dfb_publish_producer_ready and consumers poll in DataflowBuffer::DataflowBuffer().
