@@ -713,9 +713,15 @@ def test_op_ready_registers_the_ops_and_resets_the_deferred_tasks_and_their_depe
     assert main(args + ["--no-commit"]) == 0
     out = capsys.readouterr().out
     assert "delivered: ttnn.bringup.fixture_norm, ttnn.bringup.fixture_mlp" in out and "orchestrator resume" in out
-    tree = ast.parse((bops / "__init__.py").read_text())
-    node = next(n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "PYTHON_OPS")
-    assert ast.literal_eval(node.value) == {
+
+    def python_ops(text):
+        tree = ast.parse(text)
+        return ast.literal_eval(
+            next(n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "PYTHON_OPS").value
+        )
+
+    assert python_ops((bops / "__init__.py").read_text()) == {
+        **python_ops(before_init),  # the ops already registered stay (mhc_pre / mhc_post)
         "fixture_norm": ("fixture_norm", "fixture_norm"),
         "fixture_mlp": ("fixture_mlp", "fixture_mlp"),
     }
