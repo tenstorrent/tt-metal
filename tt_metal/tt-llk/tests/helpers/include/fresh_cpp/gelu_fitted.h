@@ -115,11 +115,22 @@ __attribute__((noinline)) void calculate_gelu_fitted_cpp()
         // round, hi/lo ln2 split, exponent recombine).
         v_if (x < -3.0f)
         {
-            const sfpi::vFloat arg  = x * x * -0.5f;
-            const sfpi::vFloat z    = arg * 1.4426950408889634f;
-            const sfpi::vFloat c231 = 12582912.0f; // 0x4B400000 = 1.5 * 2^23
-            const sfpi::vFloat tmp  = z + c231;
-            const sfpi::vFloat k    = tmp - c231;
+            // arg is clamped at the point where exp(arg) underflows fp32 anyway
+            // (-88 < -127*ln2), for two reasons beyond the value.  The magic-number
+            // round below recovers its integer from as<vInt>(z + 1.5*2^23) -
+            // as<vInt>(1.5*2^23), which is only meaningful while z + 1.5*2^23 stays
+            // POSITIVE: past |x| = 4176 it goes negative and k_int is whatever the
+            // integer format makes of a negative float reinterpreted, which on
+            // silicon comes back with the wrong SIGN (measured: x = -4192 returned
+            // +4.2573e15 with the exponent guard alone, where an int32 two's-complement
+            // host model predicts 0 - so the host model cannot settle this case and the
+            // clamp removes the dependence on it).  With arg >= -88, z >= -127, the
+            // bias trick is inside its documented |z| < 2^22 range, and k_int >= -127.
+            const sfpi::vFloat arg   = sfpi::max(x * x * -0.5f, -88.0f);
+            const sfpi::vFloat z     = arg * 1.4426950408889634f;
+            const sfpi::vFloat c231  = 12582912.0f; // 0x4B400000 = 1.5 * 2^23
+            const sfpi::vFloat tmp   = z + c231;
+            const sfpi::vFloat k     = tmp - c231;
             const sfpi::vInt k_int  = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
             sfpi::vFloat rr         = k * -0.6931152343750000f + arg;
             rr                      = k * -3.19461832987e-05f + rr;
@@ -129,9 +140,40 @@ __attribute__((noinline)) void calculate_gelu_fitted_cpp()
             p                       = p * rr + 0.5f;
             p                       = p * rr + 1.0f;
             p                       = p * rr + 1.0f;
-            const sfpi::vInt pexp   = sfpi::exexp(p, sfpi::ExponentMode::Biased);
-            const sfpi::vFloat e    = sfpi::setexp(p, pexp + k_int);
-            r                       = r * e * -3.9894228040143270e-01f;
+            const sfpi::vInt pexp    = sfpi::exexp(p, sfpi::ExponentMode::Biased);
+            const sfpi::vInt new_exp = pexp + k_int;
+            // exp(-x^2/2) UNDERFLOWS long before x leaves this arm, and setexp
+            // keeps only the low 8 bits of its exponent operand, so once
+            // new_exp goes non-positive the field WRAPS and the underflowed
+            // factor comes back as a NORMAL number: at x = -13.3125 new_exp is
+            // -1 -> field 255 -> NaN, at -13.375 it is -3 -> -6.1144e37, at -20
+            // -> +3.7471e-10 with the SIGN FLIPPED against a function that is
+            // negative and bounded by -0.169979 on this whole arm.
+            // Guarded exactly as the in-tree siblings guard the same
+            // reconstruction -- softplus_exp_negative (v_if(new_exp > 0), FTZ
+            // otherwise) and xielu's -126.5 clamp.  Flush-to-zero IS the true
+            // fp32 value here: gelu(-14) = -1.09e-43, gelu(-20) = -5.5e-88.
+            // NOTE this is deliberately NOT the x <= -5.54259443 flush the
+            // sibling gelu.h / gelu_255_licensed.h bodies carry.  Those flush
+            // because their own exp region is bracketed there; this asymptotic
+            // arm is EXACT from -3 down to -13 (0 / 0 / 9 bf16 ULP at -5 /
+            // -10 / -13 against an mpmath golden), and flushing at -5.5426
+            // would trade a wrap defect for a 19535-to-25928 bf16 ULP band of
+            // the very plausible constant 0 shape this class of defect is
+            // about.  The guard binds only where setexp cannot represent the
+            // result, which is the argument-side statement of the bug.
+            // The result is set, not multiplied by a zeroed factor: segment 0's
+            // degree-6 correction polynomial itself overflows to +/-inf past
+            // |x| ~ 1.1e7, and inf * 0 is a NaN where the answer is -0.
+            v_if (new_exp > 0)
+            {
+                r = r * sfpi::setexp(p, new_exp) * -3.9894228040143270e-01f;
+            }
+            v_else
+            {
+                r = 0.0f;
+            }
+            v_endif;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);

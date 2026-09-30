@@ -67,6 +67,20 @@ __attribute__((noinline)) void calculate_tanh_lut_licensed_cpp()
             t = a * 0x1.244p-6f + 0x1.dfp-1f;
         }
         v_endif;
+        // SATURATION: the last slot, [4, inf), is an AFFINE RAMP
+        // (a * 0x1.31p-11 + 0x1.fe8p-1) standing for a BOUNDED quantity --
+        // |tanh| <= 1 for every x.  The ramp crosses 1.0 at |x| = 5.036066, so
+        // one bf16 step outside the row's golden domain it runs away instead of
+        // saturating: 5.0625 -> 1.0000154, 119.5 -> 1.0665884 (9 bf16 ULP),
+        // 1e6 -> 582.738 (1170 ULP), FLT_MAX -> 1.9796e35 (15000 ULP).
+        // Restated as one min AFTER the dispatch tree -- exactly the shape and
+        // placement of the fix already landed on the sister body
+        // sigmoid_lut_licensed.h -- so the tree itself stays the six all-affine
+        // slots that -mtt-tensix-optimize-lut-select-fp16 folds into a single
+        // SFPLUTFP32 mod0 7.  It only ever binds above |x| = 5.036066, where it
+        // strictly REDUCES the error, so the licensed
+        // equal-or-better-than-hand accuracy bar on bf16 [-5, 5] is untouched.
+        t                = sfpi::min(t, 1.0f);
         sfpi::dst_reg[0] = sfpi::copysgn(t, x);
         sfpi::dst_reg++;
     }

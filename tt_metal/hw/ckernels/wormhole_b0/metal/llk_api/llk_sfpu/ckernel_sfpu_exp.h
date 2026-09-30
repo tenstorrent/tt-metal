@@ -117,7 +117,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
-    // To avoid this, we clamp xlog2 to [0, 255]
+    // To avoid this, we clamp xlog2 to [0, 255]. NOTE the clamp alone is not enough on
+    // the high side -- see the saturation-encoding note at the setexp below.
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
     xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
@@ -135,6 +136,23 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
+
+    // The clamp above bounds the VALUE; it does not produce the correct saturation
+    // ENCODING. At the ceiling, _float_to_int32_for_exp_21f_(255.0f) is exactly
+    // 0x7F800000, so z = +inf, exman(z) = 0, and the polynomial returns its constant
+    // term 1.0017248 = 0x3F803885 -- a NON-ZERO mantissa. setexp then writes exponent
+    // field 255 over it, giving 0x7F803885, which is a NaN and not +inf. Every input
+    // from 88.723 upwards therefore returned NaN where the answer is +inf (the comment
+    // above, promising "+inf (when input > 88.5)", was false), and via sigmoid's
+    // _sfpu_exp_21f_bf16_<true> call that NaN was only laundered back to a plausible
+    // answer by whatever SFPARECIP happens to do with a NaN.
+    //
+    // exponential_part >= 255 names exactly that saturated lane and nothing else:
+    // exexp is an 8-bit field extraction so it cannot exceed 255, and field 255 is
+    // reachable only from the clamp ceiling (val = 88.72 already gives field 254).
+    // Substituted explicitly, in the same shape as the two 21f pow bodies.
+    v_if(exponential_part >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.

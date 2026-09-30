@@ -20,7 +20,7 @@ namespace ckernel::sfpu
 
 // Softplus via abs(x) symmetry (ported from Blackhole): with f(a) = ln(1+exp(-a)),
 // softplus(t) = t + f(t) for t >= 0 and f(-t) for t < 0. is_fp32_dest_acc_en selects a degree-8 poly on
-// [0,5] + exp Taylor tail (32-bit Dest) vs a bf16-accurate degree-6 poly with the tail dropped (16-bit).
+// [0,5] vs a bf16-accurate degree-6 poly (16-bit); both then share the exp Taylor tail for a > 5.
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
 
@@ -73,14 +73,6 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
                 SOFTPLUS_POLY_C6,
                 SOFTPLUS_POLY_C7,
                 SOFTPLUS_POLY_C8);
-
-            // Tail for a > 5: f(a) ~ exp(-a) via 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3)).
-            v_if (a > SOFTPLUS_POLY_BOUNDARY)
-            {
-                sfpi::vFloat e = _sfpu_exp_fp32_accurate_(-a);
-                residual       = e * (1.0f + e * (-0.5f + e * 0.333333343f));
-            }
-            v_endif;
         }
         else
         {
@@ -93,15 +85,23 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
                 SOFTPLUS_BF16_POLY_C4,
                 SOFTPLUS_BF16_POLY_C5,
                 SOFTPLUS_BF16_POLY_C6);
-
-            // The degree-6 poly diverges past its [0, 5] fit domain, while the true residual <
-            // exp(-5) = 0.0067 there; clamp to 0 to keep softplus(t>0) = t within bf16 rounding.
-            v_if (a > SOFTPLUS_POLY_BOUNDARY)
-            {
-                residual = 0.0f;
-            }
-            v_endif;
         }
+
+        // Tail for a > 5: f(a) ~ exp(-a) via 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3)).
+        //
+        // Shared by both arms. It used to be fp32-only: the bf16 arm clamped residual to 0,
+        // justified by "the true residual < exp(-5) = 0.0067 there". That is a clamp on the
+        // RESULT and it is correct for the POSITIVE fold only, where tp dominates the sum.
+        // On the negative fold the result IS the residual -- tp = max(t, 0) = 0, so the whole
+        // op returned exactly 0 for every t < -5, against a true value that stays
+        // bf16-representable down to t ~ -87: softplus(-5.0001) = 6.7147e-3 as 0.0 (15324
+        // bf16 ULP), softplus(-20) = 2.0612e-9 as 0.0 (12558 ULP). One shared tail restores
+        // 0 bf16 ULP from -5.0001 to -87 and leaves the positive fold bit-identical.
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+            sfpi::vFloat e = _sfpu_exp_fp32_accurate_(-a);
+            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+        }
+        v_endif;
 
         // Reconstruct: t >= 0 -> max(0,t) + residual; t < 0 -> residual.
         sfpi::vFloat tp = sfpi::max(t, 0.0f);
@@ -125,8 +125,8 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  * Uses the abs(x) symmetry: with f(a) = ln(1 + exp(-a)) and t = beta * x,
  * softplus(x) = 1/beta * (t + f(t)) for t >= 0 and 1/beta * f(-t) for t < 0. Above `threshold` the op
  * is linear (returns x). is_fp32_dest_acc_en selects a degree-8 polynomial on [0, 5] plus an exp
- * Taylor tail (32-bit Dest) or a bf16-accurate degree-6 polynomial with the tail dropped (16-bit
- * Dest). APPROXIMATION_MODE is accepted for ABI parity but ignored (softplus is exact).
+ * Taylor tail (32-bit Dest) or a bf16-accurate degree-6 polynomial (16-bit Dest); the exp tail for
+ * a > 5 is shared by both. APPROXIMATION_MODE is accepted for ABI parity but ignored (softplus is exact).
  *
  * @tparam APPROXIMATION_MODE: Accepted for ABI parity; ignored (softplus has no approximate variant).
  * @tparam is_fp32_dest_acc_en: Select the fp32 (degree-8 + exp tail) vs bf16 (degree-6) residual path.

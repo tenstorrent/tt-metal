@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
@@ -94,18 +96,43 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 1.0f;
     r = r * f + 1.0f;
 
-    // exp(a) = 2^i * exp(f). Construct 2^i by writing the biased exponent (i + 127) directly into
-    // the IEEE-754 exponent field. This is equivalent to sfpi::setexp on top of a 1.0 seed (setexp
-    // and exexp are correct on Quasar); the int add / shift-left / reinterpret used here are simply
-    // cheaper and keep the whole path in fp32 / two's-complement. Correct across fp32 exp's
-    // representable domain (|a| < ~88); larger-magnitude inputs are the LUT/approx path's concern.
+    // exp(a) = 2^i * exp(f), written by pushing i into the result's biased exponent field.
     //
-    // NB: the Quasar port bug was NOT here. It was the Blackhole kernel's sign-magnitude rounding
-    // (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add), which relies on
-    // Blackhole's integer-format behaviour. _sfpu_round_to_nearest_int32_ above replaces that and is
-    // the actual fix.
-    sfpi::vFloat two_i = sfpi::as<sfpi::vFloat>((i + 127) << 23);
-    return r * two_i;
+    // This is Blackhole's guarded reconstruction, RESTORED. The port had replaced it with
+    // as<vFloat>((i + 127) << 23) and dropped the guard with it, and the claim that
+    // "larger-magnitude inputs are the LUT/approx path's concern" was false: the dispatcher below
+    // hands dst_reg[0] straight to this function unclamped whenever EN_32BIT_DEST is set. Because
+    // a shift does not wrap mod 256 but spills into BIT 31, that left a strictly-positive function
+    // returning plausible NEGATIVES on both tails --
+    //
+    //     exp( 90) -> -1.0540e-38     exp( 200) -> -6.2405e+09     (true +inf)
+    //     exp(-89) -> -inf            exp(-100) -> -4.3076e+33     (true ~0, subnormal)
+    //
+    // onset i + 127 >= 256, i.e. a >= 89.06, and i + 127 <= -1, i.e. a <= -88.03.
+    //
+    // The shift form was ALSO one octave short on the high side even where it did not spill: it
+    // materialises 2^i, so i = 128 gives field 255 = +inf and the product saturates, while the true
+    // result is still finite. exp(88.5) returned +inf against 2.7231e+38. Writing exexp(r) + i
+    // instead never materialises 2^i, and the resulting e >= 255 test coincides EXACTLY with the
+    // real overflow: e >= 255 <=> r >= 1 <=> a >= i*ln2 = 128*ln2 = 88.72284 = ln(FLT_MAX).
+    // Max relative error of this form over every bf16 a in [-90, 90] with a finite true result is
+    // 7.923e-08 (~1.3 fp32 ULP).
+    //
+    // setexp/exexp are correct on Quasar, as the previous comment noted. NB the port bug this file
+    // was written to fix was a different one -- Blackhole's sign-magnitude rounding, replaced by
+    // _sfpu_round_to_nearest_int32_ above -- and that fix is untouched here.
+    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
+    sfpi::vFloat y = sfpi::setexp(r, e);
+    v_if(e >= 255) {
+        // overflow beyond the fp32 range
+        y = std::numeric_limits<float>::infinity();
+    }
+    v_elseif(e < 1) {
+        // underflow, including subnormals (FTZ, as on Blackhole)
+        y = 0.0f;
+    }
+    v_endif;
+    return y;
 }
 
 // Calculates EXP over a full tile. Quasar exposes exactly two implementations:

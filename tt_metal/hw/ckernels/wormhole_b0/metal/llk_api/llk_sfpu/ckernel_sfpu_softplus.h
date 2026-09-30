@@ -23,9 +23,9 @@ namespace ckernel::sfpu {
 //   softplus(t) = f(-t)      for t < 0
 //
 // FP32: degree-8 polynomial for f(a) on [0, 5] + inline exp + 3-term Taylor tail
-// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) + tail clamped to 0
-//       (residual < exp(-5) = 0.0067 for a > 5, below bf16 rounding vs the t>0 term,
-//        so the expensive exp tail is unnecessary at bf16 precision)
+// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) + the same exp tail at degree 5
+//       (the tail used to be fp32-only, which made softplus(t) exactly 0 for every
+//        t < -5 -- see the note at the tail itself)
 // ======================================================================
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
@@ -117,15 +117,6 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_POLY_C6,
             SOFTPLUS_POLY_C7,
             SOFTPLUS_POLY_C8);
-
-        // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
-        // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
-        sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
-            sfpi::vFloat e = softplus_exp_negative(neg_a);
-            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
-        }
-        v_endif;
 #else
         // BF16: f(a) via degree-6 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
@@ -137,13 +128,33 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C4,
             SOFTPLUS_BF16_POLY_C5,
             SOFTPLUS_BF16_POLY_C6);
-
-        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
-        // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
-        // bf16 rounding and avoids the ~8-op exp tail on every element.
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
-        v_endif;
 #endif
+
+        // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
+        // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3)).
+        //
+        // This used to be fp32-only: the bf16 arm set residual = 0 instead, justified by
+        // "residual < exp(-5) = 0.0067 for a > 5, below bf16 rounding vs the t>0 term".
+        // That argument holds for the POSITIVE fold ONLY, where t dominates the sum. It
+        // clamps the RESULT and not the argument, and on the negative fold the result IS
+        // the residual: t = max(t, 0) = 0, so sp = 0 + 0 = 0 exactly, for every t < -5.
+        // The true value is nowhere near 0 and stays bf16-representable down to t ~ -87 --
+        // softplus(-5.0001) = 6.7147e-3 returned as 0.0 (15324 bf16 ULP), softplus(-20) =
+        // 2.0612e-9 as 0.0 (12558 ULP), softplus(-80) = 1.8049e-35 as 0.0 (1472 ULP).
+        // 100% relative error over 82 octaves, delivered as the plausible constant 0.
+        //
+        // Sharing one tail restores 0 bf16 ULP from t = -5.0001 down to t = -87 (the first
+        // t where the true value is subnormal and both flush), and leaves the positive fold
+        // BIT-IDENTICAL: over every bf16 t in [0, 20) the before/after difference is
+        // exactly 0, because there the tail only replaces a residual already below the bf16
+        // resolution of t. softplus_exp_negative selects its Taylor degree on INP_FLOAT32,
+        // so the bf16 arm still gets the cheaper degree-5 form.
+        sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+            sfpi::vFloat e = softplus_exp_negative(neg_a);
+            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+        }
+        v_endif;
 
         // Reconstruct softplus(t):
         //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
