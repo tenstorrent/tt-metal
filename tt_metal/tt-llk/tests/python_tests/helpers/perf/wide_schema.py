@@ -135,6 +135,7 @@ DB_SCHEMA = [
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
+    Column("welford_recip_size", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
