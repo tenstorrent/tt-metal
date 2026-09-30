@@ -56,8 +56,9 @@ _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
 _MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
-# `-hot` cases: this share of each chip's tokens picks, as its first expert, the hot expert of the chip
-# token_index % ring points at -- one per chip, in its LAST local slot, so it is walked last.
+# The hot case: this share of every origin chip's tokens picks ONE global expert first. Spread over a hot
+# expert per chip it could never exceed seq * topk / chips, well under the models' 320-token threshold; on
+# one expert it reaches ~2.1k and is the only expert the real threshold leaves to the unified half.
 _HOT_SHARE = 0.4
 # Measured programs per configuration; the median is reported.
 _PERF_ITERS = 5
@@ -84,7 +85,7 @@ def _mesh_params():
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
         for model_id in _MODELS:
-            for threshold_id in ("all-unified", "median-split", "median-split-hot", "all-AIcodegen"):
+            for threshold_id in ("all-unified", "median-split", "hot-expert", "all-AIcodegen"):
                 params.append(
                     pytest.param(
                         mesh,
@@ -104,14 +105,19 @@ def _int_tensor(torch_tensor, mesh_device, mesh_mapper, dtype=ttnn.int32):
     )
 
 
+def _hot_expert(idx_table, experts_per_chip, chips):
+    """The one expert the hot case overloads: the LAST local slot of the LAST chip, so both the chip's own
+    walk and the ring reach it last."""
+    return int(idx_table[0, chips - 1, experts_per_chip - 1])
+
+
 def _add_hot_experts(indices, idx_table, experts_per_chip):
-    """Route _HOT_SHARE of every origin chip's tokens to one expert per destination chip, its last local slot,
-    in place. The token's other picks stay distinct from it."""
+    """Route _HOT_SHARE of every origin chip's tokens to the one hot expert, in place. The token's other
+    picks stay distinct from it."""
     chips, seq, topk = indices.shape
-    hot = idx_table[0, :, experts_per_chip - 1]
+    expert = _hot_expert(idx_table, experts_per_chip, chips)
     for origin in range(chips):
         for t in range(int(seq * _HOT_SHARE)):
-            expert = int(hot[t % chips])
             row = indices[origin, t]
             clash = (row == expert).nonzero()
             if len(clash):
@@ -163,7 +169,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    if threshold_id.endswith("-hot"):
+    if threshold_id == "hot-expert":
         _add_hot_experts(indices, idx_table, experts_per_chip)
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -194,9 +200,9 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     )(x, weights, indices, expert_offsets)
 
     counts = expert_token_counts.flatten()
-    if threshold_id.endswith("-hot"):
-        hot = idx_table[0, :, experts_per_chip - 1].tolist()
-        logger.info(f"hot experts (last local slot per chip): {hot}, counts {[int(counts[e]) for e in hot]}")
+    if threshold_id == "hot-expert":
+        hot = _hot_expert(idx_table, experts_per_chip, dispatch_group_size)
+        logger.info(f"hot expert (last local slot of the last chip): {hot}, count {int(counts[hot])}")
     if threshold_id == "all-unified":
         # Every expert above the threshold, so the unified pass takes them all and combine sees each
         # one released as that pass finishes it.
@@ -206,6 +212,10 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         # walks each local slot with no work and nothing is released until the fused pass reaches it.
         # The bound on what the overlap can hide.
         threshold = int(counts.max().item())
+    elif threshold_id == "hot-expert":
+        # The model's own measured crossover. On the flat routing every expert falls under it, which is
+        # all-AIcodegen again; it only splits anything once one expert is genuinely hot.
+        threshold = model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
     else:
         threshold = max(1, int(counts[counts > 0].median().item()))
     assert threshold < max_dispatched_tokens_per_expert
