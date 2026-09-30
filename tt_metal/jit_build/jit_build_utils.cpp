@@ -462,6 +462,7 @@ void harvest_zone_src_locations_from_dir(const std::string& out_dir) {
             harvest_zone_src_locations_from_ii(read_file_bytes(entry.path().string()));
         } catch (const std::exception&) {
             // Unreadable .ii: skip it. Profiler bookkeeping must never fail a build.
+            continue;
         }
     }
 }

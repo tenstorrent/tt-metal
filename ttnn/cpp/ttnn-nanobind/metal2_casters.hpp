@@ -37,7 +37,7 @@ struct spec_name_caster {
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
         StringCaster caster;
         if (!caster.from_python(src, flags_for_local_caster<std::string>(flags), cleanup) ||
-            !caster.template can_cast<std::string>()) {
+            !StringCaster::template can_cast<std::string>()) {
             return false;
         }
         value = SpecName(caster.operator cast_t<std::string>());

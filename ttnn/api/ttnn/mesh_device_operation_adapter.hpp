@@ -31,7 +31,6 @@
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/up_front_compile.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
