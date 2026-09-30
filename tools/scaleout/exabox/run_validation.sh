@@ -435,8 +435,33 @@ reset_cluster_hosts() {
 # pipe through tag_stream; those lines arrive here already tagged and pass through.
 exec > >(tag_stream) 2>&1
 
+# Log exactly which build a run used: the image digest (stable even when the tag moves) and
+# the tt-metal commit baked into it (OCI revision label; older images have no label, so fall
+# back to the checkout inside the image). Pulls here so the digest is known before mpi-docker
+# fans it out; mpi-docker's own pull then finds it cached.
+print_image_provenance() {
+    local image="$1"
+    if ! docker pull -q "$image" >/dev/null 2>&1; then
+        echo "Docker image digest: unknown (could not pull; using local copy if present)"
+        return 0
+    fi
+    local digest revision
+    digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
+        | grep -m1 '@sha256:' | sed 's/.*@//')
+    revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null)
+    if [[ -z "$revision" ]]; then
+        revision=$(docker run --rm --entrypoint='' "$image" \
+            git -c safe.directory='*' -C /home/user/tt-metal rev-parse HEAD 2>/dev/null)
+    fi
+    echo "Docker image digest: ${digest:-unknown}"
+    echo "Docker image tt-metal commit: ${revision:-unknown}"
+}
+
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
+if [[ -n "$DOCKER_IMAGE" && "$DOCKER_IMAGE" != "none" ]]; then
+    print_image_provenance "$DOCKER_IMAGE"
+fi
 if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
     echo "Factory descriptor path: $FACTORY_DESCRIPTOR_PATH"
 else
