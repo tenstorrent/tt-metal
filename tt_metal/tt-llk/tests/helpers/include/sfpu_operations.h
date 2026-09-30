@@ -42,6 +42,7 @@
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
@@ -648,6 +649,11 @@ void call_unary_sfpu_operation_init()
         // exp polynomial's C2..C4, which calculate_tanh_derivative_sech2 reads.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_sech2_init<APPROX_MODE>);
     }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        // Records the eight-add scan program into the replay buffer.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cumsum_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         // Typecast selects its concrete init from the (IN, OUT) format pair.
@@ -727,6 +733,8 @@ void call_unary_sfpu_operation_init()
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
  * @param dst_index Destination tile index in the destination register
  * @param math_format Optional math format for operations that need format-specific behavior
+ * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
+ *        reads it. Defaults to true so each tile is independent.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -741,7 +749,8 @@ template <
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
     DataFormat TYPECAST_OUT = DataFormat::Invalid,
     bool FUSED_SORT         = false>
-void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
+void call_unary_sfpu_operation(
+    std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None, bool first = true)
 {
     // Fixed dispatch constants shared with the golden (golden_generators.py:
     // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
@@ -1607,6 +1616,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::expm1_cw)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_expm1_cw, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
+        // boundary, so it runs once per tile (RC_custom), not once per face. `first` clears the
+        // carry; false continues the scan of the tile before it.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {

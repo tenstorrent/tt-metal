@@ -1848,6 +1848,17 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 
 @dataclass
+class CUMSUM_CHAIN(TemplateParameter):
+    """Whether sfpu_cumsum_test.cpp chains the tiles of a DEST block into one column scan
+    (``first`` true for the first tile only) or scans every tile on its own."""
+
+    cumsum_chain: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUMSUM_CHAIN = {str(self.cumsum_chain).lower()};"
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
