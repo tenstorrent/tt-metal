@@ -119,6 +119,10 @@ Never:
   person delegates the picks, add each as a perf task (step `perf`, role `perf`, `brief.details` with the exact
   change, deps on X.2 or the previous pick, gate = an accuracy rung plus the profile with a time threshold below the
   X.1 baseline); perf tasks do not void the plan approval;
+- brief a perf pick to measure anything beyond the e2e chunk time and the changed section's time, before and after,
+  from the plain profile (minutes). Per-op mode (BRINGUP_PROFILE_OPS) syncs after every ttnn call, about a minute per
+  layer: it runs on the representative layers only, never the whole model (Xing P.3: a per-op before/after over 40
+  layers ran 40 minutes for a change to the experts, and was then killed by the agent's task time limit);
 - change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
