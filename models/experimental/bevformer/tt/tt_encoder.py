@@ -171,7 +171,9 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer TSA Complete")
 
         # Layer normalization (norm1)
-        temp_query = ttnn.layer_norm(temp_query, weight=self.params.norm1.weight, bias=self.params.norm1.bias)
+        temp_query = ttnn.layer_norm(
+            temp_query, weight=self.params.norm1.weight, bias=self.params.norm1.bias, epsilon=self.params.norm1.eps
+        )
         bev_query = temp_query
 
         if use_signpost:
@@ -193,7 +195,9 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer SCA Complete")
 
         # Layer normalization (norm2)
-        spatial_query = ttnn.layer_norm(spatial_query, weight=self.params.norm2.weight, bias=self.params.norm2.bias)
+        spatial_query = ttnn.layer_norm(
+            spatial_query, weight=self.params.norm2.weight, bias=self.params.norm2.bias, epsilon=self.params.norm2.eps
+        )
         bev_query = spatial_query
 
         if use_signpost:
@@ -208,7 +212,10 @@ class TTBEVFormerLayer:
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
         bev_query = ttnn.layer_norm(
-            ffn_output_with_residual, weight=self.params.norm3.weight, bias=self.params.norm3.bias
+            ffn_output_with_residual,
+            weight=self.params.norm3.weight,
+            bias=self.params.norm3.bias,
+            epsilon=self.params.norm3.eps,
         )
 
         if use_signpost:
