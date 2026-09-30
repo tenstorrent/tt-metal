@@ -116,7 +116,7 @@ def _perf_unpack_tilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[UNPACK_BLOCK(True)] if unpack_block else [],
+        templates=[UNPACK_BLOCK(unpack_block)],  # always present: one report schema for the per tile and the block rows
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
