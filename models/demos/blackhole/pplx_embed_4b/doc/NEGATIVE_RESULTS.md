@@ -1615,3 +1615,27 @@ tt-triage (`tools/tt-triage.py --run=dump_callstacks`) put all cores in SDPA's `
 `scratch_cb.reserve_back(sbh)`: the installed `_ttnncpp.so` (00:19) predated 0458a990466 (20:08), which sized that CB to
 a row group in the program factory, so the JIT'd kernel reserved sbh tiles of a 1-tile CB. `./build_metal.sh` fixed it
 (STS-B bs8 0.8120 after). PERF_GUIDE §4 now says to rebuild after host-side changes.
+
+**Addendum: what bounds the add+norm, and double-buffering its CBs (negative).** `perf_tools/bench_add_norm_ablate.py`
+at the model's placement (a DRAM; b / normalised out L1; sum L1 at bs8 / 16, DRAM at bs32), µs per call:
+
+| variant | bs8 | bs16 | bs32 |
+|---|---|---|---|
+| full | 88.0 | 129.0 | 275.3 |
+| no a / b reads | 73.4 | 114.2 | 233.4 |
+| no sum / out writes | 83.9 | 125.2 | 217.1 |
+| no reads, no writes | 67.3 | 98.7 | 159.8 |
+| local exchange (no peer writes / semaphore) | 92.5 | 130.7 | 291.3 |
+| compute + handshakes (no reads / writes / exchange) | 62.5 | 88.7 | 150.0 |
+| data movement only (copy compute) | 79.6 | 118.3 | 253.2 |
+| handshakes only (copy compute, nothing moved) | 39.5 | 51.3 | 83.4 |
+
+Data-movement-bound at every batch size: the DM floor is the larger one and the op runs at 90-92% of it. At bs32 that
+floor is the DRAM traffic (a read + sum write, 89 MB: ~350 GB/s, about what stock streaming ops reach here, §54); at
+bs8 / 16 only a is in DRAM (22 / 44 µs at 512 GB/s), so the floor is per-wave latency, not bandwidth. The copy compute
+is not free (handshakes only), so the DM floors are upper bounds. The exchange is not the cost. The profile artifact's
+"L1 / compute" tag at bs8 / 16 (DRAM floor under half the call) is wrong for this op; "DRAM" at bs32 is right.
+
+CBs 0 / 1 / 16 / 17 two waves deep (a scratch knob, reverted): bs8 87.8 → 89.4 µs; bs16 / 32 do not fit beside the L1
+operands even standalone (static CBs clash at 423,808). The next wave's add already overlaps the writer, since compute
+runs the stages in order anyway; what is exposed is the per-wave latency of the reads and writes.
