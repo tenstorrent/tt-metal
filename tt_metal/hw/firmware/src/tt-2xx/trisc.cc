@@ -25,6 +25,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "cmath_common.h"    // ckernel::math::DataFormatConfigSet (definition of data_format_config_set below)
 
 // clang-format on
 
@@ -123,6 +124,10 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BA
 }  // namespace ckernel
 
 using namespace ckernel;
+
+// Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
+thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
+    ckernel::math::DataFormatConfigSet::UNCONFIGURED;
 
 void init_sync_registers() {
     // TODO: check if this is needed with transition to DFBs

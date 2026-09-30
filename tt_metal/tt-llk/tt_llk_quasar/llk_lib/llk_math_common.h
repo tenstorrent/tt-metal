@@ -12,7 +12,11 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+#ifdef ENV_LLK_INFRA
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+#else
+extern thread_local DataFormatConfigSet data_format_config_set;
+#endif
 
 /**
  * @brief Sets up ALU formats for math destination register.
