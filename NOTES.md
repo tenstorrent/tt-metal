@@ -52,3 +52,10 @@ Task t26 attempt 5 (2026-09-30 16:03): box rebooted again at 16:00 and killed dr
 (position 4 behind 643/651/656). Both caches still on /var/tmp (72G DiT, 4.8G kernels). drive26d.sh now takes RESUME_<label>=<job>
 to wait on an already-queued job; restarted as `RESUME_dv145=671 nohup bash tmp/drive26d.sh >> tmp/drive26d.log 2>&1 &`.
 If it dies again: check `tt-device-mcp status -j 671`; if still queued, restart with RESUME_dv145=671, else without it.
+Task t26 attempt 6 (2026-09-30, device pause): no broker jobs of ours are queued (693 was cancelled by the user; the drive26d driver is dead).
+671 (dv145) and 687 (dv145_c211) did NOT fail on the cache: every model loaded from cache (13 load-cache, 0 misses; the same in 640/689).
+They failed on a JIT compile error in neighborhood_sdpa.cpp (a stale num_blocks arg to matmul_blocks after the na-integration merge).
+Fixed in d079ee7cd11 and checked off-device (tmp/na_kernel_compile.sh). t10 fast-forwarded to it.
+Cache key: stable. 4 later processes (640, 671, 687, 689) hit all entries after 605 wrote them, two of them after reboots.
+The CPU two-process source_id key is identical (899ea6ca289419bd both times). Unit tests: 13 passed, 3 skipped.
+Next (only after the user lifts the pause): tmp/READY_26.md, one job at a time.
