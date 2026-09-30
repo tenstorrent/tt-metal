@@ -117,6 +117,10 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
     # core's units span more than one seq tile.
     if rot is not None and norm_eps is not None and os.getenv("QWEN_FUSED_RESIDENT_CONSTS", "0") == "1":
         rot_kwargs.update(resident=True, norm_eps=norm_eps)
+    # QWEN_HEADS_KV_L1=1: K / V go to L1 interleaved whatever Q's placement (SDPA's K/V reads from DRAM are what its
+    # DRAM round-trip costs; Q or the output in L1 add little).
+    if os.getenv("QWEN_HEADS_KV_L1", "0") == "1":
+        rot_kwargs["kv_memory_config"] = ttnn.L1_MEMORY_CONFIG
 
     @functools.wraps(original_fn)
     def wrapper(qkv_fused, *args, **kwargs):
@@ -544,10 +548,11 @@ class PplxBidirectionalAttention(Attention):
             hd = self.head_dim
             alloc = lambda shp, dt, mc: ttnn.allocate_tensor_on_device(ttnn.Shape(shp), dt, ttnn.TILE_LAYOUT, dev, mc)
             q_dt, kv_dt = q_dtype or ttnn.bfloat8_b, kv_dtype or ttnn.bfloat8_b
+            kv_mc = ttnn.L1_MEMORY_CONFIG if os.getenv("QWEN_HEADS_KV_L1", "0") == "1" else heads_mc
             qkv = (
                 alloc([B, self.n_local_heads, S, hd], q_dt, heads_mc),
-                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, heads_mc),
-                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, heads_mc),
+                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, kv_mc),
+                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, kv_mc),
             )
             mm_seq = self.MAX_QKV_MM_SEQ_LEN
             for c, h in enumerate(halves):

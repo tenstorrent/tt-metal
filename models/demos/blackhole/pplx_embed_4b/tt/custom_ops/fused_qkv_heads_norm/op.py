@@ -89,6 +89,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     num_kv_heads: int,
     head_groups: int | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    kv_memory_config: ttnn.MemoryConfig | None = None,
     rot_cos: ttnn.Tensor | None = None,
     rot_sin: ttnn.Tensor | None = None,
     trans_mat: ttnn.Tensor | None = None,
@@ -113,9 +114,12 @@ def nlp_create_qkv_heads_norm_headsplit(
     ``out_tensors`` / ``batch_offset``: write into preallocated ``(q, k, v)`` with a larger batch, this call's batches
     at ``[batch_offset, batch_offset + B)`` (a batch processed in chunks lands in one tensor per output, no concat).
     ``use_v3``: the v3 compute for this call (default: ``QWEN_FUSED_COMPUTE_V3``).
+    ``kv_memory_config``: K / V placement when it differs from Q's (default: ``memory_config``).
     """
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if kv_memory_config is None:
+        kv_memory_config = memory_config
     device = qkv_fused.device()
     fuse_rotary = rot_cos is not None
     use_v2 = os.getenv("QWEN_FUSED_COMPUTE_V2", "0") == "1"
@@ -161,10 +165,10 @@ def nlp_create_qkv_heads_norm_headsplit(
             raise ValueError("batch_offset needs out_tensors")
         q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(q_shape), q_dtype, ttnn.TILE_LAYOUT, device, memory_config)
         k_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config
+            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, kv_memory_config
         )
         v_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config
+            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, kv_memory_config
         )
     else:
         q_tensor, k_tensor, v_tensor = out_tensors

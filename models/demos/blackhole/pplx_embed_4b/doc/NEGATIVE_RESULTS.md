@@ -1433,3 +1433,35 @@ system python). e2e, sustained_run.sh, 3 alternating rounds (rebuilt between arm
 sustained ms: bs8 78.2 / 100.0 → 78.3 / 100.4 (the sustained +0.4% repeats in all 3 pairs, with the new arm first;
 standalone bs8 is unchanged), bs16 148.0 / 194.1 → 145.3 / 192.8 (−1.8 / −0.7%), bs32 298.3 / 401.9 → 292.0 / 399.6
 (−2.1 / −0.6%).
+
+## 64. SDPA's DRAM round-trip: only K / V matter; K / V in L1 landed at bs8 / 16, bs32 does not fit (2026-09-30)
+
+WIP_HANDOFF item 3. `bench_sdpa_bs16_ablate.py <bs> l1`, the shipped reuse_kv q128 config (12×8 at bs8, 12×10 at
+bs16 / 32) with each operand moved from DRAM to L1 interleaved, µs per call, PCC 1.00000 vs the shipped config
+throughout:
+
+| placement | bs8 | bs16 | bs32 |
+|---|---|---|---|
+| all DRAM (shipped) | 237.0 | 355.8 | 624.4 |
+| Q in L1 | 222.5 | 338.0 | 592.0 |
+| **K / V in L1** | **201.2** | **308.7** | **563.0** |
+| Q + K / V in L1 | 200.9 | 306.1 | clash |
+| output in L1 | 225.9 | 350.1 | 604.6 |
+| Q + K / V + output in L1 | 195.0 | 304.4 | OOM |
+
+K / V are 74 / 148 / 297 KB per core (K + V) at bs8 / 16 / 32; Q is twice that and adds little on top. **Landed** at
+bs8 / 16 as `QWEN_HEADS_KV_L1=1` (the heads op's `kv_memory_config`; POSITIVE_RESULTS). bs1 already holds Q / K / V in
+L1 (`l1_map_first_layer.py 1`: 19 / 5 / 5 KB per core, SDPA reads them there).
+
+**bs32 does not fit.** `l1_map_first_layer.py 32` with the knob: the first half-batch QKV matmul (the first op after
+K / V are allocated) clashes, `L1 buffer allocated at 405120 and static dataflow buffer region ends at 595072`. Live at
+that matmul, per core: the two preallocated half-batch norm outputs (2 × 181 KB, top of L1), K and V (2 × 145 KB) and
+the matmul's L1 output (446 KB), ~1.1 MB against ~945 KB above the matmul's CBs: 190 KB short. Ruled out: K alone in L1
+(still ~41 KB short); K / V allocated after chunk 0's matmul (they land where chunk 1's matmul CBs go); chunk 0's QKV
+output to DRAM (its heads op then reads half the batch from DRAM, ~80 µs per layer, more than the 61 µs SDPA saves).
+
+**Open: 4 QKV chunks at bs32** (quarter-batch norm outputs 4 × 90 KB + K / V 290 KB + a 223 KB QKV output ≈ 880 KB,
+fits). The matmul side is roughly neutral since §63 (4 × 266 = 1064 µs vs 2 × 534 = 1068 µs per layer), so the gain
+would be SDPA's 61 µs per layer minus two more heads-op launches. It needs `fused_add_rmsnorm_split` to write four
+output tensors (its writer has two accessors) and `decoder_fusion.py` / `qkv_chunks.py` to allow `QWEN_QKV_CHUNKS=4`.
+Not tried.

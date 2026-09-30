@@ -48,6 +48,19 @@ if len(sys.argv) > 2 and sys.argv[2] == "sweep":
     for grid in ((12, 10), (12, 8)):
         for q in (512, 256, 128, 96):
             ARMS.append((f"reuse_kv, {grid[0]}x{grid[1]} q{q}", (DRAM, DRAM, DRAM), pc(grid=grid, q=q), False, True))
+elif len(sys.argv) > 2 and sys.argv[2] == "l1":
+    # The shipped reuse_kv config with each operand moved to L1: what the Q/K/V (and output) DRAM round-trip costs.
+    GRID = {8: (12, 8)}.get(BATCH, (12, 10))
+    ARMS = []
+    for label, place in (
+        ("all DRAM (shipped)", (DRAM, DRAM, DRAM)),
+        ("Q L1", (L1, DRAM, DRAM)),
+        ("K/V L1", (DRAM, L1, DRAM)),
+        ("Q + K/V L1", (L1, L1, DRAM)),
+        ("out L1", (DRAM, DRAM, L1)),
+        ("Q + K/V + out L1", (L1, L1, L1)),
+    ):
+        ARMS.append((f"reuse_kv {GRID[0]}x{GRID[1]} q128, {label}", place, pc(grid=GRID, q=128), False, True))
 
 try:
     torch.manual_seed(0)
