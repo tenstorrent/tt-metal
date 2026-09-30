@@ -14,8 +14,9 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import build_causal_mask, build_mesh, no_grad, round_up_to_tile
+from ttml.common.utils import build_causal_mask, build_mesh, no_grad, round_up_to_tile, run_mode
 from ttml.models import RunnerType, WeightTyingType
+from ttml.modules import RunMode
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.kv_cache import KVCache as Qwen3KVCache
@@ -574,9 +575,8 @@ class TTMLRolloutSampler(RolloutSampler):
         pending_event: Any = None
         done = np.zeros(B, dtype=bool)
 
-        self._model.eval()
         try:
-            with no_grad():
+            with run_mode(self._model, RunMode.EVAL), no_grad():
                 # -------- Prefill: shard-safe host-side per-row pick --------
                 prompt_np = np.full((B, prefill_width), pad_token, dtype=np.uint32)
                 for b in range(B):
