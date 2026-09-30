@@ -230,9 +230,8 @@ def _run_unary_datacopy_test(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
-        ]
-        # the perf rows always carry the knob, so the per tile and the block rows of a module share one report schema
-        + ([UNPACK_BLOCK(unpack_block)] if (unpack_block or is_perf) else []),
+            UNPACK_BLOCK(unpack_block),  # always present: one report schema for the per tile and the block rows
+        ],
         "runtimes": [
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
