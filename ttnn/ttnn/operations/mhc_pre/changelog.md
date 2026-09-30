@@ -198,3 +198,70 @@
   chunk's mcast. It is still below the pre-R3 567 µs.
 - Issues encountered: None beyond the race.
 - Tests added: none. The stress probe was saved under `tests/ttnn/unit_tests/operations/mhc_pre/probes/`.
+
+## Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
+- Date: 2026-09-30
+- What was done (perf; nothing added to SUPPORTED). All levers were measured on device. BH device-ns was read in
+  process (`ttnn.ReadDeviceProfiler`, `test_mhc_pre_perf_inproc.py`), because the Tracy capture tool crashed on
+  every `--profile` run this session. Per-stage `DeviceZoneScopedN` zones were used for the analysis and then
+  removed.
+  - **W fill on the writer (NoC1), column all-gather with per-share fp32-W split** (earlier R4 step): each row reads
+    1/rows of the W slice, its compute splits that share in place, and it multicasts it down the column. The bias is
+    also loaded by the writer.
+  - **Narrow groups** (perf lamp L2, knob `NARROW_GROUPS`, bf16 X): group_w = the widest width with the fewest
+    blocks per group. At 640×1792 that is 20 groups of 5 with one block each (was 10 × 11, 2 blocks). This
+    replaced the tree combine; the verifier note asked for the two to be compared, and narrow groups won.
+  - **In-DEST coefficient layout transforms** (earlier R4 step): transpose + SFPU subvector transpose. They remove
+    the writer's S scatter and the post/comb staging (`cb_coef_out`, `cb_logits_coef`, `cb_out_stage` deleted).
+  - **Bounded X read look-ahead**: `X_STREAM_CHUNKS = 4` chunks per block, `X_STREAM_INFLIGHT = 2` outstanding, one
+    NoC trid per chunk, each chunk published as it lands. Issuing everything up front let the banks interleave all
+    cores' requests, so even chunk 0 landed at the end of the burst.
+  - **Streamed projection + Σx²** (`project_sumsq_streamed`, bf16 X / fp32 W): per K chunk, the projection window
+    reloads the fp32 running mix exactly (`cb_mix_run`), and a Σx² window packs one partial into `cb_sq_acc`. Then
+    one REDUCE_ROW per row runs over the partials. `cb_partial` is now [mix rows | sumsq rows], and the writer
+    sends it in one transfer when the block is full.
+  - **Fused owned block**: owned rows run coefficients + Sinkhorn + post/comb in one DEST window and park the
+    coefficient tile in `cb_coef_keep`. The pre tiles reload it instead of re-running the S gather +
+    coefficients. The post/comb store now goes out before the y-mix.
+  - **Owner C discount** (`OWNER_C_DISCOUNT = 7`, `_c_split`): when every group has ≤ 1 token tile-row, rank 0
+    owns every Sinkhorn row. It gets 7 fewer stream columns and the other ranks absorb them. The fit
+    (`core_k_tiles_max`) reads the same split.
+  - **Per-row NoC flip** (`READER_NOC_FLIP_ROWS`, default 0, plus the `READER_NOC` knob): groups in the top rows swap
+    reader/writer NoCs. This needed per-NoC kernel sets and mcast wires. Measured null (see below), so it is parked
+    at 0.
+  - `L1_SAFETY_MARGIN` 64 → 96 KB. The CB base sits ~70.7 KB above the unreserved base because the kernel
+    binaries grew, and 1×1×2048×20480 bf16 overflowed L1 by 3.2 KB.
+  - Reused: the whole R3 path, `project_block_pieces`' matmul realization, the fp32-X exact-reload pattern,
+    `sumsq_row` + the reduce helper, and the group mcast / gather. Added: one compute block op, one 1-tile CB,
+    host knobs and the per-NoC kernel sets.
+- Perf (BH p150, device kernel ns, bf16 X / fp32 X, fp32 W):
+
+  | Shape | R3 bf16 | R4 bf16 | R3 fp32 X | R4 fp32 X |
+  |---|---|---|---|---|
+  | 640×1792 (focus) | 86.5 µs | **44.3–45.6 µs** | 157.3 µs | 128–130 µs |
+  | 640×7168 | 191.9 µs | 151–155 µs | 543.5 µs | 405–411 µs |
+  | 1280×4096 | 199.2 µs | 175–178 µs | 447.6 µs | 384–389 µs |
+  | 4096×1792 | 352.8 µs | 246 µs | 633.5 µs | 557–563 µs |
+
+  Knob A/Bs at 640×1792 bf16:
+  - Owner discount: 0 → 46.6–46.8, 6 → 45.5, 7 → 44.3–44.9, 8 → 45.4 µs. A discount that makes two ranks' `c_start`
+    collide mod the 8 DRAM banks is slower (2 → 50.2, 4 → 48.7). The stream stride is 56 tiles ≡ 0 mod 8, so a
+    rank's reads walk banks (c_start + c) mod 8.
+  - X chunks: 1 → 47.0–47.4 vs 4 → 44.7–45.4 µs.
+  - Reader NoC: NoC1 for all readers → 61 µs. Flipping the top 2–5 rows → 48.2–49.7 µs: the flipped rows get fast,
+    rows 4–6 become the starved ones, and the X burst still ends at ~25 µs. The flipped writers' W share reads also
+    queue behind the X burst, which delays the column all-gather.
+- Bottleneck now (zone analysis): the X read is aggregate NoC/DRAM-bound, 9.2 MB by ~24–26 µs (~370 GB/s). On NoC0
+  the bottom row finishes at 8 µs and the top rows at 26 µs. The critical group (top row) then pays a ~19 µs serial
+  tail: proj + Σx² on the late data ~5 µs, gather + fold + mcast ~3.5 µs, owner coefficients + Sinkhorn ~8 µs
+  (Sinkhorn alone: 20 → 1 iteration saves 3.8 µs), y-mix + post/comb stores ~1.5 µs.
+- Accuracy achieved: unchanged gates. bf16-X/fp32-W post/comb rel-RMS 2.4–3.1e-4 (gate 5e-4) and y 1.6–1.7e-3 on
+  [17×512, 1000×28672, 256×24576]. fp32 X post/comb rel-RMS 2.3–6.1e-5 on [64×4096, 100×4096, 640×7168, 640×28672].
+- Golden test progress: two slices together cover all 206 golden + regression cells, all passing. The first
+  slice was 127 passed plus 3 loose 20480-wide cells failing on the L1 margin; after the fix all 96 loose cells
+  pass, and the complementary slice was 86/86.
+- Issues encountered: the Tracy capture tool crashed on every `--profile` run (infra), so measurements used the
+  in-process profiler. The L1 margin underestimate is fixed above.
+- Tests added: `tests/ttnn/unit_tests/operations/mhc_pre/test_mhc_pre_perf_inproc.py`, an in-process device-ns
+  probe over `SHAPES` × dtypes × the knob sets in `test_mhc_pre_perf_sweep.py`. It is skipped unless
+  `TT_METAL_DEVICE_PROFILER=1`.

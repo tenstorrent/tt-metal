@@ -246,7 +246,7 @@ intermittent comb rel-RMS of about 1e-2. Reproduced 1 in 40 seeds (256×24576 bf
 runs). Perf, BH device-ns: bf16 640×7168 191.9 µs (unchanged); fp32-X 640×7168 543.5 µs (was 504 with the race;
 567 before R3), because the sender's in-place split now waits for each chunk's mcast.
 
-### [ ] Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
+### [x] Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
 
 **Type**: perf
 
@@ -279,6 +279,20 @@ committing to the tree (the T3 cost). Every group-geometry knob must stay derive
 - Measured device-ns improves on the flagged 640×1792 bf16 case, moving it toward ~30 µs.
 - The golden suite is green.
 - There is no regression across the config-spanning guard set (as in Refinement 3, plus 640×7168 bf16).
+
+**Outcome**: 640×1792 bf16 (fp32 W, BH device-ns) went from 104.7 µs (verifier) / 86.5 µs (after R3) to **44.3–45.6 µs**
+(1.95× vs R3). Guard set vs R3, bf16 / fp32 X: 640×7168 191.9 → 154 / 543.5 → 409; 1280×4096 199.2 → 176 / 447.6 → 384;
+4096×1792 352.8 → 246 / 633.5 → 558; 640×1792 fp32 157.3 → 130. The winning levers: the W fill moved to the writer
+(column all-gather, per-share split); narrow groups (L2: group_w = 5, one block per group; this took the place of the
+tree combine); owner C discount (`OWNER_C_DISCOUNT = 7`, −2 µs); the owned block fused with the coefficient tile reload
+(−1.5 µs); bounded X look-ahead + per-K-chunk streamed proj/Σx² (−1.6 µs vs no chunking). `READER_NOC_FLIP_ROWS`
+measured null and is parked at 0. What binds now: the X read is NoC/DRAM-saturated. All 9.2 MB lands by ~24–26 µs
+(~370 GB/s aggregate), and the top core rows are starved on NoC0 (their first chunk lands only ~3 µs before the end,
+whichever rows are flipped). A ~19 µs serial tail follows on the critical group: proj + Σx² on late data (~5 µs),
+gather + fold + mcast (~3.5 µs), the owner's coefficients + Sinkhorn (~8 µs), then y-mix + stores. Next I would try:
+a 4-way SFPU fold or a split combine (~1 µs), a register-fused Sinkhorn row/col pass (~1 µs), and Σx² as a matmul
+X·Xᵀ diagonal (~1.5 µs). I did not do them because each is ~1 µs, inside the ±1 µs run-to-run noise at this size, and
+the lower-fidelity Σx² variant spends precision budget. The ~30 µs target would need the X read itself to get faster.
 
 ### [ ] Refinement 5 — Speed up the perf-focus profile T=1280, C=4096, bf16 streams (block × depth co-tune)
 

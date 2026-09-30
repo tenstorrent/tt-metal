@@ -122,7 +122,9 @@ PRODUCT_ORDER_MAX = 2
 PRODUCT_LO_ORDER = 2
 X_LO_FIDELITY = ttnn.MathFidelity.HiFi3
 DEST_TILES_FP32 = 4  # DEST_AUTO_LIMIT at fp32_dest_acc_en, half sync: bound on the projection sub-block height
-L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
+L1_SAFETY_MARGIN = 96 * 1024  # headroom below the allocator's unreserved L1 (kernel config ring incl. the kernel
+# binaries, stack). Measured Refinement 4: the CB base sits ~70.7 KB above the unreserved base (1x1x2048x20480
+# bf16 overflowed at 64 KB once the compute binary grew).
 # Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
 # Measured on BH p150 (fp32, device kernel ns, bt=coarsest-fit -> bt=1): 640x7168 384->383 us,
 # 640x1792 133->128, 1280x4096 420->381, 4096x1792 591->521 (bt 2/4/7 in between). The whole K slice
