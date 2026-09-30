@@ -1,7 +1,5 @@
 set(TT_METAL_PUBLIC_API
     api/internal/service/inter_process_counter_channel.hpp
-    api/internal/service/named_shm.hpp
-    api/internal/service/shm_resource_tracker.hpp
     api/internal/disaggregation/layer_completion_message.hpp
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_reorder_buffer.hpp
@@ -106,6 +104,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp
     api/tt-metalium/experimental/sockets/hd_socket_descriptor.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
+    api/tt-metalium/experimental/sockets/named_shm.hpp
+    api/tt-metalium/experimental/sockets/shm_resource_tracker.hpp
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp

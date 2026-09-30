@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 
 #include "layer_completion_ring_layout.hpp"
-#include <internal/service/named_shm.hpp>
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
 
 namespace tt::tt_metal::internal {
 

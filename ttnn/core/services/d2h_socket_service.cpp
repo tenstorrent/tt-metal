@@ -36,7 +36,7 @@
 #include "tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/sockets/d2h_stream_service_descriptor.hpp>
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
-#include <internal/service/shm_resource_tracker.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
