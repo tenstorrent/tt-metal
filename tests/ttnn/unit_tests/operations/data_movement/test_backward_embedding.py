@@ -174,3 +174,19 @@ def test_embedding_bw_with_program_cache(
         assert comp_pass
 
     assert device.cache_entries_counter.total == 1
+
+
+def test_embedding_bw_rejects_sharded_index(device, expect_error):
+    # Regression: the sharding checks were OR'd, so a sharded index was accepted.
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [1, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    index = ttnn.from_torch(torch.randint(0, 64, (1, 256)), dtype=ttnn.uint32, device=device, memory_config=sharded)
+    weights = ttnn.from_torch(torch.randn(64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad = ttnn.from_torch(torch.randn(1, 1, 256, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "index tensor"):
+        ttnn.embedding_bw(index, weights, grad, dtype=ttnn.bfloat16)
