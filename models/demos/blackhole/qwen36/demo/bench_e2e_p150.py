@@ -407,6 +407,12 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); 5=fused gated RMSNorm compute kernel (P9_SGRN2); unset=op default (4)",
     ),
     # P7_INT1D item flags (merged into r3 2026-09-28).
+    "QWEN36_REPACK_AFTER_TTFT": (
+        "1",
+        "P23_REPACK: 1 = replay the M3 conv-history repack trace at the first decode step (after the first-token "
+        "readback) instead of inside TTFT; needs M3 REPACK_TRACE; same ops/buffers. run_bench_e2e_p150.sh pins it "
+        "(runner default 1 since INT2j; code default 0)",
+    ),
     "QWEN36_GDN_GATE_FUSE": (
         "0",
         "P7_INT1D (P5_GATING): fuse the GDN beta sigmoid+scale and the a+dt_bias+softplus into single BinaryNg "

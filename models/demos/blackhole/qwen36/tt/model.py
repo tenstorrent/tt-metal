@@ -568,7 +568,12 @@ class Qwen36Model:
         prepare_decode_inputs_host, decode, GDN reset / save / restore), so the repack runs on CQ 0 before
         any of them; _forward_decode asserts that nothing is pending."""
         if self._m2_repack_pending:
-            self._gdn_refresh_conv_hist()  # clears _m2_repack_pending
+            if os.environ.get("QWEN36_REPACK_AFTER_TTFT") == "1" and self._m3_repack_trace_id is not None:
+                # REPACK_AFTER_TTFT: replay the captured repack trace here (first decode step) instead of
+                # in the TTFT window; same ops, same buffers as the eager repack (clears _m2_repack_pending).
+                self._m3_replay_repack_trace()
+            else:
+                self._gdn_refresh_conv_hist()  # clears _m2_repack_pending
 
     def _m3_alloc_zero_biases(self, mesh_device):
         """M3 ZB (QWEN36_M3_ZB=1, single device; tp_common M3 table): allocate the zero bias of each enabled
@@ -3743,7 +3748,12 @@ class Qwen36Model:
             if tpc.m2_enabled("REPACK_LATE"):
                 self._m2_repack_pending = True
             elif self._m3_repack_trace_id is not None:
-                self._m3_replay_repack_trace()
+                if os.environ.get("QWEN36_REPACK_AFTER_TTFT") == "1":
+                    # Defer the repack-trace replay out of TTFT: _m2_flush_pending_repack replays it before
+                    # the first GDN-state user (switch_mode / decode / reset / save / restore).
+                    self._m2_repack_pending = True
+                else:
+                    self._m3_replay_repack_trace()
             else:
                 self._gdn_refresh_conv_hist()
             # M5 TAIL_TRACE: replay the tail trace (final norm + LM head [+ argmax] into the persistent output)
