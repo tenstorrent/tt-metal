@@ -116,7 +116,7 @@ The **writer** registers the op so the kernel compiles: the `SfpuType::{Op}`/`Bi
 
 #### 1A.3 — Verify registration; add the test cases
 
-**C++ — the dispatcher header `sfpu_operations_{arch}.h`** should already carry the op (writer's job); if a branch is missing, add it (use `Edit`; the unified `.cpp` is not edited):
+**C++ — the dispatcher header `sfpu_operations_{arch}.h`** should already carry the op (writer's job); if a branch is missing, add it (use `Edit`; the unified `.cpp` is not edited except as 1A.3b allows):
 - **unary**: add `#include "llk_sfpu/ckernel_sfpu_{op}.h"`; add an `else if constexpr (OPERATION == SfpuType::{op})` branch to `call_unary_sfpu_operation_quasar()` calling `_llk_math_eltwise_unary_sfpu_params_(_calculate_{op}_<ITERATIONS>, dst_index)`; add an `init_unary_sfpu_operation_quasar()` branch only if the op has `_init_{op}_`.
 - **binary**: add the ckernel `#include`; add an `else if constexpr (OP == BinaryOp::{OP})` branch to `call_binary_sfpu_operation_quasar()` (and `init_binary_sfpu_operation_quasar()` if it needs init).
 - **ternary**: `sfpu_where_{arch}_test.cpp` has no shared dispatcher. A second ternary op requires generalizing that harness — do the minimum needed and call it out in your log; do not fabricate a dispatcher.
@@ -128,6 +128,14 @@ The **writer** registers the op so the kernel compiles: the `SfpuType::{Op}`/`Bi
 - Confirm the golden dispatches on your op.
 
 The unified test's format list, invalid-combo filter, and `TestConfig` already exist — do not recreate them. Confirm the recommended formats from the analysis are within the swept set; extend the shared list only if a needed format is missing.
+
+#### 1A.3b — Code-path coverage (MANDATORY)
+
+Coverage has two axes: formats **and** code paths. Open the analysis's `## Code-Path Coverage Matrix` and make every **REQUIRED** row run in at least one variant — e.g. each layout, each row-count network, and each runtime mode (`chunk == 0` seeding and `chunk > 0` folding) the production callers use. Check every tile/output the kernel writes, not only the first.
+
+If the unified harness cannot select a REQUIRED path (the dispatcher binds it to a literal, or the `.cpp` has no parameter for it), extend it: add a `TemplateParameter` / `RuntimeParameter` in `helpers/test_variant_parameters.py` and thread it through — or, when that would touch every other op in the unified harness, move the op to a dedicated test pair (`tests/sources/{arch}/sfpu_{op}_{arch}_test.cpp` + `tests/python_tests/{arch}/test_sfpu_{op}_{arch}.py`, modelled on the unified harness and on an existing dedicated one such as `sfpu_topk_{arch}`). Path coverage outranks "append to the unified test" (Key Rule 5) and "the unified `.cpp` is not edited". Mark per-variant runtime values with `runtime()` so each kernel build compiles once.
+
+A REQUIRED row you cannot cover is a terminal `STUCK` with `Last failure category: COVERAGE_GAP` — never a `PASS`. Optional rows you skip go in the PASS block's `Paths not covered`.
 
 #### 1A.4 — Input preparation
 
@@ -404,7 +412,11 @@ $ST --log-dir "$LOG_DIR" set TESTER_COMPILE_COUNT "{number of compile-producer r
 $ST --log-dir "$LOG_DIR" set PHASE_DEBUGS         "{fix iterations = attempts used - 1}" --json
 $ST --log-dir "$LOG_DIR" set FORMATS_TESTED_JSON  '{JSON array of the formats you ran, e.g. ["Float16","Float32"]}'
 $ST --log-dir "$LOG_DIR" set FORMATS_EXCLUDED_JSON '{JSON object of format:reason you excluded, e.g. {"UInt16":"broken dest datapath"}}'
+$ST --log-dir "$LOG_DIR" set COVERAGE_JSON        '{JSON object {"covered": [matrix rows run], "not_covered": {"row": "reason"}}, e.g. {"covered":["TILE-9","ROW_MAJOR-32-acc chunk 0/1"],"not_covered":{}}}'
+$ST --log-dir "$LOG_DIR" set TEST_FILE_USED       "{test file path relative to tests/, e.g. python_tests/quasar/test_sfpu_{op}_quasar.py}"
+$ST --log-dir "$LOG_DIR" set TEST_K               "{the --k token you scoped runs with, or empty for a whole dedicated file}"
 ```
+The optimizer and prettifier re-run exactly `TEST_FILE_USED` / `TEST_K`, so they must name what you ran.
 
 Then report:
 ```
@@ -414,6 +426,9 @@ PASS
   Test file(s): {list}
   Files modified on the kernel: {N}
   Formats tested: {list}
+  Paths covered: {Code-Path Coverage Matrix rows run}
+  Paths not covered: {optional rows skipped, with reason — "none" if every row ran}
+  Distinct kernel runs: {variants that differ only in which output tile is checked count once}
 Summary: {one sentence}
 ```
 
@@ -464,7 +479,7 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 2. **Always use `run_test.sh simulate`** (never `pytest --run-simulator`), invoked synchronously via the Bash tool with `timeout: 600000` as a backstop — one blocking call, no resume loop (§2.3.1).
 3. **One fix per attempt.**
 4. **Fix the kernel, not the test.**
-5. **SFPU ops append to the unified test for their category** (1A) — never a new per-op file. Non-SFPU kernels extend a sibling test or create one (1B). Copy patterns exactly.
+5. **SFPU ops append to the unified test for their category** (1A) — unless the unified harness cannot reach a REQUIRED code path, in which case use a dedicated test pair (1A.3b). Non-SFPU kernels extend a sibling test or create one (1B). Copy patterns exactly.
 6. **Safe value ranges first**; widen only after a pass.
 7. **`TTI_` → `TT_` is a last resort** — change the parameter type instead (3.5).
 8. **SFPU tests always use `unpack_to_dest=True`**; filter the matrix to bit-width-matched combinations only (1C). Non-SFPU: `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`.
@@ -475,7 +490,8 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 13. **Use `$WORKTREE_DIR/...` absolute paths.**
 14. **Contradiction check before every hypothesis (§3.0.a).**
 15. **Harness-first on uniform failures (§3.0.b).**
-16. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
+16. **Every REQUIRED code path is tested (1A.3b)** — an untested REQUIRED path is `STUCK: COVERAGE_GAP`, not `PASS`.
+17. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
 
 ---
 

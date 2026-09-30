@@ -264,11 +264,17 @@ If it printed `SKIP`, record it in the self-log and return — do not edit, reco
 cp "$WORKTREE_DIR/$GENERATED_KERNEL" "$WORKTREE_DIR/$GENERATED_KERNEL.pre_opt"
 ```
 
-### Step 2: Find ITERATIONS loops
+### Step 2: Find replay candidates
 ```bash
 grep -n "ITERATIONS\|for.*int d" "$WORKTREE_DIR/$GENERATED_KERNEL"
+grep -n "replay\|load_replay_buf\|lltt::" "$REFERENCE_PATH"
 ```
-Each `for (int d = 0; d < ITERATIONS; d++)` loop is a replay candidate.
+Candidates are:
+- each `for (int d = 0; d < ITERATIONS; d++)` loop;
+- any fixed, all-`TTI_` instruction block the kernel issues two or more times per call (e.g. a sort network run once per row block), on **every** layout / mode path — not only the path the first test exercised;
+- every block the reference records into a replay buffer: the target should replay the same blocks.
+
+**Where to record:** if the reference records in its init and replays from compute, record in the target's init the same way (one `load_replay_buf` per layout/mode, selected by the init's template parameters) and replay from compute. Recording inside the compute function re-records on every call. Add the init's `@note` contract: "call again after any other math-thread op that records into the replay buffer".
 
 ### Step 3: Study the reference
 ```bash
@@ -340,7 +346,7 @@ A loop CANNOT use replay if the body has **conditional branches** (`if/else`) or
 
 By the time the optimizer runs, the unified Python test and its C++ source both exist (the tester established them), so `run_test.sh` resolves `-t`/`-r` from the test's `TestConfig` and compiles every variant of your op in parallel — no hand-built `compiler.py` flags.
 
-Resolve `{TEST_FILE}` and the `--k "{op}"` token from the analysis `## SFPU Category`: unary → `test_eltwise_unary_sfpu_quasar.py`, binary → `test_eltwise_binary_sfpu_quasar.py`, ternary → `test_sfpu_where_quasar.py`. **The `--k` token is case-sensitive** — lowercase op for unary, the UPPERCASE op id (`ADD`, `MUL`, …) for binary, `where` for ternary. A zero-match run "passes" vacuously and hides a regression, so first confirm the filter selects your op's variants with `run_test.sh count ... --k "{op}"` (must be non-zero).
+**Prefer the tester's recorded test:** read `TEST_FILE_USED` / `TEST_K` from state (`$ST --log-dir "$LOG_DIR" get TEST_FILE_USED`, same for `TEST_K`) and use them as `{TEST_FILE}` / the `--k` token (omit `--k` when `TEST_K` is empty). The tester may have moved the op to a dedicated test file to reach every REQUIRED code path; re-running only the unified category test would skip those paths. Fall back to the resolution below only when `TEST_FILE_USED` is unset. Otherwise resolve `{TEST_FILE}` and the `--k "{op}"` token from the analysis `## SFPU Category`: unary → `test_eltwise_unary_sfpu_quasar.py`, binary → `test_eltwise_binary_sfpu_quasar.py`, ternary → `test_sfpu_where_quasar.py`. **The `--k` token is case-sensitive** — lowercase op for unary, the UPPERCASE op id (`ADD`, `MUL`, …) for binary, `where` for ternary. A zero-match run "passes" vacuously and hides a regression, so first confirm the filter selects your op's variants with `run_test.sh count ... --k "{op}"` (must be non-zero).
 
 1. **Compile** (no simulator):
 ```bash
@@ -379,9 +385,9 @@ A correct unoptimized kernel beats a broken optimized one.
 ## What NOT to Do
 
 - Do NOT use SFPLOADMACRO — complex and error-prone.
-- Do NOT change the algorithm — only wrap ITERATIONS loops with replay.
+- Do NOT change the algorithm — only move instruction blocks into replay (Step 2 candidates).
 - Do NOT add functionality — no new template params or code paths.
-- Do NOT modify init/uninit functions — only compute functions.
+- Do NOT modify init/uninit functions beyond recording the replay program there when the reference records it in init (Step 2).
 - Do NOT optimize loops with conditional branches.
 
 ---

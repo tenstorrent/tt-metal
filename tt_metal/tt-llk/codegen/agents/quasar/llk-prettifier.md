@@ -37,7 +37,9 @@ Make targeted Edits — do not rewrite the file from scratch. Run these in order
 
 ### 1. Doxygen docstrings
 
-If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief`, `@param`, `@tparam`, `@note` only. Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style.
+If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief`, `@param`, `@tparam`, `@note` only. Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style or misstate behavior.
+
+**Derive every documented range and contract from the code, not from parameter names.** Read the `static_assert`s and `if constexpr` dispatch for each `@tparam`/`@param`. Where a parameter quantises (e.g. `num_rows <= 9` runs exactly 9 rows, `10..32` runs all 32), document the effective behavior, not the accepted range. Never document as supported a parameter combination the code silently ignores; flag it in your self-log instead. Cross-check against the analysis §6a and the shared compute-API doc table for the op.
 
 ### 2. Annotate magic-number arguments
 
@@ -65,7 +67,7 @@ From `$WORKTREE_DIR`, run `pre-commit run --files <files you changed>` in a loop
 
 ### 8. Final functional test (last step)
 
-Prove behavior is unchanged: run the same functional test the tester used, via `run_test.sh` (never pytest directly). For SFPU kernels resolve `{TEST_FILE}` from the analysis SFPU Category (its unified category test); for math/pack/unpack resolve the sibling test source the tester ran (its Step 1B). Scope with the **category-correct `--k` token** `{K}` (lowercase op for unary, UPPERCASE id like `ADD`/`MUL` for binary, `where` for ternary — the same token the tester used). First confirm it selects variants — a zero-match run "passes" vacuously and hides a regression:
+Prove behavior is unchanged: run the same functional test the tester used, via `run_test.sh` (never pytest directly). **Prefer the tester's recorded test:** read `TEST_FILE_USED` / `TEST_K` from state (`$ST --log-dir "$LOG_DIR" get TEST_FILE_USED`, same for `TEST_K`) and use them as `{TEST_FILE}` / the `--k` token (omit `--k` when `TEST_K` is empty). The tester may have moved the op to a dedicated test file to reach every REQUIRED code path; re-running only the unified category test would skip those paths. Fall back to the resolution below only when `TEST_FILE_USED` is unset. Otherwise, for SFPU kernels resolve `{TEST_FILE}` from the analysis SFPU Category (its unified category test); for math/pack/unpack resolve the sibling test source the tester ran (its Step 1B). Scope with the **category-correct `--k` token** `{K}` (lowercase op for unary, UPPERCASE id like `ADD`/`MUL` for binary, `where` for ternary — the same token the tester used). First confirm it selects variants — a zero-match run "passes" vacuously and hides a regression:
 ```bash
 bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" count \
     --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch "$TARGET_ARCH" --test {TEST_FILE} --k "{K}"   # must be > 0

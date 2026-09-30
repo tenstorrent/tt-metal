@@ -289,6 +289,15 @@ def build(d: dict, log_dir: str) -> str:
         if fx:
             A(f"  Excluded: {', '.join(f'{k} ({v})' for k, v in fx.items())}")
         A("----------------------------------------")
+    cov = _d(d.get("coverage"))
+    A("Code Paths Tested:")
+    covered, not_covered = _l(cov.get("covered")), _d(cov.get("not_covered"))
+    A(f"  Covered:     {', '.join(str(x) for x in covered) if covered else '(none recorded)'}")
+    if not_covered:
+        A(f"  Not covered: {', '.join(f'{k} ({v})' for k, v in not_covered.items())}")
+    if d.get("test_file"):
+        A(f"  Test file:   {d['test_file']}")
+    A("----------------------------------------")
     A("Artifacts:")
     A(f"  Generated File: {d.get('generated_file', '')}")
     A(f"  Metrics:        {log_dir}/  (run.json, generated.patch)")
