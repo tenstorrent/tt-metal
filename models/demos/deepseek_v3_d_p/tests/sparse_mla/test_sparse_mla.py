@@ -3,6 +3,10 @@
 
 """Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.2 variants.
 
+GLM-5.2, not GLM-5.3: these tests compare against a CPU reference cached under ``variant.mla_ref_cache_env``,
+and only GLM-5.2 has a populated one. The two checkpoints are architecturally identical and these runs use
+random weights, so GLM-5.2 covers the same sparse path.
+
 Dense MLA coverage lives in test_mla.py. This file keeps the sparse reference
 path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
@@ -190,7 +194,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
     ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory).
 
-    Layer-slot count mirrors the serving adapter (glm_5_2.py allocate_kv_cache): the indexer strides the
+    Layer-slot count mirrors the serving adapter (glm_5_3.py allocate_kv_cache): the indexer strides the
     folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
     cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
     hold. Falls back to 1 when the config has no ``indexer_types`` (glm_5_1: every layer full,
@@ -807,7 +811,7 @@ def run_sparse_mla_rotated_case(
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
     chunk_local = chunk_size_global // sp
-    # GLM-5.2 KV dedup: caches striped over ALL sp*tp chips instead of TP-replicated. The QUERY sharding
+    # GLM-5.3 KV dedup: caches striped over ALL sp*tp chips instead of TP-replicated. The QUERY sharding
     # (and hence the rotation pattern fed to the model below) is unchanged -- only the cache layout and
     # its readback stride change, which is exactly the decoupling this case is meant to stress.
     kv_tp_axis = tp_axis  # the sparse path always dedups; there is no TP-replicated variant
@@ -938,10 +942,13 @@ def run_sparse_mla_rotated_case(
     SPARSE_ANCHOR_CASES,
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+@pytest.mark.parametrize("iters_isl", [[2560, 1600, 5120]], ids=["maxedge"])
 # KV dedup under ROTATION is the interesting case (test_sparse_mla_cache.py only starts slab-aligned):
 # the writer rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and the two
-# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 5152 -- aligned, mid-slab, straddle.
+# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 4160 -- aligned, mid-slab on an SP
+# boundary, and a full chunk starting mid SP slab (4160 % 640 = 320) that straddles into the next slab.
+# The last one is where query ownership (SP rotation + TP window) and a per-device stripe rotation
+# disagree on a fused full-mesh ring (#58339).
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_rotated_chunked(

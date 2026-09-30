@@ -33,6 +33,7 @@ void MorehGroupNormOperation::validate_tensors(
     check_tensor(beta, "moreh_group_norm", "beta");
 
     // input (N, C, H, W)
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0.");
     auto C = input.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)

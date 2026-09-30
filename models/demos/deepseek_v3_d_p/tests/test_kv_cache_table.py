@@ -791,7 +791,7 @@ def test_glm_kv_cache_table(
     )
 
 
-# sp x tp -- GLM-5.2 KV-dedup (TP-sharded) chunk address table. Same shape as test_kimi_kv_cache_mock
+# sp x tp -- GLM-5.3 KV-dedup (TP-sharded) chunk address table. Same shape as test_kimi_kv_cache_mock
 # above: build the block-cyclic cache on the host, build the table over it, read every 32-token chunk
 # back. Only the sharding differs -- linear chip L = s*tp + t owns tokens [c*5120 + L*(5120/(sp*tp)), +),
 # so each device holds a DISTINCT sub-slice instead of a whole row replicated across its tp columns.
@@ -818,9 +818,9 @@ def test_glm_kv_cache_table(
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("compacted_layers", [False, True], ids=["dense_layers", "compacted_layers"])
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.2 DSA / TP-dedup is Blackhole-only")
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.3 DSA / TP-dedup is Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm52_tp_sharded_kv_cache_mock(
+def test_glm53_tp_sharded_kv_cache_mock(
     mesh_device,
     seq_len,
     num_users,
@@ -935,12 +935,12 @@ def test_glm52_tp_sharded_kv_cache_mock(
                 assert_equal(chunk_torch, expected_chunk)
 
 
-# sp x tp -- STANDARD (SP-only, TP-replicated) GLM-5.2 merged KV chunk address table.
-# main has a model-driven table readback for glm_5_1 (test_glm_kv_cache_table) but none for glm_5.2;
-# this is the missing SP-only baseline. It runs the real GLM-5.2 DSA MLA (layer 0 = a "full" layer, so
+# sp x tp -- STANDARD (SP-only, TP-replicated) GLM-5.3 merged KV chunk address table.
+# main has a model-driven table readback for glm_5_1 (test_glm_kv_cache_table) but none for glm_5.3;
+# this is the missing SP-only baseline. It runs the real GLM-5.3 DSA MLA (layer 0 = a "full" layer, so
 # the indexer runs and fills the index-key cache), fills both the KVPE and indexer caches, builds the
 # merged 2-config kimi table (config 0 = KVPE, config 1 = index) with tp_axis=None, and reads every
-# 32-token chunk back. test_glm52_tp_sharded_kv_cache_mock above covers the tp_axis=1 layout.
+# 32-token chunk back. test_glm53_tp_sharded_kv_cache_mock above covers the tp_axis=1 layout.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -950,21 +950,21 @@ def test_glm52_tp_sharded_kv_cache_mock(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
-@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.2 DSA (indexer / sparse SDPA) is Blackhole-only")
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.3 DSA (indexer / sparse SDPA) is Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm52_kv_cache_table(
+def test_glm53_kv_cache_table(
     mesh_device,
     seq_len,
     variant,
     config_only,
     device_params,
 ):
-    """Readback test for the standard (SP-only) GLM-5.2 merged KVPE + indexer KV chunk address table.
+    """Readback test for the standard (SP-only) GLM-5.3 merged KVPE + indexer KV chunk address table.
 
-    Mirrors test_glm_kv_cache_table (glm_5_1): one sparse GLM-5.2 MLA layer with random weights, a single
+    Mirrors test_glm_kv_cache_table (glm_5_1): one sparse GLM-5.3 MLA layer with random weights, a single
     full-seq block-cyclic forward filling both caller-owned caches, then a merged 2-config table over
-    both, read back chunk-by-chunk. This is the SP-only baseline that main lacks for GLM-5.2.
+    both, read back chunk-by-chunk. This is the SP-only baseline that main lacks for GLM-5.3.
     """
     config = config_only
     topology = per_axis_topology(device_params["fabric_config"])
@@ -977,7 +977,7 @@ def test_glm52_kv_cache_table(
         f"model={variant.name} num_heads={config.num_attention_heads} hidden={config.hidden_size} topology={topology}"
     )
 
-    # Random GLM-5.2 weights incl. indexer weights (build_weights populates indexer.* for the sparse path).
+    # Random GLM-5.3 weights incl. indexer weights (build_weights populates indexer.* for the sparse path).
     weights, _ = build_weights(variant, config, seed=42)
 
     chunk_size_global = seq_len
@@ -1010,7 +1010,7 @@ def test_glm52_kv_cache_table(
         tp_axis=tp_axis,
     )
 
-    # Indexer key cache: caller-owned, block-cyclic bfp8 TILE, index_head_dim wide. GLM-5.2 cross-layer
+    # Indexer key cache: caller-owned, block-cyclic bfp8 TILE, index_head_dim wide. GLM-5.3 cross-layer
     # reuse COMPACTS this cache to the FULL-layer count (num_full_indexer_layers), NOT all layers: only
     # `full` layers own an indexer and write their compacted rank slot. Size it to the indexer's own
     # _index_cache_layers (the same stride write_k passes as num_layers) so the write's
@@ -1049,7 +1049,7 @@ def test_glm52_kv_cache_table(
         tt_hidden, rope_tensors, tt_kvpe_cache, actual_start=0, cache_user_id=0, index_kv_cache=tt_index_cache
     )
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"[glm52] forward complete: out shape {tuple(tt_out.shape)}")
+    logger.info(f"[glm53] forward complete: out shape {tuple(tt_out.shape)}")
 
     index_kbuf = tt_index_cache
     index_head_dim = mla_tt._indexer.index_args.index_head_dim  # 128
@@ -1069,7 +1069,7 @@ def test_glm52_kv_cache_table(
         return c
 
     # KVPE keeps all (here: 1) layers; the index config is sized to the COMPACTED full-layer count so it
-    # matches the index cache's batch stride (GLM-5.2 indexer reuse). Readback below checks rank 0.
+    # matches the index cache's batch stride (GLM-5.3 indexer reuse). Readback below checks rank 0.
     index_config = _table_config(INDEX_CHUNK_SIZE_BYTES, num_index_layers)
     kvpe_config = _table_config(KVPE_CHUNK_SIZE_BYTES, 1)
 
@@ -1112,7 +1112,7 @@ def test_glm52_kv_cache_table(
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         assert_equal(chunk_torch, index_kbuf_torch[:, :, position:pos_end, :])
-    logger.info(f"[glm52] index-cache (config {INDEX_CONFIG_ID}) readback verified over {seq_len} tokens")
+    logger.info(f"[glm53] index-cache (config {INDEX_CONFIG_ID}) readback verified over {seq_len} tokens")
 
     # --- readback the MLA KVPE cache (config 0, bf16 ROW_MAJOR) ---
     tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device)[:1]
@@ -1123,7 +1123,7 @@ def test_glm52_kv_cache_table(
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bf16_bytes(raw_bytes, kvpe_chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         assert_equal(chunk_torch, tt_kvpe_cache_torch[:, :, position:pos_end, :])
-    logger.info(f"[glm52] kvpe-cache (config {KVPE_CONFIG_ID}, bf16 RM) readback verified over {seq_len} tokens")
+    logger.info(f"[glm53] kvpe-cache (config {KVPE_CONFIG_ID}, bf16 RM) readback verified over {seq_len} tokens")
 
 
 class _RecordingKvChunkAddressTable:
@@ -1155,8 +1155,8 @@ class _RecordingKvChunkAddressTable:
         )
 
 
-def test_glm52_index_cache_pipeline_stage_addresses():
-    """Every rank allocates the GLM-5.2 index cache for its OWN full-indexer layers, so its physical slot 0
+def test_glm53_index_cache_pipeline_stage_addresses():
+    """Every rank allocates the GLM-5.3 index cache for its OWN full-indexer layers, so its physical slot 0
     is that stage's first compacted layer. The merged table must place a stage at its compacted offset
     while addressing the slots exactly as that stage's cache-local walk does.
 
@@ -1167,7 +1167,7 @@ def test_glm52_index_cache_pipeline_stage_addresses():
     num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
     index_chunk_size_bytes = 4 * 1088  # [1,1,32,128] bfp8
     config_id = 1  # the index cache is config 1 of the merged table
-    num_full = 21  # GLM-5.2: 21 of 78 layers own an indexer
+    num_full = 21  # GLM-5.3: 21 of 78 layers own an indexer
     # Compacted full-indexer ranges for the boundary-snapped 38/40 two-rank split.
     stage_ranges = [(0, 11), (11, 10)]
     base_addrs = [0x1000_0000, 0x2000_0000]
@@ -1215,10 +1215,10 @@ def test_glm52_index_cache_pipeline_stage_addresses():
     )
     mismatched = {k: (merged[k], golden[k]) for k in golden if merged[k] != golden[k]}
     assert not mismatched, f"{len(mismatched)} entries mismapped, e.g. {list(mismatched.items())[:2]}"
-    logger.info(f"[glm52] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
+    logger.info(f"[glm53] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
 
 
-def test_glm52_tp_sharded_pipeline_stage_addresses():
+def test_glm53_tp_sharded_pipeline_stage_addresses():
     rows, cols, sp_axis, tp_axis = 8, 4, 0, 1
     num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
     CHUNK_SIZE_BYTES = 19584
@@ -1293,7 +1293,7 @@ def test_glm52_tp_sharded_pipeline_stage_addresses():
             f"{base_addrs[rank]:#x} — the stage's base address did not reach the walk"
         )
 
-    logger.info(f"[glm52] merged 2-stage TP-sharded table matches the per-rank walk over {len(merged)} entries")
+    logger.info(f"[glm53] merged 2-stage TP-sharded table matches the per-rank walk over {len(merged)} entries")
 
 
 # sp x tp -- Mistral-Small-4-119B (dense MLA, no DSA indexer) KV chunk address table.

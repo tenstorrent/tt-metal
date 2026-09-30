@@ -30,6 +30,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
     build_extended_attention_mask,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import additive_attention_mask, rotary_tables, to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
@@ -206,7 +207,7 @@ def test_sdpa_unmasked(device, tt_config, config, batch, seqlen):
         to_device(key, device),
         to_device(value, device),
         is_causal=False,
-        compute_kernel_config=tt_config.compute_kernel_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
     )
 
     ref = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False)
@@ -233,7 +234,7 @@ def test_sdpa_with_ragged_padding(device, tt_config, config, batch, seqlen):
         to_device(value, device),
         attn_mask=additive_attention_mask(mask, device),
         is_causal=False,
-        compute_kernel_config=tt_config.compute_kernel_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
     )
 
     ref = torch.nn.functional.scaled_dot_product_attention(
@@ -259,7 +260,7 @@ def test_causal_attention_is_decorrelated(device, tt_config, config):
 
     def pcc(is_causal):
         out = ttnn.transformer.scaled_dot_product_attention(
-            *operands, is_causal=is_causal, compute_kernel_config=tt_config.compute_kernel_config
+            *operands, is_causal=is_causal, compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA)
         )
         return compute_pcc(ttnn.to_torch(out).float(), ref)
 
@@ -287,7 +288,10 @@ def test_all_ones_mask_matches_no_mask(device, tt_config, config, seqlen):
 
     def run(mask):
         out = ttnn.transformer.scaled_dot_product_attention(
-            *operands, attn_mask=mask, is_causal=False, compute_kernel_config=tt_config.compute_kernel_config
+            *operands,
+            attn_mask=mask,
+            is_causal=False,
+            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA),
         )
         return ttnn.to_torch(out).float()
 

@@ -728,7 +728,9 @@ permissions:
 # All gh-aw workflows in this repo use the copilot engine; upstream's `pi` engine with
 # `copilot/gpt-5.4` is not what this repo has validated. The agent's job here is small
 # (pick topic-separated issues from a pre-filtered list), so the engine default model is
-# sufficient — no `model:` override.
+# sufficient — no `model:` override on THIS engine. That is unrelated to
+# `safe-outputs.assign-to-agent.model` below, which pins the model for the actual
+# code-writing coding-agent session GitHub starts once this agent picks an issue.
 engine: copilot
 
 # Cost backstop for a 12x/day schedule, matching test-command.md's value.
@@ -771,6 +773,16 @@ safe-outputs:
     max: 2                # upstream: 3 per 30 min; see the schedule comment above
     target: "*"           # requires explicit issue_number in agent output
     allowed: [copilot]    # only the Copilot coding agent
+    # Without this, GitHub's coding-agent assignment falls back to its own "Auto" model
+    # policy -- observed live on PR #58341 picking gpt-5.6-luna and claude-haiku-4.5 for
+    # the actual code-writing sessions, not a model this repo has validated for that job.
+    # `assign-to-agent.model` is a distinct setting from this workflow's own `engine.model`
+    # (there is none, deliberately -- see the comment above `engine: copilot`): that engine
+    # is the small agent that PICKS an issue; this is the model GitHub's coding agent uses
+    # to actually write the patch. Sonnet over Opus here per cost (2026-09-29): issue-monster
+    # dispatches routine, pre-triaged sub-issues at up to 2/run every 2h, not the harder
+    # judgment call squad-plan.md's planning step is pinned to Opus for.
+    model: claude-sonnet-5.5
     ignore-if-error: true # do not fail the run if Copilot assignment is unavailable
     # The Copilot assignment API rejects the job's GITHUB_TOKEN and GitHub App tokens;
     # it needs a PAT (fine-grained, organization-owned, scoped to this repository: read
