@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
+#include <cstdlib>
 #include <optional>
 #include <bit>
 
@@ -459,6 +460,38 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         "ROW_MAJOR",
         Wt);
 
+    // NORMOPT N1: HEIGHT_SHARDED one-tile-row-per-core residual case (a, b, h all HS tile rows on the same
+    // grid, one row per core). The input, residual and h buffers are then borrowed straight from the
+    // resident shards: the reader copies nothing and the packer writes x = a + b once, into h's shard,
+    // which also serves as the x buffer of the norm. Every other layout keeps the copy path.
+    bool hs_alias = false;
+    const char* hsopt_env = std::getenv("LN_HSOPT");
+    const uint32_t hsopt = hsopt_env != nullptr ? static_cast<uint32_t>(std::strtoul(hsopt_env, nullptr, 0)) : 1u;
+    {
+        if ((hsopt & 1u) && residual_out && b.has_value() && rms_norm && !use_welford && !large_tensor_needed &&
+            !input_is_row_major && gamma.has_value() && !beta.has_value() && layernorm_is_hs_tile_rows(a) &&
+            layernorm_is_hs_tile_rows(b.value()) && layernorm_is_hs_tile_rows(residual_output.value()) &&
+            (Wt % block_size == 0) && core_group_2.num_cores() == 0 && num_tile_rows_per_core_group_1 == 1 &&
+            num_cores == a.shard_spec().value().grid.num_cores() &&
+            a.shard_spec().value().grid == b.value().shard_spec().value().grid &&
+            a.shard_spec().value().grid == residual_output.value().shard_spec().value().grid) {
+            hs_alias = true;
+        }
+    }
+    if (hs_alias) {
+        in0_t = Wt;  // the whole row of a and of b, in place
+        in1_t = Wt;
+    }
+    // NORMOPT N2a: normalize the whole row into fusion, then apply gamma to the whole row.
+    const bool e_split = hs_alias && (hsopt & 2u) && gamma.has_value() && !beta.has_value() &&
+                         !operation_attributes.fused_activation.has_value();
+    if (e_split) {
+        im5_t = Wt;
+    }
+    // NORMOPT N2b: single pass, gamma applied in DST by a row-broadcast dest-reuse multiply.
+    const bool e_reuse = hs_alias && (hsopt & 16u) && !e_split && gamma.has_value() && !beta.has_value() &&
+                         !operation_attributes.fused_activation.has_value();
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -520,6 +553,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Input buffer. On the non-fused Welford path this also serves as dfb_x for the welford
     // intake and the post-welford eltwise.
     add_dfb(IN, in0_t, in_single_tile_size, in_data_format);
+    auto borrow = [&spec](const m2::DFBSpecName& dfb_name, const m2::TensorParamName& tensor_name) {
+        for (auto& d : spec.dataflow_buffers) {
+            if (d.unique_id == dfb_name) {
+                d.borrowed_from = tensor_name;
+            }
+        }
+    };
+    if (hs_alias) {
+        borrow(IN, INPUT);
+    }
 
     // Output buffer.
     add_dfb(OUT, out0_t, out_single_tile_size, out_data_format);
@@ -545,6 +588,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // x - E[x].
     if (!rms_norm || fuse_pre_add || large_tensor_needed) {
         add_dfb(XMM, im0_t, xmm_single_tile_size, xmm_data_format);
+        if (hs_alias) {
+            borrow(XMM, RESIDUAL_OUT_T);  // x = h: the packer writes the sum once, into h's shard
+        }
     }
 
     // (x - E[x])^2.
@@ -579,7 +625,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // gamma/beta streaming intermediate.
     if (gamma.has_value() || beta.has_value()) {
-        add_dfb(FUSION, im5_t, single_tile_size, interm_data_format);
+        if (hs_alias && (hsopt & 4u)) {
+            add_dfb(FUSION, im5_t, bfloat16_tile_size, tt::DataFormat::Float16_b);
+        } else if (hs_alias && (hsopt & 8u)) {
+            add_dfb(FUSION, im5_t, bfloat16_tile_size, tt::DataFormat::Float16);
+        } else {
+            add_dfb(FUSION, im5_t, single_tile_size, interm_data_format);
+        }
+        if (e_split) {
+            alias_pair(spec, XMM2, FUSION);  // xmm2 is dead once the variance is reduced
+        }
     }
 
     if (gamma.has_value()) {
@@ -597,10 +652,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             add_dfb(X, im6_t, single_tile_size, interm_data_format);
         }
         add_dfb(INB, in1_t, inb_single_tile_size, inb_data_format);
+        if (hs_alias) {
+            borrow(INB, RESIDUAL);
+        }
     }
 
     // h = a + b: compute packs each pre-add block here as well as to XMM, the writer drains it.
-    if (residual_out) {
+    if (residual_out && !hs_alias) {
         add_dfb(H_OUT, h_out_t, h_single_tile_size, h_data_format);
     }
 
@@ -692,6 +750,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (fuse_pre_add) {
         reader.compiler_options.defines.emplace("FUSE_PRE_ADD", "1");
     }
+    if (hs_alias) {
+        reader.compiler_options.defines.emplace("HS_ALIAS", "1");
+    }
     if (gamma.has_value()) {
         reader.compiler_options.defines.emplace("FUSE_GAMMA", "1");
     }
@@ -738,9 +799,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         bind_dfb(reader, X_WELFORD, "x_welford", m2::DFBEndpointType::PRODUCER);
     }
 
-    bind_tensor(reader, INPUT, "src");
-    if (b) {
-        bind_tensor(reader, RESIDUAL, "src_b");
+    if (!hs_alias) {
+        bind_tensor(reader, INPUT, "src");
+        if (b) {
+            bind_tensor(reader, RESIDUAL, "src_b");
+        }
     }
     if (gamma.has_value()) {
         bind_tensor(reader, GAMMA_T, "gamma");
@@ -774,7 +837,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     bind_tensor(writer, OUTPUT, "dst");
     // The writer drains each row of h from H_OUT before that row's normalized tiles.
-    if (residual_out) {
+    if (residual_out && !hs_alias) {
         writer.compiler_options.defines.emplace("RESIDUAL_OUT", "1");
         bind_dfb(writer, H_OUT, "h_out", m2::DFBEndpointType::CONSUMER);
         bind_tensor(writer, RESIDUAL_OUT_T, "dst_h");
@@ -854,6 +917,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (residual_out) {
         compute.compiler_options.defines.emplace("RESIDUAL_OUT", "1");
     }
+    if (hs_alias) {
+        compute.compiler_options.defines.emplace("RESID_HS_ALIAS", "1");
+    }
+    if (e_split) {
+        compute.compiler_options.defines.emplace("NORM_E_SPLIT", "1");
+    }
+    if (e_reuse) {
+        compute.compiler_options.defines.emplace("NORM_E_REUSE", "1");
+    }
+    if (hs_alias && (hsopt & 32u)) {
+        compute.compiler_options.defines.emplace("NORM_SQ_ACC", "1");
+    }
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         auto act_defines =
@@ -883,7 +958,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (fuse_pre_add) {
         bind_dfb(compute, INB, "inb", m2::DFBEndpointType::CONSUMER);
     }
-    if (residual_out) {
+    if (residual_out && !hs_alias) {
         bind_dfb(compute, H_OUT, "h_out", m2::DFBEndpointType::PRODUCER);
     }
     if (!use_welford) {
