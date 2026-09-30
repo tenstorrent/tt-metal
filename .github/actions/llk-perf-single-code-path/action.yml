@@ -1,0 +1,22 @@
+name: 'LLK perf single code path'
+description: 'Compile a sample of the LLK perf tests with counters off and on and require both builds to be the same program. Assumes the repository is already checked out.'
+
+inputs:
+  chip-arch:
+    description: 'Architecture to check: wormhole, blackhole or quasar.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install SFPI
+      shell: bash
+      working-directory: tt_metal/tt-llk/tests
+      run: ./setup_testing_env.sh
+
+    - name: Compare the counters off and on builds
+      shell: bash
+      working-directory: tt_metal/tt-llk/tests
+      env:
+        ARCH: ${{ inputs.chip-arch }}
+      run: ./check_perf_single_code_path.sh "$ARCH"
