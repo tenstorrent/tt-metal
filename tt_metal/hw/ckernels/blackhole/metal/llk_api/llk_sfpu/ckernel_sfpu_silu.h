@@ -278,12 +278,245 @@ inline void calculate_swiglu_bf16_p5_pipe() {
     TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
     TTI_INCRWC(0, 2, 0, 0);
 }
+
+// ---------------------------------------------------------------------------------------------- P25 experiments
+// GLU_SILU_VARIANT (compile-time, from env TT_MATMUL_GLU_SILU_VARIANT via the factory; unset = 0 = today):
+//   1 = V1: today without the Newton step (out = (x*y)*u, y = SFPARECIP(d)); body 20 slots.
+//   4 = V4a: V1 without the |x| <= 87.5 clamp; body 17 slots. WRONG for |g| > ~88 (exponent wrap).
+//   5 = V4b: V4a with x*u formed early and multiplied by y right after SFPARECIP; body 16 slots. Same clamp caveat.
+#ifndef GLU_SILU_VARIANT
+#define GLU_SILU_VARIANT 0
+#endif
+#if GLU_SILU_VARIANT == 1
+template <int ITERATIONS>
+inline void calculate_swiglu_v1() {
+    silu_p5_load_consts();
+    TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 0);
+    TTI_SFPSETSGN(0, LREG3, LREG7, 1);
+    TTI_SFPSWAP(0, LREG14, LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSETSGN(0, LREG7, LREG3, 0);
+    TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);
+    TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);
+    TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);
+    TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);
+    TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);
+    TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);
+    TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+    TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);
+    if constexpr (ITERATIONS > 1) {
+        constexpr int BODY = 20;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPARECIP(0, LREG5, LREG0, 0);     // y = ~1/d
+        TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 2);  // x' (row i+1)
+        TTI_SFPSETSGN(0, LREG3, LREG7, 1);     // |x'|
+        TTI_SFPSWAP(0, LREG14, LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSETSGN(0, LREG7, LREG3, 0);                  // xc
+        TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);               // x (row i)
+        TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);         // f
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // xy = x*y
+        TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);       // km
+        TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);    // kk
+        TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);         // r
+        TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);  // u (row i)
+        TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);          // p = r*e2 + e1
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // xy*u
+        TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);       // p = p*r + 1
+        TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);       // E = p + kk
+        TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d' = 1 + E
+        TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+    }
+    TTI_SFPARECIP(0, LREG5, LREG0, 0);
+    TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+#endif
+#if GLU_SILU_VARIANT == 4
+template <int ITERATIONS>
+inline void calculate_swiglu_v4a() {
+    silu_p5_load_consts();
+    TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 0);
+    TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);
+    TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);
+    TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);
+    TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);
+    TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);
+    TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);
+    TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+    TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);
+    if constexpr (ITERATIONS > 1) {
+        constexpr int BODY = 17;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPARECIP(0, LREG5, LREG0, 0);                  // y = ~1/d
+        TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 2);               // x' (row i+1), no clamp
+        TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);               // x (row i)
+        TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);         // f
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // xy = x*y
+        TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);       // km
+        TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);    // kk
+        TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);         // r
+        TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);  // u (row i)
+        TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);          // p = r*e2 + e1
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // xy*u
+        TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);       // p = p*r + 1
+        TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);       // E = p + kk
+        TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d' = 1 + E
+        TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+    }
+    TTI_SFPARECIP(0, LREG5, LREG0, 0);
+    TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+#endif
+#if GLU_SILU_VARIANT == 5
+// State at body entry: LREG5 = d(row i), LREG7 = x_i*u_i. Body writes out(row i) and builds d and x*u of row i+1.
+template <int ITERATIONS>
+inline void calculate_swiglu_v4b() {
+    silu_p5_load_consts();
+    TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 0);               // x0
+    TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);  // u0
+    TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);         // f
+    TTI_SFPMUL(LREG3, LREG0, LCONST_0, LREG7, 0);       // xu0
+    TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG6, 1);       // km
+    TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);    // kk
+    TTI_SFPMAD(LREG3, LREG13, LREG6, LREG6, 1);         // r
+    TTI_SFPNOP;
+    TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);  // p
+    TTI_SFPNOP;
+    TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);  // p2
+    TTI_SFPNOP;
+    TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+    TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d0
+    if constexpr (ITERATIONS > 1) {
+        constexpr int BODY = 16;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 2);          // x' (row i+1)
+        TTI_SFPARECIP(0, LREG5, LREG0, 0);             // y_i = ~1/d_i
+        TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);    // f'
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);  // out_i = xu_i * y_i
+        TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG6, 1);  // km'
+        TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS + 2);  // u' (row i+1)
+        TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);                  // out_i
+        TTI_SFPMAD(LREG3, LREG13, LREG6, LREG6, 1);             // r'
+        TTI_SFPMUL(LREG3, LREG0, LCONST_0, LREG7, 0);           // xu' = x'*u'
+        TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);              // p'
+        TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);        // kk'
+        TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);           // p2'
+        TTI_INCRWC(0, 2, 0, 0);
+        TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);       // E'
+        TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d'_{i+1}
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+    }
+    TTI_SFPNOP;
+    TTI_SFPARECIP(0, LREG5, LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFPNOP;
+    TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+#endif
+#if GLU_SILU_VARIANT == 6
+// V5 (env 6): V4b restructure + two-sided clamp of the exp argument to [-87.5, 87.5] with 2 SFPSWAP on x' after xu =
+// x'*u' is formed (silu(g) -> g for large positive g, 0 for large negative g, like V0). Prgm2 = 87.5 (LREG14), Prgm0 =
+// -87.5 (LREG12, set in silu_init). SFPSWAP mode 1: dest = min(dest, VC); mode 9: dest = max(dest, VC); sign-magnitude
+// float compare.
+template <int ITERATIONS>
+inline void calculate_swiglu_v5() {
+    silu_p5_load_consts();
+    TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 0);               // x0
+    TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);  // u0
+    TTI_SFPMUL(LREG3, LREG0, LCONST_0, LREG7, 0);       // xu0
+    TTI_SFPSWAP(0, LREG14, LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0, LREG12, LREG3, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
+    TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);       // f
+    TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG6, 1);     // km
+    TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);  // kk
+    TTI_SFPMAD(LREG3, LREG13, LREG6, LREG6, 1);       // r
+    TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);        // p
+    TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);     // p2
+    TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+    TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d0
+    if constexpr (ITERATIONS > 1) {
+        constexpr int BODY = 18;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 2);          // x' (row i+1)
+        TTI_SFPARECIP(0, LREG5, LREG0, 0);             // y_i
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);  // out_i = xu_i*y_i
+        TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS + 2);  // u' (row i+1)
+        TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);                  // out_i
+        TTI_SFPMUL(LREG3, LREG0, LCONST_0, LREG7, 0);           // xu' = x'*u' (unclamped x')
+        TTI_SFPSWAP(0, LREG14, LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, LREG12, LREG3, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
+        TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);       // f'
+        TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG6, 1);     // km'
+        TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);  // kk'
+        TTI_SFPMAD(LREG3, LREG13, LREG6, LREG6, 1);       // r'
+        TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);        // p'
+        TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);     // p2'
+        TTI_INCRWC(0, 2, 0, 0);
+        TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+        TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+    }
+    TTI_SFPNOP;
+    TTI_SFPARECIP(0, LREG5, LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFPNOP;
+    TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+#endif
 }  // namespace silu_detail
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_swiglu() {
     static_assert(!is_fp32_dest_acc_en, "fused SwiGLU SFPU is bf16-dest only");
+#if GLU_SILU_VARIANT == 1
+    silu_detail::calculate_swiglu_v1<ITERATIONS>();
+#elif GLU_SILU_VARIANT == 4
+    silu_detail::calculate_swiglu_v4a<ITERATIONS>();
+#elif GLU_SILU_VARIANT == 5
+    silu_detail::calculate_swiglu_v4b<ITERATIONS>();
+#elif GLU_SILU_VARIANT == 6
+    silu_detail::calculate_swiglu_v5<ITERATIONS>();
+#else
     silu_detail::calculate_swiglu_bf16_p5_pipe<ITERATIONS>();
+#endif
 }
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
@@ -337,6 +570,9 @@ inline void silu_init() {
     // Prgm2 = 86.0f: the P5 input clamp bound |x| <= 86 (SFPSWAP VC operand, read-only). Prgm1 = log2(e) is the
     // exp's 1/ln2 from sigmoid_init. The fp32 arm does not read Prgm2.
     sfpi::vConstFloatPrgm2 = 87.5f;
+#endif
+#if GLU_SILU_VARIANT == 6
+    sfpi::vConstFloatPrgm0 = -87.5f;  // P25 V5: lower clamp bound (LREG12); the silu path does not read Prgm0
 #endif
 }
 

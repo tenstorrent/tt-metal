@@ -644,6 +644,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             if (glu_fused_env == nullptr || std::string(glu_fused_env) != "0") {
                 mm_kernel_defines["GLU_FUSED_SFPU"] = "1";
             }
+            // INT2k: SiLU sequence variant inside the fused SFPU function; unset = 1 (no Newton step).
+            // 0 = old IMPL 3 path with Newton step; other values are experimental variants.
+            const char* glu_silu_variant_env = std::getenv("TT_MATMUL_GLU_SILU_VARIANT");
+            if (glu_silu_variant_env != nullptr && glu_silu_variant_env[0] != '\0') {
+                mm_kernel_defines["GLU_SILU_VARIANT"] = glu_silu_variant_env;
+            } else {
+                mm_kernel_defines["GLU_SILU_VARIANT"] = "1";
+            }
         }
     }
     if (fp32_dest_acc_en) {

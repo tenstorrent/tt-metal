@@ -466,7 +466,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // which also serves as the x buffer of the norm. Every other layout keeps the copy path.
     bool hs_alias = false;
     const char* hsopt_env = std::getenv("LN_HSOPT");
-    const uint32_t hsopt = hsopt_env != nullptr ? static_cast<uint32_t>(std::strtoul(hsopt_env, nullptr, 0)) : 1u;
+    const uint32_t hsopt = hsopt_env != nullptr ? static_cast<uint32_t>(std::strtoul(hsopt_env, nullptr, 0)) : 33u;
     {
         if ((hsopt & 1u) && residual_out && b.has_value() && rms_norm && !use_welford && !large_tensor_needed &&
             !input_is_row_major && gamma.has_value() && !beta.has_value() && layernorm_is_hs_tile_rows(a) &&
