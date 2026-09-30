@@ -12,7 +12,7 @@ import torch
 
 from models.demos.qwen38_27b_t3k.tt import generator_vllm as adapter_module
 from models.demos.qwen38_27b_t3k.tt.generator import Qwen38Generator
-from models.demos.qwen38_27b_t3k.tt.generator_vllm import Qwen38ForCausalLM
+from models.demos.qwen38_27b_t3k.tt.generator_vllm import Qwen38ForCausalLM, _shared_pool_ceiling
 
 
 class KVPoolConfigurationTests(unittest.TestCase):
@@ -20,18 +20,33 @@ class KVPoolConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), 262144)
 
-    def test_concurrent_pool_fits_eight_long_requests(self):
-        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "1050592"}):
-            self.assertEqual(
-                Qwen38ForCausalLM.get_max_tokens_all_users(262144, max_num_seqs=8),
-                8 * (131072 + 252),
-            )
+    def test_served_pool_is_granted(self):
+        # Two full contexts plus slack, the value the serving spec sets.
+        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
+            self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144, max_num_seqs=8), 525312)
+
+    def test_pool_ceiling_is_the_derived_budget_and_is_granted(self):
+        ceiling = _shared_pool_ceiling()
+        self.assertEqual(ceiling, 885024)
+        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": str(ceiling)}):
+            self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), ceiling)
+
+    def test_pool_is_granted_without_an_explicit_device_count(self):
+        # vLLM omits num_devices; the qualified mesh is the only one this tree admits.
+        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
+            self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), 525312)
 
     def test_invalid_or_oversized_pool_is_rejected(self):
-        for value in ("-1", "0", "262145", "2097152", "1e6", "１２３"):
+        # 1050592 is eight 128K requests, which the Blackhole mesh fits and this one does not.
+        for value in ("-1", "0", "262145", "885056", "1050592", "2097152", "1e6", "１２３"):
             with self.subTest(value=value), patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": value}):
                 with self.assertRaises(ValueError):
                     Qwen38ForCausalLM.get_max_tokens_all_users(262144)
+
+    def test_a_foreign_device_count_is_rejected(self):
+        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
+            with self.assertRaises(ValueError):
+                Qwen38ForCausalLM.get_max_tokens_all_users(262144, num_devices=4)
 
 
 class FakeGenerator:

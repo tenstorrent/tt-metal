@@ -17,6 +17,20 @@ from models.demos.qwen38_27b_t3k.tt.generator import build_generator
 from models.demos.qwen38_27b_t3k.tt.model import ModelCache
 
 
+def _shared_pool_ceiling():
+    """Largest paged KV pool that fits beside the weights, trace reserve and GDN state.
+
+    Re-derived from the recorded byte budget rather than a transcribed token count, so a
+    correction to the capacity contract cannot leave this bound behind.
+    """
+    contract = json.loads((Path(__file__).parents[1] / "doc/context_contract.json").read_text())
+    budget = contract["per_device_bytes"]
+    pages = (budget["state_budget_remaining"] - budget["gdn_recurrent_and_conv_per_request"]) // budget[
+        "kv_cache_per_page"
+    ]
+    return pages * 32
+
+
 class Qwen38ForCausalLM:
     _MAX_CONTEXT = 262144
     # Leave room for every output position and the final traced increment.
@@ -84,15 +98,15 @@ class Qwen38ForCausalLM:
         if not configured.isascii() or not configured.isdecimal():
             raise ValueError("QWEN_VLLM_KV_POOL_TOKENS must be positive ASCII decimal tokens")
         tokens = int(configured)
-        # Bound the allocation to the measured TP4 BFP8 KV pool, independently
-        # of the per-request context limit. Eight 128K prompts need more than
-        # the default shared 256K pool even when admission permits eight users.
-        if tokens % 32 or not cls._MAX_CONTEXT <= tokens <= 1179648:
-            raise ValueError("Explicit KV pool must be 32-token aligned within 262144..1179648")
-        # The bound is per-device, and every qualified mesh holds one KV head per device: four
-        # heads shard across four chips and replicate across eight. So the measured pool size
-        # carries over, but data parallelism would multiply it.
-        if kwargs.get("num_devices", 4) not in supported_device_counts() or kwargs.get("tt_data_parallel", 1) != 1:
+        # The pool is shared across concurrent requests, so it is bounded by device memory
+        # rather than by the per-request context limit.
+        ceiling = _shared_pool_ceiling()
+        if tokens % 32 or not cls._MAX_CONTEXT <= tokens <= ceiling:
+            raise ValueError(f"Explicit KV pool must be 32-token aligned within {cls._MAX_CONTEXT}..{ceiling}")
+        # The bound is per-device, and this tree qualifies exactly one mesh, so an unspecified
+        # device count means that mesh. Data parallelism would multiply the requirement.
+        (qualified,) = supported_device_counts()
+        if kwargs.get("num_devices", qualified) != qualified or kwargs.get("tt_data_parallel", 1) != 1:
             raise ValueError("Explicit KV pool requires a single qualified mesh")
         return tokens
 
