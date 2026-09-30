@@ -100,7 +100,6 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_UINT32,
     LGAMMA_STIRLING_FP32,
     ADD_TOP_ROW,
-    MAX_POOL_WITH_INDICES,
 };
 
 enum class DataLayout

@@ -109,7 +109,6 @@
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
-#include "llk_sfpu/ckernel_sfpu_max_pool_indices.h" // calculate_max_pool_with_indices / init_max_pool_with_indices
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
@@ -1196,11 +1195,6 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         init_add_top_row();
     }
-    else if constexpr (OP == BinaryOp::MAX_POOL_WITH_INDICES)
-    {
-        // Enables SFPU index tracking; must run after _llk_math_eltwise_sfpu_init_(), which resets it.
-        init_max_pool_with_indices<APPROXIMATION_MODE, ckernel::DataLayout::TILE>();
-    }
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
 
@@ -1398,21 +1392,6 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
-    }
-    else if constexpr (OP == BinaryOp::MAX_POOL_WITH_INDICES)
-    {
-        // src0 = values tile, src1 = indices tile; both reduced in place into their row 0.
-        // VectorMode::None runs the kernel once: it addresses the whole tile itself.
-        SFPU_BINARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_max_pool_with_indices,
-            (APPROXIMATION_MODE, is_fp32_dest_acc_en, 9 /* num_rows */, ITERATIONS, ckernel::DataLayout::TILE, false /* accumulate */),
-            src0_tile,
-            src1_tile,
-            dst_tile,
-            VectorMode::None,
-            0 /* chunk */);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
