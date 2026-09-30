@@ -5,15 +5,18 @@
 //
 //   w_split_block       ONCE, before block 0, fp32 W only: each fp32 W tile k of cb_weight is rewritten
 //                        in place (aliased cb_weight_split) into the exact bf16 pair [W_hi(k), W_lo(k)]
+//   sumsq_block         eltwise_chain Mul x*x DEST-accumulated over K (streams under the X burst)
+//                        + reduce<SUM, REDUCE_ROW, Accurate>                  -> cb_partial [sumsq rows]
 //   project_block       bf16 W:  matmul_block helper: mix partial = X_blk @ W_slice -> cb_partial [mix rows]
 //                        (in0 WaitAndRetainOnLastBlock, num_k_blocks = 1: the X block stays resident)
 //                        fp32 W:  project_block_pieces: X_blk @ W_hi + X_blk @ W_lo in ONE DEST window
-//   sumsq_block         eltwise_chain Mul x*x DEST-accumulated over K        -> cb_sq_acc
-//                        + reduce<SUM, REDUCE_ROW, Accurate>                  -> cb_partial [sumsq rows]
 //   combine_block       root only: rank-ordered fp32 SFPU fold of cb_gathered -> cb_combined
-//   coefficients_block  custom SFPU block op: r, pre, post, logits          -> cb_coef_out (+cb_logits_coef)
+//   coefficients_block  S row-major (cb_coef_in, multicast by the root) -> transpose_tile -> SFPU subvector
+//                        gather into coefficient-major -> custom SFPU coefficients (r, pre) -> pre_i tiles
+//                        (subvector scatter + transpose_dest) -> cb_pre_cols
 //   ymix_block          eltwise_chain Mul x_i * bcast_col(pre_i), DEST-accumulated over i -> cb_y_out
-//   sinkhorn_block      custom SFPU block op on the owned rows              -> cb_comb_coef
+//   owned_block         owned rows: the same gather + coefficients, Sinkhorn, post / comb row-major tiles
+//                        (subvector scatter + transpose_dest), in one DEST window -> cb_comb_coef
 //
 // fp32 X (x_pieces == 3, Refinement 2; compile-time gated, the bf16-X path is unchanged):
 //   w_grid_split_block  ONCE: max|W| -> grid; W -> [W0 on a 2^-W_GRID_BITS grid, W - W0] (bf16, in place)
@@ -39,6 +42,9 @@
 //   * combine_block: reduce<AccumulateViaAdd> reads the fp32 partials through the FPU (tf32 truncation);
 //     eltwise_chain cannot express a runtime group_cores-deep fold in one DEST window. Realized with the
 //     chain's own two primitives, copy_tile (UnpackToDestFp32) + add_binary_tile (SFPU), in a loop.
+//   * coefficient layout transforms (gather_coef_major / pre_tiles / post_comb_tiles): a data permutation
+//     (coefficient columns <-> per-token lanes) no helper expresses; built from transpose_tile /
+//     transpose_dest (exact fp32) + the SFPI subvector transpose.
 //   * coefficients_block / sinkhorn_block: the math runs across slots WITHIN one tile (row / column sums
 //     over the n x n matrix, per-token softmax); chain SFPU elements are whole-tile elementwise. Realized as
 //     custom SFPI functions over one DEST tile that call the non-approximate SFPI exp primitive, with a
@@ -51,6 +57,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack.h"
 #include "api/compute/bcast.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -58,6 +66,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
+
+// DEST tiles of the coefficient layout transforms (visible on every TRISC).
+constexpr uint32_t mhc_t_mix = 2;  // the transposed mix tile of S
+constexpr uint32_t mhc_t_sq = 3;   // the transposed sum(x^2) tile of S (row 0 = sum x^2 per token)
 
 #ifdef TRISC_MATH
 #include "sfpi.h"
@@ -75,8 +87,8 @@ constexpr uint32_t cb_partial = get_compile_time_arg_val(5);
 constexpr uint32_t cb_gathered = get_compile_time_arg_val(6);
 constexpr uint32_t cb_combined = get_compile_time_arg_val(7);
 constexpr uint32_t cb_coef_in = get_compile_time_arg_val(8);
-constexpr uint32_t cb_coef_out = get_compile_time_arg_val(9);
-constexpr uint32_t cb_logits_coef = get_compile_time_arg_val(10);
+// CT args 9 and 10 are unused (formerly the writer-scattered coefficient CBs; the layout transform is now the
+// compute's own, in DEST).
 constexpr uint32_t cb_comb_coef = get_compile_time_arg_val(11);
 constexpr uint32_t cb_pre_cols = get_compile_time_arg_val(12);
 constexpr uint32_t cb_y_out = get_compile_time_arg_val(13);
@@ -391,6 +403,118 @@ void sinkhorn(uint32_t eps_bits, uint32_t iters) {
     }
 }
 
+// ---- Layout transforms (Refinement 4): row-major S <-> coefficient-major, all in DEST ----
+// A row-major tile transposed in DEST ("T layout": row = coefficient, col = token) holds coefficient row r of
+// face F + h (F = (r >> 4) * 2, h = token >= 16) in the dst_reg vectors 8(F + h) + 2rb + o (rb = (r & 15) >> 2,
+// o = token parity), subvector g = r & 3, lane c <-> token 16h + 2c + o. subvec_transp of the four vectors
+// (h, o) of one row block therefore yields the four coefficients of that block as whole vectors, lane
+// l <-> token 16(l >> 4) + 2(l & 7) + ((l >> 3) & 1) (mhc_layout::lane_token), and it is its own inverse.
+// Every per-token op is lane-wise, so this fixed token permutation is invisible except at these transforms.
+constexpr int T_MIX = static_cast<int>(mhc_t_mix);
+constexpr int T_SQ = static_cast<int>(mhc_t_sq);
+
+constexpr int t_vec(int tile, int row_block, int h, int o) {
+    return tile * TILE_SLOTS + 8 * (((4 * row_block) >> 4) * 2 + h) + 2 * (((4 * row_block) & 15) >> 2) + o;
+}
+
+// DEST tile 0 slots [0, MIX) <- T_MIX rows [0, MIX); slot MIX <- T_SQ row 0.
+void gather_coef_major() {
+#pragma GCC unroll 8
+    for (int b = 0; 4 * b < MIX; ++b) {
+        vFloat u0 = dst_reg[t_vec(T_MIX, b, 0, 0)];
+        vFloat u1 = dst_reg[t_vec(T_MIX, b, 0, 1)];
+        vFloat u2 = dst_reg[t_vec(T_MIX, b, 1, 0)];
+        vFloat u3 = dst_reg[t_vec(T_MIX, b, 1, 1)];
+        subvec_transp(u0, u1, u2, u3);
+        dst_reg[4 * b] = u0;
+        if (4 * b + 1 < MIX) {
+            dst_reg[4 * b + 1] = u1;
+        }
+        if (4 * b + 2 < MIX) {
+            dst_reg[4 * b + 2] = u2;
+        }
+        if (4 * b + 3 < MIX) {
+            dst_reg[4 * b + 3] = u3;
+        }
+    }
+    vFloat u0 = dst_reg[t_vec(T_SQ, 0, 0, 0)];
+    vFloat u1 = dst_reg[t_vec(T_SQ, 0, 0, 1)];
+    vFloat u2 = dst_reg[t_vec(T_SQ, 0, 1, 0)];
+    vFloat u3 = dst_reg[t_vec(T_SQ, 0, 1, 1)];
+    subvec_transp(u0, u1, u2, u3);
+    dst_reg[MIX] = u0;
+}
+
+sfpi_inline void zero_tile(int tile) {
+#pragma GCC unroll 32
+    for (int k = 0; k < TILE_SLOTS; ++k) {
+        dst_reg[tile * TILE_SLOTS + k] = 0.0f;
+    }
+}
+
+// Pre-column tile: coefficient-major slot I of tile 0 -> T-layout row 0 of tile DST (rest 0); transposed by
+// the caller into column 0 = pre_I per token row (the y-mix's bcast-column operand). DST may be 0 (the slot
+// is read before the tile is cleared).
+template <int I, int DST>
+void pre_tile() {
+    vFloat v = dst_reg[I];
+    zero_tile(DST);
+    vFloat z1 = 0.0f, z2 = 0.0f, z3 = 0.0f;
+    subvec_transp(v, z1, z2, z3);
+    dst_reg[t_vec(DST, 0, 0, 0)] = v;
+    dst_reg[t_vec(DST, 0, 0, 1)] = z1;
+    dst_reg[t_vec(DST, 0, 1, 0)] = z2;
+    dst_reg[t_vec(DST, 0, 1, 1)] = z3;
+}
+
+// All n pre-column tiles: pre_i -> DEST tile (i + 1) % 4 (tile 1 = the consumed bias, 2 / 3 = the consumed
+// transposed S tiles, 0 = the coefficient tile itself, last).
+void pre_tiles() {
+    static_assert(N >= 1 && N <= 4, "n*(n+2)+1 <= 32 coefficient slots bounds n to 4");
+    pre_tile<0, 1>();
+    if constexpr (N > 1) {
+        pre_tile<1, 2>();
+    }
+    if constexpr (N > 2) {
+        pre_tile<2, 3>();
+    }
+    if constexpr (N > 3) {
+        pre_tile<3, 0>();
+    }
+}
+// Row-major output tile: coefficient-major slots [SRC0, SRC0 + COUNT) of tile 0 -> T-layout rows [0, COUNT)
+// of tile DST (!= 0; rest 0); transposed by the caller into columns [0, COUNT) per token row.
+template <int SRC0, int COUNT, int DST>
+void rows_tile() {
+    static_assert(DST != 0 && COUNT <= 16, "rows stay in faces 0/1 of a tile other than the source");
+    zero_tile(DST);
+#pragma GCC unroll 4
+    for (int b = 0; 4 * b < COUNT; ++b) {
+        vFloat u0 = dst_reg[SRC0 + 4 * b];
+        vFloat u1 = 0.0f, u2 = 0.0f, u3 = 0.0f;
+        if (4 * b + 1 < COUNT) {
+            u1 = dst_reg[SRC0 + 4 * b + 1];
+        }
+        if (4 * b + 2 < COUNT) {
+            u2 = dst_reg[SRC0 + 4 * b + 2];
+        }
+        if (4 * b + 3 < COUNT) {
+            u3 = dst_reg[SRC0 + 4 * b + 3];
+        }
+        subvec_transp(u0, u1, u2, u3);
+        dst_reg[t_vec(DST, b, 0, 0)] = u0;
+        dst_reg[t_vec(DST, b, 0, 1)] = u1;
+        dst_reg[t_vec(DST, b, 1, 0)] = u2;
+        dst_reg[t_vec(DST, b, 1, 1)] = u3;
+    }
+}
+
+// Owned rows, after the Sinkhorn: post -> tile 2, comb -> tile 3 (T layout).
+void post_comb_tiles() {
+    rows_tile<N, N, 2>();
+    rows_tile<2 * N, N * N, 3>();
+}
+
 }  // namespace mhc_sfpu
 #endif
 
@@ -467,9 +591,10 @@ ALWI void w_split_block(uint32_t core_k_tiles) {
     cb_wait_front(cb_weight_split, 2 * core_k_tiles);  // resident for the whole kernel, never popped
 }
 
-// W_ROLE_SPREAD (column all-gather): split only this core's share [p0, p1) — the reader multicasts it split,
-// and the other rows' shares land already split — then wait for the whole slice. The copy_tile reads of the
-// own share run before cb_weight is published: the reader's cb_w_own_ready token guarantees they landed.
+// W_ROLE_SPREAD (column all-gather): split only this core's share [p0, p1) — the writer multicasts it split,
+// and the other rows' shares land already split. The copy_tile reads of the own share run before cb_weight is
+// published: the writer's cb_w_own_ready token guarantees they landed. The whole slice is waited for only
+// right before the first projection (w_publish_split), so the W-free sumsq of block 0 runs under the exchange.
 ALWI void w_split_own_share(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
     cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
     cb_wait_front(cb_w_own_ready, 1);
@@ -477,6 +602,8 @@ ALWI void w_split_own_share(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
     cb_pop_front(cb_w_own_ready, 1);
     cb_reserve_back(cb_w_own_split, 1);  // packs above are complete when the push lands (pack thread order)
     cb_push_back(cb_w_own_split, 1);
+}
+ALWI void w_publish_split(uint32_t core_k_tiles) {
     cb_wait_front(cb_weight, core_k_tiles);
     cb_push_back(cb_weight_split, 2 * core_k_tiles);
     cb_wait_front(cb_weight_split, 2 * core_k_tiles);  // resident for the whole kernel, never popped
@@ -487,8 +614,10 @@ ALWI void w_split_own_share(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
 // the bf16 W itself) runs at MATH_FIDELITY; pieces >= 1 (W_lo) at w_lo_fidelity (math re-init only; same DEST).
 template <uint32_t PIECES>
 ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h) {
-    cb_wait_front(cb_x_resident, extent * core_k_tiles);  // retained: sumsq + y-mix reuse the block
-    reconfig_data_format(cb_w_matmul, cb_x_resident);     // matmul: srca = in1, srcb = in0
+    // The reader publishes the block in K chunks: wait per K tile (cumulative, never popped here — the block is
+    // retained for sumsq and the y-mix), so the projection runs under the rest of the X burst.
+    uint32_t waited = 0;
+    reconfig_data_format(cb_w_matmul, cb_x_resident);  // matmul: srca = in1, srcb = in0
     pack_reconfig_data_format(cb_partial);
     matmul_init(cb_x_resident, cb_w_matmul);
     for (uint32_t r0 = 0; r0 < extent; r0 += sb_h) {
@@ -500,6 +629,11 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
             }
         }
         for (uint32_t k = 0; k < core_k_tiles; ++k) {
+            const uint32_t need = (r0 + sb_h - 1) * core_k_tiles + k + 1;
+            if (need > waited) {
+                cb_wait_front(cb_x_resident, need);
+                waited = need;
+            }
             for (uint32_t r = 0; r < sb_h; ++r) {
                 const uint32_t x_idx = (r0 + r) * core_k_tiles + k;
                 matmul_tiles(cb_x_resident, cb_w_matmul, x_idx, k * PIECES, r);
@@ -531,6 +665,7 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
         tile_regs_release();
         cb_push_back(cb_partial, sb_h);
     }
+    cb_wait_front(cb_x_resident, extent * core_k_tiles);  // whole block landed (no-op after the last sub-block)
 }
 
 #ifdef TRISC_MATH
@@ -773,6 +908,50 @@ ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t s
     }
 }
 
+namespace mhc_sfpu_tiles {
+constexpr uint32_t pre_tile_index(uint32_t i) { return (i + 1) % 4; }  // mirrors mhc_sfpu::pre_tiles
+}  // namespace mhc_sfpu_tiles
+
+// Row t of the landed S block (cb_coef_in: [mix x block_token_tiles | sum(x^2) x block_token_tiles]) -> DEST
+// tile 0 = coefficient-major raw sums, tile 1 = bias, then the coefficient op: tile 0 = r / pre / post /
+// logits. Caller holds the DEST window.
+struct CoefScalars {
+    uint32_t a_pre, a_post, a_res, eps, norm_eps, inv_nc;
+};
+ALWI void load_coef_major(uint32_t t, const CoefScalars& c) {
+    reconfig_data_format_srca(cb_coef_in);  // the previous phase may have left bf16 X formats (y-mix)
+    transpose_init(cb_coef_in);
+    transpose_tile(cb_coef_in, t, mhc_t_mix);
+    transpose_tile(cb_coef_in, block_token_tiles + t, mhc_t_sq);
+    copy_tile_to_dst_init_short(cb_bias_coef);
+    copy_tile(cb_bias_coef, 0, 1);
+    custom_sfpu_init();
+    MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::gather_coef_major, 0, VectorMode::None)));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(
+        mhc_sfpu::coefficients, 0, VectorMode::None, c.a_pre, c.a_post, c.a_res, c.eps, c.norm_eps, c.inv_nc)));
+}
+
+// sumsq_row: Q = sum_k x_k * x_k over one token row of the resident X block (DEST-accumulated) -> cb_sq_acc.
+template <compute_kernel_lib::WaitPolicy WAIT, compute_kernel_lib::TileAddressing ADDR>
+ALWI void sumsq_row(uint32_t core_k_tiles, uint32_t base) {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        IterationShape::tiles(core_k_tiles),
+        BinaryFpu<
+            BinaryFpuOp::Mul,
+            input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
+            input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
+            Dst::D0,
+            DestAccumulation::WholeShape>{base, base},
+        PackTile<output(
+            cb_sq_acc,
+            ReservePolicy::OneUpfront,
+            PushPolicy::OneAtEnd,
+            DataFormatReconfig::Enabled,
+            TileAddressing::Direct,
+            DestAccumulation::WholeShape)>{});
+}
+
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t core_token_tiles = get_arg_val<uint32_t>(1);
@@ -785,6 +964,7 @@ void kernel_main() {
     const uint32_t norm_eps_bits = get_arg_val<uint32_t>(8);
     const uint32_t inv_nc_bits = get_arg_val<uint32_t>(9);
     const uint32_t sinkhorn_iters = get_arg_val<uint32_t>(10);
+    const CoefScalars coef_scalars{a_pre_bits, a_post_bits, a_res_bits, eps_bits, norm_eps_bits, inv_nc_bits};
 
     using namespace compute_kernel_lib;
 
@@ -813,7 +993,7 @@ void kernel_main() {
         const uint32_t extent =
             (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
 
-        // ---- project_block: mix partial = X_blk @ W_slice (out subblock height = largest divisor <= DEST) ----
+        // projection out sub-block height = largest divisor of the extent <= DEST
         uint32_t sb_h = 1;
         for (uint32_t h = DEST_AUTO_LIMIT; h > 1; --h) {
             if (extent % h == 0) {
@@ -821,22 +1001,53 @@ void kernel_main() {
                 break;
             }
         }
+        if constexpr (x_grid_split) {
+            // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
+            // reader's data is guaranteed by the cb_x_resident wait).
+            cb_reserve_back(cb_x_fp32, x_block_pages);
+            cb_push_back(cb_x_fp32, x_block_pages);
+            cb_wait_front(cb_x_resident, extent * core_k_tiles);
+            cb_wait_front(cb_x_fp32, x_block_pages);
+            x_stats_block(extent, core_k_tiles);
+        }
         {
-            DeviceZoneScopedN("C-xwait");
-            cb_wait_front(cb_x_resident, x_block_pages);
+            DeviceZoneScopedN("C-sumsq");
+            // ---- sumsq_block (first: it needs only X, so it streams under the X burst while W may still be
+            // landing): per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse -> cb_partial
+            // [sumsq rows]. Row 0 (CB-front based) waits per K tile (Cumulative); a later row (runtime base
+            // offset, which the chain's cumulative count cannot carry) first waits for its whole row explicitly.
+            for (uint32_t t = 0; t < extent; ++t) {
+                const uint32_t base = t * core_k_tiles;
+                if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
+                    if (t == 0) {
+                        sumsq_row<WaitPolicy::Cumulative, TileAddressing::Direct>(core_k_tiles, 0);
+                    } else {
+                        cb_wait_front(cb_x_resident, base + core_k_tiles);
+                        sumsq_row<WaitPolicy::None, TileAddressing::Offset>(core_k_tiles, base);
+                    }
+                }
+                reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_sq_acc,
+                    cb_reduce_scaler,
+                    cb_partial,
+                    ReduceInputPolicy::WaitAndPopPerTile,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
+            }
         }
         {
             DeviceZoneScopedN("C-proj");
+            // ---- project_block: mix partial = X_blk @ W_slice -> cb_partial [mix rows] ----
             if constexpr (x_grid_split) {
-                // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
-                // reader's data is guaranteed by the cb_x_resident wait).
-                cb_reserve_back(cb_x_fp32, x_block_pages);
-                cb_push_back(cb_x_fp32, x_block_pages);
-                cb_wait_front(cb_x_resident, extent * core_k_tiles);
-                cb_wait_front(cb_x_fp32, x_block_pages);
-                x_stats_block(extent, core_k_tiles);
                 project_block_split(extent, core_k_tiles, sb_h);
             } else if constexpr (w_pieces > 1) {
+                if constexpr (w_presplit) {
+                    if (block_idx == 0) {
+                        w_publish_split(core_k_tiles);
+                    }
+                }
                 project_block_pieces<w_pieces>(extent, core_k_tiles, sb_h);
             } else {
                 matmul_block<
@@ -854,51 +1065,6 @@ void kernel_main() {
                     MatmulBlockShape::of(extent / sb_h, 1, sb_h, 1, core_k_tiles, 1));
             }
         }
-        {
-            DeviceZoneScopedN("C-sumsq");
-            // ---- sumsq_block: per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse ----
-            for (uint32_t t = 0; t < extent; ++t) {
-                const uint32_t base = t * core_k_tiles;
-                if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
-                    eltwise_chain(
-                        IterationShape::tiles(core_k_tiles),
-                        BinaryFpu<
-                            BinaryFpuOp::Mul,
-                            input(
-                                cb_x_resident,
-                                WaitPolicy::None,
-                                PopPolicy::None,
-                                InputTileMapping::Block,
-                                DataFormatReconfig::Enabled,
-                                TileAddressing::Offset),
-                            input(
-                                cb_x_resident,
-                                WaitPolicy::None,
-                                PopPolicy::None,
-                                InputTileMapping::Block,
-                                DataFormatReconfig::Enabled,
-                                TileAddressing::Offset),
-                            Dst::D0,
-                            DestAccumulation::WholeShape>{base, base},
-                        PackTile<output(
-                            cb_sq_acc,
-                            ReservePolicy::OneUpfront,
-                            PushPolicy::OneAtEnd,
-                            DataFormatReconfig::Enabled,
-                            TileAddressing::Direct,
-                            DestAccumulation::WholeShape)>{});
-                }
-                reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    cb_sq_acc,
-                    cb_reduce_scaler,
-                    cb_partial,
-                    ReduceInputPolicy::WaitAndPopPerTile,
-                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
-            }
-        }
         // ---- combine_block (root only) ----
         if (rank == 0) {
             {
@@ -913,47 +1079,31 @@ void kernel_main() {
             cb_wait_front(cb_coef_in, extent);
         }
 
-        // ---- coefficients_block ----
+        // ---- coefficients_block: S (landed row-major in cb_coef_in) -> pre-column tiles, all in DEST ----
+        //   transpose S -> gather into coefficient-major -> coefficients (r, pre) -> pre_i into T-layout row 0
+        //   of its own tile -> transpose -> column 0 = pre_i per token row -> cb_pre_cols.
         {
             DeviceZoneScopedN("C-coef");
             cb_wait_front(cb_bias_coef, 1);  // resident constant (writer-produced): waited, never popped
-            cb_wait_front(cb_coef_in, extent);
-            cb_reserve_back(cb_coef_out, extent);
-            reconfig_data_format_srca(cb_coef_in);
-            pack_reconfig_data_format(cb_coef_out);
-            copy_tile_to_dst_init_short(cb_coef_in);
-            custom_sfpu_init();
+            cb_wait_front(cb_coef_in, 2 * block_token_tiles);
+            cb_reserve_back(cb_pre_cols, n_streams * extent);
+            pack_reconfig_data_format(cb_pre_cols);
             for (uint32_t t = 0; t < extent; ++t) {
-                const bool owned = ((row0 + t) % group_cores) == rank;
-                if (owned) {
-                    cb_reserve_back(cb_logits_coef, 1);
-                }
                 tile_regs_acquire();
-                copy_tile(cb_coef_in, t, 0);
-                copy_tile(cb_bias_coef, 0, 1);
-                MATH((_llk_math_eltwise_unary_sfpu_params_(
-                    mhc_sfpu::coefficients,
-                    0,
-                    VectorMode::None,
-                    a_pre_bits,
-                    a_post_bits,
-                    a_res_bits,
-                    eps_bits,
-                    norm_eps_bits,
-                    inv_nc_bits)));
+                load_coef_major(t, coef_scalars);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::pre_tiles, 0, VectorMode::None)));
+                transpose_dest_init<true, true>();
+                for (uint32_t i = 0; i < n_streams; ++i) {
+                    transpose_dest<true, true>(mhc_sfpu_tiles::pre_tile_index(i));
+                }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_coef_out);
-                if (owned) {
-                    pack_tile(0, cb_logits_coef);
+                for (uint32_t i = 0; i < n_streams; ++i) {
+                    pack_tile(mhc_sfpu_tiles::pre_tile_index(i), cb_pre_cols);
                 }
                 tile_regs_release();
-                if (owned) {
-                    cb_push_back(cb_logits_coef, 1);
-                }
             }
-            cb_push_back(cb_coef_out, extent);
-            cb_pop_front(cb_coef_in, extent);
+            cb_push_back(cb_pre_cols, n_streams * extent);
         }
         {
             DeviceZoneScopedN("C-pwait");
@@ -1003,31 +1153,30 @@ void kernel_main() {
         }
         DeviceZoneScopedN("C-sink");
 
-        // ---- sinkhorn_block (owned rows), after the y-mix (stall-shadow reorder) ----
-        bool sinkhorn_initialized = false;
+        // ---- owned_block (owned rows), after the y-mix (stall-shadow reorder): the coefficient tile is rebuilt
+        // from S, then coefficients (post, logits) + Sinkhorn + the post / comb row-major tiles in ONE DEST
+        // window -> cb_comb_coef [post, comb] (the writer stores both pages as they are).
         for (uint32_t t = 0; t < extent; ++t) {
             if (((row0 + t) % group_cores) != rank) {
                 continue;
             }
-            if (!sinkhorn_initialized) {
-                reconfig_data_format_srca(cb_logits_coef);
-                pack_reconfig_data_format(cb_comb_coef);
-                copy_tile_to_dst_init_short(cb_logits_coef);
-                custom_sfpu_init();
-                sinkhorn_initialized = true;
-            }
-            cb_wait_front(cb_logits_coef, 1);
-            cb_reserve_back(cb_comb_coef, 1);
+            cb_reserve_back(cb_comb_coef, 2);
+            pack_reconfig_data_format(cb_comb_coef);
             tile_regs_acquire();
-            copy_tile(cb_logits_coef, 0, 0);
+            load_coef_major(t, coef_scalars);
             MATH((_llk_math_eltwise_unary_sfpu_params_(
                 mhc_sfpu::sinkhorn, 0, VectorMode::None, eps_bits, sinkhorn_iters)));
+            MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::post_comb_tiles, 0, VectorMode::None)));
+            transpose_dest_init<true, true>();
+            transpose_dest<true, true>(2);
+            transpose_dest<true, true>(3);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_comb_coef);
+            pack_tile(2, cb_comb_coef);
+            pack_tile(3, cb_comb_coef);
             tile_regs_release();
-            cb_push_back(cb_comb_coef, 1);
-            cb_pop_front(cb_logits_coef, 1);
+            cb_push_back(cb_comb_coef, 2);
         }
+        cb_pop_front(cb_coef_in, 2 * block_token_tiles);  // S consumed (both passes)
     }
 }

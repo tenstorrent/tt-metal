@@ -39,12 +39,9 @@ CB_PARTIAL = 5
 CB_GATHERED = 6
 CB_COMBINED = 7
 CB_COEF_IN = 8
-CB_COEF_OUT = 9
-CB_LOGITS_COEF = 10
 CB_COMB_COEF = 11
 CB_PRE_COLS = 12
 CB_Y_OUT = 13
-CB_OUT_STAGE = 14
 CB_WEIGHT_SPLIT = 15  # aliases CB_WEIGHT's allocation (fp32 W only): bf16 pages [W_hi(k), W_lo(k)] per k
 CB_X_FP32 = 16  # aliases CB_X_RESIDENT's allocation (fp32 X only): the same tiles, read UnpackToDestFp32
 CB_X_PIECES = 17  # fp32 X only: bf16 pieces [x0, x1_hi, x1_mid] of one K chunk window (streams K)
@@ -57,7 +54,7 @@ CB_W_OWN_READY = 23  # W column all-gather token (no payload): reader -> compute
 CB_W_OWN_SPLIT = 24  # W column all-gather token (no payload): compute -> reader "own W share split"
 TOKEN_PAGE_BYTES = 32
 NUM_CB_SLOTS = 64
-UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_LOGITS_COEF)
+UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN)
 
 
 def w_pieces(w_dtype):
@@ -90,9 +87,12 @@ SEM_W_READY = 3  # W column broadcast: data-ready Counter (one event per W chunk
 # ---- host constants (tunable knobs, single source) ----
 GROUP_CORES_CAP = 32  # flat-root gather cap (cb_gathered grows with group_cores)
 X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of the combine round trip)
+# Each X block is read as one NoC burst but published to the compute in this many K-ordered chunks (one NoC
+# transaction id each), so the projection runs under the rest of the burst instead of after it (Refinement 4).
+# 1 = one publish per block (the pre-Refinement-4 behaviour); at most 15 (NoC transaction ids).
+X_STREAM_CHUNKS = 4
 Y_DEPTH = 2  # cb_y_out windows in flight
 Y_CHUNK_TILES_CAP = 8  # 4-8 writes in flight per barrier saturate (catalog: double_buffer)
-OUT_STAGE_PAGES = 2  # one post + one comb staging tile
 # W is pushed into cb_weight in chunks of this many tiles (one read barrier each), so the compute kernel's
 # fp32 W hi/lo split of chunk j runs under the DRAM read of chunk j+1 instead of after the whole W slice.
 W_CHUNK_TILES = 8
@@ -138,10 +138,24 @@ NARROW_GROUPS = True
 # is also spread 1/rows per core. Applies when groups are one core-row tall (group_h == 1) and at least two
 # full group rows are active; otherwise every core reads (and splits) W itself (R1). False disables.
 W_BCAST = True
-# NoC of the W column exchange = the writer's NoC (the writer owns the W fill; the reader's X stream is NoC0).
-W_MCAST_NOC = ttnn.NOC.NOC_1
+# NoC placement (noc_placement): the reader's X stream rides READER_NOC; the writer (W fill, both multicasts,
+# partial / y / post / comb stores) rides the other one.
+READER_NOC = ttnn.NOC.NOC_0
+
+
+def _writer_noc():
+    return ttnn.NOC.NOC_1 if READER_NOC == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
+
+
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
 W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
+
+
+def _dm_config(processor, noc):
+    cfg = ttnn.DataMovementConfigDescriptor()
+    cfg.processor = processor
+    cfg.noc = noc
+    return cfg
 
 
 def _f32_bits(x):
@@ -210,13 +224,10 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_PARTIAL, 2 * bt, fT, f32),
         (CB_GATHERED, G * 2 * bt, fT, f32),
         (CB_COMBINED, 2 * bt, fT, f32),
-        (CB_COEF_IN, bt, fT, f32),
-        (CB_COEF_OUT, bt, fT, f32),
-        (CB_LOGITS_COEF, bt, fT, f32),
-        (CB_COMB_COEF, bt, fT, f32),
+        (CB_COEF_IN, 2 * bt, fT, f32),  # landed S block [mix x bt | sum(x^2) x bt] (group multicast)
+        (CB_COMB_COEF, 2 * bt, fT, f32),  # owned rows: [post, comb] row-major output tiles
         (CB_PRE_COLS, n * bt, fT, f32),
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
-        (CB_OUT_STAGE, OUT_STAGE_PAGES, fT, f32),
         (CB_W_OWN_READY, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
         (CB_W_OWN_SPLIT, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
     ]
@@ -433,7 +444,7 @@ def create_program_descriptor(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
         )
         w_cfg = ttnn.McastConfig(
-            noc=W_MCAST_NOC,
+            noc=_writer_noc(),
             handshake=False,
             data_ready=ttnn.McastDataReady.Counter,
             rotating_sender=True,
@@ -445,7 +456,7 @@ def create_program_descriptor(
     w_presplit = w_mcast is not None and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
 
     # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
-    mcast_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
+    mcast_cfg = ttnn.McastConfig(noc=_writer_noc(), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
     helpers = {}
     mcast_ct = None
     if G > 1:
@@ -475,8 +486,9 @@ def create_program_descriptor(
         plan.Ct,
         CB_MAX_SCALER,
         int(x_pieces(x_tensor.dtype) > 1),
+        X_STREAM_CHUNKS,
     ]
-    assert len(reader_ct) == 8  # TensorAccessorArgs base in the reader
+    assert len(reader_ct) == 9  # TensorAccessorArgs base in the reader
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
 
     compute_ct = [
@@ -489,8 +501,8 @@ def create_program_descriptor(
         CB_GATHERED,
         CB_COMBINED,
         CB_COEF_IN,
-        CB_COEF_OUT,
-        CB_LOGITS_COEF,
+        0,  # CT 9 / 10 unused (formerly the writer-scattered coefficient CBs)
+        0,
         CB_COMB_COEF,
         CB_PRE_COLS,
         CB_Y_OUT,
@@ -528,11 +540,8 @@ def create_program_descriptor(
         CB_GATHERED,
         CB_COMBINED,
         CB_COEF_IN,
-        CB_COEF_OUT,
         CB_COMB_COEF,
-        CB_PRE_COLS,
         CB_Y_OUT,
-        CB_OUT_STAGE,
         n,
         bt,
         plan.Ct,
@@ -541,10 +550,15 @@ def create_program_descriptor(
         plan.y_depth * plan.y_chunk_tiles,
         SEM_GATHER,
         n * (n + 2),
+        # The writer also produces the resident constants: the coefficient-major bias and the W slice (NoC1).
+        CB_BIAS_COEF,
+        CB_WEIGHT,
+        W_CHUNK_TILES,
+        CB_W_OWN_READY,
+        CB_W_OWN_SPLIT,
+        int(w_presplit),
     ]
-    # The writer also produces the resident constants: the coefficient-major bias and the W slice (NoC1).
-    writer_ct += [CB_BIAS_COEF, CB_WEIGHT, W_CHUNK_TILES, CB_W_OWN_READY, CB_W_OWN_SPLIT, int(w_presplit)]
-    assert len(writer_ct) == 23  # MCAST_CT_BASE in the writer
+    assert len(writer_ct) == 20  # MCAST_CT_BASE in the writer
     writer_ct += mcast_ct
     writer_ct += list(w_mcast.compile_time_args()) if w_mcast is not None else W_MCAST_PLACEHOLDER_CT
     writer_ct += ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args()
@@ -618,14 +632,14 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, READER_NOC),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_pre_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _writer_noc()),
     )
     compute_cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=cfg.math_fidelity,

@@ -21,11 +21,26 @@ SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("narrow", [False, True], ids=["fullrow", "narrow"])
+import os
+
+# Knob settings to A/B, each a {module attribute: value} patch on the program descriptor. MHC_PRE_PERF_KNOBS
+# (comma-separated names) selects a subset.
+ALL_KNOBS = {
+    "default": {},
+    "fullrow": dict(NARROW_GROUPS=False),
+    "nostream": dict(X_STREAM_CHUNKS=1),
+    "readernoc1": dict(READER_NOC=ttnn.NOC.NOC_1),
+}
+_sel = os.environ.get("MHC_PRE_PERF_KNOBS")
+KNOBS = {k: ALL_KNOBS[k] for k in _sel.split(",")} if _sel else ALL_KNOBS
+
+
+@pytest.mark.parametrize("knobs", list(KNOBS), ids=list(KNOBS))
 @pytest.mark.parametrize("x_dtype", [ttnn.bfloat16, ttnn.float32], ids=["xbf16", "xf32"])
 @pytest.mark.parametrize("x_shape", SHAPES, ids=lambda s: "X" + "x".join(map(str, s)))
-def test_mhc_pre_perf_sweep(device, monkeypatch, x_shape, x_dtype, narrow):
-    monkeypatch.setattr(pd, "NARROW_GROUPS", narrow)
+def test_mhc_pre_perf_sweep(device, monkeypatch, x_shape, x_dtype, knobs):
+    for name, value in KNOBS[knobs].items():
+        monkeypatch.setattr(pd, name, value)
     torch.manual_seed(0)
     nc = x_shape[-1]
     x = torch.randn(x_shape, dtype=torch.float32)
