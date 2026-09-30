@@ -281,6 +281,28 @@ SDPA_EXP_SCALE = 1.0
 BF16_TINY = 2.0**-126  # FTZ threshold for Float16_b / Float32 (finfo.tiny)
 
 
+def input_ftz(x: np.ndarray) -> np.ndarray:
+    """The operand with subnormals flushed to a same-signed zero.
+
+    Neither ``UnarySFPUGolden`` nor this module models INPUT flush-to-zero: both
+    apply FTZ to the RESULT (``_apply_ftz`` / ``format_golden_f32_noacc``) and
+    evaluate the op at the exact subnormal operand. bf16 and fp32 share an 8-bit
+    exponent field, so a subnormal bf16 in a 16-bit Dest is a subnormal fp32 to
+    SFPLOAD, and SFPU arithmetic flushes it -- the value the kernel actually
+    computes on is +-0.
+
+    Ordinary stimuli never produce a subnormal, so the gap is invisible until a
+    band enumerates all 65536 bf16 patterns: there it makes every domained op look
+    like it fails at exactly the 127 negative subnormals (sqrt(-1e-41) is +inf to
+    both oracles and 0.0 on silicon, and the SILICON is right). This is used to
+    ATTRIBUTE such a miss, never to hide one: a device answer is only explained if
+    it matches the golden at the flushed operand.
+    """
+    xf = np.asarray(x, dtype=np.float32)
+    sub = (np.abs(xf.astype(np.float64)) < BF16_TINY) & (xf != 0)
+    return np.where(sub, np.copysign(np.float32(0.0), xf), xf).astype(np.float32)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Vectorized true-math op bodies. Each takes an fp32 numpy array (the value the SFPU
 # actually sees after bf16 truncation) and returns an fp64 numpy array (high precision,
@@ -670,6 +692,26 @@ def _round_bf16_as_f32(hp: np.ndarray) -> np.ndarray:
     return ((bits + bias) & np.uint32(0xFFFF0000)).view(np.float32)
 
 
+def format_golden_f32_acc(hp: np.ndarray) -> np.ndarray:
+    """hp (fp64 true math) -> the reference for a 32-bit DEST with an fp32 output.
+
+    Mirrors UnarySFPUGolden.__call__ for (input Float16_b, output Float32,
+    dest_acc=Yes): dst_format is Float32, so there is NO bf16 rounding of the
+    result, and `match (Float32, Float32)` PRESERVES NaN rather than converting it
+    to +inf. `_apply_ftz` still applies -- and at the SAME 2^-126, because
+    _FTZ_THRESHOLD keys on the output format and fp32's smallest NORMAL is
+    2^-126, exactly bf16's.
+
+    That last point is the whole reason this pipeline exists as a separate
+    function and also the reason it does not rescue a subnormal: widening Dest
+    from 16 to 32 bits does not lower the flush threshold, because bf16 and fp32
+    share an 8-bit exponent field. See SIGMOID_SUBNORMAL_NOTE.
+    """
+    y = np.asarray(hp, dtype=np.float64).astype(np.float32)
+    y = np.where(np.abs(y.astype(np.float64)) < BF16_TINY, np.float32(0.0), y)  # FTZ
+    return y.astype(np.float32)
+
+
 def format_golden_f32_noacc(hp: np.ndarray) -> np.ndarray:
     """hp (fp64 true math) -> the fp32-container reference the device should output.
 
@@ -697,6 +739,7 @@ class GoldenSpec:
     )
     note: str = ""
     checkable: bool = True
+    dst_acc: bool = False  # True => 32-bit DEST + fp32 output (format_golden_f32_acc)
 
 
 # Divergent priority ops (the correctness question actually matters for these).
@@ -1052,6 +1095,41 @@ _CORPUS_BLAZE = (
     + _blaze_rows("sdpaexp", _blaze_sdpaexp, 0.05, 0.05, "exp(x); the SDPA exp row")
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# The dest_acc=Yes rows the predecessor lane asked for, and the answer they give.
+#
+# That lane found sigmoid(-89) CLEAN on the Float32->Float32 dest_acc=No row and
+# said the audit's "the true value 2.22736e-39 is representable" claim is about an
+# fp32 DEST, so testing it needs a dest_acc=Yes ROW. These are that row -- with a
+# bf16 INPUT, so one band is also exhaustive.
+#
+# SIGMOID_SUBNORMAL_NOTE. The row exists and is run, and the answer is that no
+# widening of Dest can make that value observable, for a reason that is arithmetic
+# rather than a limit of the harness: bf16 and fp32 have the SAME 8-bit exponent
+# field, so both have 2^-126 as their smallest NORMAL. 2.22736e-39 is 2^-128.55 --
+# a subnormal in fp32 exactly as much as in bf16 -- and SFPU arithmetic flushes
+# subnormals at 2^-126 whatever the Dest width. The audit's premise conflates
+# "representable in fp32" (true, fp32 has subnormals down to 2^-149) with
+# "survives SFPU arithmetic" (false). Measured, not argued: these rows run.
+# ─────────────────────────────────────────────────────────────────────────────
+_CORPUS_DESTACC = [
+    GoldenSpec(
+        "sigmoid-destacc",
+        _sigmoid,
+        dst_acc=True,
+        note="torch.sigmoid on Float16_b->Float32 dest_acc=Yes: a 32-bit DEST and an "
+        "fp32 output, EXHAUSTIVE over the bf16 input space. The row the predecessor "
+        "lane named for the audit's rank 1; see SIGMOID_SUBNORMAL_NOTE",
+    ),
+    GoldenSpec(
+        "softplus-destacc",
+        _softplus,
+        dst_acc=True,
+        note="softplus on Float16_b->Float32 dest_acc=Yes -- the audit's rank 6b names "
+        "the bf16 arm specifically, and this is that arm at full Dest width",
+    ),
+]
+
 # Two further single-row vehicles whose test file had no hook and whose row IS
 # pointwise. Their siblings in the same families are NOT (see _NOT_POINTWISE):
 # sdpametal / sdpafw transform only SdpaSfpuGolden.TRANSFORMED_COLS and pass the
@@ -1272,6 +1350,8 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
     "trigonometry-fresh": (1.0, 10.0),
     "recip": (0.0, 1.0),                     # Reciprocal (for_op_pipeline)
     "recip-ilv2": (0.0, 1.0),
+    "sigmoid-destacc": (-8.0, 8.0),   # Sigmoid
+    "softplus-destacc": (-5.0, 30.0),  # Softplus
     "sdpa": (-20.0, 0.0),          # the row's own swept input_range
     "binopscalar": (-1.0, 1.0),    # Elwadd's _OP_DOMAIN_REGISTRY interval
     # blaze / coverage rows: the interval each row's own StimuliSpec sweeps.
@@ -1410,7 +1490,7 @@ _UNSUPPORTED = {
 REGISTRY: dict[str, GoldenSpec] = {}
 for _s in (
     _DIVERGENT + _BITEXACT + _CORPUS_UNARY + _CORPUS_BF16 + _CORPUS_BLAZE
-    + _CORPUS_COVERAGE + _CORPUS_VEHICLES
+    + _CORPUS_COVERAGE + _CORPUS_VEHICLES + _CORPUS_DESTACC
 ):
     REGISTRY[_s.op] = _s
 for _op, _why in _UNSUPPORTED.items():
@@ -1486,6 +1566,10 @@ class CorrectnessAccumulator:
     # [1, 10] is a defect. Reporting only in the sense that no gate reads it --
     # but it is the difference between "out-of-claim" and "defect" in the writeup,
     # and one global counter cannot express it.
+    # Out-of-tolerance inputs whose device answer IS the golden evaluated at the
+    # FTZ-flushed operand -- i.e. explained by the oracles not modelling input FTZ
+    # rather than by the kernel being wrong.
+    n_out_ftz_explained: int = 0
     n_in_claim: int = 0
     n_out_in_claim: int = 0
     max_ulp_in_claim: float = 0.0
@@ -1520,7 +1604,8 @@ class CorrectnessAccumulator:
         else:
             xin = bf16_truncate(u32)  # what the SFPU actually sees
         hp = self.spec.math(xin)  # fp64 true math
-        golden = format_golden_f32_noacc(hp)  # fp32-container reference
+        fmt = format_golden_f32_acc if self.spec.dst_acc else format_golden_f32_noacc
+        golden = fmt(hp)  # fp32-container reference
         if self.out_bytes == 2:
             dev = _bf16_bits_to_f32(
                 np.frombuffer(dev_bytes[: valid_count * 2], dtype="<u2").astype(
@@ -1556,6 +1641,17 @@ class CorrectnessAccumulator:
             if graded[gi] and ulp[gi] > self.max_ulp_graded:
                 self.max_ulp_graded = float(ulp[gi])
                 self.max_ulp_graded_input = int(u32[gi])
+        # Attribute the misses that input FTZ explains, before anything else reads
+        # the counts. Only subnormal operands can be affected, so this is cheap.
+        sub_in = (np.abs(xin.astype(np.float64)) < BF16_TINY) & (xin != 0)
+        if np.any(out & sub_in):
+            idx = np.flatnonzero(out & sub_in)
+            ftz_golden = fmt(self.spec.math(input_ftz(xin[idx])))
+            _, ftz_within = numeric_comparison(
+                ftz_golden, dev[idx], self.spec.atol, self.spec.rtol
+            )
+            self.n_out_ftz_explained += int(np.count_nonzero(ftz_within))
+
         claim = CLAIMED_ACCURACY_DOMAIN.get(self.spec.op)
         if claim is not None:
             lo, hi = claim
@@ -1634,6 +1730,7 @@ class CorrectnessAccumulator:
             f"first_witness=0x{max(w,0):08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"n_graded={self.n_graded},n_out_graded={self.n_out_graded},"
+            f"n_out_ftz_explained={self.n_out_ftz_explained},"
             f"max_ulp_graded={self.max_ulp_graded:.0f},"
             f"max_ulp_graded_input=0x{max(self.max_ulp_graded_input,0):08x},"
             f"graded_witness=0x{max(self.graded_witness_u32,0):08x},"

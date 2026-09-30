@@ -627,6 +627,72 @@ def case_faithful_vehicles():
         )
 
 
+# ── case 1f: the dest_acc=Yes rows, at their own precision ───────────────────
+# Different output pipeline (no bf16 rounding of the result, NaN PRESERVED rather
+# than converted to +inf), so it needs its own oracle call: input Float16_b,
+# output Float32, dest_acc=Yes. Exhaustive over the bf16 input space.
+def case_faithful_destacc():
+    print("case 1f: dest_acc=Yes goldens == the oracle at 32-bit DEST / fp32 out")
+    import torch
+    from helpers.format_config import DataFormat
+    from helpers.golden_generators import UnarySFPUGolden
+    from helpers.llk_params import DestAccumulation, MathOperation
+
+    u16 = np.arange(65536, dtype=np.uint32)
+    xs = tg._bf16_bits_to_f32(u16)
+    for op, mathop_name in (("sigmoid-destacc", "Sigmoid"), ("softplus-destacc", "Softplus")):
+        spec = tg.get_spec(op)
+        check(f"destacc-flag[{op}]", spec is not None and spec.dst_acc, "dst_acc must be True")
+        ref = (
+            UnarySFPUGolden()(
+                getattr(MathOperation, mathop_name),
+                torch.from_numpy(xs.astype(np.float32)),
+                DataFormat.Float32,
+                DestAccumulation.Yes,
+                DataFormat.Float16_b,
+                (256, 256),
+                iterations=None,
+                skip_tilize=True,
+            )
+            .detach()
+            .float()
+            .numpy()
+            .astype(np.float32)
+        )
+        mine = tg.format_golden_f32_acc(spec.math(xs))
+        mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
+        mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+        d = np.where(mb != rb)[0]
+        if d.size == 0:
+            check(f"faithful-destacc[{op}]", True, "65536/65536 bit-identical at fp32 DEST")
+            continue
+        g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
+        fin = np.isfinite(g) & np.isfinite(m)
+        nan_pair = np.isnan(g) & np.isnan(m)
+        minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+        near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
+        ok = bool(np.all(near | nan_pair | minf))
+        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
+        check(
+            f"faithful-destacc[{op}]", ok,
+            f"{d.size}/65536 differ, all inside contract (worst |d|={worst:.3e})",
+        )
+
+    # The arithmetic behind SIGMOID_SUBNORMAL_NOTE, asserted rather than asserted-in-prose:
+    # widening Dest cannot rescue the value, because fp32 and bf16 share a min NORMAL.
+    check(
+        "fp32-and-bf16-share-min-normal",
+        float(np.finfo(np.float32).tiny) == tg.BF16_TINY == 2.0**-126,
+        f"fp32 tiny={float(np.finfo(np.float32).tiny)!r} BF16_TINY={tg.BF16_TINY!r}",
+    )
+    sg = float(tg.format_golden_f32_acc(tg._sigmoid(np.array([-89.0], dtype=np.float32)))[0])
+    check(
+        "sigmoid-89-flushes-at-fp32-dest-too",
+        sg == 0.0,
+        f"sigmoid(-89)=2.2274e-39 < 2^-126, so the fp32-DEST golden is {sg!r} as well",
+    )
+
+
 def case_fitter_ulp():
     print("case 2b: bf16_bitdistance == fitter compute_ulp_bitdistance")
     try:
@@ -958,6 +1024,7 @@ def main():
     case_faithful_bf16()
     case_faithful_blaze()
     case_faithful_vehicles()
+    case_faithful_destacc()
     case_fitter_ulp()
     case_special_numeric_policy()
     case_known_correct()

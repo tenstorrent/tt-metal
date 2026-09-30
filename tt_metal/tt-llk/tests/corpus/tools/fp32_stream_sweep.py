@@ -418,6 +418,7 @@ def _new_leg():
         # out-of-domain misses, which for acosh is 48640 of 65536 inputs.
         "n_graded": 0,
         "n_out_graded": 0,
+        "n_out_ftz_explained": 0,
         "max_ulp_graded": -1.0,
         "max_ulp_graded_input": "-",
         "graded_witness": None,
@@ -452,6 +453,7 @@ def _fold_leg(acc, corr):
     if "n_out_graded" in corr:
         acc["n_graded"] += int(corr["n_graded"])
         acc["n_out_graded"] += int(corr["n_out_graded"])
+        acc["n_out_ftz_explained"] += int(corr.get("n_out_ftz_explained", 0))
         mg = float(corr["max_ulp_graded"])
         if mg > acc["max_ulp_graded"]:
             acc["max_ulp_graded"] = mg
@@ -579,7 +581,7 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
             "hand_in_contract\tsem_n_out\thand_n_out\tulp_nonregression\t"
             "ulp_reason\tverdict\tfirst_witness\twitness_class\t"
             "sem_max_ulp_graded\thand_max_ulp_graded\tsem_n_out_graded\t"
-            "hand_n_out_graded\tn_graded\tgraded_witness\t"
+            "hand_n_out_graded\tn_graded\tsem_n_out_ftz\thand_n_out_ftz\tgraded_witness\t"
             "n_in_claim\tsem_n_out_in_claim\thand_n_out_in_claim\t"
             "sem_max_ulp_in_claim\thand_max_ulp_in_claim\tnote\n"
         )
@@ -623,6 +625,8 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
                     sem["n_out_graded"] if sem["checked"] else "n/a",
                     hand["n_out_graded"] if hand["checked"] else "n/a",
                     sem["n_graded"] if sem["checked"] else "n/a",
+                    sem["n_out_ftz_explained"] if sem["checked"] else "n/a",
+                    hand["n_out_ftz_explained"] if hand["checked"] else "n/a",
                     (
                         "-"
                         if (sem["graded_witness"] or hand["graded_witness"]) is None
@@ -643,6 +647,7 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
         f"OP={op} 3WAY_VERDICT={verdict} sem_max_ulp={sem['max_ulp']:.0f} "
         f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']} "
         f"sem_out_graded={sem['n_out_graded']} hand_out_graded={hand['n_out_graded']} "
+        f"sem_out_ftz={sem['n_out_ftz_explained']} hand_out_ftz={hand['n_out_ftz_explained']} "
         f"n_graded={sem['n_graded']} "
         f"sem_max_ulp_graded={sem['max_ulp_graded']:.0f} "
         f"hand_max_ulp_graded={hand['max_ulp_graded']:.0f} "
