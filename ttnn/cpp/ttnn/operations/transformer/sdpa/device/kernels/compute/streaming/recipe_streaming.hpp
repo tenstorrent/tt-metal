@@ -410,7 +410,7 @@ namespace ckernel::sfpu {
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_pa_bias() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    constexpr float bias = (SDPA_PA_DBG & 2) ? 0.0f : SDPA_PROTO_PA_TAU / __builtin_bit_cast(float, scale_fp32);
+    constexpr float bias = (SDPA_PA_DBG & 128) ? SDPA_PROTO_PA_TAU / __builtin_bit_cast(float, scale_fp32) : 0.0f;
     for (int i = 0; i < 32; ++i) {
         sfpi::vFloat m = sfpi::dst_reg[0];
         sfpi::dst_reg[0] = m + bias;
@@ -503,7 +503,7 @@ void reduce_c_row_group(
 
     tile_regs_commit();
     tile_regs_wait();
-#ifdef SDPA_PA
+#if defined(SDPA_PA) && (SDPA_PA_DBG & 128)
     // First K chunk only (later chunks return above with the carried reference).
     for (uint32_t i = 0; i < group_size; i++) {
         PACK((SFPU_UNARY_CALL(
@@ -1386,6 +1386,18 @@ static void sdpa_inner_loop_step(
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
 #ifdef SDPA_RECIPE_FP32
     PACK((ckernel::sfpu::init_sdpa_refine_loadmacros()));
+#endif
+#if defined(SDPA_PA) && !(SDPA_PA_DBG & 2)
+    // Reference max headroom: P = exp(scale * (s - m_ref) - tau). The fast exp computes
+    // y = 256*log2(e)*scale*x + (B - C) as INT16 (saturating ~0.72 above zero); lowering the constant by
+    // 256*log2(e)*tau moves saturation to tau + 0.72 while s - m_ref stays small (precise in BF16).
+    PACK({
+        constexpr float pa_exp_c = 32500.818359375f - 256.0f * 1.4426950408889634f * SDPA_PROTO_PA_TAU;
+        constexpr uint32_t pa_exp_bits = __builtin_bit_cast(uint32_t, pa_exp_c);
+        TTI_SFPLOADI(0, 0xA, pa_exp_bits & 0xFFFF);
+        TTI_SFPLOADI(0, 0x8, pa_exp_bits >> 16);
+        TTI_SFPCONFIG(0, 13, 0);
+    })
 #endif
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
