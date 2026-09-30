@@ -236,7 +236,8 @@ def main(argv=None):
         is_float = want.is_floating_point()
         plan = [("reference", "reference", None)]
         plan += [(k, f"mutate:{k}", None) for k in (a.kinds or MU.KINDS) if (k in MU.FLOAT_KINDS) == is_float]
-        plan += [(k, "reference", m) for k, m in hard_cases(step).items()]
+        if spec.model.startswith("hy4_preview"):  # the hard cases patch the Hy4 reference's internals
+            plan += [(k, "reference", m) for k, m in hard_cases(step).items()]
         if is_float:
             plan.append(("bf16", "mutate:bf16", None))
         else:
