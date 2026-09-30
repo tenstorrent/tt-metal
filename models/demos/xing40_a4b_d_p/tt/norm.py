@@ -13,7 +13,10 @@ tt_distributed_rms_norm.py):
     ttnn.all_gather over axis 1    -> [S/4, 64] (both column halves; Linear, FABRIC_2D mesh)
     ttnn.rms_norm_post_all_gather  x * rsqrt(sum / H + eps) * w_c  (w split by column, fp32 row-major)
 
-HiFi4 + fp32 dest on both halves. Output stays column-split [1, 1, S/4, 1792] in ``dtype`` (bf16 default): q_a_proj
+ffn_norm (post_attention_layernorm) adds ttnn.all_gather(dim 3, cluster_axis 1) -> [1, 1, S/4, H] bf16 per chip,
+replicated within a row (the input of every FFN consumer).
+
+HiFi4 + fp32 dest on both halves. attn_norm output stays column-split [1, 1, S/4, 1792] in ``dtype`` (bf16 default): q_a_proj
 and kv_a_proj_with_mqa take a K-split input. No host work in __call__; weight and mask built at load.
 """
 
@@ -27,7 +30,10 @@ TILE = 32
 
 
 class TtDistributedRmsNorm:
-    def __init__(self, mesh, weight: torch.Tensor, eps: float, cluster_axis: int = 1, dtype=ttnn.bfloat16):
+    def __init__(
+        self, mesh, weight: torch.Tensor, eps: float, cluster_axis: int = 1, dtype=ttnn.bfloat16, gather: bool = False
+    ):
+        self.gather = gather
         hidden = weight.numel()
         tp = mesh.shape[cluster_axis]
         assert hidden % (TILE * tp) == 0, (hidden, tp)
@@ -80,13 +86,23 @@ class TtDistributedRmsNorm:
             dtype=self.dtype,
         )
         ttnn.deallocate(gathered)
-        return y
+        if not self.gather:
+            return y
+        # ffn_norm: every FFN consumer (router, dispatch, dense MLP, shared expert) needs the full hidden, so gather
+        # the normed column halves once here -> [1, 1, S/4, H] per chip, replicated within a mesh row.
+        full = ttnn.all_gather(
+            y, dim=3, cluster_axis=self.cluster_axis, topology=ttnn.Topology.Linear, memory_config=dram
+        )
+        ttnn.deallocate(y)
+        return full
 
 
 # norm steps -> checkpoint weight under model.layers.<i>.
-NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight"}
+NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight", "ffn_norm": "post_attention_layernorm.weight"}
+# norm steps whose output is gathered over the mesh columns (full hidden, replicated within a row).
+GATHERED_NORMS = {"ffn_norm"}
 
 
 def build_norm(mesh, loader, cfg, layer: int, step: str, dtype=ttnn.bfloat16) -> TtDistributedRmsNorm:
     w = loader.get(f"model.layers.{layer}.{NORM_WEIGHTS[step]}").float()
-    return TtDistributedRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1, dtype=dtype)
+    return TtDistributedRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1, dtype=dtype, gather=step in GATHERED_NORMS)
