@@ -175,3 +175,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   out, column 0's copy); ffn_norm added to `DEVICE_STEPS["dense"]`.
 - Gate: pcc_ffn_norm_L00 0.999996; rel vs cpu 0.0018 (limit 0.0062), norm ratio [0.9985, 1.0004].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_norm.py`
+
+## C.dense.mlp implement (attempt 1)
+- Added `tt/mlp.py:TtDenseMLP` + `build_mlp(mesh, loader, cfg, layer, prefix="mlp.")`, adapted from
+  hy4_preview_d_p/tt/mlp.py. Gate / up are column-parallel ([3584, 4608] per chip column, bf16), and down is row-parallel
+  ([4608, 3584]). The step is `silu(g) * u` as one `ttnn.multiply` with a SILU input activation. gate / up / h are fp32, every
+  matmul runs at HiFi4 with fp32 dest. After that comes `ttnn.reduce_scatter(dim 3, cluster_axis 1, Linear)`, giving [S/4, 1792] fp32 column split.
+- Input: the ffn_norm output, row-split and replicated over axis 1 (bf16 at the harness boundary). Output: the column split
+  that ffn_residual consumes.
+- hooks.py: `_MLP_STEPS`, `_mlp_host_fn`. "mlp" is added to DEVICE_STEPS["dense"]. The `prefix` arg lets the MoE
+  shared expert (`mlp.shared_experts.`) reuse the module.
+- Gate: pcc_mlp_L00 = 0.999997, and all the auto checks pass (rel vs cpu 6.3e-4).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_mlp.py`
