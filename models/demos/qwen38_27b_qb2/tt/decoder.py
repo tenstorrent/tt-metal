@@ -241,40 +241,29 @@ class Qwen38Decoder(LightweightModule):
                 self.dram_weights[name] = ttnn.to_memory_config(tensor, memory)
         return self
 
-    def state_shapes(self, *, batch_size, num_pages=None):
-        """Per-slot cache shapes for this layer, keyed by DecoderState field.
-
-        Every head count here is already per-device, so the shapes narrow with the
-        tensor-parallel width. Serving validates an externally allocated cache against this,
-        so it has to stay the only place the geometry is written down.
-        """
-        c = self.config
-        if self.kind == "full_attention":
-            if num_pages is None or num_pages < 1:
-                raise ValueError("Full attention requires num_pages")
-            page = (num_pages, c.num_key_value_heads, self.PAGE_SIZE, c.head_dim)
-            return {"key": page, "value": page}
-        width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
-        return {
-            "recurrent": (batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim),
-            "conv": (batch_size, 3, width),
-        }
-
     def allocate_state(self, *, batch_size, num_pages=None):
         """Setup only. Page ownership and page-table construction belong to caller."""
 
         def zeros(shape, dtype, layout=ttnn.TILE_LAYOUT):
             return ttnn.zeros(
-                list(shape), dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                shape, dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
-        shapes = self.state_shapes(batch_size=batch_size, num_pages=num_pages)
         if self.kind == "full_attention":
-            kv = getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))
-            return DecoderState(key=zeros(shapes["key"], kv), value=zeros(shapes["value"], kv))
+            if num_pages is None or num_pages < 1:
+                raise ValueError("Full attention requires num_pages")
+            shape = [num_pages, self.config.num_key_value_heads, self.PAGE_SIZE, self.config.head_dim]
+            return DecoderState(
+                key=zeros(shape, getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))),
+                value=zeros(shape, getattr(ttnn, self.policy.get("kv_dtype", "bfloat16"))),
+            )
+        c = self.config
+        width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
         return DecoderState(
-            recurrent=zeros(shapes["recurrent"], ttnn.float32),
-            conv=zeros(shapes["conv"], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            recurrent=zeros(
+                [batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim], ttnn.float32
+            ),
+            conv=zeros([batch_size, 3, width], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         )
 
     def _role(self, name):
@@ -450,20 +439,6 @@ class Qwen38Decoder(LightweightModule):
             fuse_swiglu=fuse_swiglu,
         )
 
-    def _shard_grid(self, cores):
-        """Rectangle holding `cores` width shards, as `_width_memory` lays them out.
-
-        Sharded layernorm's program config must name the same rectangle as its shard spec, so
-        both sides read this. QB2's worker grid is ten wide and every measured count here is a
-        multiple of ten; a narrower grid re-shapes the same count.
-        """
-        if self.policy.get("rectangular_working", False) and cores % 10 == 0:
-            return 10, cores // 10
-        width = self.device.compute_with_storage_grid_size().x
-        if cores % width:
-            raise ValueError(f"{cores} width shards do not tile a {width}-wide worker grid")
-        return width, cores // width
-
     def _width_memory(self, cores, height, width):
         if self.policy.get("rectangular_working", False) and cores % 10 == 0:
             grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, cores // 10 - 1))})
@@ -489,7 +464,7 @@ class Qwen38Decoder(LightweightModule):
 
     def _residual_memory(self, batch):
         cores = self.policy.get("residual_cores", 40)
-        grid = self._shard_grid(cores)
+        grid = (10, cores // 10)
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -514,7 +489,7 @@ class Qwen38Decoder(LightweightModule):
             packed = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, rows, width]), memory)
             shard_width = 160 // cores
             program = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=self._shard_grid(cores),
+                compute_with_storage_grid_size=(10, cores // 10),
                 subblock_w=min(shard_width, 4),
                 block_h=(rows + 31) // 32,
                 block_w=shard_width,
@@ -534,7 +509,7 @@ class Qwen38Decoder(LightweightModule):
             public = len(x.shape) == 3
             memory = self._residual_memory(batch)
             cores = self.policy.get("residual_cores", 40)
-            grid = self._shard_grid(cores)
+            grid = (10, cores // 10)
             x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, batch, 5120]), memory)
             width = 160 // cores
             program = ttnn.LayerNormShardedMultiCoreProgramConfig(

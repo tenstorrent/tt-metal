@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full text autoregressive path over the validated tensor-parallel decoder."""
+"""Full text autoregressive path over the validated Blackhole TP4 decoder."""
 
 import json
 import os
@@ -16,7 +16,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp, tp_policy
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
@@ -61,26 +61,9 @@ class ModelCache:
     num_pages: int
 
 
-def head_decode_chunks(shard_vocab, banks, target=16384):
-    """Bank-exact chunk bounds for the DRAM head, and the leftover the interleaved head takes.
-
-    A DRAM-sharded matmul returns wrong values, without failing, unless the weight fills its
-    bank shards exactly, so no chunk may be wider than its banks can divide. A vocabulary
-    shard rarely ends on that boundary, and the remainder has no geometry to satisfy on the
-    interleaved path.
-    """
-    align = banks * 64
-    stride = max(align, (target // align) * align)
-    aligned = (shard_vocab // align) * align
-    chunks = [(start, min(start + stride, aligned)) for start in range(0, aligned, stride)]
-    return chunks, (aligned, shard_vocab) if aligned < shard_vocab else None
-
-
 class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
-        self.TP = resolve_mesh_tp(mesh_device)
-        self.num_links = tp_policy(self.TP).get("num_links", 2)
-        self.head_readers = tp_policy(self.TP).get("head_readers", 2)
+        validate_qb2_mesh(mesh_device)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())
@@ -147,17 +130,12 @@ class Qwen38Model:
         if head_strategy not in ("interleaved", "dram"):
             raise ValueError("Unknown LM-head program family")
         self.head_decode_weights = []
-        self.head_decode_tail = None
         if head_strategy == "dram":
             banks = mesh_device.dram_grid_size().x
             bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
-            shard_vocab = self.config.vocab_size // self.TP
-            chunks, tail = head_decode_chunks(shard_vocab, banks)
-            if tail is not None:
-                self.head_decode_tail = self.head_weight[:, tail[0] : tail[1]]
-            for start, stop in chunks:
-                weight = self.head_weight[:, start:stop]
-                width = (stop - start) // banks
+            for start in range(0, self.config.vocab_size // 4, 16384):
+                weight = self.head_weight[:, start : min(start + 16384, self.config.vocab_size // 4)]
+                width = ((weight.shape[-1] + banks * 64 - 1) // (banks * 64)) * 64
                 memory = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                     ttnn.BufferType.DRAM,
@@ -218,15 +196,15 @@ class Qwen38Model:
         out = ttnn.embedding(
             tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        out = ttnn.reshape(out, [1, 1, batch * length, self.config.hidden_size // self.TP])
+        out = ttnn.reshape(out, [1, 1, batch * length, self.config.hidden_size // 4])
         if sharded:
-            return ttnn.reshape(out, [batch, length, self.config.hidden_size // self.TP])
+            return ttnn.reshape(out, [batch, length, self.config.hidden_size // 4])
         out = ttnn.experimental.all_gather_async(
             out,
             dim=3,
             cluster_axis=1,
             mesh_device=self.mesh,
-            num_links=self.num_links,
+            num_links=2,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
@@ -256,11 +234,7 @@ class Qwen38Model:
                 epsilon=self.config.rms_norm_eps,
                 memory_config=memory,
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=self.layers[0]._shard_grid(40),
-                    subblock_w=4,
-                    block_h=1,
-                    block_w=4,
-                    inplace=False,
+                    compute_with_storage_grid_size=(10, 4), subblock_w=4, block_h=1, block_w=4, inplace=False
                 ),
                 compute_kernel_config=self.norm_compute,
             )
@@ -293,7 +267,7 @@ class Qwen38Model:
                 in0_block_w=5,
                 per_core_M=1,
                 per_core_N=weight.memory_config().shard_spec.shape[1] // 32,
-                num_workers_per_dram_bank=self.head_readers,
+                num_workers_per_dram_bank=2,
                 fused_activation=None,
             )
             out = ttnn.linear(
@@ -305,16 +279,6 @@ class Qwen38Model:
                 program_config=config,
             )
             parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
-        if self.head_decode_tail is not None:
-            parts.append(
-                ttnn.linear(
-                    ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG),
-                    self.head_decode_tail,
-                    dtype=getattr(ttnn, self.precision["logits_dtype"]),
-                    compute_kernel_config=self.head_compute,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            )
         return ttnn.concat(parts, dim=-1)
 
     def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False, positions=None):
@@ -406,7 +370,7 @@ class Qwen38Model:
             x = x[:, length - 1 : length, :]
             length = 1
         if sharded:
-            x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // self.TP]))
+            x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // 4]))
             x = ttnn.reshape(x, [batch, 1, self.config.hidden_size])
         if batched_head:
             logits = self.logits(x, decode=True)

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tensor-parallel decoder on a qualified mesh; optimized single-chip kernels are the baseline.
+"""TP4 decoder on a 1x4 Blackhole mesh; optimized single-chip kernels are the baseline.
 
 Only setup partitions Torch weights. Runtime attention, recurrence, paged cache,
 and logical-tail handling reuse Qwen38Decoder with local head dimensions.
@@ -17,182 +17,28 @@ from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
 
-# (arch, cluster_type, device count, mesh shape) -> tensor-parallel width. Keyed on the whole
-# tuple rather than the device count alone so a mis-shaped or mis-wired mesh is rejected before
-# any weight conversion or device allocation, which is what the entry points rely on.
-_SUPPORTED_MESHES = {
-    (ttnn.Arch.BLACKHOLE, ttnn.cluster.ClusterType.P300_X2, 4, (1, 4)): 4,
-    (ttnn.Arch.WORMHOLE_B0, ttnn.cluster.ClusterType.T3K, 8, (1, 8)): 8,
-}
 
-_SUPPORTED_MESH_TEXT = "a Blackhole P300_X2 QB2 in a (1, 4) mesh or a Wormhole T3K in a (1, 8) mesh"
-
-# Policy deltas per tensor-parallel width. The shipping values below are measured on QB2; a T3K
-# has a narrower worker grid and one usable ethernet link per chip pair, so both assumptions have
-# to move. Applied after the measured defaults and before any caller override.
-_TP_POLICY = {
-    8: {
-        # _width_memory lays cores out as a fixed 10-wide rectangle when the count is a multiple
-        # of ten. A T3K worker grid is 8x8, so that CoreCoord(9, ...) does not exist; fall back to
-        # deriving the range set from the device grid.
-        "rectangular_working": False,
-        # The second ethernet link of each chip pair carries the dispatch datapath.
-        "num_links": 1,
-        # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
-        # projection and the LM head fall back to a single reader per bank.
-        "attention_readers": 1,
-        "output_readers": 1,
-        "gate_readers": 1,
-        "up_readers": 1,
-        "down_readers": 1,
-        "head_readers": 1,
-        # DRAM-sharded matmul takes its K block from the in0 shard width, which must divide K
-        # exactly. down_proj's per-device K is intermediate/TP, so halving TP halves it to 68
-        # tiles, and eight shards no longer fit; 34 is its largest divisor inside a 64-core grid.
-        "down_cores": 34,
-        "down_block": 2,
-        # The 1D prefill matmul needs in0_block_w to divide Kt, and down_proj's 68 tiles admit
-        # only {1,2,4,17,34,68}. Seventeen serves both layer kinds, where QB2 needed eight for
-        # the GDN layers and seventeen for the full-attention ones.
-        "prefill_1d_down_k": 17,
-    },
-}
-
-
-# A ring collective needs the closing hop from the last device back to the first, which a
-# linear fabric does not route: every device enters the collective and none of them completes,
-# so the failure is a silent device timeout rather than an error.
-_RING_FABRICS = frozenset(
-    getattr(ttnn.FabricConfig, name)
-    for name in ("FABRIC_1D_RING", "FABRIC_2D_TORUS_X", "FABRIC_2D_TORUS_Y", "FABRIC_2D_TORUS_XY")
-)
-
-
-def validate_fabric_topology(topology):
-    """Reject a ring topology on a fabric that cannot route the wrap-around link.
-
-    DISABLED means the caller has not opened a fabric yet, which this cannot judge; a
-    deployment that sets the fabric at mesh-open time is the case worth catching.
-    """
-    if topology != ttnn.Topology.Ring:
-        return
-    fabric = ttnn.get_fabric_config()
-    if fabric == ttnn.FabricConfig.DISABLED or fabric in _RING_FABRICS:
-        return
-    raise ValueError(
-        f"Ring collectives need a ring fabric; {fabric} does not route the wrap-around link and "
-        "every collective would hang. Open the mesh with FabricConfig.FABRIC_1D_RING, or set the "
-        "decoder policy's 'ring' to False."
-    )
-
-
-def supported_device_counts():
-    """Device counts a qualified mesh can have, for callers that validate before opening one."""
-    return frozenset(key[2] for key in _SUPPORTED_MESHES)
-
-
-def tp_policy(tp):
-    """Platform deltas for callers that hold no decoder, such as the embedding all-gather."""
-    return _TP_POLICY.get(tp, {})
-
-
-def kv_head_owners(num_kv_heads, tp):
-    """Device index -> KV head index, or None when the heads shard evenly.
-
-    A head is the smallest unit attention can consume, so when there are fewer KV heads than
-    devices they share heads instead of splitting one. Callers replicate on the returned mapping.
-    """
-    if num_kv_heads >= tp:
-        return None
-    if tp % num_kv_heads:
-        raise ValueError(f"{tp} devices cannot share {num_kv_heads} KV heads evenly")
-    return [d // (tp // num_kv_heads) for d in range(tp)]
-
-
-def native_mesh_shape():
-    """Mesh shape this host's cluster is qualified for, for callers that open the mesh.
-
-    Readable before any device is open, so an entry point does not have to be told which
-    platform it is on to allocate the right mesh.
-    """
-    arch, cluster = ttnn.get_arch_name(), ttnn.cluster.get_cluster_type()
-    for key, _ in _SUPPORTED_MESHES.items():
-        if key[1] == cluster and key[0].name.lower() == arch:
-            return key[3]
-    raise ValueError(f"Qwen3.8-27B requires {_SUPPORTED_MESH_TEXT}; got arch={arch}, cluster_type={cluster}")
-
-
-def measured_policy(kind):
-    """Policy measured on QB2 at TP=4, before any platform overlay or caller override."""
-    return dict(
-        # Measured TP4 policy; native descriptors resolve each physical coordinate.
-        attention_readers=2,
-        output_readers=2,
-        gate_readers=3,
-        up_readers=3,
-        down_readers=2,
-        attention_cores=10,
-        attention_block=16,
-        gate_cores=40,
-        gate_block=4,
-        up_cores=40,
-        up_block=4,
-        output_cores=8,
-        output_block=6,
-        down_cores=8,
-        down_block=17,
-        # Materialize the reader-alignment tail in the logical projection
-        # output.  Older release images require every DRAM reader to own
-        # an output shard; the wrapper crops this zero-padded tail back to
-        # projection_widths below.  The readers already compute these
-        # bank-alignment tiles, so this does not add matmul work.
-        pad_reader_outputs=True,
-        residual_cores=40,
-        allreduce_cores=40,
-        chunk_size=4096,
-        sdpa_k=128,
-        prefill_1d=True,
-        prefill_1d_min=64,
-        prefill_1d_max=256,
-        prefill_1d_k=20 if kind == "full_attention" else 8,
-        prefill_1d_output_k=24 if kind == "full_attention" else 8,
-        prefill_1d_down_k=17 if kind == "full_attention" else 8,
-        prefill_1d_l1=kind != "full_attention",
-        carry_input=True,
-        carry_output=True,
-        carry_residual=True,
-        residual_layout="replicated",
-        ccl_dtype="bfloat16",
-        num_links=2,
-        ring=True,
-        packed_mlp=True,
-        packed_decode_conv=True,
-        persistent_ccl=True,
-        direct_allreduce=True,
-        # Public TILE [B,1,H] expands to B*32 rows. Keep these batched
-        # boundaries out of L1 while the next layer retains its input.
-        public_dram_batch=2,
-    )
-
-
-def resolve_mesh_tp(mesh_device):
-    """Tensor-parallel width for a qualified mesh; raises on any other hardware."""
-    key = (
-        mesh_device.arch(),
-        ttnn.cluster.get_cluster_type(),
-        mesh_device.get_num_devices(),
-        tuple(mesh_device.shape),
-    )
-    tp = _SUPPORTED_MESHES.get(key)
-    if tp is None:
+def validate_qb2_mesh(mesh_device):
+    """Reject unsupported hardware before checkpoint conversion or device allocation."""
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    if (
+        arch != ttnn.Arch.BLACKHOLE
+        or cluster_type != ttnn.cluster.ClusterType.P300_X2
+        or num_devices != 4
+        or mesh_shape != (1, 4)
+    ):
         raise ValueError(
-            f"Qwen3.8-27B requires {_SUPPORTED_MESH_TEXT}; got arch={key[0]}, "
-            f"cluster_type={key[1]}, num_devices={key[2]}, mesh_shape={key[3]}"
+            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
+            f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
         )
-    return tp
 
 
 class Qwen38TPDecoder(Qwen38Decoder):
+    TP = 4
+
     def _role(self, name):
         if name.removesuffix(".weight") == "mlp.interleaved_gate_up":
             return "gate"
@@ -202,18 +48,64 @@ class Qwen38TPDecoder(Qwen38Decoder):
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, ccl=None):
         import torch
 
-        tp = resolve_mesh_tp(mesh_device)
+        validate_qb2_mesh(mesh_device)
         if ccl is not None and ccl.mesh_device is not mesh_device:
             raise ValueError("The shared CCL context must belong to this mesh")
         self = cls()
-        self.TP = tp
         self.device = mesh_device
         self.layer_idx = layer_idx
         self.kind = hf_config.layer_types[layer_idx]
         self.eps = hf_config.rms_norm_eps
         self.policy = dict(DEFAULT_POLICY)
-        self.policy.update(measured_policy(self.kind))
-        self.policy.update(_TP_POLICY.get(self.TP, {}))
+        self.policy.update(
+            # Measured TP4 policy; native descriptors resolve each physical coordinate.
+            attention_readers=2,
+            output_readers=2,
+            gate_readers=3,
+            up_readers=3,
+            down_readers=2,
+            attention_cores=10,
+            attention_block=16,
+            gate_cores=40,
+            gate_block=4,
+            up_cores=40,
+            up_block=4,
+            output_cores=8,
+            output_block=6,
+            down_cores=8,
+            down_block=17,
+            # Materialize the reader-alignment tail in the logical projection
+            # output.  Older release images require every DRAM reader to own
+            # an output shard; the wrapper crops this zero-padded tail back to
+            # projection_widths below.  The readers already compute these
+            # bank-alignment tiles, so this does not add matmul work.
+            pad_reader_outputs=True,
+            residual_cores=40,
+            allreduce_cores=40,
+            chunk_size=4096,
+            sdpa_k=128,
+            prefill_1d=True,
+            prefill_1d_min=64,
+            prefill_1d_max=256,
+            prefill_1d_k=20 if self.kind == "full_attention" else 8,
+            prefill_1d_output_k=24 if self.kind == "full_attention" else 8,
+            prefill_1d_down_k=17 if self.kind == "full_attention" else 8,
+            prefill_1d_l1=self.kind != "full_attention",
+            carry_input=True,
+            carry_output=True,
+            carry_residual=True,
+            residual_layout="replicated",
+            ccl_dtype="bfloat16",
+            num_links=2,
+            ring=True,
+            packed_mlp=True,
+            packed_decode_conv=True,
+            persistent_ccl=True,
+            direct_allreduce=True,
+            # Public TILE [B,1,H] expands to B*32 rows. Keep these batched
+            # boundaries out of L1 while the next layer retains its input.
+            public_dram_batch=2,
+        )
         self.policy.update(policy or {})
         self.CHUNK_SIZE = self.policy["chunk_size"]
         self.sharded_residual = self.policy["residual_layout"] == "sharded"
@@ -221,11 +113,8 @@ class Qwen38TPDecoder(Qwen38Decoder):
             # Qwen38Decoder's packed residual branch has a full-hidden contract.
             self.policy["carry_residual"] = False
         self.topology = ttnn.Topology.Ring if self.policy.get("ring", False) else ttnn.Topology.Linear
-        validate_fabric_topology(self.topology)
         self.ccl = ccl if ccl is not None else TT_CCL(mesh_device)
         self.config = copy.deepcopy(hf_config)
-        # Every attention head count below is the PER-DEVICE count downstream: the KV cache shape,
-        # kv_width, and nlp_create_qkv_heads_decode all read them that way.
         for name in (
             "num_attention_heads",
             "num_key_value_heads",
@@ -234,15 +123,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
             "intermediate_size",
         ):
             value = getattr(hf_config, name)
-            if name == "num_key_value_heads" and value < self.TP:
-                # Fewer KV heads than devices: a head is the smallest unit attention can consume,
-                # so devices share one rather than splitting it. TP // value devices per head, and
-                # the GQA group (num_attention_heads // value) is a multiple of the per-device Q
-                # count, so a device's Q heads never span two KV heads.
-                assert (hf_config.num_attention_heads // value) % (hf_config.num_attention_heads // self.TP) == 0
-                # Raises here rather than mid-conversion if the sharing is uneven.
-                setattr(self.config, name, 1)
-                continue
             assert value % self.TP == 0, name
             setattr(self.config, name, value // self.TP)
         self.ckc = ttnn.WormholeComputeKernelConfig(
@@ -296,14 +176,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
         def split(t, dim=0):
             return t.chunk(self.TP, dim=dim)
 
-        def split_kv(t):
-            """Per-device K/V shard, replicating whole heads when TP exceeds the KV head count."""
-            owners = kv_head_owners(hf_config.num_key_value_heads, self.TP)
-            if owners is None:
-                return split(t)
-            heads = t.chunk(hf_config.num_key_value_heads, dim=0)
-            return [heads[owner] for owner in owners]
-
         for name in ("input_layernorm", "post_attention_layernorm"):
             t = (state_dict[name + ".weight"].float() + 1).reshape(1, 1, -1)
             self.weights[name + ".weight"] = upload(t, dim=2 if self.sharded_residual else None)
@@ -321,8 +193,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             c = hf_config
             qg = state_dict["self_attn.q_proj.weight"].reshape(c.num_attention_heads, 2, c.head_dim, c.hidden_size)
             qs, gs = split(qg[:, 0].reshape(-1, c.hidden_size)), split(qg[:, 1].reshape(-1, c.hidden_size))
-            ks = split_kv(state_dict["self_attn.k_proj.weight"])
-            vs = split_kv(state_dict["self_attn.v_proj.weight"])
+            ks, vs = split(state_dict["self_attn.k_proj.weight"]), split(state_dict["self_attn.v_proj.weight"])
             weight("self_attn.qkvg", [torch.cat(p, dim=0) for p in zip(qs, ks, vs, gs)])
             if self.policy.get("split_attention", False):
                 weight("self_attn.split_qg", [torch.cat(p) for p in zip(qs, gs)])
@@ -602,7 +473,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     N_block_size=self.policy.get("fused_input_n", 8),
                     subblock_h=1,
                     subblock_w=4,
-                    compute_with_storage_grid_size=tuple(self.policy.get("fused_grid", [10, 8])),
+                    compute_with_storage_grid_size=(10, 8),
                 ),
                 multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
                 topology=self.topology,
@@ -674,7 +545,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     weight,
                     dim=3,
                     multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(1),
-                    reduce_scatter_core_grid_offset=ttnn.CoreCoord(*self.policy.get("rs_core_offset", (0, 8))),
+                    reduce_scatter_core_grid_offset=ttnn.CoreCoord(0, 8),
                     config=config,
                     topology=self.topology,
                     cluster_axis=1,

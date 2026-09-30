@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Serving state and canonical split sampling for the tensor-parallel Qwen text model."""
+"""Serving state and canonical split sampling for the TP4 Qwen text model."""
 
 import os
 import time
@@ -15,22 +15,11 @@ import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
 
-# Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
-# tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B), the same way
-# conftest.py does. Not bound to Python; update here if the C++ constants change.
-_MAX_PACKET_PAYLOAD_BYTES = {"wormhole_b0": 7 * 1088, "blackhole": 14 * 1088}
-
 
 def configure_fabric(*, payload_bytes=8192):
-    """Configure the measured ring before the caller opens its mesh.
-
-    The QB2 measurement picked 8192 B, which sits under Blackhole's 15232 B ceiling but over
-    Wormhole's 7616 B. Clamp instead of failing so a T3K gets the largest packet its ethernet
-    datamover accepts.
-    """
+    """Configure the measured TP4 ring before the caller opens its mesh."""
     router = ttnn.FabricRouterConfig()
-    arch_max = _MAX_PACKET_PAYLOAD_BYTES.get(ttnn.get_arch_name())
-    router.max_packet_payload_size_bytes = min(payload_bytes, arch_max) if arch_max else payload_bytes
+    router.max_packet_payload_size_bytes = payload_bytes
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
@@ -45,7 +34,7 @@ class Qwen38Generator:
         args = SimpleNamespace(
             vocab_size=model.config.vocab_size,
             padded_vocab_size=model.config.vocab_size,
-            cluster_shape=tuple(model.mesh.shape),
+            cluster_shape=(1, 4),
             max_batch_size=32,
             max_top_k=32,
             pad_logits_to_power_of_2=False,
@@ -54,9 +43,7 @@ class Qwen38Generator:
             raise ValueError("Unknown common sampling strategy")
         args.model_config = {
             "SAMPLING_AG_CONFIG": dict(
-                allow_force_argmax=sampling_strategy == "argmax",
-                num_links=model.num_links,
-                topology=ttnn.Topology.Ring,
+                allow_force_argmax=sampling_strategy == "argmax", num_links=2, topology=ttnn.Topology.Ring
             )
         }
         self.sampling_strategy = sampling_strategy
@@ -799,34 +786,29 @@ class Qwen38Generator:
         if len(cache.layers) != len(self.model.layers):
             raise ValueError("Cache must cover every model layer")
         for layer, state in zip(self.model.layers, cache.layers):
-            # The layer owns the geometry, which narrows with the tensor-parallel width.
-            shapes = layer.state_shapes(batch_size=cache.batch_size, num_pages=cache.num_pages)
             if layer.kind == "full_attention":
                 if any(
                     t is None
                     or t.dtype != getattr(ttnn, layer.policy["kv_dtype"])
                     or t.layout != ttnn.TILE_LAYOUT
                     or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG
-                    or tuple(t.shape) != shapes[name]
-                    for name, t in (("key", state.key), ("value", state.value))
+                    or tuple(t.shape) != (cache.num_pages, 1, 32, 256)
+                    for t in (state.key, state.value)
                 ):
-                    raise ValueError(f"Full-attention cache violates the selected-dtype page contract {shapes['key']}")
+                    raise ValueError("Full-attention cache violates the TP4 selected-dtype page contract")
             elif (
                 state.recurrent is None
-                or tuple(state.recurrent.shape) != shapes["recurrent"]
+                or tuple(state.recurrent.shape) != (cache.batch_size, 12, 128, 128)
                 or state.recurrent.dtype != ttnn.float32
                 or state.recurrent.layout != ttnn.TILE_LAYOUT
                 or state.recurrent.memory_config() != ttnn.DRAM_MEMORY_CONFIG
                 or state.conv is None
-                or tuple(state.conv.shape) != shapes["conv"]
+                or tuple(state.conv.shape) != (cache.batch_size, 3, 2560)
                 or state.conv.dtype != ttnn.bfloat16
                 or state.conv.layout != ttnn.ROW_MAJOR_LAYOUT
                 or state.conv.memory_config() != ttnn.DRAM_MEMORY_CONFIG
             ):
-                raise ValueError(
-                    "Linear state violates the FP32 recurrence / BF16 row-major convolution contract "
-                    f"(expected recurrent {shapes['recurrent']}, conv {shapes['conv']})"
-                )
+                raise ValueError("Linear state violates the FP32 recurrence / BF16 row-major convolution contract")
         if isinstance(page_table, ttnn.Tensor):
             if (
                 page_table.dtype != ttnn.int32

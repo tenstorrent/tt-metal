@@ -38,8 +38,6 @@ class ShardedPrefillScopeTests(unittest.TestCase):
         model = SimpleNamespace(
             prefill_sharded_residual=True,
             config=SimpleNamespace(hidden_size=5120),
-            # _gather stacks four shards below, so this stands in for a TP4 mesh.
-            TP=4,
             layers=[layer],
             embed=lambda ids, **kw: ids[:, :, None].expand(-1, -1, 1280).float(),
             upload=lambda x, **kw: x,
