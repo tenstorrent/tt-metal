@@ -32,3 +32,6 @@
   `bash tmp/cmp.sh noisepf <id>`. noisepf_ph (LTX_DEVICE_PROMPT_HANDOFF=1) is deferred: submit it as its own
   single job only after noisepf is done and the queue is clear. If drive6.log shows no DRIVE6_SUBMITTED
   and the driver is gone, rerun `nohup setsid bash tmp/drive6.sh > tmp/drive6.log 2>&1 &` (edit the wait if 651 is done).
+- 2026-09-30 16:03 UTC (attempt 7): box rebooted 16:00 UTC and killed the drive6 driver (651 still queued, #2 behind 643;
+  656 and 671 also queued). Restarted `nohup setsid bash tmp/drive6.sh` (PID 9190, log tmp/drive6.log). busy() already
+  counts queued smarton jobs, so the e2e run goes in only after 643/651/656/671 all finish. Resume steps unchanged.

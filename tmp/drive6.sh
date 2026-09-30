@@ -6,6 +6,7 @@
 cd "$(dirname "$0")/.."
 W=$PWD
 CACHE=/home/smarton/fasth3/tt-metal/tt-project/worktrees/t7/tmp/tt-metal-cache
+# Busy while any smarton job is running or queued (queued ones count: one project job at a time).
 busy() { tt-device-mcp status 1 | sed -n '/^RUNNING/,/^RECENT/p' | grep -q smarton; }
 echo "== waiting for capture job 651 =="
 until ! tt-device-mcp status -j 651 | grep -qiE 'Status: +(running|queued|pending)'; do sleep 60; done
