@@ -45,7 +45,11 @@ void kernel_main() {
     const uint32_t start_id = start_id_base + start_id_offset;
 
     constexpr auto num_readers = get_arg(args::num_readers);
-    constexpr uint32_t tile_bytes = get_tile_size(dfb::in);
+    // tile_bytes comes from a CTA, not the device-side get_tile_size(dfb::in): the latter is not
+    // arch-portable to Quasar (it reads a DFB-descriptor slot that may be stale on a Quasar DM kernel,
+    // yielding a wrong read size / L1 stride and a stray NOC write). The factory passes the correct
+    // input/output tile size. Mirrors the Gen2-native experimental/quasar i2s reader.
+    constexpr uint32_t tile_bytes = get_arg(args::tile_bytes);
 
     Noc noc;
     // dfb::in — this core's shard
