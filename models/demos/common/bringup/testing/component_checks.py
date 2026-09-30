@@ -11,7 +11,8 @@ generically, chosen by the kind of the step's output:
                 (<= component_row), every row's norm ratio (1 +- component_ratio), the median row norm ratio
                 (1 +- component_bias: a systematic scale), and every column's rel L2 over the rows (an iHC gate near 0
                 with its sign flipped moves nothing else), each column against its own limit: the rule below applied
-                to the precision model's error in that column, without the cap; on the golden input only. The rel L2 limit follows the step's precision: the CPU step
+                to the precision model's error in that column, without the cap, and never below component_col_factor x
+                the whole-output limit (the column check is for structural column bugs); on the golden input only. The rel L2 limit follows the step's precision: the CPU step
                 run with every float intermediate rounded to bf16 (bf16 inputs and output; a model of a correct device
                 step, fp32 accumulation inside each op) has rel L2 e vs the fp32 step; the limit is
                 component_calib x e (component_calib_low for the step kinds in ``tests.low_precision_kinds``, default
@@ -64,6 +65,7 @@ COMPONENT_DEFAULTS = {
     "component_floor": 0.003,  # rel L2 limit never below this
     "component_calib": 2.0,  # rel L2 limit = this x the bf16 precision model's error (Hy4 device: <= 1.7 x)
     "component_calib_low": 3.5,  # the same for tests.low_precision_kinds (Hy4 bfp8 experts: 2.1 x)
+    "component_col_factor": 2.0,  # a column's limit is at least this x the whole-output rel limit
     "component_margin": 1.2,  # ... and never below this x the model's error, even above the cap
     "component_row": 0.03,  # worst row rel L2 (Hy4 device: <= 0.016)
     "component_ratio": 0.015,  # every row's norm ratio within 1 +- this (Hy4 device: within 0.0073)
@@ -278,7 +280,9 @@ def f_lim(overlap_lim: float, f: float) -> float:
     return 1 - f * (1 - overlap_lim)
 
 
-def selection_fails(got, want, lim, f=1.0) -> tuple[dict, list[str]]:
+def selection_fails(got, want, lim, f=1.0, slack: dict | None = None) -> tuple[dict, list[str]]:
+    """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the bf16 golden)."""
+    slack = slack or {}
     if got.numel() != want.numel():
         return {}, [f"{got.numel()} elements, want {tuple(want.shape)}"]
     g, w = _rows(got, want.shape), _rows(want, want.shape)
@@ -302,10 +306,13 @@ def selection_fails(got, want, lim, f=1.0) -> tuple[dict, list[str]]:
         sw = wm.sum(1)
         nz = sw.abs() > 1e-30
         e["rowsum"] = ((gm.sum(1)[nz] / sw[nz]) - 1).abs().max().item() if nz.any() else 0.0
-        if e["rel"] > f * lim["component_select_rel"]:
-            bad.append(f"rel L2 on matched rows {e['rel']:.5f} > {f * lim['component_select_rel']:.4f}")
-        if e["rowsum"] > f * lim["component_rowsum"]:
-            bad.append(f"row sums off by {e['rowsum']:.5f} (limit {f * lim['component_rowsum']:.4f})")
+        rl, sl = f * lim["component_select_rel"] + slack.get("rel", 0.0), f * lim["component_rowsum"] + slack.get(
+            "rowsum", 0.0
+        )
+        if e["rel"] > rl:
+            bad.append(f"rel L2 on matched rows {e['rel']:.5f} > {rl:.4f}")
+        if e["rowsum"] > sl:
+            bad.append(f"row sums off by {e['rowsum']:.5f} (limit {sl:.4f})")
     else:
         bad.append("no row selects the same entries")
     return e, bad
@@ -462,6 +469,8 @@ class Expect:
                 self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low)
             self.golden_err = rel(self.cpu["golden"], want)
             self.golden_col_err = col_errors(self.cpu["golden"], want)
+        if self.kind == "selection":  # the fp32 step's own error vs the bf16 golden (Gemma router row sums: 0.0044)
+            self.golden_sel = selection_fails(self.cpu["golden"], want, self.lim)[0]
 
     def describe(self) -> str:
         lims = ", ".join(f"{k} {v:.4f}" for k, v in self.rel_lim.items())
@@ -477,9 +486,11 @@ class Expect:
             cl = self.col_lim[case.name]
             if cl is not None and vs_golden and self.golden_col_err is not None:
                 cl = cl + self.golden_col_err
+            if cl is not None:  # never tighter than col_factor x the whole-output limit (Gemma mlp: one column 1.06 x)
+                cl = cl.clamp_min(self.lim["component_col_factor"] * rl)
             e, bad = float_fails(got, ref, float_limits(self.lim, f, rl, self.model_err[case.name], second, cl))
         elif self.kind == "selection":
-            e, bad = selection_fails(got, ref, self.lim, f)
+            e, bad = selection_fails(got, ref, self.lim, f, self.golden_sel if vs_golden else None)
         elif self.kind == "index":
             e, bad = index_fails(got, ref, case.start, self.lim, self.thr, f)
         else:
