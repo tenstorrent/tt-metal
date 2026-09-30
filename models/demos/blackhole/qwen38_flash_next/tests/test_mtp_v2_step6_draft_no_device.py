@@ -37,6 +37,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     FakeContract,
     FakeTensor,
     _bf16,
+    install_source_chunk_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (
     BLOCKS,
@@ -64,7 +65,9 @@ WIDTH = 640
 
 @pytest.fixture
 def fake(monkeypatch):
-    fake_ttnn = make_verify_fake(FakeChunk())
+    chunk = FakeChunk()
+    install_source_chunk_fake(monkeypatch, chunk)
+    fake_ttnn = make_verify_fake(chunk)
     for module in (qsa_module, gdn_module, embedding_module, contracts_module, mtp_v2):
         monkeypatch.setattr(module, "ttnn", fake_ttnn)
         monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)

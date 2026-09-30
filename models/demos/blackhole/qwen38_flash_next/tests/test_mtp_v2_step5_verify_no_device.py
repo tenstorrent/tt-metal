@@ -43,6 +43,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     _bf16,
     _cat,
     _DType,
+    install_source_chunk_fake,
     make_fake_ttnn,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import accept_select
@@ -263,6 +264,7 @@ def _rope_rows(x, cos, sin, n_heads, rope_dim):
 @pytest.fixture
 def fake(monkeypatch):
     chunk = FakeChunk()
+    install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn = make_verify_fake(chunk)
     for module in (qsa_module, gdn_module, embedding_module, final_mixer_module, mtp_module, mtp_v2):
         monkeypatch.setattr(module, "ttnn", fake_ttnn)
