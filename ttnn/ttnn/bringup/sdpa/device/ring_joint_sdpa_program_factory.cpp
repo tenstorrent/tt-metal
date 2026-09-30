@@ -1347,7 +1347,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    // Bring-up fork: latent-V (ring_mla) at fp32 dest, which the source refuses (the legacy path has no latent V),
+    // takes the streaming path with fp32 DEST accumulation and the streaming path's bf16 intermediate CBs (as
+    // sparse_sdpa at fp32 dest). Every configuration the source accepts keeps its path and program.
+    const bool use_streaming_compute = !fp32_dest_acc_en || v_shares_k_buffer;
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
@@ -1815,9 +1818,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     tt::DataFormat stats_df = im_df;
     // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
     // the running softmax denominator doesn't lose precision with K-iter rounding.
-    tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // (Fork: the streaming path's CBs stay bf16 at fp32 dest; its kernel assumes one intermediate format.)
+    tt::DataFormat sum_df =
+        (fp32_dest_acc_en && !use_streaming_compute) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat qk_im_df =
+        (fp32_dest_acc_en && !use_streaming_compute) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
