@@ -52,7 +52,7 @@ def test_xlogy_bw_a_zero_b_not_positive(device, dtype):
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_xlogy_bw_b_zero(device, dtype):
-    # grad_b is sign(grad) * inf where b is zero.
+    # grad_b is sign(grad * a) * inf where b is zero.
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     zero = torch.zeros([1, 1, 32, 32], dtype=torch_dtype)
     a = torch.full([1, 1, 32, 32], 2.0, dtype=torch_dtype)
@@ -60,3 +60,38 @@ def test_xlogy_bw_b_zero(device, dtype):
 
     _, got_b = run(device, dtype, grad, a, zero)
     assert (got_b == float("-inf")).all()
+
+
+def torch_grads(grad, a, b):
+    ta = a.double().requires_grad_(True)
+    tb = b.double().requires_grad_(True)
+    torch.xlogy(ta, tb).backward(grad.double())
+    return ta.grad, tb.grad
+
+
+# At b == 0 torch takes grad_b from grad * a / b, so its sign is that of grad * a and it is
+# nan for a == 0, and it takes grad_a as zero for a zero grad. The nan rows are float32 only:
+# the bfloat16 multiply takes 0 * inf as 0.
+@pytest.mark.parametrize(
+    "dtype, grad, a, b",
+    [
+        (ttnn.bfloat16, 1.0, -2.0, 0.0),
+        (ttnn.float32, 1.0, -2.0, 0.0),
+        (ttnn.bfloat16, -1.0, -2.0, 0.0),
+        (ttnn.float32, -1.0, -2.0, 0.0),
+        (ttnn.float32, 1.0, 0.0, 0.0),
+        (ttnn.float32, 0.0, 1.0, 0.0),
+        (ttnn.float32, 0.0, 1.0, -1.0),
+    ],
+)
+def test_xlogy_bw_other_zero(device, dtype, grad, a, b):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+    def full(v):
+        return torch.full([1, 1, 32, 32], v, dtype=torch_dtype)
+
+    got = run(device, dtype, full(grad), full(a), full(b))
+    want = torch_grads(full(grad), full(a), full(b))
+    for g, w in zip(got, want):
+        assert torch.equal(g.isnan(), w.isnan())
+        assert (g.double() == w)[~w.isnan()].all()

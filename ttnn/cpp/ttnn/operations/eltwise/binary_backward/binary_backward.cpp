@@ -284,15 +284,24 @@ std::vector<Tensor> xlogy_bw(
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
     const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
-    const std::array is_le_zero = {EltwiseUnaryWithParam{UnaryOpType::LEZ}};
     const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
-    const std::array sign_of_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
 
     Tensor grad1_result = ttnn::log(other, true, output_mem_config);
-    // eqz(a) and le(b, 0) are the operand activations of the logical_and that
-    // reads them, so the three dispatches are one.
+    // eqz(a) and eqz(grad) are the operand activations of the logical_or that reads them.
+    // le(b, 0) stays a standalone op: folded as LEZ it would stop reading a subnormal b
+    // as zero where le(b, 0) does, and the guard would move off the composite.
+    //
+    // torch takes grad_a as zero for a zero upstream gradient whenever b is not nan, so a
+    // zero gradient joins the a == 0 case rather than reaching the multiply and forming
+    // 0 * -inf (b == 0) or 0 * nan (b < 0). b == nan still falls through, since le(nan, 0)
+    // is false.
     grad1_result = ttnn::where(
-        ttnn::logical_and(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_le_zero),
+        ttnn::logical_and(
+            ttnn::logical_or(
+                input_a, grad_tensor, std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero),
+            ttnn::le(other, 0.0f, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
         0.0f,
         ttnn::where(ttnn::ltz(other, output_mem_config), std::nanf(" "), grad1_result, output_mem_config),
         output_mem_config);
@@ -306,21 +315,16 @@ std::vector<Tensor> xlogy_bw(
     Tensor div_result =
         ttnn::multiply(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     Tensor grad2_result = ttnn::multiply(grad_tensor, div_result, std::nullopt, output_mem_config);
-    grad2_result = where(
-        ttnn::eqz(other, output_mem_config),
-        ttnn::multiply(
-            grad_tensor,
-            std::numeric_limits<float>::infinity(),
-            std::nullopt,
-            output_mem_config,
-            std::nullopt,
-            {},
-            sign_of_it),
-        grad2_result,
-        output_mem_config);
-    // The matching where on eq(other, nan) is gone for the same reason. What it
-    // was reaching for is a real gap and is filed on its own: grad_b is 0 or inf
-    // where other is nan and torch.xlogy has nan.
+    // A where on eqz(b) selecting sign(grad) * inf stood here. It never read a, so it had
+    // the wrong sign for every negative a and returned an infinity where a == 0 asks for
+    // nan. The arithmetic it overrode gets those right: grad_b is grad * (a * reciprocal(b)),
+    // and reciprocal(0) is inf, so it gives sign(grad * a) * inf, and nan for 0 / 0 in
+    // float32. The bfloat16 multiply takes 0 * x as 0, so there 0 / 0 gives 0. A subnormal
+    // grad or a is the one case it gets wrong: the multiply reads it as zero, so the result
+    // is nan (0 in bfloat16) where torch and the removed where give an infinity.
+    // The matching where on eq(b, nan) is gone because nothing is equal to nan. What it
+    // was reaching for is a real gap and is filed on its own: grad_b is 0 or inf where b
+    // is nan and torch.xlogy has nan.
     grad.emplace_back(grad2_result);
     return grad;
 }
