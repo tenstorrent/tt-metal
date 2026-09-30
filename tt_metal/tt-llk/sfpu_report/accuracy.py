@@ -55,14 +55,23 @@ def _sweep_stats(d):
     src, golden, result = d["src"], torch.as_tensor(d["golden"]), d["result"]
     if d.get("exact"):
         return _exact_stats(d)
-    mask = measurable_mask(src, golden, result, in_fmt)
+    from helpers.llk_params import DestAccumulation
+
+    # The Dest width decides which inputs reach the SFPU as subnormals (flushed), so
+    # the sweep's own masking needs it, as the nightly ULP sweep passes it.
+    dest = DestAccumulation[d["dest_acc"]]
+    mask = measurable_mask(
+        src, golden, result, in_fmt, output_format=out_fmt, dest_acc=dest
+    )
     if d.get("binary"):
         # A lane is measurable only if both operands are.
-        mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt)
+        mask = mask & measurable_mask(
+            d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest
+        )
     distance = ulp_distance(golden, result)
     stats = ulp_stats(distance, mask)
     nonfinite = nonfinite_failures(
-        MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt
+        MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest_acc=dest
     )
     flat = distance.reshape(-1).to(torch.int64)
     measured = mask.reshape(-1) & (flat >= 0)
