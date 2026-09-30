@@ -4,14 +4,11 @@
 
 """Opt-in precision knobs for the MiniMax-H3 transformer blocks, read from the environment.
 
-MINIMAX_H3_FAST=1                               the measured 15 s recipe: adaLN schedule cache, bfloat8_b to_qkv/ff1
-                                                weights, LoFi PV in the ring SDPA (sets the knobs below unless given)
-MINIMAX_H3_MM_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4  fidelity of the block matmuls (adaLN table, to_qkv, to_out, ff1, ff2)
-MINIMAX_H3_MM_FP32_ACC=0|1                      fp32 destination accumulation for the same matmuls (default 1)
-MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]        typecast the listed linears' weights to bfloat8_b after loading
-
-Unset means the model's measured defaults (bf16 weights, HiFi2, fp32 acc). `out` and `ff2` feed fused
-residual/gate kernels whose ternary inputs must match the weight format, so bf8 there may be rejected.
+MINIMAX_H3_FAST=1                         the measured 15 s recipe: adaLN schedule cache, bfloat8_b to_qkv/ff1
+                                          weights, LoFi PV in the ring SDPA (sets those knobs unless given)
+MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]  typecast the listed linears' weights to bfloat8_b after loading; `out` and
+                                          `ff2` feed fused residual/gate kernels whose ternary inputs must match the
+                                          weight format, so bf8 there may be rejected
 """
 
 from __future__ import annotations
@@ -30,7 +27,7 @@ FAST_RECIPE = {
 
 
 def apply_fast_recipe_env() -> None:
-    """MINIMAX_H3_FAST=1 fills in the recipe knobs (explicit settings win). Runs at import, before any module reads them."""
+    """MINIMAX_H3_FAST=1 fills in the recipe knobs (explicit settings win); runs at import, before any module reads them."""
     if os.environ.get("MINIMAX_H3_FAST") == "1":
         for key, value in FAST_RECIPE.items():
             os.environ.setdefault(key, value)
@@ -48,27 +45,11 @@ def _typecast_parameter(param, dtype) -> None:
 
 def apply_env_quant_config(model) -> None:
     """`model` is the transformer or a single block (the block perf test)."""
-    fidelity = os.environ.get("MINIMAX_H3_MM_FIDELITY")
-    fp32_acc = os.environ.get("MINIMAX_H3_MM_FP32_ACC")
     bf8 = [name for name in os.environ.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name]
-    if not (fidelity or fp32_acc or bf8):
+    if not bf8:
         return
-
-    compute_config = None
-    if fidelity or fp32_acc:
-        compute_config = ttnn.init_device_compute_kernel_config(
-            model.mesh_device.arch(),
-            math_fidelity=getattr(ttnn.MathFidelity, fidelity or "HiFi2"),
-            math_approx_mode=True,
-            fp32_dest_acc_en=fp32_acc != "0",
-            packer_l1_acc=True,
-        )
-    logger.info(f"minimax-h3 block precision override: fidelity={fidelity} fp32_acc={fp32_acc} bf8_weights={bf8}")
-
+    logger.info(f"minimax-h3 block weights typecast to bfloat8_b: {bf8}")
     for block in getattr(model, "transformer_blocks", [model]):
-        if compute_config is not None:
-            block.mm_compute_kernel_config = compute_config
-            block.attn.mm_compute_kernel_config = compute_config
         linears = {"qkv": block.attn.to_qkv, "out": block.attn.to_out, "ff1": block.ff.ff1, "ff2": block.ff.ff2}
         for name in bf8:
             linear = linears[name]

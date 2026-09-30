@@ -19,17 +19,8 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor, typed_tensor
+from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
-
-_SDPA_DTYPES = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b, "bfloat4_b": ttnn.bfloat4_b}
-
-
-def _sdpa_dtype(name: str) -> ttnn.DataType:
-    """The K/V dtype knobs accept these names only."""
-    if name not in _SDPA_DTYPES:
-        raise ValueError(f"unsupported SDPA K/V dtype {name!r}; choose one of {sorted(_SDPA_DTYPES)}")
-    return _SDPA_DTYPES[name]
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -188,22 +179,6 @@ class MiniMaxH3Attention(Module):
 
         # Ring SDPA reuses the joint-attention entry point with empty joint inputs, as WanAttention does.
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), device=mesh_device)
-        # Opt-in K/V dtypes for the ring SDPA: MINIMAX_H3_SDPA_KV_DTYPE sets both, MINIMAX_H3_SDPA_V_DTYPE only V (the
-        # streamed PV operand; K stays bf16 for the logits). The joint dummies follow each stream's dtype.
-        self.sdpa_k_dtype = self.sdpa_v_dtype = None
-        self.dummy_joint_k = self.dummy_joint_v = self.dummy_joint_input
-        if self.use_ring:
-            kv = os.environ.get("MINIMAX_H3_SDPA_KV_DTYPE")
-            v_only = os.environ.get("MINIMAX_H3_SDPA_V_DTYPE")
-            if kv:
-                self.sdpa_k_dtype = self.sdpa_v_dtype = _sdpa_dtype(kv)
-            if v_only:
-                self.sdpa_v_dtype = _sdpa_dtype(v_only)
-            empty = torch.zeros((1, self.n_local_heads, 0, head_dim))
-            if self.sdpa_k_dtype is not None:
-                self.dummy_joint_k = typed_tensor(empty, self.sdpa_k_dtype, mesh_device)
-            if self.sdpa_v_dtype is not None:
-                self.dummy_joint_v = typed_tensor(empty, self.sdpa_v_dtype, mesh_device)
 
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid
@@ -227,9 +202,8 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
-        # Opt-in tuning knobs for the ring path; unset means the measured defaults below.
-        # fixed-offset softmax: only for blocks whose q/k norm gains bound the scaled logits (the transformer
-        # sets it per block from MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS; the plain env turns it on everywhere).
+        # Ring-path knobs; unset keeps the measured defaults. The transformer sets the fixed-offset softmax per
+        # block from MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS; MINIMAX_H3_SDPA_FIXED_SOFTMAX=1 turns it on everywhere.
         self.sdpa_fixed_offset = self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX") == "1"
         self.sdpa_fixed_offset_value = float(os.environ.get("MINIMAX_H3_SDPA_FIXED_OFFSET", "0"))
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
@@ -348,7 +322,6 @@ class MiniMaxH3Attention(Module):
             )
             phase_fidelity = {}
             if ring:
-                # Opt-in per-phase SDPA fidelity (QK^T / PV), denoise tuning knobs.
                 for field, var in (
                     ("qk_math_fidelity", "MINIMAX_H3_SDPA_QK_FIDELITY"),
                     ("pv_math_fidelity", "MINIMAX_H3_SDPA_PV_FIDELITY"),
@@ -586,10 +559,6 @@ class MiniMaxH3Attention(Module):
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
-        if self.sdpa_k_dtype is not None:
-            k_BHNE = ttnn.typecast(k_BHNE, self.sdpa_k_dtype)
-        if self.sdpa_v_dtype is not None:
-            v_BHNE = ttnn.typecast(v_BHNE, self.sdpa_v_dtype)
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -628,8 +597,8 @@ class MiniMaxH3Attention(Module):
                 k_BHNE,
                 v_BHNE,
                 self.dummy_joint_input,
-                self.dummy_joint_k,
-                self.dummy_joint_v,
+                self.dummy_joint_input,
+                self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
                 ),

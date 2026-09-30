@@ -235,7 +235,6 @@ class DistributedRMSNorm(Module):
         # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
         weight = self.weight.data if self.weight is not None else None
         if dynamic_weight is not None:
-            # A caller that already folded the static weight into its per-token weight skips the full-size multiply.
             if weight is None or dynamic_weight_includes_static:
                 weight = dynamic_weight
             else:
@@ -251,8 +250,8 @@ class DistributedRMSNorm(Module):
             msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
 
-        # dynamic_tile_row_map: the op reads tile row map[r] of dynamic_weight / dynamic_bias for input tile row r,
-        # so both may be small tables of tile rows. Passed only when set, so older builds keep working.
+        # dynamic_tile_row_map: the op reads tile row map[r] of dynamic_weight / dynamic_bias for input tile row r;
+        # passed only when set, so builds of the op without the argument keep working.
         extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST

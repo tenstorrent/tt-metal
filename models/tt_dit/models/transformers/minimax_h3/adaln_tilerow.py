@@ -4,15 +4,11 @@
 
 """Host-side index tables for `MINIMAX_H3_ADALN_GATHER=tilerow`.
 
-The packed sequence is a few long runs of one adaLN table row each, so nearly every 32-row tile selects a single
-row. Instead of materialising a per-token [S, H] modulation, the fused norm reads tile row `tile_map[r]` of a
-small expanded table for tile row `r` of its input:
-
-    expanded tile row j < R    : table row j, repeated over all 32 rows
-    expanded tile row R + k    : the rows of the k-th tile that straddles a run boundary, one per token
-
-`expanded_indices` names the table row behind every expanded row, so `onehot(expanded_indices) @ table` builds the
-expanded table with the same one-hot matmul the per-token gather uses: every tile the norm reads holds the same bits.
+The packed sequence is a few long runs of one adaLN table row each, so nearly every 32-row tile selects a single row.
+Instead of a per-token [S, H] modulation, the fused norm reads tile row `tile_map[r]` of a small expanded table for
+input tile row `r`: expanded tile row j < R repeats table row j, expanded tile row R + k holds the k-th tile that
+straddles a run boundary, one row per token. `onehot(expanded_indices) @ table` builds that expanded table with the
+same one-hot matmul as the per-token gather, so every tile the norm reads holds the same bits.
 """
 
 from __future__ import annotations
@@ -32,15 +28,8 @@ def tilerow_remap(
     max_mixed_tiles: int = DEFAULT_MAX_MIXED_TILES,
     tile: int = TILE,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build the per-tile-row map and the expanded-table row indices for every SP device.
-
-    adaln_indices: [S_padded] table row of every packed row, padding included; device d owns the d-th of
-        `sp_factor` equal contiguous slices.
-    num_rows: rows R of the modulation table (num_timesteps * MODALITY_NUM).
-
-    Returns int32 `(tile_map [sp_factor * S_local / tile], expanded_indices [sp_factor * (R + max_mixed_tiles) * tile])`,
-    each laid out so an even split of the last dim hands every SP device its own slice. Unused mixed slots hold row 0.
-    """
+    """int32 `(tile_map, expanded_indices)`, each laid out so an even split hands every SP device its own slice;
+    `adaln_indices` is the [S_padded] table row of every packed row (padding included), `num_rows` the table's R."""
     idx = adaln_indices.reshape(-1).to(torch.int64)
     if idx.numel() == 0 or idx.numel() % (sp_factor * tile):
         raise ValueError(f"{idx.numel()} rows do not split into {sp_factor} devices of whole {tile}-row tiles")

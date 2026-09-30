@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device side of tools/cpu_reference_forward.py: run the full-depth real-checkpoint transformer on the reference's
-inputs for one or more MINIMAX_H3_* knob sets, save each output, and print PSNR / PCC against the CPU reference.
+inputs for one or more MINIMAX_H3_* knob sets, save each output and print PSNR / PCC against the CPU reference.
 
-One process, one model: the checkpoint goes onto the mesh once (~9 min), then every knob set is applied in place (the
-SDPA knobs are attention attributes plus environment read when the program config is built) and scored. A set with
+The checkpoint goes onto the mesh once; every knob set is then applied in place and scored. A set with
 MINIMAX_H3_BF8_WEIGHTS typecasts the weights on the device, which cannot be undone, so list such sets last.
 
-    H3_CPU_REF=~/cpu_ref/ref_5s.npz H3_TAG=tip pytest test_zz_cpu_ref.py -k 4x8 -s
-    H3_CPU_REF=... H3_CPU_REF_CONFIGS="tip:;lofipv:MINIMAX_H3_SDPA_PV_FIDELITY=LoFi;bf8:MINIMAX_H3_BF8_WEIGHTS=qkv,ff1" \
-        pytest test_zz_cpu_ref.py -k 4x8 -s
-(configs are separated by ';', a config is 'tag:ENV=VAL|ENV=VAL'; an empty knob list is the plain tip)
+    H3_CPU_REF=ref.npz H3_CPU_REF_CONFIGS="tip:;lofipv:MINIMAX_H3_SDPA_PV_FIDELITY=LoFi" pytest test_zz_cpu_ref.py -k 4x8 -s
+(';' separates configs, a config is 'tag:ENV=VAL|ENV=VAL', an empty knob list is the plain tip; H3_TAG names a lone run)
 """
 
 import json
@@ -29,7 +26,6 @@ import ttnn
 
 from ....models.transformers.minimax_h3.quant_config import FAST_RECIPE, apply_env_quant_config
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
-from ....utils.tensor import typed_tensor
 from ....utils.test import skip_if_unsupported_num_links
 from .common import GALAXY_RING
 from .test_transformer_minimax_h3 import (
@@ -59,21 +55,12 @@ def _configs() -> list[tuple[str, dict[str, str]]]:
     return out
 
 
-_NOT_IN_PLACE = (
-    "MINIMAX_H3_ADALN_GATHER",
-    "MINIMAX_H3_STEP_SKIP",
-    "MINIMAX_H3_ATTN_CACHE",
-    "MINIMAX_H3_LOCAL_ASSEMBLY",
-)
+_NOT_IN_PLACE = ("MINIMAX_H3_ADALN_GATHER",)
 
 
 def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
-    """Put the model into the state a fresh process with exactly `knobs` in its environment would build.
-
-    Constructor-derived state is set on the objects (fixed-offset blocks, SDPA fidelities and dtypes, the adaLN
-    schedule cache, the fused heads, the bf8 weights and MM fidelity overrides); MINIMAX_H3_FAST=1 is expanded the way
-    quant_config does at import. Knobs that need pipeline-built inputs or several forwards (tile-row gather, step reuse,
-    local assembly) cannot be applied to one forward here and are rejected."""
+    """Put the model into the state a fresh process with exactly `knobs` in its environment would build; a knob that
+    needs pipeline-built inputs (the tile-row gather) is rejected. MINIMAX_H3_FAST=1 expands as quant_config does."""
     knobs = dict(knobs)
     if knobs.pop("MINIMAX_H3_FAST", None) == "1":
         for key, value in FAST_RECIPE.items():
@@ -87,13 +74,12 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     tt_model._adaln_cache_enabled = knobs.get("MINIMAX_H3_ADALN_CACHE") == "1"
     tt_model._modulation_cache.clear()
     fidelity = getattr(ttnn.MathFidelity, knobs.get("MINIMAX_H3_SDPA_FIDELITY", "HiFi2"))
-    kv_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_KV_DTYPE"]) if "MINIMAX_H3_SDPA_KV_DTYPE" in knobs else None
-    v_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_V_DTYPE"]) if "MINIMAX_H3_SDPA_V_DTYPE" in knobs else kv_dtype
+    # The cached SDPA program configs hold the per-phase fidelities read from the environment; rebuild them.
     for block in tt_model.transformer_blocks:
         attn = block.attn
         attn.sdpa_fixed_offset = False
         attn.sdpa_fixed_offset_value = 0.0
-        attn._sdpa_program_configs.clear()  # per-phase fidelity is read from the environment when a config is built
+        attn._sdpa_program_configs.clear()
         attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=fidelity,
@@ -101,30 +87,19 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
             fp32_dest_acc_en=False,
             dst_full_sync_en=False,
         )
-
-        def dummy(dtype):
-            if dtype is None:
-                return attn.dummy_joint_input
-            return typed_tensor(torch.zeros((1, attn.n_local_heads, 0, attn.head_dim)), dtype, mesh_device)
-
-        attn.sdpa_k_dtype, attn.sdpa_v_dtype = kv_dtype, v_dtype
-        attn.dummy_joint_k, attn.dummy_joint_v = dummy(kv_dtype), dummy(v_dtype)
     spec = knobs.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS")
     if spec:
         tt_model._set_fixed_softmax_blocks(spec)
     # The bf8 typecast cannot be undone, so a config can only add linears to the set already cast; cast just those.
-    # The MM fidelity / fp32-accumulate overrides go through the same call and are re-applied for every config.
     applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
     wanted = {name for name in knobs.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name}
-    if wanted - applied or "MINIMAX_H3_MM_FIDELITY" in knobs or "MINIMAX_H3_MM_FP32_ACC" in knobs:
+    if wanted - applied:
         os.environ["MINIMAX_H3_BF8_WEIGHTS"] = ",".join(sorted(wanted - applied))
         apply_env_quant_config(tt_model)
         os.environ["MINIMAX_H3_BF8_WEIGHTS"] = knobs.get("MINIMAX_H3_BF8_WEIGHTS", "")
         tt_model._cpu_ref_bf8_applied = applied | wanted
     applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
     weights = "bf8:" + ",".join(sorted(applied)) if applied else "bf16"
-    if hasattr(tt_model, "fused_heads"):
-        tt_model.fused_heads = knobs.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
     return (
         " ".join(f"{k}={v}" for k, v in sorted(knobs.items())) + f" [weights {weights}]"
         if knobs
@@ -166,14 +141,11 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
         rope_theta=config["rope_theta"],
         host_inputs=host_inputs,
     )
-    # the same metadata as the reference run, or the comparison is meaningless
     assert np.array_equal(inputs.position_ids.numpy(), ref["position_ids"]) and np.array_equal(
         inputs.tags.numpy(), ref["tags"]
     )
 
-    # build the model in the plain-tip state; every knob set is applied in place afterwards
-    _apply_knobs_env_only = [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]
-    for k in _apply_knobs_env_only:
+    for k in [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]:
         del os.environ[k]
     tt_model = MiniMaxH3Transformer3DModel(
         **model_kwargs,
@@ -204,7 +176,8 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
     for tag, knobs in configs:
         knob_str = _apply_knobs(tt_model, knobs, mesh_device)
         logger.info(f"[{tag}] knobs: {knob_str}")
-        tt_model(**inputs.tt)  # compile pass for this knob set
+        # One compile pass per knob set, so the timed forward below is warm.
+        tt_model(**inputs.tt)
         ttnn.synchronize_device(mesh_device)
         start = time.time()
         tt_video, tt_audio = tt_model(**inputs.tt)

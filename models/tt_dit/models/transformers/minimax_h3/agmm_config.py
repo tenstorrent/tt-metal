@@ -44,7 +44,7 @@ def _per_core_m(m: int, n: int) -> int:
 #   (5376, 5376)  attention to_qkv   K_tiles_per_device = 42
 #   (7168, 1344)  attention to_out   K_tiles_per_device = 56
 #   (5376, 7168)  feed-forward ff1   K_tiles_per_device = 42, fused SwiGLU so N_block must be even
-# per_core_M 36 is 768P at 15 s (13664 rows/device), screened on the block perf test (two N blocks per core).
+# per_core_M 36: 768P at 15 s (13664 rows/device), two N blocks per core.
 AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (5376, 5376, 1): (2, 6, 16),
     (5376, 5376, 2): (2, 7, 16),
@@ -89,9 +89,8 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 
 
 def _env_agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
-    """Tuning override MINIMAX_H3_AGMM_BLOCKS="K,N:Mb,Kb,Nb[,sub_h,sub_w];..." for the (K, N) linears listed.
-    A 5-value entry registers a 12x9 table hit (subblock included) and returns None so the table wins."""
-    # Entries separated by ";" or "/" (the latter for shells and config strings that reserve ";").
+    """MINIMAX_H3_AGMM_BLOCKS="K,N:Mb,Kb,Nb[,sub_h,sub_w];..." (";" or "/" between entries) for the listed (K, N)
+    linears; a 5-value entry registers a 12x9 table hit (subblock included) and returns None so the table wins."""
     for entry in re.split(r"[;/]", os.environ.get("MINIMAX_H3_AGMM_BLOCKS", "")):
         if ":" not in entry:
             continue

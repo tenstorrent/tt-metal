@@ -17,7 +17,6 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -205,14 +204,10 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
-        # MINIMAX_H3_ADALN_CACHE=1: keep every block's six modulation tables per distinct timestep vector (eager
-        # path only), so a fixed schedule projects each block's adaLN once instead of once per step.
+        # MINIMAX_H3_ADALN_CACHE=1: every block's modulation tables per distinct timestep vector (eager path only),
+        # so a fixed schedule projects each block's adaLN once per schedule instead of once per step.
         self._adaln_cache_enabled = os.environ.get("MINIMAX_H3_ADALN_CACHE") == "1"
         self._modulation_cache: dict[tuple, list[list[ttnn.Tensor]]] = {}
-        # MINIMAX_H3_STEP_SKIP (see step_reuse.py): keep the block stack's delta of the last computed forward so a
-        # skipped forward can add it instead of running the blocks. Eager path only, off by default.
-        self._stack_delta_enabled = bool(os.environ.get("MINIMAX_H3_STEP_SKIP"))
-        self._stack_delta: ttnn.Tensor | None = None
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -314,14 +309,6 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
-        # MINIMAX_H3_FUSED_HEADS=1: both heads as one [video | audio]-wide matmul and one SP all-gather, then a
-        # column slice per modality; the columns are independent, so each head's values are its own.
-        self.fused_heads = os.environ.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
-        self._fused_head_weight: ttnn.Tensor | None = None
-        self._fused_head_bias: ttnn.Tensor | None = None
-        # MINIMAX_H3_LOCAL_ASSEMBLY=1: each device gathers and projects only its own packed rows (the pipeline
-        # passes per-device row indices and 0/1 masks); exact, and skips the arena-wide projections and gather.
-        self.local_assembly = os.environ.get("MINIMAX_H3_LOCAL_ASSEMBLY", "0") == "1"
 
     def prepare_static_sources(
         self,
@@ -375,11 +362,8 @@ class MiniMaxH3Transformer3DModel(Module):
         pad_to: int,
         traced: bool = False,
         timestep_key: tuple | None = None,
-        reuse_stack: bool = False,
-        reuse_attn_blocks: frozenset[int] | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
-        local_assembly: dict[str, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -396,11 +380,7 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
-        reuse_stack / reuse_attn_blocks: cross-step reuse for this forward (step_reuse.py); eager path only, and
-            only once a computed forward has filled the caches.
-        local_assembly: per-device `{static,audio,video}_rows` ([1, 1, 1, S_padded_local] integers into each
-            source stream) and `select_rows` (row of the stacked [static | audio | video] local candidates per
-            position); when given, the source table is never built (MINIMAX_H3_LOCAL_ASSEMBLY=1).
+        timestep_key: hashable form of the timestep vector, keys the adaLN schedule cache (eager path only).
         adaln_tile_map / adaln_expanded_indices: [1, 1, 1, .] integers from `adaln_tilerow.tilerow_remap`, sharded on
             SP; used by MINIMAX_H3_ADALN_GATHER=tilerow (the norms fall back to the per-token gather without them).
 
@@ -427,14 +407,12 @@ class MiniMaxH3Transformer3DModel(Module):
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        if local_assembly is not None:
-            hidden = self._assemble_locally(static_prefix, audio_1BAC, video_1BVC, local_assembly, as_indices)
-            if os.environ.get("MINIMAX_H3_LOCAL_ASSEMBLY_CHECK") == "1":
-                self._check_local_assembly(
-                    hidden, static_prefix, audio_1BAC, video_1BVC, local_assembly, assembly_indices, as_indices
-                )
-        else:
-            hidden = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
+        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
+        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
+
+        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
+        hidden = ttnn.unsqueeze(hidden, 0)
+        hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
         temb = self._temb_state.value
@@ -445,31 +423,19 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_idx = ts_state.value
 
         tables = self.modulation_tables(temb, timestep_key) if (not traced and timestep_key is not None) else None
-        if reuse_stack and not traced and self._stack_delta is not None:
-            hidden = ttnn.add(hidden, self._stack_delta)
-        else:
-            hidden_in = hidden
-            hidden = self.run_blocks(
-                hidden,
-                logical_n,
-                temb,
-                adaln_idx,
-                rope_cos,
-                rope_sin,
-                tables,
-                adaln_tile_map=adaln_tile_map,
-                adaln_expanded_indices=(
-                    as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None
-                ),
-                traced=traced,
-                tracer_trace_key=pad_to,
-                **({} if traced or reuse_attn_blocks is None else {"reuse_attn_blocks": reuse_attn_blocks}),
-            )
-            if self._stack_delta_enabled and not traced:
-                delta = ttnn.subtract(hidden, hidden_in)
-                if self._stack_delta is not None:
-                    ttnn.deallocate(self._stack_delta)
-                self._stack_delta = delta
+        hidden = self.run_blocks(
+            hidden,
+            logical_n,
+            temb,
+            adaln_idx,
+            rope_cos,
+            rope_sin,
+            tables,
+            adaln_tile_map=adaln_tile_map,
+            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
+            traced=traced,
+            tracer_trace_key=pad_to,
+        )
 
         hidden = self.norm_out(
             hidden,
@@ -478,22 +444,6 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
-
-        def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
-            table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
-
-        if self.fused_heads:
-            both = self._fused_heads_matmul(hidden)
-            if self.sp_factor > 1:
-                both = self.ccl_manager.all_gather(both, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
-            n_video, n_all = self.proj_out.out_features, both.shape[3]
-            video_rows = select(both, video_out_indices)
-            audio_rows = select(both, audio_out_indices)
-            return (
-                ttnn.slice(video_rows, [0, 0, 0, 0], [1, 1, video_rows.shape[2], n_video]),
-                ttnn.slice(audio_rows, [0, 0, 0, n_video], [1, 1, audio_rows.shape[2], n_all]),
-            )
 
         video_all = self.proj_out(hidden)
         audio_all = self.audio_proj_out(hidden)
@@ -504,103 +454,12 @@ class MiniMaxH3Transformer3DModel(Module):
             audio_all = self.ccl_manager.all_gather(
                 audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
             )
+
+        def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
+            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
-
-    def _assemble_locally(
-        self,
-        static_prefix: ttnn.Tensor,
-        audio_1BAC: ttnn.Tensor,
-        video_1BVC: ttnn.Tensor,
-        la: dict[str, ttnn.Tensor],
-        as_indices,
-    ) -> ttnn.Tensor:
-        """This device's packed rows only: gather each stream's rows, project the raw ones at the local M, stack the
-        three candidates and select one row per position (a pure row gather: the values are the arena path's)."""
-
-        def gather(stream: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
-            table = ttnn.reshape(stream, (stream.shape[2], stream.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
-
-        static = gather(static_prefix, la["static_rows"])
-        audio = self.audio_proj_in(gather(audio_1BAC, la["audio_rows"]))
-        video = self.proj_in(gather(video_1BVC, la["video_rows"]))
-        candidates = ttnn.concat([static, audio, video], dim=2)
-        for t in (static, audio, video):
-            ttnn.deallocate(t)
-        hidden = gather(candidates, la["select_rows"])
-        ttnn.deallocate(candidates)
-        return hidden
-
-    def _check_local_assembly(
-        self, hidden, static_prefix, audio_1BAC, video_1BVC, la, assembly_indices, as_indices
-    ) -> None:
-        """Diagnostic (MINIMAX_H3_LOCAL_ASSEMBLY_CHECK=1): compare the local path with the arena path on this host's
-        device 0 shard, stage by stage: raw gathers vs a host gather, projections of gathered rows vs gathered
-        projections, and the final select."""
-
-        def dev(t: ttnn.Tensor) -> torch.Tensor:
-            return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
-
-        def gather(stream: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
-            table = ttnn.reshape(stream, (stream.shape[2], stream.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
-
-        def report(name: str, a: torch.Tensor, b: torch.Tensor) -> None:
-            diff = (a.reshape(a.shape[-2], -1) - b.reshape(b.shape[-2], -1)).abs().amax(dim=-1)
-            bad = torch.nonzero(diff > 0).reshape(-1)
-            logger.info(
-                f"local assembly check [{name}]: max|diff| {diff.max().item():.4g}, rows differing {bad.numel()} of"
-                f" {diff.numel()}, first {bad[:6].tolist()}, |ref| max {b.abs().max().item():.4g}"
-            )
-
-        arena = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
-        report("hidden vs arena", dev(hidden), dev(arena))
-        ttnn.deallocate(arena)
-        for name, stream, proj in (("audio", audio_1BAC, self.audio_proj_in), ("video", video_1BVC, self.proj_in)):
-            idx = dev(la[f"{name}_rows"]).reshape(-1).long()
-            table = dev(stream).reshape(stream.shape[2], stream.shape[3])
-            raw = gather(stream, la[f"{name}_rows"])
-            report(f"{name} raw gather vs host gather", dev(raw).reshape(-1, stream.shape[3]), table[idx])
-            local_proj = dev(proj(raw)).reshape(idx.numel(), -1)
-            arena_proj = dev(proj(stream)).reshape(stream.shape[2], -1)[idx]
-            report(f"{name} proj(gathered) vs gathered(proj)", local_proj, arena_proj)
-            ttnn.deallocate(raw)
-        idx = dev(la["static_rows"]).reshape(-1).long()
-        report(
-            "static raw gather vs host gather",
-            dev(gather(static_prefix, la["static_rows"])).reshape(idx.numel(), -1),
-            dev(static_prefix).reshape(static_prefix.shape[2], -1)[idx],
-        )
-        sel = dev(la["select_rows"]).reshape(-1).long()
-        s_local = idx.numel()
-        logger.info(
-            f"local assembly check [select]: kinds per device-0 row: static {(sel < s_local).sum().item()},"
-            f" audio {((sel >= s_local) & (sel < 2 * s_local)).sum().item()}, video {(sel >= 2 * s_local).sum().item()};"
-            f" select min {sel.min().item()} max {sel.max().item()}"
-        )
-
-    def _assemble_arena(
-        self, static_prefix: ttnn.Tensor, audio_1BAC: ttnn.Tensor, video_1BVC: ttnn.Tensor, assembly_indices, as_indices
-    ) -> ttnn.Tensor:
-        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
-        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
-        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
-        hidden = ttnn.unsqueeze(hidden, 0)
-        return ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
-
-    def _fused_heads_matmul(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
-        """Both heads as one matmul on the [video | audio] column-concatenated weights, built once on device."""
-        if self._fused_head_weight is None:
-            self._fused_head_weight = ttnn.concat([self.proj_out.weight.data, self.audio_proj_out.weight.data], dim=-1)
-            self._fused_head_bias = ttnn.concat([self.proj_out.bias.data, self.audio_proj_out.bias.data], dim=-1)
-        M, K, N = hidden.padded_shape[-2], hidden.padded_shape[-1], self._fused_head_weight.padded_shape[-1]
-        return ttnn.experimental.minimal_matmul(
-            input_tensor=hidden,
-            weight_tensor=self._fused_head_weight,
-            bias_tensor=self._fused_head_bias,
-            config=get_matmul_config(M, K, N, get_matmul_core_grid(self.mesh_device)),
-            compute_kernel_config=self.proj_out.compute_config,
-        )
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
@@ -612,11 +471,10 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         tables: list[list[ttnn.Tensor]] | None = None,
-        reuse_attn_blocks: frozenset[int] | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        # The one-hot gather matrix depends only on the row tags: build it once per forward, not once per block.
+        # The one-hot gather matrix depends only on the row tags, so one per forward serves every block.
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2])
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2])
         for i, block in enumerate(self.transformer_blocks):
@@ -629,11 +487,9 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 tables=tables[i] if tables is not None else None,
                 onehot=onehot,
-                reuse_attn=reuse_attn_blocks is not None and i in reuse_attn_blocks,
                 tilerow=tilerow,
             )
-        if onehot is not None:
-            ttnn.deallocate(onehot)
+        ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
@@ -643,23 +499,9 @@ class MiniMaxH3Transformer3DModel(Module):
         """Whether forward wants `adaln_tile_map` / `adaln_expanded_indices` (MINIMAX_H3_ADALN_GATHER=tilerow)."""
         return self.transformer_blocks[0]._adaln_gather == "tilerow"
 
-    def clear_step_cache(self) -> None:
-        """Drop the cross-step reuse caches (call at the start of every request)."""
-        if self._stack_delta is not None:
-            ttnn.deallocate(self._stack_delta)
-            self._stack_delta = None
-        for block in self.transformer_blocks:
-            block.clear_attn_cache()
-
     def _set_fixed_softmax_blocks(self, spec: str | None) -> None:
-        """`spec`: "all", a block-range list ("0-35,39,41,42"), or "auto[:threshold]" which reads the checkpoint's q/k
-        norm gains and enables the mode where sqrt(d) * max|g_q| * max|g_k| <= threshold (default 70), using that
-        bound as the constant offset. Explicit lists use the same bounds when the checkpoint is readable, else 0.
-
-        With offset = bound B every exp input lies in [-2B, 0]; the kernel clamps inputs below -88.5 to 0 and
-        seeds the row sum, so a row whose largest scaled logit is more than 88.5 below B gets a zero attention
-        output (residual only) instead of NaN. auto:44 rules that out for every row; the default 70 keeps 40
-        of the 50 blocks on the fast kernel (44 keeps 14) and such rows were not observed on the reference clip."""
+        """`spec`: "all", a block-range list ("0-35,39,41,42") or "auto[:threshold]" (the blocks whose bound
+        sqrt(d) * max|g_q| * max|g_k| <= threshold, default 70); each block's bound is its offset, 0 if unreadable."""
         if not spec or spec.strip().lower() in ("off", "none", "0"):
             return
         spec = spec.strip()
@@ -717,7 +559,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if cached is None:
             try:
                 cached = [block._modulation_tables(temb) for block in self.transformer_blocks]
-            except RuntimeError as exc:  # out of device memory: fall back for good
+            except RuntimeError as exc:
                 logger.warning(f"adaLN schedule cache disabled: {str(exc)[:120]}")
                 self._adaln_cache_enabled = False
                 self._modulation_cache.clear()

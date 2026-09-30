@@ -444,9 +444,8 @@ conditioner fidelity rather than output quality.
 ## Denoise tuning knobs (4x8, 768P 15 s)
 
 Defaults now: on Blackhole the norms read the adaLN scale/shift through a per-tile-row map built once per request
-(exact; `MINIMAX_H3_ADALN_GATHER=matmul` restores the one-hot matmul gathers, `=embedding` the `ttnn.embedding`
-gathers; a request with more boundary tiles than `MINIMAX_H3_ADALN_MIXED_TILES` slots uses the one-hot gathers and
-says so in the log), the norms' static weight is multiplied into the 6-row modulation table instead of the
+(exact; `MINIMAX_H3_ADALN_GATHER=matmul` restores the one-hot matmul gathers; a request with more boundary tiles
+than `MINIMAX_H3_ADALN_MIXED_TILES` slots uses the one-hot gathers and says so in the log), the norms' static weight is multiplied into the 6-row modulation table instead of the
 per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores), and the AGMM / fused-MMRS tables carry rows for the 15 s
 per-device length (`agmm_config.py`, `mmrs_config.py`). Everything below is opt-in and leaves the numerics unchanged
 when unset; each was measured on the block perf test and the 15 s clip and gated with the 2-step-denoise comparison
@@ -459,20 +458,9 @@ described in the next paragraph.
 | `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]` | typecast those linears' weights to bfloat8_b after loading (`out`/`ff2` need a bf8 residual for the fused addcmul, so they are normally left bf16) |
 | `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA fidelity per matmul phase or for both (`SDPAProgramConfig.qk_math_fidelity` / `pv_math_fidelity`). LoFi on PV keeps the logits at HiFi2; LoFi on both phases degrades the output |
 | `MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=auto[:threshold]` | ring SDPA without a running row max on the blocks whose q/k RMSNorm gains bound the scaled logits (`SDPAProgramConfig.fixed_offset_softmax`, offset = the block's bound); a block range list or `all` also works. **Default on Blackhole in the pipeline** (`auto`): it measured faster and slightly closer to the fp32 reference than the running-max kernel; `off` restores the standard kernel. Exp inputs lie in [-2B, 0] for a block bound B: a row whose largest scaled logit is more than 88.5 below B underflows entirely and gets a zero attention output (the kernel seeds the row sum, so no NaN); `auto:44` excludes that for every row at the cost of 26 of the 40 fast blocks |
-| `MINIMAX_H3_MM_FIDELITY`, `MINIMAX_H3_MM_FP32_ACC=0` | fidelity / fp32 accumulation of the five block matmuls (bandwidth-bound at this shape: no gain) |
 | `MINIMAX_H3_SDPA_CHUNKS=q,k`, `MINIMAX_H3_AGMM_BLOCKS=K,N:Mb,Kb,Nb[,sh,sw];...`, `MINIMAX_H3_MMRS_BLOCKING=gx,gy,Mb,Kb,Nb,sh,sw[,workers[,window]]` | sweep overrides for the ring SDPA chunking and the linears' blockings |
-| `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
-| `MINIMAX_H3_SDPA_V_DTYPE=bfloat8_b` | typecast only V (K stays bf16 for the logits): V is the operand the LoFi PV matmul streams, so this halves its unpack bytes and its share of the ring traffic; one typecast per block until fused; gate with the 2-step comparison |
-| `MINIMAX_H3_FUSED_HEADS=1` | the two output heads as one 128-wide matmul, one SP all-gather and a tile-aligned column slice per modality (the columns are independent, so each head's values are its own); saves one read of the TP-gathered hidden, one CCL and one gather per step; opt-in until measured |
-| `MINIMAX_H3_LOCAL_ASSEMBLY=1` | each device gathers only its own packed rows from the three source streams, projects the raw audio/video rows at the local M and keeps one row per position by a gather over the stacked candidates (exact: same per-row matmul, pure row selection); removes the arena-wide proj_in, the source concat, the full gather and the mesh partition (~1 GB of DRAM traffic per step); opt-in until measured |
+| `MINIMAX_H3_SDPA_DST_FULL_SYNC=1` | measured and rejected (slower); kept for experiments |
 | `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
-
-Cross-step reuse (`step_reuse.py`) is a different kind of knob: it changes the output. It is off unless set, eager path
-only, and meant for measurement: `MINIMAX_H3_STEP_SKIP=first-last/N[,...]` skips the whole block stack on the forwards of the range whose offset from
-`first` is not a multiple of N (`first-last` without `/N` lists every forward; `/1` is rejected) and adds the previous computed forward's stack delta instead; `MINIMAX_H3_ATTN_CACHE=a-b:N[:first-last]` reuses
-the attention-branch delta of blocks a..b on the forwards of the window whose offset is not a multiple of N, still
-running the FFN. Neither can pass the 2-step gate by construction (a reused forward is one step stale); judge them on
-the decoded clip against the plain schedule and against the same time spent on fewer steps.
 
 Numerics gate: the 50-step clip's PSNR against a reference run only distinguishes bit-identical from broken, because
 any bf16-level difference diverges chaotically over the sampling trajectory. A 2-step run (`H3_PERF_STEPS=2`) compared

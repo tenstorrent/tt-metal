@@ -76,7 +76,6 @@ from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
-from ...models.transformers.minimax_h3.step_reuse import StepReusePlan
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -267,10 +266,6 @@ class _BucketState:
     assembly_idx: StateTensor = field(default_factory=StateTensor)
     adaln_tile_map: StateTensor = field(default_factory=StateTensor)
     adaln_expanded: StateTensor = field(default_factory=StateTensor)
-    local_static_rows: StateTensor = field(default_factory=StateTensor)
-    local_audio_rows: StateTensor = field(default_factory=StateTensor)
-    local_video_rows: StateTensor = field(default_factory=StateTensor)
-    local_select_rows: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -1257,12 +1252,10 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         apply_env_quant_config(self._transformer)
-        # Fixed-offset softmax on the blocks whose q/k gains bound the logits: faster and slightly closer to the fp32
-        # reference than the running-max kernel on Blackhole. MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=off restores it.
+        # Blackhole defaults: fixed-offset softmax on the blocks whose q/k gains bound the logits, and the adaLN
+        # scale/shift through the tile-row map (a request with too many boundary tiles falls back in __call__).
         if os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS") is None and is_blackhole():
             self._transformer._set_fixed_softmax_blocks("auto")
-        # adaLN scale/shift through the per-tile-row map (exact, measured faster); a request whose boundary tiles
-        # exceed the slots falls back to the per-token gather below. MINIMAX_H3_ADALN_GATHER=matmul restores it.
         if os.environ.get("MINIMAX_H3_ADALN_GATHER") is None and is_blackhole():
             for block in self._transformer.transformer_blocks:
                 block._adaln_gather = "tilerow"
@@ -1360,7 +1353,7 @@ class MiniMaxH3Pipeline:
         offsets["video"] = cursor + caps.audio_rows
         return offsets
 
-    def _assembly_rows(
+    def _assembly_indices(
         self,
         condition_spec: Sequence[tuple[str, int]],
         caps: MiniMaxH3ArenaCaps,
@@ -1368,7 +1361,7 @@ class MiniMaxH3Pipeline:
         a_len: int,
         v_len: int,
         rung: int,
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor:
         """Source-table row of each packed row: `[text | condition blocks | audio | video | pad]`.
 
         Pad rows point at source row 0 so the gathered content is finite.
@@ -1386,48 +1379,7 @@ class MiniMaxH3Pipeline:
         indices[pos : pos + a_len] = torch.arange(src["audio"], src["audio"] + a_len)
         pos += a_len
         indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
-        return indices
-
-    def _assembly_indices(self, *args) -> ttnn.Tensor:
-        """`_assembly_rows` as a replicated device index tensor."""
-        return self._replicated_indices(self._assembly_rows(*args))
-
-    def _local_assembly(
-        self,
-        state: _BucketState,
-        condition_spec: Sequence[tuple[str, int]],
-        caps: MiniMaxH3ArenaCaps,
-        l_len: int,
-        a_len: int,
-        v_len: int,
-        rung: int,
-        traced: bool,
-    ) -> dict[str, ttnn.Tensor]:
-        """Per-device row indices into each source stream, plus the row of the stacked [static | audio | video]
-        local candidates to keep per position (MINIMAX_H3_LOCAL_ASSEMBLY=1). Pad rows select static row 0."""
-        rows = self._assembly_rows(condition_spec, caps, l_len, a_len, v_len, rung)
-        src = self._assembly_source_offsets(caps)
-        s_local = rung // self.sp_factor
-        local = torch.arange(rung, dtype=torch.int32) % s_local
-        # int32 rows: the open upper bound must fit int32 (1 << 31 compared false for every row).
-        bounds = {
-            "static": (0, src["audio"]),
-            "audio": (src["audio"], src["video"]),
-            "video": (src["video"], 2**31 - 1),
-        }
-        select = torch.zeros(rung, dtype=torch.int32)
-        out = {}
-        for kind, (name, (lo, hi)) in enumerate(bounds.items()):
-            sel = (rows >= lo) & (rows < hi)
-            select = torch.where(sel, local + kind * s_local, select)
-            rows_state = getattr(state, f"local_{name}_rows")
-            rows_state.update(
-                self._row_indices(torch.where(sel, rows - lo, torch.zeros_like(rows)), rung), traced=traced
-            )
-            out[f"{name}_rows"] = rows_state.value
-        state.local_select_rows.update(self._row_indices(select, rung), traced=traced)
-        out["select_rows"] = state.local_select_rows.value
-        return out
+        return self._replicated_indices(indices)
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
         """Padded-global-sequence row of each target row of one modality, at the arena capacity."""
@@ -2446,9 +2398,6 @@ class MiniMaxH3Pipeline:
             rung = self._select_bucket(layout.sequence_length)
         else:
             rung = padded_sequence_length(layout.sequence_length, self.sp_factor)
-            # MINIMAX_H3_SEQ_ALIGN_TILES=2 keeps the per-device tile count even (denoise tuning knob).
-            align = self.sp_factor * ttnn.TILE_SIZE * int(os.environ.get("MINIMAX_H3_SEQ_ALIGN_TILES", "1"))
-            rung = ((rung + align - 1) // align) * align
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
         self._log(
             f"packed sequence {layout.sequence_length} -> bucket {rung}, "
@@ -2504,7 +2453,6 @@ class MiniMaxH3Pipeline:
         state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
         tilerow_kwargs = {}
         if transformer.adaln_tilerow:
-            # MINIMAX_H3_ADALN_GATHER=tilerow: the norms read scale/shift through a per-tile-row map.
             padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
             try:
                 tile_map, expanded = tilerow_remap(
@@ -2527,13 +2475,6 @@ class MiniMaxH3Pipeline:
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
         )
-        local_kwargs = {}
-        if transformer.local_assembly:
-            local_kwargs = {
-                "local_assembly": self._local_assembly(
-                    state, condition_spec, caps, l_len, a_target, v_target, rung, traced
-                )
-            }
         self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
         audio_start = l_len + num_cond + num_cond_audio
         video_start = audio_start + a_target
@@ -2555,11 +2496,6 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
-        # Opt-in cross-step reuse (MINIMAX_H3_STEP_SKIP / MINIMAX_H3_ATTN_CACHE): a fresh cache per request.
-        reuse_plan = StepReusePlan.from_env(len(timesteps))
-        transformer.clear_step_cache()
-        if reuse_plan.active:
-            self._log(f"step reuse ({'ignored: traced' if traced else 'eager'}): {reuse_plan.describe(len(timesteps))}")
 
         def step_levels(i: int) -> torch.Tensor:
             t = float(timesteps[i])
@@ -2605,8 +2541,6 @@ class MiniMaxH3Pipeline:
                 traced=traced,
                 timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
                 **tilerow_kwargs,
-                **local_kwargs,
-                **({} if traced else reuse_plan.kwargs(i)),
             )
 
             # The Euler update and the next step's timestep upload queue behind the forward, so that host

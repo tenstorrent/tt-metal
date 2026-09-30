@@ -210,9 +210,7 @@ def _prepare_tt_inputs(
     host_inputs: dict | None = None,
 ) -> SimpleNamespace:
     """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts.
-
-    `host_inputs` (video_input, audio_input, prompt_input, timestep tensors) replaces the random draws, so a run can be
-    scored against a reference computed elsewhere on the same inputs (tools/cpu_reference_forward.py)."""
+    `host_inputs` (video/audio/prompt inputs, timestep) replaces the random draws (tools/cpu_reference_forward.py)."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
     cond_blocks = per_modality["cond_blocks"]
