@@ -8,7 +8,7 @@
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_layout.h"
 #include "api/tt_uva.h"
 
 namespace ex = tt::tt_metal::experimental;
@@ -70,11 +70,11 @@ void kernel_main() {
 
     const ex::tt_uva_t dst = ex::tt_uva_t6_from_selector(dest_selector, dest_offset);
 
-    const uint64_t t_begin = ex::tt_uva_clock();
+    const uint64_t t_begin = get_timestamp();
     uint64_t t_steady = t_begin;
     for (uint32_t i = 0; i < iterations; ++i) {
         if (i == warmup_iters) {
-            t_steady = ex::tt_uva_clock();
+            t_steady = get_timestamp();
         }
         // Word 0 is the iteration stamp: without it a host re-reading a stale slot cannot
         // be told from one that got a fresh push.
@@ -88,7 +88,7 @@ void kernel_main() {
         }
     }
     // Before fin(): that drains the tail, and a posting rate should not carry the drain.
-    const uint64_t t_end = ex::tt_uva_clock();
+    const uint64_t t_end = get_timestamp();
     ex::tt_uva_fin();
 
     // benchmark_d2h_leg.cpp reads these back after the run

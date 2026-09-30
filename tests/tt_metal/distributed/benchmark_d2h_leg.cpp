@@ -29,8 +29,8 @@
 #include "tt_metal/distributed/host_d2h_leg.hpp"
 #include "tt_metal/distributed/host_l1_map.hpp"
 #include "tt_metal/distributed/host_region.hpp"
-#include "tt_metal/distributed/host_uva_frame.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_frame.h"
+#include "hostdevcommon/uva_layout.h"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;

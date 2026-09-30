@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 // For kMaxHosts: the credit array, not the selector, is the tighter bound on host count.
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_layout.h"
 
 namespace tt::tt_metal::experimental {
 

@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "tt_metal/distributed/host_uva.hpp"
+#include "hostdevcommon/uva.h"
 
 namespace tt::tt_metal::experimental {
 

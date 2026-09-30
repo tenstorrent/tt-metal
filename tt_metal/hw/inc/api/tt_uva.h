@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 
-#include "tt_metal/distributed/host_uva_frame.hpp"
+#include "hostdevcommon/uva_frame.h"
 
 namespace tt::tt_metal::experimental {
 
@@ -65,15 +65,6 @@ inline void push(uint32_t src, uint64_t dst, uint32_t bytes) {
     }
 }
 
-// Low half first: reading it latches the high half, so the other order can pair a fresh
-// low with a stale high across a 32-bit rollover.
-inline uint64_t wall_clock() {
-    volatile uint32_t tt_reg_ptr* lo = reinterpret_cast<volatile uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile uint32_t tt_reg_ptr* hi = reinterpret_cast<volatile uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    const uint32_t l = lo[0];
-    return static_cast<uint64_t>(l) | (static_cast<uint64_t>(hi[0]) << 32);
-}
-
 // Payload, then trailer, then the caller decides whether to commit. The signal fields are
 // written unconditionally: the staging slot is reused, so stale bytes would read as an op.
 inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
@@ -82,10 +73,10 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     ASSERT(g_page_size >= kFrameTrailerBytes && bytes <= g_page_size - kFrameTrailerBytes);
     // Bracketed separately from the write below: this is the wait for the host to retire a
     // page, which is the slot round trip and not a cost of sending.
-    const uint64_t t_pre = wall_clock();
+    const uint64_t t_pre = get_timestamp();
     socket_reserve_pages(g_socket, 1);
     const uint64_t page = page_addr();
-    const uint64_t t0 = wall_clock();
+    const uint64_t t0 = get_timestamp();
 
     push(src_l1, page, bytes);
     noc_async_write_barrier();
@@ -96,7 +87,7 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     t->dst = tt_uva_bits(dst);
     t->length = bytes;
     t->origin = g_origin;
-    t->elapsed = tt_uva_frame_elapsed_pack(wall_clock() - t0, t0 - t_pre);
+    t->elapsed = tt_uva_frame_elapsed_pack(get_timestamp() - t0, t0 - t_pre);
     t->sig_off = sig_off;
     t->sig_val = sig_val;
     t->sig_op = sig_op;
@@ -161,10 +152,6 @@ inline bool poll_one(uint32_t polls) {
 }
 
 }  // namespace detail
-
-// The device wall clock, for a kernel timing its own loop. Same source the frame trailer
-// stamps, so a loop total and a per-frame cost are on one timebase.
-inline uint64_t tt_uva_clock() { return detail::wall_clock(); }
 
 // This core's selector, derived from its own coordinates so no argument can forge it.
 inline uint32_t tt_uva_self(uint32_t grid_width, uint32_t host, uint32_t chip, uint32_t chips_per_host) {
