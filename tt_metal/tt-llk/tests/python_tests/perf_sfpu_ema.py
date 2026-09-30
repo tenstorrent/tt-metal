@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MATH_ISOLATE perf for the EMA SFPU kernel (ckernel_sfpu_ema.h).
+Perf for the EMA SFPU kernel (ckernel_sfpu_ema.h).
 
 The EMA kernel had no perf coverage at all, which is why the Wormhole scheduling
 change to _compute_ema_math_ could not be quantified from the existing suite. This
@@ -18,9 +18,10 @@ absolute number as the kernel alone.
 
 cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
 
-The kernel is hardcoded for 16-bit bf16 DEST (_ema_load/store_current_input_ use
-SFPLOADI_MOD0_FLOATB at fixed fp16 offsets with no is_fp32_dest_acc_en branch), so
-dest_acc=Yes is not swept -- same restriction as test_sfpu_ema.py.
+The kernel's loads and stores take the element format from the configured DEST, so both
+DEST widths are swept: the 16-bit DEST of the functional default and the 32-bit DEST
+ttnn.ema runs with. The Float32 row is the fp32 form through unpack to DEST, in which the
+unpacker writes DEST and the math thread runs no datacopy.
 """
 
 import struct
@@ -56,20 +57,30 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
+def _dest_acc_modes(formats):
+    # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
 @pytest.mark.perf
 @parametrize(
-    dest_acc=[DestAccumulation.No],
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    dest_acc=lambda formats: _dest_acc_modes(formats),
     loop_factor=[16],  # amortise profiler overhead
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
 def test_perf_sfpu_ema(
     perf_report,
+    formats,
     dest_acc,
     loop_factor,
     input_dimensions,
 ):
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
@@ -77,7 +88,12 @@ def test_perf_sfpu_ema(
     configuration = PerfConfig(
         "sources/sfpu_ema_perf.cpp",
         formats,
-        run_types=[PerfRunType.MATH_ISOLATE, PerfRunType.L1_TO_L1],
+        run_types=[
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
         # Everything compile-time so the measured kernel does no runtime-parameter
         # reads; all sweep values are single-valued so this does not expand the matrix.
         templates=[
@@ -102,7 +118,7 @@ def test_perf_sfpu_ema(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=False,
+        unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
         compile_time_formats=True,
     )

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 // Perf driver for the EMA SFPU entry (ckernel_sfpu_ema.h via
 // llk_math_ema_sfpu_entry.h). Mirrors sources/sfpu_ema_test.cpp, with the tile loop
 // wrapped in the perf markers and repeated LOOP_FACTOR times to amortise profiler
@@ -74,7 +75,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // SrcA a face at a time, so this count has to include num_faces. It must stay
             // in step with whatever the math isolate path actually retires -- a mismatch
             // in either direction hangs the handshake.
-            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+            }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
@@ -135,7 +139,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ false>(TILE_CNT * LOOP_FACTOR);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    }
+                    else
+                    {
+                        // The plain unpack_A MOP publishes a SrcB valid next to every SrcA valid (UNPACR_NOP SrcB SET_DVALID in its replay),
+                        // so both must be retired here; clearing A alone deadlocks unpack (waits SRCB_CLR) and math (08:38 UTC hang).
+                        _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
+                    }
+                }
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -157,8 +177,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                        EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    }
                     llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
                 }
             }
