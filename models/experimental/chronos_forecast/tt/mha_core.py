@@ -35,26 +35,35 @@ class TtMhaWeights:
 def maybe_upload_mask(device, mask_host: torch.Tensor, seq_len: int, *, mesh_mapper=None):
     """Upload an SDPA mask, or return None when it can be skipped.
 
-    An all-zero mask is the identity, and the masked SDPA kernel loses a
-    little accuracy at small seq lengths (and misbehaves badly at tiny ones),
-    so zero masks are skipped when ``seq_len < 32``. Nonzero masks are always
-    uploaded (correctness first), as are zero masks at production lengths
-    where the masked path is the validated one. Callers must guard
+    An all-zero mask is the identity and is skipped when ``seq_len < 32``;
+    nonzero masks are always uploaded, as are zero masks at production lengths.
+    SDPA fills only whole padding tiles of a provided mask with -inf and reads
+    the padding inside a partial tile from the mask itself, so a mask that is
+    not tile-aligned is tilized with -inf padding. Callers must guard
     ``ttnn.deallocate`` against None. ``mesh_mapper`` splits or copies the
     mask across a mesh device.
     """
     import ttnn
 
-    if bool((mask_host != 0).any().item()) or seq_len >= 32:
+    if not (bool((mask_host != 0).any().item()) or seq_len >= 32):
+        return None
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    mask_host = mask_host.detach().to(torch.bfloat16)
+    if mask_host.shape[-2] % 32 == 0 and mask_host.shape[-1] % 32 == 0:
         return ttnn.from_torch(
-            mask_host.detach().to(torch.bfloat16),
+            mask_host,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=dram,
             mesh_mapper=mesh_mapper,
         )
-    return None
+    rows = ttnn.from_torch(mask_host, dtype=ttnn.bfloat16, device=device, memory_config=dram, mesh_mapper=mesh_mapper)
+    shape = list(rows.shape)
+    padded = [*shape[:-2], *(-(-s // 32) * 32 for s in shape[-2:])]
+    mask = ttnn.tilize_with_val_padding(rows, padded, float("-inf"), memory_config=dram)
+    ttnn.deallocate(rows)
+    return mask
 
 
 class TtMhaCore:

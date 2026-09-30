@@ -395,3 +395,50 @@ def test_tt_forward_pretrained_pcc(mesh_device):
     device_resident_normalized = torch.asinh((device_resident - loc) / scale)
     assert_with_pcc(expected_normalized, device_resident_normalized, pcc=0.99)
     assert_with_pcc(expected.float(), device_resident, pcc=0.95)
+
+
+@pytest.mark.parametrize(
+    "group_ids",
+    [
+        pytest.param(None, id="unique"),
+        pytest.param([0, 0, 0, 0], id="one_group"),
+        pytest.param([0, 0, 1, 1], id="two_groups"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_tt_host_path_pretrained_pcc(mesh_device, group_ids):
+    """Host-orchestrated encode + forward with real weights, 4 series, 4 output patches.
+
+    37 tokens and 4 series are not tile-aligned, so the time and group masks end
+    inside a tile and their padding must be -inf.
+    """
+    pytest.importorskip("ttnn")
+    from pathlib import Path
+
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+
+    ckpt = Path("models/experimental/chronos_forecast/weights/chronos-2")
+    if not (ckpt / "config.json").is_file():
+        pytest.skip("weights/chronos-2 absent")
+
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(str(ckpt)).eval()
+    tt = TtChronos.from_torch_model(mesh_device, model)
+
+    torch.manual_seed(0)
+    context = torch.randn(4, 512)
+    group_ids = None if group_ids is None else torch.tensor(group_ids)
+    with torch.no_grad():
+        expected_hidden = model.encode(context=context, group_ids=group_ids, num_output_patches=4)[0][0]
+        expected = model(context=context, group_ids=group_ids, num_output_patches=4).quantile_preds
+    hidden, _, _ = tt.encode(context=context, group_ids=group_ids, num_output_patches=4)
+    got = tt.forward(context=context, group_ids=group_ids, num_output_patches=4)
+    assert not torch.isnan(hidden).any() and not torch.isnan(got).any()
+    assert got.shape == expected.shape
+    assert_with_pcc(expected_hidden.float(), hidden, pcc=0.99)
+    assert_with_pcc(expected.float(), got, pcc=0.99)
