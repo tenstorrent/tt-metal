@@ -4,16 +4,16 @@
 
 """Measured block time vs the theoretical model (``utils/v41_perf_model.py``, G2), bead 8y7.9.
 
-Production shapes: one 5120-token chunk at start 0 through the real-weight stack 2 -> 3 -> 20 -> 21 -> 24 (every
-sharing role) and the sliding-window block 0, LoudBox 2x4, BF16 KV. The input of the first layer is its real
-block-oracle input (2048 rows tiled to 5120); later layers take the device outputs. Measurements (warm, program
-cache hot):
+Production shapes: one 5120-token chunk at start 0 through the real-weight sharing schedule 0 -> 2 -> 3 -> 20 -> 21
+-> 24 (every checkpoint layer; every sharing role), LoudBox 2x4, BF16 KV. The input is the first 5120 tokens of real
+text (``oracle.text_tokens``; the MoE expert placement was fitted on text routing, and G2 is judged on it): their
+embedding rows expanded to the hc streams with the one-hot pre-mix, as ``TtV41Transformer`` builds them; every
+later layer takes the device outputs. Measurements (warm, program cache hot):
 
 * ``layer_ms``: untraced forward with a device synchronize after each layer (includes host dispatch);
 * ``parts_ms``: the same with synchronized timers around every sublayer and MoE / attention stage (serializes
   what might overlap; the stage times sum to more than ``layer_ms``);
-* ``traced_ms``: per-layer trace replay (device time without host dispatch; host tables staged as in
-  ``test_v41_trace``).
+* ``traced_ms``: per-layer trace replay (device time without host dispatch; captured with ``test_v41_trace.capture``).
 
 Each stage is set against the model's optimistic (``max(compute, DRAM, CCL)``) and conservative (serialized)
 compositions of the graph nodes it executes; utilization = model optimistic / measured. Logged as
@@ -35,14 +35,15 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import EXPERT_DTYPES, _weights
-from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import TRACE_REGION, HostTableStager
+from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import TRACE_REGION, capture
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.mhc import initial_pre_mix
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
 from models.demos.deepseek_v3_d_p.utils import v41_perf_model as M
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
-SCHEDULES = {"stack": (2, 3, 20, 21, 24), "swa": (0,)}
+LAYERS = (0, 2, 3, 20, 21, 24)  # the sharing schedule: every checkpoint layer
 CHUNK = R.CHUNK
 TIMED_ITERS = 3
 LAYOUTS = {(2, 4): M.LOUDBOX_2X4, (4, 2): M.LOUDBOX_4X2}
@@ -135,24 +136,20 @@ def _model(layer: int, workload: M.Workload, layout: M.Layout) -> dict:
     return out
 
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("expert_dtype", list(EXPERT_DTYPES))
-@pytest.mark.parametrize("schedule", list(SCHEDULES))
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
-def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monkeypatch):
+def text_stack(mesh_device, expert_dtype: str):
+    """The real-weight blocks of ``LAYERS``, the first block's input for the first ``CHUNK`` tokens of real text and
+    a fresh-state factory: (blocks, x0, pre0, fresh). The input is what ``TtV41Transformer`` feeds its first block
+    (embedding rows, bf16, expanded to the hc streams in fp32; one-hot pre-mix), built on the host from the
+    checkpoint embedding."""
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
-    layers = SCHEDULES[schedule]
-    spec = R.block_spec(layers[0])
-    result = orc.oracle(spec, orc.random_tokens(spec))
-    rec = result["blocks"][layers[0]]
     shape = tuple(mesh_device.shape)
-    tp = shape[1]
+    spec = R.block_spec(LAYERS[0], LAYERS)  # the weight-cache directory is schedule independent
     blocks = {}
-    for layer in layers:
+    for layer in LAYERS:
         start = time.perf_counter()
-        root, w, marker = _weights(ckpt, layer, expert_dtype, mesh_device.shape, spec)
+        root, w, marker = _weights(ckpt, layer, expert_dtype, shape, spec)
         blocks[layer] = TtV41Block(
             mesh_device,
             C,
@@ -165,19 +162,30 @@ def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monk
         marker.touch()
         del w
         logger.info(f"block {layer} built {time.perf_counter() - start:.1f}s")
+    start = time.perf_counter()
+    tokens = orc.text_tokens(CHUNK)[0]
+    h = ckpt.read(["embed.weight"])["embed.weight"][tokens].to(torch.bfloat16).float()  # [CHUNK, hidden]
+    x = _pack(h[:, None, :].repeat(1, C.HC_MULT, 1), shape[1])
+    x0 = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(2, 3)),
+    )
+    pre0 = initial_pre_mix(mesh_device, C, CHUNK)
+    logger.info(f"text input ({CHUNK} tokens) built {time.perf_counter() - start:.1f}s")
+    fresh = lambda: V41PrefillState(mesh_device, C, CHUNK, CHUNK, list(LAYERS), kv_format=MlaKvCacheFormat.BF16_RM)
+    return blocks, x0, pre0, fresh
 
-    def to_device(t, dims):
-        return ttnn.from_torch(
-            t,
-            device=mesh_device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=dims),
-        )
 
-    x0 = to_device(_pack(R.tile_rows(rec["x_in"].float()), tp), (2, 3))
-    pre0 = to_device(R.tile_rows(rec["pre_in"].float())[None, None], (2, None))
-    fresh = lambda: V41PrefillState(mesh_device, C, CHUNK, CHUNK, list(layers), kv_format=MlaKvCacheFormat.BF16_RM)
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("expert_dtype", list(EXPERT_DTYPES))
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_v41_block_perf(mesh_device, device_params, expert_dtype):
+    layers = LAYERS
+    shape = tuple(mesh_device.shape)
+    blocks, x0, pre0, fresh = text_stack(mesh_device, expert_dtype)
 
     def stack(state, per_layer_ms=None, inputs=None):
         x, pre = x0, pre0
@@ -226,16 +234,10 @@ def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monk
     inputs = {}
     state = fresh()
     stack(state, inputs=inputs)
-    stager = HostTableStager(monkeypatch)
     traced_ms = {}
     for layer in layers:
         x, pre = inputs[layer]
-        stager.calls = []
-        stager.mode = "record"
-        blocks[layer](x, pre, state, CHUNK)
-        stager.mode = "off"
-        stager.stage()
-        trace, _ = stager.capture(mesh_device, lambda: blocks[layer](x, pre, state, CHUNK), [blocks[layer].ffn.moe])
+        trace, _ = capture(mesh_device, lambda: blocks[layer](x, pre, state, CHUNK), [blocks[layer].ffn])
         trace.replay()
         start = time.perf_counter()
         for _ in range(TIMED_ITERS):
