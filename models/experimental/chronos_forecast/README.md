@@ -47,6 +47,10 @@ embeddings, 12-layer encoder, and output head on device, specializes group
 attention when every series has a unique group ID, and refreshes fixed input
 slots between replays.
 
+[optimizations.md](optimizations.md) logs every optimization on the branch,
+ranked by single-chip time saved, with code links, the hardware limit each one
+addresses, and how data-parallel scaling holds up.
+
 Accuracy and lifecycle:
 
 ```bash
@@ -129,6 +133,9 @@ The changes since `86be1507afa`:
 - Model-local `generic_op` kernels in `ops/`: RoPE, a bank-local residual add,
   the QKV head split fused with RoPE, and an RMSNorm that writes bfloat8_b.
 - The input embedding and the output head run inside the L1 chunks.
+
+See [optimizations.md](optimizations.md) for each change's measured saving and
+code references.
 
 On 4 chips, replay is 4.36× one chip at the full batch. A chip holding 256
 series is slightly more efficient per series than one holding 1024; against a
