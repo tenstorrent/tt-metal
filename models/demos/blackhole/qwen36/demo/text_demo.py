@@ -215,7 +215,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         # 128<T<=256 → grouped single-pass at B=2 groups (batched-GDN L1 ceiling for bucket 256).
         pytest.param(256, 50, True, 8, 1, id="batched_256_b8"),
         pytest.param(256, 50, True, 32, 1, id="batched_256_b32"),
-        # T>256 → prefill_chunked_peruser (per-user; GDN can't batch large chunks).
+        # T>256 → prefill_chunked_peruser (per-user; G DN can't batch large chunks).
         pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
         pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
         # B=8 long-context ladder. Paged KV scales as B x ISL (~1 GB/device at 8k to ~8 GB at
