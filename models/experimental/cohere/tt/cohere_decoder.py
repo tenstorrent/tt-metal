@@ -167,6 +167,16 @@ class CohereDecoderLayer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # Match the stock TransformerBlock (models/tt_transformers/tt/decoder.py:341-346).
+        # The h_attn reshape above hands attention a [B, 1, S_per_user, H] tensor; stock
+        # then collapses a residual that still carries the batch axis back to the packed
+        # layout so both addends agree. It uses the batch_size argument rather than
+        # inferring from shape[-3] because for a [32, 1, S, H] residual shape[-3] is 1, not
+        # 32, and it applies only in prefill with batched prefill (decode keeps the
+        # per-user sequence axis). Without this mirror, batched prefill shape-mismatches at
+        # the first ttnn.add below.
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         mlp_out = self.feed_forward.forward(h_mlp, mode)
