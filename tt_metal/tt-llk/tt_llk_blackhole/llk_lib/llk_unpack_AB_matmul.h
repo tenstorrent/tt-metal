@@ -286,7 +286,7 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  * unpacked (the UNPACK_SYNC semaphore counts them), write the row's two base addresses into the free config context
  * from the RISC, post the token, hold the UNPACRs until the writes have landed, unpack the held tile, stream the other
  * operand through the MOP, take the token back and switch context. The semaphore is read before the row's address
- * arithmetic so that the read's latency overlaps it, and a row of one streamed tile issues its MOP as an immediate.
+ * arithmetic so that the read's latency overlaps it.
  * The streamed tile stride (SCRATCH_SEC0), which the replay's CFGSHIFTMASK adds after every tile, is copied from the
  * tile size GPRs when it differs from the one programmed, so a data format reconfig between calls is honoured
  * without a re-init.
@@ -400,22 +400,10 @@ inline void _llk_unpack_AB_matmul_(
         }
 
         // Stream the other operand; a set zmask bit selects the replay copy of context 1. The mask covers the 16
-        // iterations a full-sync block can have.
-        if (rut_dim == 1)
-        {
-            if (unp_cfg_context == 0)
-            {
-                TTI_MOP(0, 0, 0);
-            }
-            else
-            {
-                TTI_MOP(0, 0, 0xffff);
-            }
-        }
-        else
-        {
-            TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
-        }
+        // iterations a full-sync block can have, and is formed without a branch: the context alternates every row,
+        // which a branch predictor gets wrong every time.
+        const std::uint32_t zmask = (0u - (unp_cfg_context & 1u)) & 0xffffu;
+        TT_MOP(0, rut_dim - 1, zmask);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);

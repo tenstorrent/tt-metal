@@ -861,6 +861,9 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
+    // Read the row MOP's programmed parameters first so that the load's latency overlaps the arithmetic below.
+    const std::uint32_t programmed_row_key = matmul_mop_row_key;
+
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -876,13 +879,13 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             // init's, as for the tile MOP.
             const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS;
             const std::uint32_t row_key          = matmul_row_key(rut_dim, dest_tile_stride);
-            if (row_key != matmul_mop_row_key)
+            if (row_key != programmed_row_key)
             {
-                if (dest_tile_stride != (matmul_mop_row_key & 0xFFFF))
+                if (dest_tile_stride != (programmed_row_key & 0xFFFF))
                 {
                     matmul_set_row_tile_end_dest(dest_tile_stride);
                 }
-                if (rut_dim != (matmul_mop_row_key >> 16))
+                if (rut_dim != (programmed_row_key >> 16))
                 {
                     // The MOP expander reads its configuration while it expands: wait for the previous MOP to finish.
                     mop_sync();
