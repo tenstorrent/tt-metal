@@ -50,7 +50,8 @@
 // output (with interleaved inputs) fixes the family (and with a shard spec, the grid and per-core sizes), and
 // what remains free (in0_block_w, output blocks, subblocks) is chosen as above within the layout's constraints.
 // A width- or block-sharded A's K blocks are whole shard columns when they fit, multicast in place.
-// Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
+// Problems it has no config for return nullopt with the reason; matmul reports them as an error (they are inputs
+// the factories can't run).
 namespace ttnn::operations::matmul::auto_config {
 
 // Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D (1D
