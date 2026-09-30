@@ -460,12 +460,15 @@ def assert_against_contract(
     """Resolve *op*'s declared contract for the variant that ran, and gate on it.
 
     The binary and ternary drivers' shared last line, so that the resolution and the
-    caveat below are written once. The numbers live beside the op in the registry, and
+    caveats below are written once. The numbers live beside the op in the registry, and
     an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
     table edit rather than a driver edit.
 
-    Tolerance arm only (``tolerance_kwargs``): a step budget is measured by the
-    exhaustive unary sweep, which is the one caller that gates on ``max_ulp``.
+    The whole contract, step budget included: every binary and ternary row was measured
+    over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
+    it describes the stimuli it gates. Ranked with fp16 subnormal outputs flushed, as
+    the exhaustive sweep ranks them: a near-cancelling ``a - b`` lands in the band the
+    golden keeps and the pack does not, 140 steps from a correct kernel.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
@@ -487,7 +490,7 @@ def assert_against_contract(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=True),
     ):
         raise AssertionError("Assert against golden failed")
 
