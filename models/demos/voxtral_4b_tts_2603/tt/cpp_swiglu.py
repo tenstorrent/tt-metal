@@ -21,7 +21,7 @@ bank-sharded weight with 12 ADJACENT cores per bank was slower (259 us), spread 
 fixed it (205 us); 3 wide K blocks cost a 70 us pipeline fill/tail (258 us); 12 blocks of 8, 4-deep,
 RT x 2 subblocks gave 187 us. Compute still trails the weight stream by ~26 us.
 
-Off with VOXTRAL_CPP_SWIGLU=0. generic_op hashes the runtime-arg COUNT, not the values, so
+Off unless VOXTRAL_CPP_SWIGLU=1: its gate/up weight is bf8_b and its output bf16, below the acoustic stage's accuracy bar. generic_op hashes the runtime-arg COUNT, not the values, so
 `custom_program_hash` carries the buffer addresses (voxtral_mini's cpp_matmul plumbing).
 """
 
@@ -60,7 +60,7 @@ def _log(msg):
 
 
 def enabled() -> bool:
-    return os.environ.get("VOXTRAL_CPP_SWIGLU", "1") == "1"
+    return os.environ.get("VOXTRAL_CPP_SWIGLU", "0") == "1"
 
 
 def _accessor_args(tensor):
@@ -195,8 +195,7 @@ class _Plan:
             ),
         ]
         cfg = kernels[2].config
-        # LoFi: the weight (srcA) is bf4_b, whose 3-bit mantissa already fits the phase LoFi multiplies.
-        cfg.math_fidelity = ttnn.MathFidelity.LoFi
+        cfg.math_fidelity = ttnn.MathFidelity.HiFi2
         cfg.fp32_dest_acc_en = True
         cfg.math_approx_mode = False
         cfg.dst_full_sync_en = True

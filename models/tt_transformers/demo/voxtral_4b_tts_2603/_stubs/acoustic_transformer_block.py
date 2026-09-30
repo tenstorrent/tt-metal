@@ -33,6 +33,7 @@ import math
 import torch
 
 import ttnn
+
 from models.demos.voxtral_4b_tts_2603.tt import cpp_down, cpp_swiglu, ttl_down
 
 _TILE = 32
@@ -43,7 +44,7 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 
 # Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 _TILE_BYTES = {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 _L1_BUDGET = 1_100_000
@@ -260,6 +261,10 @@ _NORM_SCALE = {}
 
 def _norm_scale(device, dim, eps):
     """The factor that makes `_sharded_rms_norm` exact: `exact / measured` on a row of ones."""
+    # Accuracy: the block-sharded ttnn.rms_norm reduces through a bf16 scaler (~1e-3 relative error per
+    # value, not only the constant factor measured here), which the 21-level acoustic grid cannot absorb.
+    # None routes every in-block norm through the exact spelled-out _rms_norm.
+    return None
     key = (id(device), dim, eps)
     if key not in _NORM_SCALE:
         ones = _from_torch(torch.ones(1, 1, _TILE, dim), device, dtype=ttnn.float32)
@@ -402,13 +407,13 @@ def _compact_attention(h, wqkv, wo, n_heads, n_kv_heads, scale, tokens, readout=
     rows = int(h.shape[-2])
     repeats = n_heads // n_kv_heads
     # bf16 q/k/v for the head split; the scores come back float32 for the softmax.
-    # 8-tile K blocks: 12 multicast rounds pipeline the weight stream better than 3 wide ones.
+    # Widest K blocks: the bf16 output is also the L1 partial-sum format, so fewer blocks round fewer times.
     qkv = _lin(
         h,
         wqkv,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         compute_kernel_config=_TALL_COMPUTE,
-        program_config=_short_cfg(h, wqkv, rows, ttnn.bfloat16, k_block=8),
+        program_config=_short_cfg(h, wqkv, rows, ttnn.float32),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     q, k, v = _split_heads(qkv, n_heads, n_kv_heads)
@@ -428,12 +433,12 @@ def _compact_attention(h, wqkv, wo, n_heads, n_kv_heads, scale, tokens, readout=
     weights = ttnn.divide(weights, ttnn.sum(weights, dim=-1, keepdim=True))
 
     # bf16 context: the head merge moves it and o_proj multicasts it whole.
-    out = ttnn.reshape(_bmm(weights, v, per_core_m=1, dtype=ttnn.bfloat16), [1, n_heads, q_rows, head_dim])
+    out = ttnn.reshape(_bmm(weights, v, per_core_m=1, dtype=ttnn.float32), [1, n_heads, q_rows, head_dim])
     # bf16 into L1: the residual add is its only reader, and fp32 in DRAM doubles the bytes it writes.
     return _lin(
         _concat_heads(out),
         wo,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         compute_kernel_config=_TALL_COMPUTE,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
@@ -502,19 +507,18 @@ def build(device, torch_module):
         .mul(g_attn_t)
         .contiguous(),
         device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
-    # o_proj is weight-stream bound at 96 rows; bf4_b is 576 B a tile against bf8_b's 1088.
-    wo = _from_torch(attn.wo.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat4_b)
+    wo = _from_torch(attn.wo.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w1 = _from_torch(
-        (ff.w1.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(), device, dtype=ttnn.bfloat8_b
+        (ff.w1.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(), device, dtype=ttnn.bfloat16
     )
     # The down projection is DRAM-bound at 1024 rows; bf8_b halves the weight it streams.
-    w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat4_b)
+    w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w2_ttl = ttl_down.weight(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, _from_torch)
     w2_cpp = cpp_down.shard(ff.w2.weight.detach().transpose(0, 1).contiguous(), device)
     w3 = _from_torch(
-        (ff.w3.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(), device, dtype=ttnn.bfloat8_b
+        (ff.w3.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(), device, dtype=ttnn.bfloat16
     )
     w13 = cpp_swiglu.fuse(
         (ff.w1.weight.detach().float().transpose(0, 1) * g_ffn_t).contiguous(),
@@ -535,7 +539,7 @@ def build(device, torch_module):
             h4 = ttnn.typecast(h4, ttnn.float32)
 
         # qkv's input lands in L1, not DRAM: it is read once, by the next op.
-        xn = _block_norm(h4, eps, norm_scale, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xn = _block_norm(h4, eps, norm_scale, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         if tokens:
             attn_out = _compact_attention(xn, wqkv, wo, n_heads, n_kv_heads, None, tokens, readout)
         else:
@@ -545,22 +549,22 @@ def build(device, torch_module):
             h4 = ttnn.slice(h4, [0, 0, 0, 0], [batch, 1, seq, dim])
         h4 = ttnn.add(h4, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        hn = _block_norm(h4, eps, norm_scale, ttnn.bfloat16, memory_config=_FFN_IN_MEM if w13 is not None else None)
+        hn = _block_norm(h4, eps, norm_scale, ttnn.float32, memory_config=_FFN_IN_MEM if w13 is not None else None)
         if cpp_swiglu.serves(hn, w13):
             gated = cpp_swiglu.apply(hn, w13)
         else:
             gate = _lin(
-                hn, w1, dtype=ttnn.bfloat16, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
+                hn, w1, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             up = _lin(
-                hn, w3, dtype=ttnn.bfloat16, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
+                hn, w3, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             gated = ttnn.multiply(
                 gate,
                 up,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
                 # bf16: the down projection multicasts it whole to every core.
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         if cpp_down.serves(gated, w2_cpp):

@@ -22,6 +22,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+
 from models.demos.voxtral_4b_tts_2603.tt import cpp_down, cpp_swiglu, ttl_down
 
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
@@ -31,7 +32,7 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 
 # Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 _TILE_BYTES = {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 _L1_BUDGET = 1_100_000
@@ -176,12 +177,12 @@ def build(device, torch_module):
     dim = int(ff.w1.in_features)
     out_dim = int(ff.w2.out_features)
 
-    w1 = _from_torch(ff.w1.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat8_b)
+    w1 = _from_torch(ff.w1.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     # The down projection is DRAM-bound at 1024 rows; bf8_b halves the weight it streams.
-    w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat4_b)
+    w2 = _from_torch(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w2_ttl = ttl_down.weight(ff.w2.weight.detach().transpose(0, 1).contiguous(), device, _from_torch)
     w2_cpp = cpp_down.shard(ff.w2.weight.detach().transpose(0, 1).contiguous(), device)
-    w3 = _from_torch(ff.w3.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat8_b)
+    w3 = _from_torch(ff.w3.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     w13 = cpp_swiglu.fuse(ff.w1.weight.detach().transpose(0, 1), ff.w3.weight.detach().transpose(0, 1), device)
     bias = None
     if ff.w2.bias is not None:
@@ -200,13 +201,13 @@ def build(device, torch_module):
             if cpp_swiglu.serves(h, w13)
             else ttnn.multiply(
                 _lin(
-                    h, w1, dtype=ttnn.bfloat16, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
+                    h, w1, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
                 ),
                 _lin(
-                    h, w3, dtype=ttnn.bfloat16, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
+                    h, w3, dtype=ttnn.float32, compute_kernel_config=_TALL_COMPUTE, memory_config=ttnn.L1_MEMORY_CONFIG
                 ),
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         )

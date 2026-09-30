@@ -61,6 +61,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+
 from models.demos.voxtral_4b_tts_2603.tt import common
 
 # One tile holds the whole sequence: 3 real tokens + 29 pad rows.
@@ -92,7 +93,7 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 
 # Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 _TILE_BYTES = {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 _L1_BUDGET = 1_100_000
@@ -271,12 +272,12 @@ def _composed_block(device, torch_block, layer_id, counter):
 
     def run(h, attn_mask, tokens=None, readout=False):
         # qkv's input lands in L1, not DRAM: it is read once, by the next op.
-        xn = _rms_norm(h, g_attn, eps, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xn = _rms_norm(h, g_attn, eps, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         a = attn(xn, attn_mask=attn_mask, tokens=tokens, readout=readout)
         if tokens and readout:
             h = ttnn.slice(h, [0, 0, 0, 0], [1, 1, int(h.shape[-2]) // tokens, int(h.shape[-1])])
         h = ttnn.add(h, a, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hn = _rms_norm(h, g_ffn, eps, dtype=ttnn.bfloat16)
+        hn = _rms_norm(h, g_ffn, eps, dtype=ttnn.float32)
         return ttnn.add(h, ff(hn), memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return AcousticBlock(layer_id, "composed", run, [_ATTN_STUB, _FF_STUB])

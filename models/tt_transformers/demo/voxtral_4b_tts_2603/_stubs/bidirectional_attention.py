@@ -38,6 +38,7 @@ import torch
 
 import ttnn
 
+
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
@@ -45,7 +46,7 @@ _COMPUTE = ttnn.WormholeComputeKernelConfig(
 
 # Tall (>= 8 tile rows) linears are compute-bound, so they run one fidelity rung below HiFi4.
 _TALL_COMPUTE = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 _TILE_BYTES = {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 _L1_BUDGET = 1_100_000
@@ -295,13 +296,13 @@ def _compact_attention(h, wqkv, wo, n_heads, n_kv_heads, scale, tokens, readout=
     rows = int(h.shape[-2])
     repeats = n_heads // n_kv_heads
     # bf16 q/k/v for the head split; the scores come back float32 for the softmax.
-    # 8-tile K blocks: 12 multicast rounds pipeline the weight stream better than 3 wide ones.
+    # Widest K blocks: the bf16 output is also the L1 partial-sum format, so fewer blocks round fewer times.
     qkv = _lin(
         h,
         wqkv,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         compute_kernel_config=_TALL_COMPUTE,
-        program_config=_short_cfg(h, wqkv, rows, ttnn.bfloat16, k_block=8),
+        program_config=_short_cfg(h, wqkv, rows, ttnn.float32),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     q, k, v = _split_heads(qkv, n_heads, n_kv_heads)
@@ -321,12 +322,12 @@ def _compact_attention(h, wqkv, wo, n_heads, n_kv_heads, scale, tokens, readout=
     weights = ttnn.divide(weights, ttnn.sum(weights, dim=-1, keepdim=True))
 
     # bf16 context: the head merge moves it and o_proj multicasts it whole.
-    out = ttnn.reshape(_bmm(weights, v, per_core_m=1, dtype=ttnn.bfloat16), [1, n_heads, q_rows, head_dim])
+    out = ttnn.reshape(_bmm(weights, v, per_core_m=1, dtype=ttnn.float32), [1, n_heads, q_rows, head_dim])
     # bf16 into L1: the residual add is its only reader, and fp32 in DRAM doubles the bytes it writes.
     return _lin(
         _concat_heads(out),
         wo,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         compute_kernel_config=_TALL_COMPUTE,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
@@ -376,10 +377,9 @@ def build(device, torch_module):
             dim=-1,
         ).contiguous(),
         device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
-    # o_proj is weight-stream bound at 96 rows; bf4_b is 576 B a tile against bf8_b's 1088.
-    wo = _from_torch(attn.wo.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat4_b)
+    wo = _from_torch(attn.wo.weight.detach().transpose(0, 1).contiguous(), device, dtype=ttnn.bfloat16)
     for rows in _COMPACT_ROWS:
         _compact_mask(device, rows, 3, n_heads // n_kv_heads)
         _compact_mask(device, rows, 3, n_heads // n_kv_heads, rows // 3)
