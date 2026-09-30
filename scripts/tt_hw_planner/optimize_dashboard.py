@@ -228,6 +228,27 @@ def _metric_now(metric, ledger: dict):
     return out
 
 
+def _stage_starts(stages: list, ledger: dict) -> None:
+    """Give each stage its START: its share of the BEFORE end-to-end reading, as the ledger pinned it.
+
+    `baseline_ms` used to come from the gate's best-so-far file, which every win overwrites, so a
+    stage card read baseline == current and no gain -- vae_decode "722 -> 722" after going from
+    ~3464 ms. With a pin, `start_ms` is that pin and `baseline_ms` follows it; without one (a run
+    from before the pin existed) nothing changes."""
+    from models.experimental.perf_automation.cc_optimize import measurements as _m
+
+    pins = {
+        str(r.get("depth") or "").strip().lower(): r["value_ms"]
+        for r in (ledger or {}).get(_m.KIND_STAGE_E2E) or []
+        if r.get("phase") == _m.PHASE_BEFORE and isinstance(r.get("value_ms"), (int, float))
+    }
+    for st in stages or []:
+        v = pins.get(str(st.get("name") or "").strip().lower())
+        if v is not None:
+            st["start_ms"] = v
+            st["baseline_ms"] = v
+
+
 def _fullpipe_baseline(ledger: dict):
     """The end-to-end (all layers) reading the run started from, as the ledger pinned it, or None."""
     from models.experimental.perf_automation.cc_optimize import measurements as _m
@@ -533,6 +554,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
                 ledger.setdefault(row["kind"], []).append(row)
 
     metric = _metric_now(state.get("metric"), ledger)
+    _stage_starts(stages, ledger)
 
     # Throughput only when the run itself declared a per-token unit (the full-pipeline baseline's
     # "unit" field). Current comes from the ledger's committed after-rows — earliest-reading-wins

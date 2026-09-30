@@ -112,6 +112,12 @@ KIND_MATMUL_PARAMS = "matmul_params"
 # prefill chunk that changes size would move the ceiling under the measurement chasing it.
 KIND_STAGE_TOKENS = "stage_tokens"
 
+# EACH STAGE'S SHARE OF THE BEFORE END-TO-END READING (depth = stage). The whole-model BEFORE is pinned
+# as one number; its per-stage split was only ever held in the gate's best-so-far file, which every
+# win overwrites -- so a stage's own starting time was lost the moment it improved, and a stage whose
+# biggest win came first (Qwen-Image-Edit vision_encode, ~63.8 s -> 22.8 s) had no "before" anywhere.
+KIND_STAGE_E2E = "stage_e2e"
+
 # THE TENSOR-PARALLEL DEGREE the run's own marker reported (trace_replay: the pipeline's stated split,
 # else the mesh). Every ceiling divides a unit's bytes and FLOPs by it; pinned so a later round cannot
 # change the divisor under a measurement.

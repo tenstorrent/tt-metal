@@ -444,14 +444,17 @@ function historyChart(S, stage) {
   const goal = (sameQuantity && m.target != null) ? yOf(m.target) : null;
   // The best line: the engine's banked best where one exists, otherwise the running minimum of the
   // KEPT readings -- only a kept attempt changes what the model is, so only it may move the line.
-  let runMin = null;
+  // It STARTS from the stage's pinned start (its share of the BEFORE end-to-end reading) when the run
+  // recorded one, so a stage whose big win came first shows that drop instead of starting after it.
+  const start = ser.stage ? ((S.stages || []).find(s => s.name === ser.stage) || {}).start_ms : null;
+  let runMin = (!ser.best && start != null) ? start : null;
   const bestAt = at.map(a => {
     if (ser.best) return yOf(ser.best(a));
     const v = ser.value(a);
     if (v != null && a.status === "kept" && (runMin == null || v < runMin)) runMin = v;
     return yOf(runMin);
   });
-  const bests = bestAt.filter(v => v != null);
+  const bests = bestAt.filter(v => v != null).concat(!ser.best && start != null ? [yOf(start)] : []);
   const all = measured.map(a => yOf(ser.value(a))).concat(bests).concat(goal != null ? [goal] : []);
   let yMin = Math.min(...all), yMax = Math.max(...all);
   const pad = (yMax - yMin || Math.abs(yMax) || 1) * 0.12;
@@ -475,6 +478,7 @@ function historyChart(S, stage) {
   // best only ever improves, and an ordinary spline would bulge past its own endpoints and draw the
   // best briefly getting worse — a curve claiming something the run never measured.
   const line = [];
+  if (!ser.best && start != null && yOf(start) != null) line.push([X(0), Y(yOf(start))]);  // the run's start
   bestAt.forEach((b, i) => {
     if (b != null) line.push([X(i), Y(b)]);
   });
