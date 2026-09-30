@@ -41,6 +41,7 @@ itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disa
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -69,11 +70,13 @@ from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_positio
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
 from ...layers.audio_ops import weights_variant
-from ...lora.apply import apply_adapter
+from ...lora.apply import apply_entries
+from ...lora.keys import parse_adapter
 from ...lora.promote import promote_to_lora
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.lora_targets_minimax_h3 import (
     is_host_path,
@@ -89,6 +92,7 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
+from .adaln_precompute import MiniMaxH3AdalnLoraFold, MiniMaxH3TwoTime, precompute_adaln_table, request_step_levels
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -149,6 +153,10 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
+
+# Bumped whenever the on-disk AdaLN table's layout or semantics change, so a stale file from an
+# older build cannot be read back and modulate every block slightly wrong at every step.
+_ADALN_TABLE_FORMAT = "levels-v2"
 
 # Read from the two scheduler_config.json files, which hold nothing else.
 # A distillation adapter may be trained against a different video shift and says so in its own
@@ -438,6 +446,19 @@ class MiniMaxH3Pipeline:
         self._lora_handle = None
         # Set when a HyperFlow adapter is loaded through the generic loader; read by the timing gates.
         self._lora_report = None
+        # Parsed once and shared by the device apply and the host AdaLN fold; the published adapters
+        # are 1.5 to 5.3 GB, so a second parse is not free.
+        self._lora_entries: list | None = None
+        self._lora_metadata: dict[str, str] = {}
+        self._lora_digest: str | None = None
+        # The HyperFlow precomputed-AdaLN table for this schedule, host-built once and uploaded. The
+        # `_table` (host dataclass) is kept for the per-step level value-match in `_denoise`.
+        self._adaln_cache: MiniMaxH3AdalnCache | None = None
+        self._adaln_cache_schedule: str | None = None
+        self._adaln_table = None
+        # The AdaLN cache a live denoise trace was captured against. A trace binds the resident tables
+        # by address, so a rebuilt cache (schedule change) must release the traces before replay.
+        self._trace_adaln_cache = None
         # A HyperFlow adapter's sampling contract, parsed once off the file's header. `None` means a
         # plain adapter (or none), which runs at the caller's step count.
         self._hyperflow: MiniMaxH3HyperFlow | None = None
@@ -472,9 +493,9 @@ class MiniMaxH3Pipeline:
         self._tt_cond_audio = StateTensor()
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
+        # The on-device per-slot noise levels; consumed only off the precomputed-AdaLN path (no
+        # HyperFlow contract), where `time_embedder` projects them. HyperFlow bakes them into the table.
         self._tt_timestep = StateTensor()
-        # HyperFlow interval endpoints, one per slot, mirroring `_tt_timestep`; unused off the contract.
-        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
@@ -694,21 +715,54 @@ class MiniMaxH3Pipeline:
             raise FileNotFoundError(f"no {subfolder}/config.json under {self.weights_dir}")
         return {k: v for k, v in json.loads(path.read_text()).items() if not k.startswith("_")}
 
+    @staticmethod
+    def _ranks_agree(local: bool) -> bool:
+        """Whether *every* rank sees `local` as true. A collective; all ranks must call it.
+
+        A per-rank `Path.is_file()` must not gate collective work: a shared cache can disagree between
+        hosts, and a rank taking a cached early return skips collectives the others are still waiting
+        in, which deadlocks rather than fails. Unanimity, so a partially populated cache costs a
+        recompute instead of a hang.
+        """
+        if not ttnn.using_distributed_env():
+            return local
+        return all(ttnn.distributed_context_allgather_int(1 if local else 0))
+
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
-        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here."""
+        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here.
+
+        On the precomputed-AdaLN path the keys the host table replaces (`adaln_proj`, `time_embedder`,
+        `norm_out.linear`) are dropped per shard as it is read and never accumulated into the returned
+        state: the model does not build those modules, so keeping them would fail the strict load, and
+        the 26 GB never reaches the state dict, the device, or the weight cache. The shard still has to
+        be read to get at the keys beside them.
+        """
         from safetensors.torch import load_file
+
+        # Either transformer partition: the keys the precomputed table replaces are the same in both,
+        # so this must not test for the literal "transformer".
+        drop = subfolder.startswith("transformer") and self._precomputed_adaln()
+
+        def keep(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+            if not drop:
+                return state
+            return {
+                k: v
+                for k, v in state.items()
+                if ".adaln_proj." not in k and not k.startswith("time_embedder.") and "norm_out.linear" not in k
+            }
 
         directory = self.weights_dir / subfolder
         index = directory / "diffusion_pytorch_model.safetensors.index.json"
         state: dict[str, torch.Tensor] = {}
         if index.is_file():
             for shard in sorted(set(json.loads(index.read_text())["weight_map"].values())):
-                state.update(load_file(str(directory / shard)))
+                state.update(keep(load_file(str(directory / shard))))
         else:
             single = directory / "diffusion_pytorch_model.safetensors"
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
-            state.update(load_file(str(single)))
+            state.update(keep(load_file(str(single))))
         return state
 
     # ------------------------------------------------------------------ residency
@@ -1204,7 +1258,22 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ denoiser
 
+    def _precomputed_adaln(self) -> bool:
+        """Whether this pipeline runs the host-precomputed AdaLN path.
+
+        A HyperFlow adapter fixes the sigma grid, so its six per-(step, modality) modulation tables
+        are constant per generation: they are projected on host into a resident table and the 13B of
+        `adaln_proj` / `time_embedder` / `norm_out.linear` weights never reach the device. A plain
+        adapter (or none) keeps the on-device projection the Turbo/base path needs.
+        """
+        return self.hyperflow is not None
+
     def _dit_weight_mode(self) -> str:
+        # The precomputed build drops `adaln_proj`, `time_embedder` and `norm_out.linear`, so its
+        # device-weight cache holds a different key set than the resident build and must not share a
+        # cache entry with it -- hence a distinct mode term.
+        if self._precomputed_adaln():
+            return "precomputed_adaln_fsdp" if self.dit_fsdp else "precomputed_adaln"
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
     @property
@@ -1267,6 +1336,9 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
+            # HyperFlow: project every `adaln_proj` on host into a resident table for the adapter's
+            # fixed grid; the 13B of AdaLN weights never reach the device. Off for the Turbo/base path.
+            precomputed_adaln=self._precomputed_adaln(),
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1282,22 +1354,22 @@ class MiniMaxH3Pipeline:
         if self.lora_path is not None and self._lora_handle is None:
             contract = self.hyperflow
             if contract is not None:
-                # HyperFlow's adapter also carries AdaLN, norm and endpoint-embedder deltas that the
-                # Turbo loader does not map. The generic loader routes every entry through the model's
-                # own `_prepare_torch_state` and folds it on device -- `minimax_h3_host_paths` is empty
-                # here because this build holds all of them on device (no precomputed AdaLN).
+                # HyperFlow's adapter carries AdaLN, norm-out and endpoint-embedder deltas on top of
+                # the attention/FF ones. The attention/FF half binds on device through the generic
+                # loader; the AdaLN half targets modules this build never holds (`precomputed_adaln`),
+                # so `is_host` hands those entries back and `_prepare_adaln_cache` folds them into the
+                # host table -- interval blend and all. Parse once here (memoized) so the fold reuses it.
                 promote_to_lora(self._transformer)
-                self._lora_report = apply_adapter(
+                self._lora_report = apply_entries(
                     self._transformer,
-                    str(self.lora_path),
+                    self._lora_adapter_entries(),
                     groups=minimax_h3_fusion_groups(self._transformer),
                     is_host=lambda path: is_host_path(path, minimax_h3_host_paths(self._transformer)),
                     strength=self.lora_strength,
                     name=self.lora_path.name,
                 )
-                self._transformer.two_time_gate = contract.gate
                 self._lora_handle = self._lora_report
-                logger.info(f"HyperFlow two-time gate {contract.gate:g}; {self._lora_report.summary()}")
+                logger.info(f"HyperFlow precomputed AdaLN (gate {contract.gate:g}); {self._lora_report.summary()}")
             else:
                 self._lora_handle = load_h3_adapter_into(
                     self._transformer,
@@ -1306,6 +1378,249 @@ class MiniMaxH3Pipeline:
                     name=self.lora_path.name,
                 )
         return self._transformer
+
+    # ------------------------------------------------------------------ AdaLN precompute
+
+    def _lora_adapter_entries(self) -> list:
+        """Parse the adapter once; the device apply and the host AdaLN fold both read this."""
+        if self._lora_entries is None:
+            entries, stats = parse_adapter(self.lora_path)
+            logger.info(f"adapter {self.lora_path.name}: {stats}")
+            self._lora_entries = entries
+            self._lora_metadata = dict(stats.metadata)
+        return self._lora_entries
+
+    def _lora_identity(self) -> str:
+        """A cache-key term that changes whenever the adapter's effect changes.
+
+        Content-hashed rather than path-keyed: adapters get overwritten in place during a sweep, and a
+        stale AdaLN table modulates every block slightly wrong at every step with nothing downstream
+        able to notice.
+        """
+        if self.lora_path is None:
+            return "lora=none"
+        if self._lora_digest is None:
+            digest = hashlib.sha256()
+            with self.lora_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(16 << 20), b""):
+                    digest.update(chunk)
+            self._lora_digest = digest.hexdigest()[:16]
+        return f"lora={self._lora_digest}@{self.lora_strength:g}"
+
+    def _adaln_host_entries(self) -> list:
+        """The adapter's host half: entries whose target never becomes a device parameter."""
+        return [entry for entry in self._lora_adapter_entries() if is_host_path(entry.path)]
+
+    def _adaln_lora_fold(self):
+        """The base half of the fold, or None when there is no adapter.
+
+        The endpoint embedder's entries are held back for `_adaln_two_time`: they target a module the
+        checkpoint does not have, and folding them onto `time_embedder` here would adapt the base
+        embedder with the endpoint's delta on top of its own.
+        """
+        if self.lora_path is None:
+            return None
+        host = [
+            entry
+            for entry in self._adaln_host_entries()
+            if not entry.path.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX)
+        ]
+        logger.info(f"folding {len(host)} AdaLN adapter entries into the precomputed table")
+        return MiniMaxH3AdalnLoraFold(host, strength=self.lora_strength)
+
+    def _adaln_two_time(self) -> MiniMaxH3TwoTime | None:
+        """The interval-conditioning half of the adapter, or None without a sampling contract."""
+        contract = self.hyperflow
+        if contract is None:
+            return None
+        fold = MiniMaxH3AdalnLoraFold.endpoint(self._adaln_host_entries(), strength=self.lora_strength)
+        if not fold.targets():
+            msg = (
+                f"adapter claims a two-time contract (gate {contract.gate:g}) but carries no "
+                f"`{MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX}*` tensors; the endpoint of every step "
+                "would be embedded with the unadapted base weights"
+            )
+            raise ValueError(msg)
+        return MiniMaxH3TwoTime(gate=contract.gate, weight_hook=fold)
+
+    @staticmethod
+    def _schedule_identity(scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler) -> str:
+        """A cache-key term for the exact grids a table's rows were projected from."""
+        grids = ";".join(
+            ",".join(f"{sigma:.9g}" for sigma in schedule.sigmas.tolist()) for schedule in (scheduler, audio_scheduler)
+        )
+        return f"sigmas=[{grids}]"
+
+    def _adaln_cache_path(self, schedule_identity: str) -> Path:
+        """Disk location for a built table.
+
+        The key must cover everything the rows depend on, because a stale hit is silent: it modulates
+        every block slightly wrong at every step, in the same direction. That is the schedule (both
+        per-modality sigma grids), the conditioning floor, the interval conditioning, the model
+        geometry, the partition, and the checkpoint plus adapter themselves.
+        """
+        cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-adaln"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        contract = self.hyperflow
+        key = "|".join(
+            str(part)
+            for part in (
+                self.weights_dir.resolve(),
+                self.transformer_subfolder,
+                _ADALN_TABLE_FORMAT,
+                schedule_identity,
+                "two_time=none" if contract is None else contract.identity(),
+                MINIMAX_H3_KEYFRAME_NOISE_AUG,
+                # ref2va carries a fourth level (the audio conditioning t = 1.0), so its table has more
+                # rows per step than t2va's and the two must not share a file.
+                self.task,
+                self.transformer_config["num_layers"],
+                self.transformer_config["hidden_size"],
+                self.transformer_config["freq_dim"],
+                self._lora_identity(),
+            )
+        )
+        return cache_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.adaln.pt"
+
+    def _prepare_adaln_cache(
+        self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler
+    ) -> MiniMaxH3AdalnCache:
+        """Host-build (or load) the modulation table for this schedule and upload it.
+
+        A prepare, so it belongs outside every timed row: the build reads the checkpoint's AdaLN
+        weights on host and is paid once per (checkpoint, schedule). Memoized on the schedule identity,
+        which a HyperFlow contract fixes -- so warmup and serving share one cache.
+        """
+        identity = self._schedule_identity(scheduler, audio_scheduler)
+        if self._adaln_cache is not None and self._adaln_cache_schedule == identity:
+            return self._adaln_cache
+
+        contract = self.hyperflow
+        endpoints = (
+            {}
+            if contract is None
+            else {
+                "video_endpoints": contract.endpoints(scheduler.sigmas),
+                "audio_endpoints": contract.endpoints(audio_scheduler.sigmas),
+            }
+        )
+        step_levels = request_step_levels(
+            scheduler.sigmas,
+            audio_scheduler.sigmas,
+            MINIMAX_H3_KEYFRAME_NOISE_AUG,
+            # A fourth level for ref2va only: reference soundtrack rows run at a literal t = 1.0.
+            audio_condition_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP if self.task == "ref2va" else None,
+            **endpoints,
+        )
+
+        path = self._adaln_cache_path(identity)
+        # Unanimous even though both branches are host-only: a rank reading a half-written table
+        # diverges numerically and silently.
+        if self._ranks_agree(path.is_file()):
+            self._host_log(f"AdaLN table from cache: {path}")
+            table = torch.load(path, weights_only=False)
+        else:
+            self._host_log(
+                f"building the AdaLN table on host for {len(step_levels)} forwards from "
+                f"{self.transformer_subfolder}/ (reads the checkpoint)"
+            )
+            t0 = time.time()
+            fold = self._adaln_lora_fold()
+            two_time = self._adaln_two_time()
+            table = precompute_adaln_table(
+                self.weights_dir / self.transformer_subfolder,
+                step_levels,
+                num_layers=self.transformer_config["num_layers"],
+                hidden_size=self.transformer_config["hidden_size"],
+                freq_dim=self.transformer_config["freq_dim"],
+                weight_hook=fold,
+                two_time=two_time,
+            )
+            # Both folds, not just the base one: the endpoint fold is the half with no device
+            # counterpart to fail later, so an unrecognised spelling there is invisible after this.
+            for folded in (fold, None if two_time is None else two_time.weight_hook):
+                unapplied = [] if folded is None else folded.unapplied()
+                if unapplied:
+                    msg = (
+                        f"{len(unapplied)} AdaLN adapter target(s) matched no checkpoint key "
+                        f"({', '.join(unapplied[:5])}); the table would be built from unadapted weights"
+                    )
+                    raise KeyError(msg)
+            self._host_log(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
+            is_distributed = ttnn.using_distributed_env()
+            try:
+                if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                    torch.save(table, path)
+            except OSError as exc:
+                # Warn rather than raise: the table is already in memory, so a failed write costs a
+                # recompute next run. Every rank then misses the cache together, since `_ranks_agree`
+                # reads the same absent file, so the ranks stay consistent.
+                logger.warning(f"could not cache the AdaLN table to {path}: {exc}")
+            finally:
+                if is_distributed:
+                    ttnn.distributed_context_barrier()
+
+        self._adaln_cache = MiniMaxH3AdalnCache(
+            table,
+            mesh_device=self.mesh_device,
+            parallel_config=self.dit_parallel_config,
+            num_layers=self.transformer_config["num_layers"],
+            hidden_size=self.transformer_config["hidden_size"],
+        )
+        self._adaln_cache.assert_covers(len(step_levels))
+        self._adaln_cache_schedule = identity
+        self._adaln_table = table
+        return self._adaln_cache
+
+    def _adaln_slot_rows(
+        self,
+        scheduler: MiniMaxH3Scheduler,
+        audio_scheduler: MiniMaxH3Scheduler,
+        slot_roles: tuple[str, ...],
+    ) -> list[torch.Tensor]:
+        """Per step, the absolute resident-table row of each AdaLN slot, in `slot_roles` order.
+
+        `build_slot_routing` numbers slots in a fixed order; the table numbers each step's levels in
+        `step_levels(step)` order. The two are matched by `(t, r)` **value**, never by position: the
+        distinct level count varies per step (the conditioning floor collides with the video level
+        early in the schedule and separates later), and two modalities can meet at one `t` while aiming
+        at different endpoints. The `(t, r)` a slot carries is built the same way `request_step_levels`
+        builds the table's rows, so the match is exact. `step_offset(step)` then makes the row absolute,
+        which is how the resident table is addressed. A level the table does not carry raises rather
+        than modulating with a neighbour.
+        """
+        table = self._adaln_table
+        cache = self._adaln_cache
+        contract = self.hyperflow
+        video = 1.0 - scheduler.sigmas[:-1].to(torch.float32)
+        audio = 1.0 - audio_scheduler.sigmas[:-1].to(torch.float32)
+        video_r = contract.endpoints(scheduler.sigmas).to(torch.float32).flatten()
+        audio_r = contract.endpoints(audio_scheduler.sigmas).to(torch.float32).flatten()
+        clean = torch.tensor(float(MINIMAX_H3_AUDIO_CONDITION_TIMESTEP), dtype=video.dtype)
+
+        rows_per_step = []
+        for i in range(int(video.numel())):
+            pinned = torch.clamp(video[i], min=float(MINIMAX_H3_KEYFRAME_NOISE_AUG))
+            role_tr = {
+                "video": (video[i], video_r[i]),
+                "audio": (audio[i], audio_r[i]),
+                "condition_video": (pinned, pinned),
+                "condition_audio": (clean, clean),
+            }
+            slot_tr = torch.stack([torch.stack(role_tr[role]) for role in slot_roles])
+            levels = table.step_levels(i)
+            offset = cache.step_offset(i)
+            rows = []
+            for pair in slot_tr:
+                match = (levels == pair).all(dim=-1).nonzero()
+                if match.numel() == 0:
+                    raise IndexError(
+                        f"AdaLN table step {i} has no level {pair.tolist()} for a pinned slot; the "
+                        "table and the loop disagree on the schedule"
+                    )
+                rows.append(offset + int(match[0, 0]))
+            rows_per_step.append(torch.tensor(rows, dtype=torch.long))
+        return rows_per_step
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -2463,6 +2778,25 @@ class MiniMaxH3Pipeline:
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+
+        # HyperFlow: the six per-(step, modality) modulation tables are constant for the whole
+        # generation, so the table is built once on host and left resident; each block gathers from it
+        # by the absolute row `adaln_slot_rows` computes per step. The interval blend is already baked
+        # in, so there is no on-device `temb` or endpoint embedder on this path.
+        adaln_cache = None
+        slot_abs_rows = None
+        if self._precomputed_adaln():
+            adaln_cache = self._prepare_adaln_cache(scheduler, audio_scheduler)
+            transformer.traced_adaln_cache = adaln_cache
+            if adaln_cache is not self._trace_adaln_cache:
+                # A live denoise trace binds the resident tables by address; a rebuilt cache (schedule
+                # change) would replay the old schedule's modulation, so drop every capture and re-warm.
+                self.release_traces()
+                for bucket in self._buckets.values():
+                    bucket.warm = False
+                self._trace_adaln_cache = adaln_cache
+            slot_abs_rows = self._adaln_slot_rows(scheduler, audio_scheduler, slot_roles)
+
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
@@ -2502,8 +2836,12 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
-        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
-        state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
+        # On the precomputed path these are absolute rows into the resident table and change per step
+        # (each carries `step_offset(i)`), so they are updated inside the loop. Off it they address the
+        # step-local slot table the on-device projection produces and are constant across steps.
+        if not self._precomputed_adaln():
+            state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+            state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
         )
@@ -2540,35 +2878,29 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            level_kwargs = {
-                "video_timestep": float(t),
-                "audio_timestep": float(audio_timesteps[i]),
-            }
-            if "condition_video" in slot_roles:
-                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
-            if "condition_audio" in slot_roles:
-                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            levels = slot_levels(slot_roles, **level_kwargs)
-            self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-            )
-
-            endpoint_timestep = None
-            if transformer.two_time_gate != 0.0:
-                # HyperFlow interval conditioning: each target slot integrates towards its step
-                # endpoint r_i = 1 - sigma_{i+1}. Condition slots keep r == t (their `level_kwargs`
-                # value) so their blend term is zero -- they are pinned single-time.
-                endpoint_kwargs = dict(level_kwargs)
-                endpoint_kwargs["video_timestep"] = 1.0 - float(scheduler.sigmas[i + 1])
-                endpoint_kwargs["audio_timestep"] = 1.0 - float(audio_scheduler.sigmas[i + 1])
-                endpoint_levels = slot_levels(slot_roles, **endpoint_kwargs)
-                self._tt_endpoint_timestep.update(
-                    endpoint_levels.reshape(1, 1, -1, 1),
-                    traced=traced,
-                    dtype=ttnn.float32,
-                    device=self.mesh_device,
+            if self._precomputed_adaln():
+                # Absolute rows into the resident table for this step: `step_offset(i)` plus the slot's
+                # own table row. Only these tiny index tensors change per step -- the modulation itself
+                # lives in the resident tables the trace already captured -- which is what keeps the
+                # traced step fast.
+                step_tsi = slot_abs_rows[i][row_slot]
+                state.tsi.update(self._row_indices(step_tsi, rung), traced=traced)
+                state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, step_tsi), rung), traced=traced)
+                timestep_value = None
+            else:
+                level_kwargs = {
+                    "video_timestep": float(t),
+                    "audio_timestep": float(audio_timesteps[i]),
+                }
+                if "condition_video" in slot_roles:
+                    level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
+                if "condition_audio" in slot_roles:
+                    level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+                levels = slot_levels(slot_roles, **level_kwargs)
+                self._tt_timestep.update(
+                    levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
                 )
-                endpoint_timestep = self._tt_endpoint_timestep.value
+                timestep_value = self._tt_timestep.value
 
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
@@ -2576,8 +2908,7 @@ class MiniMaxH3Pipeline:
                 assembly_indices=state.assembly_idx.value,
                 video_out_indices=self._tt_video_out_idx.value,
                 audio_out_indices=self._tt_audio_out_idx.value,
-                timestep=self._tt_timestep.value,
-                endpoint_timestep=endpoint_timestep,
+                timestep=timestep_value,
                 adaln_indices=state.adaln.value,
                 timestep_indices=state.tsi.value,
                 rope_cos=state.rope_cos.value,

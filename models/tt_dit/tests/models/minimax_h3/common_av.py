@@ -502,34 +502,49 @@ def assert_hyperflow_applied(pipeline, *, num_forwards: int):
       transformer builds only for this; a dropped pair means the blend ran against base weights;
     * a zero gate leaves the blend a no-op, so the interval never reaches the modulation.
 
-    On-device build: every target is folded on device, so the report defers nothing to host.
+    Precomputed-AdaLN build: the interval lives in the host table, so the endpoint embedder and the
+    other AdaLN targets are folded on host and land in the report's host half, not on device.
     """
+    from ....pipelines.minimax_h3.adaln_precompute import MiniMaxH3AdalnLoraFold
+
     contract = pipeline.hyperflow
     assert contract is not None, "the pipeline resolved no sampling contract for this adapter"
     assert (
         contract.num_forwards == num_forwards
     ), f"the contract publishes {contract.num_forwards} forwards, not {num_forwards}"
 
-    transformer = pipeline._transformer
-    assert transformer.two_time_gate == contract.gate, (
-        f"the transformer's two-time gate is {transformer.two_time_gate:g}, not the contract's "
-        f"{contract.gate:g}; the interval blend would not run"
+    two_time = pipeline._adaln_two_time()
+    assert two_time is not None, "the pipeline resolved no interval conditioning for this adapter"
+    targets = two_time.weight_hook.targets()
+    assert len(targets) == HYPERFLOW_ENDPOINT_TARGETS, (
+        f"the endpoint embedder covers {targets}, not both of `time_embedder.linear_{{1,2}}.weight`; "
+        "the rest would come from base weights"
     )
-    assert contract.gate != 0.0, "the contract's gate is 0, so the two-time blend is a no-op"
+    assert not any(
+        target.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX) for target in targets
+    ), "the endpoint fold kept the adapter's own spelling, so it will match no checkpoint key"
+
+    table = pipeline._adaln_table
+    assert (
+        table.num_steps == num_forwards
+    ), f"the AdaLN table covers {table.num_steps} forwards but the adapter publishes {num_forwards}"
+
+    moving = ~torch.isclose(table.levels[:, 0], table.levels[:, 1])
+    assert bool(moving.any()), (
+        "every level in the table has `r == t`, so it was built without interval conditioning; "
+        "the two-time adapter is running against single-time modulation"
+    )
+    logger.info(f"two-time table: {int(moving.sum())} of {table.levels.shape[0]} levels carry a non-empty interval")
 
     report = pipeline._lora_report
     assert report is not None, "the transformer was built without a HyperFlow adapter bound"
     logger.info(f"device half: {report.summary()}")
     assert report.bound, "no low-rank adapter was bound to the transformer"
-    assert not report.host, (
-        f"{len(report.host)} adapter entries were deferred to host, but this build folds every " "target on device"
+    assert report.host, (
+        "no adapter entries were deferred to the host AdaLN fold, but this pipeline builds with "
+        "precomputed_adaln -- the two time embedders alone should have landed there"
     )
-    endpoint_bound = [path for path in report.bound if "endpoint_time_embedder" in path]
-    assert len(endpoint_bound) == HYPERFLOW_ENDPOINT_TARGETS, (
-        f"the endpoint embedder bound {endpoint_bound}, not both of "
-        f"`endpoint_time_embedder.linear_{{1,2}}`; the rest would run against base weights"
-    )
-    logger.info(f"endpoint embedder: {endpoint_bound}")
+    logger.info(f"host half: {len(report.host)} entries folded into the AdaLN table")
 
 
 def artifact_dir(name: str) -> Path:
