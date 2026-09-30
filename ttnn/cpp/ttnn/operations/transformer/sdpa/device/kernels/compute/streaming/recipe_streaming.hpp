@@ -563,7 +563,11 @@ void sub_exp_block_bcast_cols(
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
         uint32_t dst_index = 0;
+#ifdef SDPA_KO_SUB
+        for (uint32_t i = 0; i < 0; i++) {
+#else
         for (uint32_t i = 0; i < tiles_per_row; i++) {
+#endif
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
             sub_tiles_bcast_cols_custom(
                 inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index, tiles_per_column);
