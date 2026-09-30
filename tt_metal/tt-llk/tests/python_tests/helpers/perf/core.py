@@ -1019,6 +1019,15 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # A kernel inherits state from the kernel before it: run each kernel once
+        # unrecorded, so no measured kernel follows a kernel of another test.
+        if not TestConfig.TEST_TARGET.run_simulator:
+            for templates, runtimes, run_type in self.run_configs:
+                self._select_run_type(templates, runtimes, run_type)
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,
