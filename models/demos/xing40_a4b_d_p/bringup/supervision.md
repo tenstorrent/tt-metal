@@ -102,3 +102,13 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   logits 0.9991, state 0.9997, top1 0.969, top5 1.0). Paused before L.s56320 and moved the JIT kernel cache off home:
   copied ~/.cache/tt-metal-cache (3.6 G) to /localdev/dnijemcevic/tt-metal-cache; the orchestrator now runs with
   TT_METAL_CACHE=/localdev/dnijemcevic (rtoptions appends tt-metal-cache). Resumed.
+- 17:50-18:40 L.s56320 PASS a53b737c40a (11 x 5120 on device: min layer 0.9923, final 0.9985, logits 0.9990, state
+  0.9969, top1 0.977, top5 1.0). K.1 PASS 3b835fa9a8e (bind_cache option in attention, default unchanged; tt/runners
+  adapter + kv_contract; one registry line in common/prefill/adapter.py; golden only in the contract read-back check):
+  accepted. X.1 PASS 74bd676b7fa: 50k->55k chunk 1735 ms device (attention 1104, experts 256, mHC 303: hc 78, collapse
+  44, residual 181), 203 ms host overhead, chips balanced. Owner: bring in the fused mHC ops branch
+  (dnijemcevic/mhc-bringup-ops): cherry-picked 2de91c2ecc4..1839ded0967 (6 commits, clean), build_metal.sh OK;
+  mhc_pre suites 311 passed 1 skipped, mhc_post 360 passed on this box. Owner asked whether the fused path is a safe
+  GLM default: its branch commit 3682958626d re-ran L.s4096 / s16384 / last / K.1 / O.1 at equal accuracy and 266.8 ->
+  224.4 ms; cherry-picked (917e1747647). For Xing: mhc_post fits with a comb-convention option; mhc_pre needs a split
+  (external all_reduce) entry and Xing's math options (no pre eps, clamp 30, Sinkhorn order): perf picks.
