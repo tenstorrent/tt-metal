@@ -23,6 +23,9 @@ template <int ITERATIONS, std::uint32_t ROW_OFFSET>
 inline void _csa_index_remap_()
 {
     using namespace sfpi;
+    // The body is six SFPU instructions with no data-dependent control, so the loop is unrolled in full: rolled, the
+    // 32 iterations of a tile paid the loop control and the pointer step every iteration, 15 idle cycles per tile.
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; ++d)
     {
         // Input: [device:3 | bank:3 | bank-local row:14].
