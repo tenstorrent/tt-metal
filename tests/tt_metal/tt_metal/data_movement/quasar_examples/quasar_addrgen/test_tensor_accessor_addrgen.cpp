@@ -16,8 +16,10 @@
 // Tensor-side kernels use DFB implicit sync (async_read/async_write<NocOptions::TXN_ID>) by default;
 // a few *_Explicit rows keep the reserve/push/wait/pop path covered.
 //
-// Phase A: every row runs on the SW get_noc_addr path. The rows are the golden for Phase B, which
-// flips eligible layouts onto the HW AddrGen path inside Noc::async_read / async_write.
+// Every NoC transfer address comes from tensor_accessor::transfer_noc_addr (via noc_traits_t), which uses the HW
+// AddrGen for layouts with a recipe on ATT builds and software otherwise. Tensor-side kernels report how each
+// address was produced (TT_TA_ADDRGEN_STATS) and run_case checks that against the layout, so a row can't silently
+// pass on the software path. Without TT_METAL_NOC_ATT every row is software and the rows are the golden.
 //
 // Sized for emu-quasar-2x3 (2 worker Tensix on one row). Rows that need a larger grid or more DRAM
 // banks stay in the suite and GTEST_SKIP with the requirement, so they run unchanged on a larger
@@ -27,8 +29,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
+#include <numeric>
+#include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
@@ -37,6 +43,7 @@
 #include "device_fixture.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/hw/inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
 #include "tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -61,14 +68,97 @@ constexpr auto kWriterKernel =
 constexpr auto kFillKernel =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_fill_dfb.cpp";
 
-// Per-kernel opt-out from the HW AddrGen path. Phase A has no HW path, so this is a no-op until
-// Phase B honors it in the Quasar Noc hooks.
+// Per-kernel opt-out from the HW AddrGen path (api/tensor/transfer_noc_addr.h): the kernel's NoC transfers use the
+// software TensorAccessor addresses.
 constexpr auto kDisableAddrgenDefine = "TT_TA_ADDRGEN_DISABLE";
+// Test instrumentation: each tensor-side kernel counts how its transfer addresses were produced and writes
+// {hw, sw_ineligible, sw_unsupported, seeks, transfers issued, skips} to its report_addr RTA. See TransferStats in
+// transfer_noc_addr.h.
+constexpr auto kAddrgenStatsDefine = "TT_TA_ADDRGEN_STATS";
+constexpr uint32_t kNumStatsWords = 6;
 
 constexpr uint32_t kNumDfbEntries = 4;
 
 enum class KernelShape { ReadOnly, WriteOnly, Copy };
-enum class IterMode : uint32_t { PageIdLoop = 0, PagesIterator = 1 };
+// Must match iter_mode in ta_reader_to_dfb.cpp / ta_writer_from_dfb.cpp.
+// ShardView / ShardPages walk shard by shard (not page-id order), so both sides of a row must use them together:
+// Copy rows only, sharded layouts only. ShardView moves every page slot of every shard, padding included.
+// Strided: page ids 0, 2, 4, ... then 1, 3, 5, ... (a steady stride the hardware skips along, and one jump back).
+enum class IterMode : uint32_t {
+    PageIdLoop = 0,
+    PagesIterator = 1,
+    PageView = 2,
+    Wrapper = 3,
+    ShardView = 4,
+    ShardPages = 5,
+    Strided = 6,
+};
+
+std::string iter_mode_name(IterMode m) {
+    switch (m) {
+        case IterMode::PageIdLoop: return "PageId";
+        case IterMode::PagesIterator: return "Pages";
+        case IterMode::PageView: return "PageView";
+        case IterMode::Wrapper: return "Wrapper";
+        case IterMode::ShardView: return "ShardView";
+        case IterMode::ShardPages: return "ShardPages";
+        case IterMode::Strided: return "Strided";
+    }
+    return "Unknown";
+}
+
+// The HW AddrGen transfer path is compiled in only for ATT builds (qa_hal.cpp defines NOC_ATT_ENABLED iff
+// TT_METAL_NOC_ATT is set); without it every transfer address is software.
+bool att_enabled() { return std::getenv("TT_METAL_NOC_ATT") != nullptr; }
+
+// Bring-up check, on the host: can one BankingConfig walk this device's interleaved `type` banks in page-id order?
+// Needs bank i's ATT selector == bank 0's + i and no per-bank offset (see interleaved_walkable in
+// tensor_accessor_addrgen.h). The device assumes yes; kernels for a device where it's no are built with
+// TT_TA_ADDRGEN_INTERLEAVED_{DRAM,L1}_SW (see make_kernel). Only the map this suite targets is known here.
+bool interleaved_banks_walkable(distributed::MeshDevice& device, BufferType type) {
+    const char* map_name = std::getenv("TT_METAL_NOC_ATT");
+    if (map_name == nullptr || std::string_view(map_name) != "quasar_aether_2x3") {
+        return false;
+    }
+    const noc_att::MapData& map = quasar_aether_2x3_att_config::MAP;
+    const auto& allocator = *device.allocator();
+    std::optional<uint32_t> first;
+    for (uint32_t bank = 0; bank < allocator.get_num_banks(type); ++bank) {
+        uint32_t selector = 0;
+        if (type == BufferType::DRAM) {
+            if (bank >= map.dram_selectors.size()) {
+                return false;
+            }
+            selector = map.dram_selectors[bank];
+        } else {
+            const CoreCoord core = device.worker_core_from_logical_core(allocator.get_logical_core_from_bank_id(bank));
+            const noc_att::ResolvedTile tile = noc_att::resolve(map, noc_att::Address::worker(core.x, core.y, 0));
+            if (!tile.valid) {
+                return false;
+            }
+            selector = tile.selector;
+        }
+        if (!first) {
+            first = selector;
+        }
+        if (selector != *first + bank || allocator.get_bank_offset(type, bank) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Defines that route interleaved transfers to software on a device whose banks the recipe can't walk.
+std::map<std::string, std::string> addrgen_bringup_defines(distributed::MeshDevice& device) {
+    std::map<std::string, std::string> defines;
+    if (!interleaved_banks_walkable(device, BufferType::DRAM)) {
+        defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_DRAM_SW", "1");
+    }
+    if (!interleaved_banks_walkable(device, BufferType::L1)) {
+        defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
+    }
+    return defines;
+}
 
 // Row-major UINT32 tensors throughout: one page is one row (interleaved / HEIGHT) or one
 // shard-width row segment (WIDTH / BLOCK), and the host vector is in logical page order.
@@ -278,10 +368,82 @@ m2::KernelSpec make_kernel(
             {"iter_mode", static_cast<uint32_t>(*iter_mode)}, {"implicit_sync", implicit_sync ? 1u : 0u}};
     }
     kernel.runtime_arg_schema = {.runtime_arg_names = {"start_page", "num_pages"}};
+    if (tensor_accessor) {
+        kernel.runtime_arg_schema.runtime_arg_names.push_back("report_addr");
+        kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    }
     if (disable_addrgen) {
         kernel.compiler_options.defines.emplace(kDisableAddrgenDefine, "1");
     }
     return kernel;
+}
+
+// Layouts with a hardware AddrGen recipe (tt_addrgen::has_hw_recipe in tensor_accessor_addrgen.h): every
+// TensorAccessor layout -- interleaved, and sharded of any rank / distribution / buffer type.
+bool has_hw_recipe(const LayoutCase& /*lc*/) { return true; }
+
+// Single-page L1 buffer. Interleaved allocation reserves the same range in every L1 bank, so its address is
+// usable on any worker core, including the program's node (0,0).
+std::shared_ptr<distributed::MeshBuffer> make_l1_region(distributed::MeshDevice& device, uint32_t size_bytes) {
+    distributed::DeviceLocalBufferConfig local{.page_size = size_bytes, .buffer_type = BufferType::L1};
+    distributed::ReplicatedBufferConfig replicated{.size = size_bytes};
+    return distributed::MeshBuffer::create(replicated, local, &device);
+}
+
+// Checks one tensor-side kernel's {hw, sw_ineligible, sw_unsupported, seeks, transfers, skips} report.
+void expect_transfer_stats(
+    const std::string& kernel,
+    const std::vector<uint32_t>& stats,
+    const LayoutCase& lc,
+    uint32_t pages,
+    IterMode iter_mode,
+    bool addrgen_allowed,
+    bool interleaved_walkable) {
+    ASSERT_EQ(stats.size(), static_cast<size_t>(kNumStatsWords));
+    ASSERT_NE(stats[0], 0xDEADBEEFu) << kernel << " never wrote its transfer stats";
+    const uint32_t hw = stats[0];
+    const uint32_t ineligible = stats[1];
+    const uint32_t unsupported = stats[2];
+    const uint32_t seeks = stats[3];
+    const uint32_t transfers = stats[4];
+    const uint32_t skips = stats[5];
+    const std::string counts = fmt::format(
+        "{}: hw {} ({} seeks, {} skips), sw_ineligible {}, sw_unsupported {} of {} transfers",
+        kernel,
+        hw,
+        seeks,
+        skips,
+        ineligible,
+        unsupported,
+        transfers);
+    log_info(tt::LogTest, "{}", counts);
+    // ShardView also moves the padding slots of edge shards; every other mode moves each logical page once.
+    if (iter_mode == IterMode::ShardView) {
+        EXPECT_GE(transfers, pages) << counts;
+    } else {
+        EXPECT_EQ(transfers, pages) << counts;
+    }
+    pages = transfers;
+    ASSERT_EQ(hw + ineligible + unsupported, pages) << counts << " -- some transfer bypassed transfer_noc_addr";
+    if (!addrgen_allowed || !att_enabled() || !has_hw_recipe(lc)) {
+        EXPECT_EQ(unsupported, pages) << counts << " -- expected the software path only";
+        return;
+    }
+    EXPECT_EQ(unsupported, 0u) << counts << " -- layout has a HW recipe but the transfer path didn't try it";
+    // Walkability is a property of the device, so a kernel is all-HW or all-fallback, never mixed.
+    EXPECT_TRUE(hw == pages || ineligible == pages) << counts;
+    EXPECT_LE(seeks, hw) << counts;
+    EXPECT_LE(skips, hw) << counts;
+    if (hw > 0) {
+        EXPECT_GE(seeks, 1u) << counts << " -- a walk must be programmed before its first pop";
+    }
+    // Only the interleaved recipe depends on the device's bank tables (host-checked, see interleaved_banks_walkable);
+    // sharded layouts always have a recipe.
+    if (lc.memory_layout == TensorMemoryLayout::INTERLEAVED && !interleaved_walkable) {
+        EXPECT_EQ(ineligible, pages) << counts << " -- banks not walkable: expected the software fallback";
+    } else {
+        EXPECT_EQ(hw, pages) << counts << " -- expected every transfer address from the HW AddrGen";
+    }
 }
 
 void run_case(
@@ -332,6 +494,17 @@ void run_case(
         implicit_sync,
         /*disable_addrgen=*/shape == KernelShape::ReadOnly);
 
+    // Bring-up: interleaved banks this device can't walk go to software (host-checked; the device assumes walkable).
+    const auto bringup_defines = addrgen_bringup_defines(device);
+    for (m2::KernelSpec* kernel : {&producer, &consumer}) {
+        if (kernel->compiler_options.defines.contains(kAddrgenStatsDefine)) {
+            for (const auto& [name, value] : bringup_defines) {
+                kernel->compiler_options.defines.emplace(name, value);
+            }
+        }
+    }
+    const bool walkable = interleaved_banks_walkable(device, lc.buffer_type);
+
     auto dfb = m2::test_helpers::MakeMinimalDFB("staging", page_size, kNumDfbEntries);
     dfb.data_format_metadata = to_data_format(lc.dtype);
 
@@ -348,11 +521,25 @@ void run_case(
 
     Program program = m2::MakeProgramFromSpec(device, spec);
 
-    const auto rtas = m2::MakeRuntimeArgsForSingleNode(node, {{"start_page", 0u}, {"num_pages", pages}});
+    // Transfer-stats reports: producer's words at +0, consumer's at +kStatsStride.
+    constexpr uint32_t kStatsStride = 32;
+    static_assert(kNumStatsWords * sizeof(uint32_t) <= kStatsStride);
+    auto stats_region = make_l1_region(device, 2 * kStatsStride);
+    const uint32_t producer_report = static_cast<uint32_t>(stats_region->address());
+    const uint32_t consumer_report = producer_report + kStatsStride;
+    std::vector<uint32_t> stats_init(2 * kStatsStride / sizeof(uint32_t), 0xDEADBEEF);  // "never written"
+    slow_dispatch::WriteToL1(device, node, producer_report, stats_init);
+
+    auto rtas_for = [&](bool with_report, uint32_t report_addr) {
+        return with_report ? m2::MakeRuntimeArgsForSingleNode(
+                                 node, {{"start_page", 0u}, {"num_pages", pages}, {"report_addr", report_addr}})
+                           : m2::MakeRuntimeArgsForSingleNode(node, {{"start_page", 0u}, {"num_pages", pages}});
+    };
+    const bool producer_is_ta = shape != KernelShape::WriteOnly;
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel = m2::KernelSpecName{"producer"}, .runtime_arg_values = rtas},
-        {.kernel = m2::KernelSpecName{"consumer"}, .runtime_arg_values = rtas},
+        {.kernel = m2::KernelSpecName{"producer"}, .runtime_arg_values = rtas_for(producer_is_ta, producer_report)},
+        {.kernel = m2::KernelSpecName{"consumer"}, .runtime_arg_values = rtas_for(true, consumer_report)},
     };
     params.tensor_args = {{m2::TensorParamName{"dst"}, std::cref(out_tensor)}};
     if (in_tensor) {
@@ -399,6 +586,15 @@ void run_case(
             ASSERT_EQ(output[idx], expected[idx]) << "first mismatch at page " << p << " word " << w;
         }
     }
+
+    std::vector<uint32_t> stats;
+    if (producer_is_ta) {
+        slow_dispatch::ReadFromL1(device, node, producer_report, kNumStatsWords * sizeof(uint32_t), stats);
+        expect_transfer_stats("reader", stats, lc, pages, iter_mode, /*addrgen_allowed=*/true, walkable);
+    }
+    slow_dispatch::ReadFromL1(device, node, consumer_report, kNumStatsWords * sizeof(uint32_t), stats);
+    expect_transfer_stats(
+        "writer", stats, lc, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly, walkable);
 }
 
 // Layout rows. Names are gtest-safe (alphanumeric + underscore).
@@ -821,8 +1017,8 @@ std::string shape_name(KernelShape s) {
 }
 
 void PrintTo(const MatrixParam& p, std::ostream* os) {
-    *os << p.layout.name << "/" << shape_name(p.shape) << "/"
-        << (p.iter_mode == IterMode::PageIdLoop ? "PageId" : "Pages") << (p.implicit_sync ? "" : "/Explicit");
+    *os << p.layout.name << "/" << shape_name(p.shape) << "/" << iter_mode_name(p.iter_mode)
+        << (p.implicit_sync ? "" : "/Explicit");
 }
 
 std::vector<MatrixParam> matrix() {
@@ -832,10 +1028,37 @@ std::vector<MatrixParam> matrix() {
             for (auto mode : {IterMode::PageIdLoop, IterMode::PagesIterator}) {
                 params.push_back({lc, shape, mode});
             }
+            // PageView / AbstractTensorAccessorWrapper route through their own noc_traits_t specializations;
+            // one Copy row per layout covers both sides of each.
+            if (shape == KernelShape::Copy) {
+                params.push_back({lc, shape, IterMode::PageView});
+                params.push_back({lc, shape, IterMode::Wrapper});
+                params.push_back({lc, shape, IterMode::Strided});
+                if (is_sharded(lc)) {
+                    params.push_back({lc, shape, IterMode::ShardView});
+                    params.push_back({lc, shape, IterMode::ShardPages});
+                }
+            }
             // Explicit-sync smoke rows: keep the generic (non-TXN_ID) Noc path covered on one layout per
             // HW recipe family, since Phase B hooks both paths.
             if (lc.name == "InterleavedDram" || lc.name == "HeightL1" || lc.name == "WidthL1") {
                 params.push_back({lc, shape, IterMode::PageIdLoop, /*implicit_sync=*/false});
+            }
+        }
+    }
+    return params;
+}
+
+// matrix() rows with interleaved L1 tensors, every iteration mode, for the identity-remap fixture.
+std::vector<MatrixParam> interleaved_l1_matrix() {
+    std::vector<MatrixParam> params;
+    for (const auto& lc : layout_cases()) {
+        if (lc.memory_layout != TensorMemoryLayout::INTERLEAVED || lc.buffer_type != BufferType::L1) {
+            continue;
+        }
+        for (auto shape : {KernelShape::ReadOnly, KernelShape::WriteOnly, KernelShape::Copy}) {
+            for (auto mode : {IterMode::PageIdLoop, IterMode::PagesIterator, IterMode::PageView, IterMode::Wrapper}) {
+                params.push_back({lc, shape, mode});
             }
         }
     }
@@ -971,8 +1194,41 @@ std::vector<MatrixParam> fuzz_cases() {
 
 }  // namespace unit_tests::dm::ta_addrgen
 
+// Opens the device with an identity l1_bank_remap. By default the L1 banking allocator shuffles bank ids across
+// cores (fixed-seed std::shuffle in l1_banking_allocator.cpp), so L1 bank i -> ATT worker selector is a
+// permutation that a single BankingConfig can't walk and interleaved L1 falls back to software. With the identity
+// remap L1 bank i is the i-th compute core in row-major order, which is the ATT worker selectors' order, so the
+// interleaved recipe applies to L1 too.
+class IdentityL1RemapFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    void create_devices() override {
+        const ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
+        // The remap must list exactly one entry per L1 bank; ask a default-opened device how many there are.
+        uint32_t num_l1_banks = 0;
+        {
+            auto probe = distributed::MeshDevice::create_unit_meshes(
+                {id}, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
+            num_l1_banks = probe.at(id)->allocator()->get_num_banks(BufferType::L1);
+        }
+        std::vector<uint32_t> identity(num_l1_banks);
+        std::iota(identity.begin(), identity.end(), 0u);
+        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+            {id}, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config, identity);
+        devices_.clear();
+        for (const auto& [device_id, device] : id_to_device_) {
+            devices_.push_back(device);
+        }
+    }
+};
+
 class TensorAccessorAddrgen : public QuasarMeshDeviceSingleCardFixture,
                               public ::testing::WithParamInterface<unit_tests::dm::ta_addrgen::MatrixParam> {};
+
+// Same rows on an identity-remap device, where interleaved L1 must take the HW path too.
+class TensorAccessorAddrgenIdentityL1 : public IdentityL1RemapFixture,
+                                        public ::testing::WithParamInterface<unit_tests::dm::ta_addrgen::MatrixParam> {
+};
 
 TEST_P(TensorAccessorAddrgen, TensorDfbRoundTrip) {
     using namespace unit_tests::dm::ta_addrgen;
@@ -992,8 +1248,30 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<unit_tests::dm::ta_addrgen::MatrixParam>& info) {
         using namespace unit_tests::dm::ta_addrgen;
         return info.param.layout.name + "_" + shape_name(info.param.shape) + "_" +
-               (info.param.iter_mode == IterMode::PageIdLoop ? "PageId" : "Pages") +
-               (info.param.implicit_sync ? "" : "_Explicit");
+               iter_mode_name(info.param.iter_mode) + (info.param.implicit_sync ? "" : "_Explicit");
+    });
+
+TEST_P(TensorAccessorAddrgenIdentityL1, TensorDfbRoundTrip) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    const LayoutCase lc = resolve_grid(device, p.layout);
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+    ASSERT_TRUE(interleaved_banks_walkable(device, BufferType::L1))
+        << "with an identity l1_bank_remap the L1 banks should be an ascending stride-1 selector run";
+    run_case(device, lc, p.shape, p.iter_mode, p.implicit_sync);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PatternMatrix,
+    TensorAccessorAddrgenIdentityL1,
+    ::testing::ValuesIn(unit_tests::dm::ta_addrgen::interleaved_l1_matrix()),
+    [](const ::testing::TestParamInfo<unit_tests::dm::ta_addrgen::MatrixParam>& info) {
+        using namespace unit_tests::dm::ta_addrgen;
+        return info.param.layout.name + "_" + shape_name(info.param.shape) + "_" +
+               iter_mode_name(info.param.iter_mode) + (info.param.implicit_sync ? "" : "_Explicit");
     });
 
 // Randomized fuzz layer: same fixture/body as PatternMatrix, params drawn by fuzz_cases() instead of
@@ -1004,8 +1282,478 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(unit_tests::dm::ta_addrgen::fuzz_cases()),
     [](const ::testing::TestParamInfo<unit_tests::dm::ta_addrgen::MatrixParam>& info) {
         using namespace unit_tests::dm::ta_addrgen;
-        return info.param.layout.name + "_" + shape_name(info.param.shape) + "_" +
-               (info.param.iter_mode == IterMode::PageIdLoop ? "PageId" : "Pages");
+        return info.param.layout.name + "_" + shape_name(info.param.shape) + "_" + iter_mode_name(info.param.iter_mode);
     });
+
+// ============================================================================
+// Phase B, step B1: real HW AddrGen addresses (interleaved DRAM / L1)
+// ============================================================================
+//
+// Walks an interleaved TensorAccessor with the real overlay address generator, banking parameters
+// derived from the live ATT map (not the hardcoded, unverified endpoint IDs in the older
+// addrgen_interleaved_example.cpp). The kernel cross-checks every generated address against the software
+// TensorAccessor::get_noc_addr() and, in ReadEveryPage, issues the read through the ordinary NoC V3 API at
+// the hardware address. See tensor_accessor_addrgen.h and addrgen_hw_interleaved_read.cpp.
+namespace b1 {
+
+constexpr uint32_t kRows = 16;
+constexpr uint32_t kCols = 64;
+constexpr uint32_t kNumPages = kRows;
+constexpr uint32_t kPageSize = kCols * sizeof(uint32_t);
+
+// Must match ReportWord in addrgen_hw_interleaved_read.cpp.
+enum ReportWord : uint32_t {
+    kMismatches = 0,
+    kFirstBadPage,
+    kFirstBadHwLo,
+    kFirstBadHwHi,
+    kFirstBadSwLo,
+    kFirstBadSwHi,
+    kPagesIssued,
+    kWalkable,
+    kNumBanks,
+    kBankSelector0,
+    kBankOffset0 = kBankSelector0 + 8,
+    kNumReportWords = kBankOffset0 + 8,
+};
+
+// "bank i -> selector s (+offset o)" for the banks the kernel reported, for failure messages.
+std::string describe_banks(const std::vector<uint32_t>& report) {
+    std::string out;
+    const uint32_t n = std::min<uint32_t>(report[kNumBanks], 8);
+    for (uint32_t b = 0; b < n; ++b) {
+        out += fmt::format(
+            "{}bank {} -> selector {} (+offset {})",
+            b ? ", " : "",
+            b,
+            report[kBankSelector0 + b],
+            static_cast<int32_t>(report[kBankOffset0 + b]));
+    }
+    return fmt::format("{} bank(s): {}", report[kNumBanks], out);
+}
+
+using unit_tests::dm::ta_addrgen::make_l1_region;
+
+struct Result {
+    std::vector<uint32_t> report;
+    std::vector<uint32_t> dest;
+};
+
+Result run(distributed::MeshDevice& device, bool is_dram, bool issue_real_reads, MeshTensor& src_tensor) {
+    namespace m2 = experimental;
+    const m2::NodeCoord node{0, 0};
+    auto dest = make_l1_region(device, kNumPages * kPageSize);
+    auto report = make_l1_region(device, kNumReportWords * sizeof(uint32_t));
+
+    std::vector<uint32_t> zeros(kNumPages * kCols, 0);
+    slow_dispatch::WriteToL1(device, node, dest->address(), zeros);
+    std::vector<uint32_t> report_init(kNumReportWords, 0xDEADBEEF);  // distinguishes "never written"
+    slow_dispatch::WriteToL1(device, node, report->address(), report_init);
+
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/"
+                                        "addrgen_hw_interleaved_read.cpp"},
+        .num_threads = 1,
+        .compile_time_args =
+            {{"is_dram", is_dram ? 1u : 0u},
+             {"issue_real_reads", issue_real_reads ? 1u : 0u},
+             {"walkable",
+              unit_tests::dm::ta_addrgen::interleaved_banks_walkable(
+                  device, is_dram ? BufferType::DRAM : BufferType::L1)
+                  ? 1u
+                  : 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "dest_addr", "report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    m2::test_helpers::BindTensorParameterToKernel(reader, "src", "src");
+
+    m2::ProgramSpec spec{
+        .name = "hw_addrgen_interleaved",
+        .kernels = {reader},
+        .tensor_parameters = {{.unique_id = m2::TensorParamName{"src"}, .spec = src_tensor.tensor_spec()}},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"reader"})},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"reader"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+             node,
+             {{"num_pages", kNumPages},
+              {"dest_addr", static_cast<uint32_t>(dest->address())},
+              {"report_addr", static_cast<uint32_t>(report->address())}})}};
+    params.tensor_args = {{m2::TensorParamName{"src"}, std::cref(src_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(device, std::move(program));
+
+    Result result;
+    slow_dispatch::ReadFromL1(device, node, report->address(), kNumReportWords * sizeof(uint32_t), result.report);
+    slow_dispatch::ReadFromL1(device, node, dest->address(), kNumPages * kPageSize, result.dest);
+    return result;
+}
+
+// A layout whose banks the recipe can't walk (host-checked, see interleaved_banks_walkable) stays on the software
+// path, so it skips rather than fails; the kernel's device print lists the bank -> selector map.
+bool recipe_applies(const std::vector<uint32_t>& report) {
+    return report.size() == kNumReportWords && report[kWalkable] == 1u;
+}
+
+void expect_addresses_match(const std::vector<uint32_t>& report) {
+    ASSERT_EQ(report.size(), static_cast<size_t>(kNumReportWords));
+    ASSERT_NE(report[kWalkable], 0xDEADBEEFu) << "kernel never wrote its report";
+    const uint64_t hw = (static_cast<uint64_t>(report[kFirstBadHwHi]) << 32) | report[kFirstBadHwLo];
+    const uint64_t sw = (static_cast<uint64_t>(report[kFirstBadSwHi]) << 32) | report[kFirstBadSwLo];
+    EXPECT_EQ(report[kMismatches], 0u) << report[kMismatches] << " of " << kNumPages
+                                       << " addrgen addresses differ from TensorAccessor::get_noc_addr; first at page "
+                                       << report[kFirstBadPage] << ": hw 0x" << std::hex << hw << " sw 0x" << sw;
+}
+
+// Host's view of the L1 bank -> core map, to compare against the kernel's bank -> ATT selector report.
+void log_l1_bank_map(distributed::MeshDevice& device) {
+    for (uint32_t bank = 0; bank < device.allocator()->get_num_banks(BufferType::L1); ++bank) {
+        const CoreCoord logical = device.allocator()->get_logical_core_from_bank_id(bank);
+        log_info(
+            tt::LogTest,
+            "host: L1 bank {} -> logical core {} -> virtual core {}",
+            bank,
+            logical.str(),
+            device.worker_core_from_logical_core(logical).str());
+    }
+}
+
+MeshTensor make_src_tensor(distributed::MeshDevice& device, bool is_dram) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, is_dram ? BufferType::DRAM : BufferType::L1};
+    auto tensor_layout = TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config);
+    return MeshTensor::allocate_on_device(device, TensorSpec(Shape{kRows, kCols}, tensor_layout));
+}
+
+}  // namespace b1
+
+class HwAddrgenInterleaved : public QuasarMeshDeviceSingleCardFixture, public ::testing::WithParamInterface<bool> {};
+
+// Address-only: no NoC transaction is issued, so this can't hang. Run it first when bringing up a new
+// recipe or platform.
+TEST_P(HwAddrgenInterleaved, AddressesMatchSoftware) {
+    const bool is_dram = GetParam();
+    auto& device = *devices_.at(0);
+    if (!is_dram) {
+        b1::log_l1_bank_map(device);
+    }
+    MeshTensor src_tensor = b1::make_src_tensor(device, is_dram);
+    const auto result = b1::run(device, is_dram, /*issue_real_reads=*/false, src_tensor);
+    if (!b1::recipe_applies(result.report)) {
+        GTEST_SKIP() << "interleaved bank selectors on this device are not an ascending stride-1 run (see device "
+                        "print); the interleaved recipe doesn't apply and this layout stays on the software path";
+    }
+    b1::expect_addresses_match(result.report);
+}
+
+TEST_P(HwAddrgenInterleaved, ReadEveryPage) {
+    const bool is_dram = GetParam();
+    auto& device = *devices_.at(0);
+    MeshTensor src_tensor = b1::make_src_tensor(device, is_dram);
+
+    std::vector<uint32_t> expected(b1::kNumPages * b1::kCols);
+    for (uint32_t i = 0; i < expected.size(); ++i) {
+        expected[i] = 0x5A000000u ^ (i * 2654435761u);
+    }
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), expected);
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromBuffer(src_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, expected) << "source staging not visible before launch";
+
+    const auto result = b1::run(device, is_dram, /*issue_real_reads=*/true, src_tensor);
+    if (!b1::recipe_applies(result.report)) {
+        GTEST_SKIP() << "interleaved bank selectors on this device are not an ascending stride-1 run (see device "
+                        "print); the interleaved recipe doesn't apply and this layout stays on the software path";
+    }
+    b1::expect_addresses_match(result.report);
+    ASSERT_EQ(result.report[b1::kPagesIssued], b1::kNumPages) << "not every page was issued";
+    ASSERT_EQ(result.dest.size(), expected.size());
+    for (uint32_t p = 0; p < b1::kNumPages; ++p) {
+        for (uint32_t w = 0; w < b1::kCols; ++w) {
+            const uint32_t idx = (p * b1::kCols) + w;
+            ASSERT_EQ(result.dest[idx], expected[idx]) << "first mismatch at page " << p << " word " << w;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    B1, HwAddrgenInterleaved, ::testing::Values(true, false), [](const ::testing::TestParamInfo<bool>& info) {
+        return info.param ? "Dram" : "L1";
+    });
+
+// Interleaved L1 with an identity l1_bank_remap (see IdentityL1RemapFixture): here the recipe must apply, and not
+// applying is a failure, not a skip.
+class HwAddrgenInterleavedIdentityL1 : public IdentityL1RemapFixture {};
+
+TEST_F(HwAddrgenInterleavedIdentityL1, AddressesMatchSoftware) {
+    auto& device = *devices_.at(0);
+    b1::log_l1_bank_map(device);
+    MeshTensor src_tensor = b1::make_src_tensor(device, /*is_dram=*/false);
+    const auto result = b1::run(device, /*is_dram=*/false, /*issue_real_reads=*/false, src_tensor);
+    ASSERT_TRUE(b1::recipe_applies(result.report))
+        << "with an identity l1_bank_remap the L1 banks should be an ascending stride-1 selector run with no "
+           "per-bank offset; got "
+        << b1::describe_banks(result.report);
+    b1::expect_addresses_match(result.report);
+}
+
+TEST_F(HwAddrgenInterleavedIdentityL1, ReadEveryPage) {
+    auto& device = *devices_.at(0);
+    MeshTensor src_tensor = b1::make_src_tensor(device, /*is_dram=*/false);
+
+    std::vector<uint32_t> expected(b1::kNumPages * b1::kCols);
+    for (uint32_t i = 0; i < expected.size(); ++i) {
+        expected[i] = 0x5A000000u ^ (i * 2654435761u);
+    }
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), expected);
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromBuffer(src_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, expected) << "source staging not visible before launch";
+
+    const auto result = b1::run(device, /*is_dram=*/false, /*issue_real_reads=*/true, src_tensor);
+    ASSERT_TRUE(b1::recipe_applies(result.report))
+        << "with an identity l1_bank_remap the L1 banks should be an ascending stride-1 selector run with no "
+           "per-bank offset; got "
+        << b1::describe_banks(result.report);
+    b1::expect_addresses_match(result.report);
+    ASSERT_EQ(result.report[b1::kPagesIssued], b1::kNumPages) << "not every page was issued";
+    ASSERT_EQ(result.dest.size(), expected.size());
+    for (uint32_t p = 0; p < b1::kNumPages; ++p) {
+        for (uint32_t w = 0; w < b1::kCols; ++w) {
+            const uint32_t idx = (p * b1::kCols) + w;
+            ASSERT_EQ(result.dest[idx], expected[idx]) << "first mismatch at page " << p << " word " << w;
+        }
+    }
+}
+
+// Minimal diagnostic (see addrgen_roundtrip_probe.cpp): what does addrgen_1 hand back after reset, after an
+// inner-loop offset alone, and after base_start (the command buffer's SRC_BASE) is also set?
+class AddrgenRoundtripProbe : public QuasarMeshDeviceSingleCardFixture {};
+
+TEST_F(AddrgenRoundtripProbe, PeekReflectsConfiguration) {
+    namespace m2 = experimental;
+    auto& device = *devices_.at(0);
+    const m2::NodeCoord node{0, 0};
+    auto report = b1::make_l1_region(device, 6 * sizeof(uint32_t));
+    std::vector<uint32_t> report_init(6, 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report->address(), report_init);
+
+    m2::KernelSpec probe{
+        .unique_id = m2::KernelSpecName{"probe"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/"
+                                        "addrgen_roundtrip_probe.cpp"},
+        .num_threads = 1,
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    m2::ProgramSpec spec{
+        .name = "addrgen_roundtrip_probe",
+        .kernels = {probe},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"probe"})},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"probe"},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", static_cast<uint32_t>(report->address())}})}};
+    m2::SetProgramRunArgs(program, params);
+
+    LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> raw;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report->address(), 6 * sizeof(uint32_t), raw));
+    ASSERT_EQ(raw.size(), 6u);
+    ASSERT_NE(raw[0], 0xDEADBEEFu) << "kernel never wrote its report";
+    auto peek = [&](uint32_t i) { return (static_cast<uint64_t>(raw[2 * i + 1]) << 32) | raw[2 * i]; };
+    // Informational: base_start may or may not be folded in by the addrgen itself; record which.
+    log_info(
+        tt::LogTest, "addrgen probe: reset 0x{:x}, inner-only 0x{:x}, inner+base 0x{:x}", peek(0), peek(1), peek(2));
+    EXPECT_EQ(peek(1), 0x1000u) << "inner-loop start offset is not reflected in peek";
+}
+
+// Loop-nest semantics probe (addrgen_loop_probe.cpp): pops a fixed number of addresses from addrgen_1 for one
+// configuration and compares them with a model of the loop nest. The sharded walkers' cross-bank recipes depend on
+// these semantics -- in particular what the inner loop wraps to when a walk is seeked mid-row -- which
+// address_generators.md doesn't pin down.
+namespace loop_probe {
+
+// Must match addrgen_loop_probe.cpp.
+constexpr uint32_t kNumPops = 24;
+constexpr uint32_t kBankShift = 26;
+constexpr uint64_t kInnerStride = 0x40;
+constexpr uint64_t kInnerEnd = 0x100;
+constexpr uint64_t kOuterStride = 0x1000;
+constexpr uint64_t kOuterEnd = 0x10000;
+enum BankOrder : uint32_t { kBankInner = 0, kBankMiddle = 1, kBankOuter = 2 };
+
+struct Config {
+    std::string name;
+    uint32_t bank_order = kBankInner;
+    uint32_t num_banks = 1;
+    uint32_t bank_start = 0;
+    uint32_t inner_start = 0;
+    uint32_t outer_start = 0;
+    bool use_outer = true;
+    uint32_t pop_amount = 1;  // addresses each pop advances by (hardware skip)
+};
+
+// Model: each loop counts from its programmed start, and on reaching its end wraps to 0 (not to its start) and
+// carries into the next loop out. Banks count base + current; the loop order is set by the bank order. An outer loop
+// left at its reset value neither advances nor wraps anything.
+std::vector<uint64_t> model(const Config& c) {
+    uint64_t x = c.inner_start;
+    uint64_t y = c.use_outer ? c.outer_start : 0;
+    uint32_t bank = c.bank_start;
+    auto step_x = [&] {
+        x += kInnerStride;
+        if (x >= kInnerEnd) {
+            x = 0;
+            return true;
+        }
+        return false;
+    };
+    auto step_y = [&] {
+        if (!c.use_outer) {
+            return true;
+        }
+        y += kOuterStride;
+        if (y >= kOuterEnd) {
+            y = 0;
+            return true;
+        }
+        return false;
+    };
+    auto step_bank = [&] {
+        if (++bank == c.num_banks) {
+            bank = 0;
+            return true;
+        }
+        return false;
+    };
+    std::vector<uint64_t> out;
+    for (uint32_t i = 0; i < kNumPops; ++i) {
+        out.push_back(x + y + (static_cast<uint64_t>(bank) << kBankShift));
+        // A pop of N advances through N addresses of the loop nest (N = 0 behaves like 1).
+        for (uint32_t n = 0; n < std::max<uint32_t>(c.pop_amount, 1); ++n) {
+            switch (c.bank_order) {
+                case kBankInner: (void)(step_bank() && step_x() && step_y()); break;
+                case kBankMiddle: (void)(step_x() && step_bank() && step_y()); break;
+                default: (void)(step_x() && step_y() && step_bank()); break;
+            }
+        }
+    }
+    return out;
+}
+
+std::string describe(uint64_t a) {
+    return fmt::format("bank {} + 0x{:x}", a >> kBankShift, a & ((uint64_t{1} << kBankShift) - 1));
+}
+
+std::vector<Config> configs() {
+    return {
+        {.name = "InnerOnlyMidStart", .inner_start = 0x80, .use_outer = false},
+        {.name = "InnerOuterMidStart", .inner_start = 0x80},
+        {.name = "BankInner2Outer", .bank_order = kBankInner, .num_banks = 2},
+        {.name = "BankMiddle2", .bank_order = kBankMiddle, .num_banks = 2},
+        {.name = "BankMiddle2MidStart",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .outer_start = 0x2000},
+        {.name = "BankOuter2", .bank_order = kBankOuter, .num_banks = 2},
+        // Skips that cross the bank and inner-loop wraps.
+        {.name = "BankInner2Skip3", .bank_order = kBankInner, .num_banks = 2, .pop_amount = 3},
+        {.name = "BankMiddle2MidStartSkip5",
+         .bank_order = kBankMiddle,
+         .num_banks = 2,
+         .bank_start = 1,
+         .inner_start = 0x80,
+         .outer_start = 0x2000,
+         .pop_amount = 5},
+    };
+}
+
+}  // namespace loop_probe
+
+class AddrgenLoopProbe : public QuasarMeshDeviceSingleCardFixture,
+                         public ::testing::WithParamInterface<loop_probe::Config> {};
+
+TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
+    namespace m2 = experimental;
+    const auto& c = GetParam();
+    auto& device = *devices_.at(0);
+    const m2::NodeCoord node{0, 0};
+    constexpr uint32_t kReportBytes = loop_probe::kNumPops * sizeof(uint64_t);
+    auto report = unit_tests::dm::ta_addrgen::make_l1_region(device, kReportBytes);
+    std::vector<uint32_t> report_init(kReportBytes / sizeof(uint32_t), 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report->address(), report_init);
+
+    m2::KernelSpec probe{
+        .unique_id = m2::KernelSpecName{"probe"},
+        .source =
+            std::filesystem::path{
+                "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_loop_probe.cpp"},
+        .num_threads = 1,
+        .compile_time_args =
+            {{"bank_order", c.bank_order},
+             {"num_banks", c.num_banks},
+             {"bank_start", c.bank_start},
+             {"inner_start", c.inner_start},
+             {"outer_start", c.outer_start},
+             {"use_outer", c.use_outer ? 1u : 0u},
+             {"pop_amount", c.pop_amount}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    m2::ProgramSpec spec{
+        .name = "addrgen_loop_probe",
+        .kernels = {probe},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"probe"})},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"probe"},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", static_cast<uint32_t>(report->address())}})}};
+    m2::SetProgramRunArgs(program, params);
+    LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> raw;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report->address(), kReportBytes, raw));
+    ASSERT_EQ(raw.size(), kReportBytes / sizeof(uint32_t));
+    ASSERT_NE(raw[1], 0xDEADBEEFu) << "kernel never wrote its report";
+    const std::vector<uint64_t> expected = loop_probe::model(c);
+    std::string table;
+    int first_bad = -1;
+    for (uint32_t i = 0; i < loop_probe::kNumPops; ++i) {
+        const uint64_t got = (static_cast<uint64_t>(raw[2 * i + 1]) << 32) | raw[2 * i];
+        if (got != expected[i] && first_bad < 0) {
+            first_bad = static_cast<int>(i);
+        }
+        table += fmt::format(
+            "\n  pop {:2}: {:24} model {:24}{}",
+            i,
+            loop_probe::describe(got),
+            loop_probe::describe(expected[i]),
+            got == expected[i] ? "" : "  <-- differs");
+    }
+    log_info(tt::LogTest, "addrgen loop probe {}:{}", c.name, table);
+    EXPECT_EQ(first_bad, -1) << c.name << ": first difference from the loop model at pop " << first_bad << table;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LoopNest,
+    AddrgenLoopProbe,
+    ::testing::ValuesIn(loop_probe::configs()),
+    [](const ::testing::TestParamInfo<loop_probe::Config>& info) { return info.param.name; });
 
 }  // namespace tt::tt_metal

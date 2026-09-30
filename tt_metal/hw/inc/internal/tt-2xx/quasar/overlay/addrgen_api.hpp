@@ -93,6 +93,21 @@ struct LoopConfig {
 
 /* Note: Face size and base start use direct uint64_t parameters for simplicity */
 
+// setup_{src,dest}_banking / add_{src,dest}_banking below share one MISC register: bank_offset is a
+// single field (not separate per src/dest), and src_bank_order / dst_bank_order are separate fields in
+// the SAME word. Writing MISC from TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT (a reset value) instead of its
+// current value clobbers whichever of {bank_offset, the other side's bank_order} the other side already
+// programmed. Each of the 6 setup/add functions below therefore reads MISC before modifying it, instead
+// of resetting it, to preserve the fields it doesn't own.
+//
+// This can't be factored into a shared helper (function or template): ADDRGEN_RD_REG/WR_REG's cmdbuf
+// argument is stringified into a ".word" asm directive by the C PREPROCESSOR (via CUSTOMX/STR in
+// xcustom_test.hpp), not folded by the compiler -- a template non-type parameter is invisible to the
+// preprocessor and is pasted in as raw, unresolvable text ("invalid operands (*UND* and *ABS* sections)
+// for `*'" at assembly time). Only the DEFINE_ADDR_GEN macro's own `cmdbuf` parameter, substituted by
+// the preprocessor itself, works here -- so the read-modify-write has to be duplicated inline at each
+// call site below, matching how this file already duplicates other per-buf_name logic.
+
 #define ADDRGEN_0 0
 #define ADDRGEN_1 1
 
@@ -121,7 +136,7 @@ struct LoopConfig {
                                                                                                                      \
     inline __attribute__((always_inline)) void setup_src_banking_##buf_name(const BankingConfig& cfg) {              \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = cfg.endpoint_id_shift;                                                                  \
         misc.f.src_bank_order = cfg.bank_order;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
@@ -164,7 +179,7 @@ struct LoopConfig {
         uint32_t base = 0,                                                                                           \
         uint32_t current_endpoint = 0) {                                                                             \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = endpoint_id_shift;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
                                                                                                                      \
@@ -269,7 +284,7 @@ struct LoopConfig {
         uint32_t base_endpoint = 0,                                                                                  \
         uint32_t current_endpoint = 0) {                                                                             \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = endpoint_id_shift;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
                                                                                                                      \
@@ -281,7 +296,7 @@ struct LoopConfig {
     }                                                                                                                \
     inline __attribute__((always_inline)) void setup_dest_banking_##buf_name(const BankingConfig& cfg) {             \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = cfg.endpoint_id_shift;                                                                  \
         misc.f.dst_bank_order = cfg.bank_order;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
@@ -488,7 +503,7 @@ struct LoopConfig {
         uint32_t base_endpoint = 0,                                                                                  \
         uint32_t current_endpoint = 0) {                                                                             \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = endpoint_id_shift;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
                                                                                                                      \
@@ -529,7 +544,7 @@ struct LoopConfig {
         uint32_t base_endpoint = 0,                                                                                  \
         uint32_t current_endpoint = 0) {                                                                             \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
-        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.val = ADDRGEN_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);                 \
         misc.f.bank_offset = endpoint_id_shift;                                                                      \
         ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
                                                                                                                      \

@@ -158,17 +158,21 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config,
-    ContextId context_id) :
+    ContextId context_id,
+    ttsl::Span<const std::uint32_t> l1_bank_remap) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
     auto& ctx = MetalContext::instance(context_id);
+    // l1_bank_remap must reach the device manager here: this is what builds each device's L1 allocator and
+    // the firmware's l1_bank_to_noc_xy table. (It was hardcoded to {} before, so MeshDevice::create /
+    // create_unit_meshes silently ignored a caller-supplied remap.)
     ctx.initialize_device_manager(
         local_devices,
         num_command_queues,
         l1_small_size,
         trace_region_size,
         dispatch_core_config,
-        {},
+        l1_bank_remap,
         worker_l1_size,
         /* init_profiler */ false,
         /* initialize_fabric_and_dispatch_fw */ false);
@@ -456,7 +460,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     num_command_queues,
                     worker_l1_size,
                     dispatch_core_config,
-                    context_id),
+                    context_id,
+                    l1_bank_remap),
                 std::move(mapped_devices.fabric_node_ids),
                 mapped_devices.mesh_shape);
         }  // Initialize fabric node ids manually.
@@ -488,7 +493,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                 num_command_queues,
                 worker_l1_size,
                 dispatch_core_config,
-                context_id),
+                context_id,
+                l1_bank_remap),
             std::move(fabric_node_ids),
             config.mesh_shape().value());
     }();
@@ -574,7 +580,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    ttsl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     TT_FATAL(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
@@ -605,7 +611,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config,
-        context_id);
+        context_id,
+        l1_bank_remap);
 
     const auto root_devices = scoped_devices->root_devices();
 

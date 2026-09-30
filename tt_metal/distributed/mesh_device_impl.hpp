@@ -113,7 +113,8 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            ContextId context_id);
+            ContextId context_id,
+            ttsl::Span<const std::uint32_t> l1_bank_remap = {});
 
         // Destructor releases physical resources
         ~ScopedDevices();

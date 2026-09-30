@@ -753,7 +753,10 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         /*trace_region_size=*/0,
         worker_l1_size,
         DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t>{},
+        // The firmware's L1 bank tables (l1_bank_to_noc_xy, bank offsets) are generated from this descriptor, so it
+        // must carry the same remap the device allocator uses -- an empty remap here made firmware and host
+        // disagree on which core holds each L1 bank whenever a caller supplied l1_bank_remap.
+        l1_bank_remap_,
         rtoptions().get_mock_cluster_desc_path());
 }
 

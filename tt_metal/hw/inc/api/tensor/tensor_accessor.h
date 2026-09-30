@@ -693,6 +693,14 @@ auto make_tensor_accessors(const std::tuple<Tokens...>& tokens) {
  *
  * The wrapper allows to use and iterate over different kinds of tensor accessors in a unified way.
  */
+namespace tensor_accessor {
+// Defined in api/tensor/transfer_noc_addr.h (included by api/tensor/noc_traits.h, the NoC transfer path). Declared
+// here so the wrapper below can erase it alongside get_noc_addr; a kernel that hands a wrapper to the NoC APIs has
+// included noc_traits.h, so the definition is in its translation unit.
+template <typename Accessor>
+inline uint64_t transfer_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, uint8_t noc);
+}  // namespace tensor_accessor
+
 class AbstractTensorAccessorWrapper {
 public:
     AbstractTensorAccessorWrapper() = default;
@@ -702,10 +710,18 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
+        }),
+        transfer_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+            return tensor_accessor::transfer_noc_addr(*static_cast<const Accessor*>(accessor), page_idx, offset, noc);
         }) {}
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
+    }
+
+    // Address for a NoC transfer of the page -- only for the noc_traits_t path; see transfer_noc_addr.h.
+    uint64_t transfer_noc_addr(uint32_t page_idx, uint32_t offset, uint8_t noc) const {
+        return transfer_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
     }
 
 private:
@@ -713,6 +729,7 @@ private:
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
+    GetNocAddrFn transfer_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {
