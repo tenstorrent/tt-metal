@@ -314,6 +314,24 @@ class TTMLRolloutSampler(RolloutSampler):
     def model(self) -> Any:
         return self._model
 
+    @property
+    def temperature(self) -> float:
+        """Sampling temperature used by :meth:`generate` (0 = greedy)."""
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value: float) -> None:
+        self._temperature = float(value)
+
+    @property
+    def completions_per_prompt(self) -> int:
+        """Completions :meth:`generate` produces per prompt."""
+        return self._completions_per_prompt
+
+    @completions_per_prompt.setter
+    def completions_per_prompt(self, value: int) -> None:
+        self._completions_per_prompt = int(value)
+
     # --------------------------------------------------------------
     # Producer metadata
     # --------------------------------------------------------------
