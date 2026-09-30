@@ -156,6 +156,29 @@
   sp_config: sc1
 
 
+- name: "Distributed fused RMSNorm accuracy and trace replay"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm_fused.py -k torus-xy -xvs --timeout=180
+    '
+  test_type: kimi_rmsnorm
+  test_tags: [kimi_k2_7, ccl]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 5
+      tier: 1
+      release_ready: false
+  owner_id: U089NPHL0GN # Diego Gomez
+  team: models
+  budget_type: unit
+  sp_config: sc1
+
+
 - name: "(Kimi-K2.7-1T) prefill block determinism 5k"
   fabric_profile: torus_xy
   cmd: |
