@@ -850,6 +850,13 @@ tasks:
     swapped:
     - attn_hc
     layer: 2
+  frozen:
+    at: '2026-09-30T14:39:53'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_01_attn_hc.py: 6b4ca568959982713dbd7f8f6910a39634f2d2aec2afc215e3de38f18309cc8d
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.moe.attn_collapse
   title: moe attn_collapse (op) on device, layer 2
   step: implement
