@@ -187,6 +187,8 @@ def test_narrow(input_shape, dim, start, length, memory_config, layout, dtype, d
     assert layout == ttnn_output.layout
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
+    if memory_config.shard_spec is not None:
+        assert memory_config.shard_spec.orientation == ttnn_output.memory_config().shard_spec.orientation
     output = ttnn.to_torch(ttnn_output)
     # bf8_atol=0.05: unseeded randn input; worst observed bf8 delta across runs is ~0.047
     assert_quality(torch_result, output, dtype, bf8_atol=0.05)
