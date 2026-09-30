@@ -20,7 +20,10 @@ class LazyCheckpoint:
         self.root = os.path.join(root or snapshot_dir(), subfolder)
         idx_files = [f for f in os.listdir(self.root) if f.endswith(".safetensors.index.json")]
         if idx_files:
-            idx = json.load(open(os.path.join(self.root, idx_files[0])))
+            if len(idx_files) != 1:
+                raise ValueError(f"expected one safetensors index in {self.root}; found {sorted(idx_files)}")
+            with open(os.path.join(self.root, idx_files[0])) as index:
+                idx = json.load(index)
             self.key_to_file = {k: os.path.join(self.root, v) for k, v in idx["weight_map"].items()}
         else:
             single = [f for f in os.listdir(self.root) if f.endswith(".safetensors")]

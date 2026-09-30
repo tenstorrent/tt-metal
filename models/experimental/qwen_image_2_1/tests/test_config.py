@@ -54,3 +54,14 @@ def test_server_defaults_to_tensix_dispatch(editing, monkeypatch):
     monkeypatch.delenv("QWEN_IMAGE_ETH_DISPATCH", raising=False)
     monkeypatch.setenv("QWEN_IMAGE_EDITING", editing)
     assert load_config()["eth_dispatch"] is False
+
+
+def test_checkpoint_rejects_ambiguous_safetensors_indices(tmp_path):
+    from models.experimental.qwen_image_2_1.common.weights import LazyCheckpoint
+
+    folder = tmp_path / "vae"
+    folder.mkdir()
+    for name in ("first", "second"):
+        (folder / f"{name}.safetensors.index.json").write_text('{"weight_map": {}}')
+    with pytest.raises(ValueError, match="expected one safetensors index"):  # allow-pytest.raises: host-only test.
+        LazyCheckpoint("vae", str(tmp_path))

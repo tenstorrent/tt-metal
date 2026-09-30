@@ -203,7 +203,8 @@ class QwenImageDiT:
         mem = ttnn.DRAM_MEMORY_CONFIG
         wd = self.prec.weight_dtype
         g = lambda k: ckpt.get(k, torch.bfloat16)
-        self.layers: List[TTLayer] = [TTLayer(dev, ckpt, i, self.prec, cfg) for i in range(layers or cfg.num_layers)]
+        layer_count = cfg.num_layers if layers is None else layers
+        self.layers: List[TTLayer] = [TTLayer(dev, ckpt, i, self.prec, cfg) for i in range(layer_count)]
         self.img_in = ttnn.from_torch(
             linear_to_mm(g("img_in.weight")),
             dtype=ttnn.bfloat16,

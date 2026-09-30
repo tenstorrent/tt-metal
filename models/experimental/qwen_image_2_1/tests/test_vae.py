@@ -166,6 +166,50 @@ def test_tt_conv2d(dev, ckpt, torch_ref):
         assert p > 0.995
 
 
+def test_tt_conv2d_geometry_eviction_releases_buffers_and_preserves_outputs(dev):
+    import ttnn
+    from models.experimental.qwen_image_2_1.tt.vae import TTConv2d, VAEPrecision
+
+    generator = torch.Generator().manual_seed(71)
+    weight = torch.randn(32, 32, 3, 3, generator=generator) * 0.05
+    bias = torch.randn(32, generator=generator) * 0.01
+    conv = TTConv2d(dev, weight, bias, padding=1, prec=VAEPrecision())
+    geometries = [(32, 32), (32, 64), (64, 32), (64, 64), (32, 96)]
+    inputs = {size: torch.randn(1, 32, *size, generator=generator).to(torch.bfloat16).float() for size in geometries}
+    first_output = None
+    victim = None
+    try:
+        # The fifth geometry evicts the first; returning to it must prepare weights again.
+        for size in [*geometries, geometries[-1], geometries[0]]:
+            x = inputs[size]
+            xd, h, w = _to_dev(dev, x)
+            out = None
+            try:
+                out, oh, ow = conv(xd, h, w)
+                actual = _from_dev(out, oh, ow, 32)
+                expected = torch.nn.functional.conv2d(
+                    x, weight.to(torch.bfloat16).float(), bias.to(torch.bfloat16).float(), padding=1
+                )
+                assert pcc(actual, expected) > 0.999
+                assert len(conv.prepared) <= 4
+                if first_output is None:
+                    first_output = actual.clone()
+                    victim = conv.prepared[size]
+                elif size == geometries[0]:
+                    assert torch.equal(actual, first_output)
+                if size == geometries[-1]:
+                    assert not any(tensor.is_allocated() for tensor in victim)
+                assert all(tensor.is_allocated() for pair in conv.prepared.values() for tensor in pair)
+            finally:
+                if out is not None:
+                    ttnn.deallocate(out)
+                ttnn.deallocate(xd)
+    finally:
+        for pair in conv.prepared.values():
+            for tensor in pair:
+                ttnn.deallocate(tensor)
+
+
 def test_tt_rms_norm(dev, ckpt, torch_ref):
     """RMS norm for an aligned (1152) and an unaligned (144) channel count."""
     from models.experimental.qwen_image_2_1.tt.vae import TTRmsNorm, VAEPrecision

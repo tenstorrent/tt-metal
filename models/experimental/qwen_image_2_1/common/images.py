@@ -23,7 +23,10 @@ def calculate_dimensions(target_area: int, ratio: float):
     """diffusers' calculate_dimensions: (width, height) rounded to multiples of 32."""
     width = math.sqrt(target_area * ratio)
     height = width / ratio
-    return round(width / 32) * 32, round(height / 32) * 32
+    size = round(width / 32) * 32, round(height / 32) * 32
+    if min(size) == 0:
+        raise ValueError("condition image aspect ratio rounds to a zero dimension")
+    return size
 
 
 def edit_prompt_text(prompt: str, n_images: int) -> str:

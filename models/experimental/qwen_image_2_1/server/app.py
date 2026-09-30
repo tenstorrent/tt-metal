@@ -35,6 +35,9 @@ STOP = threading.Event()
 QUEUE: list = []  # (enqueued_at, seq, cache_key, work: callable, result: threading.Event holder)
 QUEUE_COND = threading.Condition()
 QUEUE_MAX_WAIT_S = float(os.environ.get("QWEN_QUEUE_MAX_WAIT_S", "120"))
+QUEUE_MAX_PENDING = int(os.environ.get("QWEN_QUEUE_MAX_PENDING", "8"))
+if QUEUE_MAX_PENDING < 1:
+    raise ValueError("QWEN_QUEUE_MAX_PENDING must be positive")
 _SEQ = [0]
 
 
@@ -66,6 +69,8 @@ def _run_queued(cache_key, work):
     with QUEUE_COND:
         if STOP.is_set():
             raise HTTPException(status_code=503, detail="server shutting down")
+        if len(QUEUE) >= QUEUE_MAX_PENDING:
+            raise HTTPException(status_code=503, detail="request queue full")
         _SEQ[0] += 1
         QUEUE.append((time.time(), _SEQ[0], cache_key, work, holder))
         QUEUE_COND.notify()
@@ -201,7 +206,7 @@ app = FastAPI(title="qwen-image-2.1-p150", lifespan=lifespan)
 class PredictRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     seed: int = 42
-    num_steps: int = Field(40, ge=1, le=100)
+    num_steps: int | None = Field(None, ge=1, le=100)
     return_rgba: bool = False
     images: list[str] | None = Field(
         None, description="optional condition images (base64 PNG/JPEG) for editing", max_length=4
@@ -210,12 +215,15 @@ class PredictRequest(BaseModel):
 
 def _decode_images(b64_list):
     from PIL import Image
+    from ..common.images import condition_size
 
     out = []
     for b in b64_list or []:
         if "," in b[:64] and b.lstrip().startswith("data:"):
             b = b.split(",", 1)[1]
-        out.append(Image.open(io.BytesIO(base64.b64decode(b, validate=True))).convert("RGBA"))
+        image = Image.open(io.BytesIO(base64.b64decode(b, validate=True))).convert("RGBA")
+        condition_size(image, STATE["info"]["size"])
+        out.append(image)
     return out or None
 
 
@@ -250,6 +258,7 @@ def predict(req: PredictRequest):
     if not STATE["ready"]:
         raise HTTPException(status_code=503, detail="model loading")
     pipe = STATE["pipe"]
+    num_steps = STATE["info"]["default_steps"] if req.num_steps is None else req.num_steps
     try:
         images = _decode_images(req.images)
     except Exception as e:
@@ -259,7 +268,7 @@ def predict(req: PredictRequest):
 
     def work():
         t0 = time.time()
-        rgb, rgba, _, tm = pipe.generate(req.prompt, seed=req.seed, num_steps=req.num_steps, images=images)
+        rgb, rgba, _, tm = pipe.generate(req.prompt, seed=req.seed, num_steps=num_steps, images=images)
         return rgb, rgba, tm, time.time() - t0
 
     rgb, rgba, tm, total = _run_queued(pipe.cache_key_for(req.prompt, images), work)
@@ -269,7 +278,7 @@ def predict(req: PredictRequest):
         "width": rgb.width,
         "height": rgb.height,
         "seed": req.seed,
-        "num_steps": req.num_steps,
+        "num_steps": num_steps,
         "timing_ms": {k: round(v * 1000, 1) for k, v in tm.as_dict().items() if k.endswith("_s")}
         | {"total_ms": round(total * 1000, 1)},
     }

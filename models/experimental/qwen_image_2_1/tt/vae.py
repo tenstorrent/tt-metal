@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -98,8 +99,9 @@ class TTConv2d:
     `ttnn.conv2d` returns its weights already laid out for the parallelization it chose, which
     depends on the input height and width, so the device copies are cached per `(h, w)` and the host
     copy is kept as the source for a geometry that has not been seen yet. Having the device weights
-    resident after one warm-up call is what makes the layer trace-capturable. A decoder uses each
-    convolution at exactly one resolution, so in practice there is one device copy per layer.
+    resident after one warm-up call is what makes the layer trace-capturable. Retain the four most
+    recently used geometries, enough for all condition images in one request, and release older
+    device copies before preparing another geometry. The serving pipeline runs the VAE eagerly.
     """
 
     def __init__(
@@ -132,7 +134,7 @@ class TTConv2d:
         self.host_b = ttnn.from_torch(
             b.reshape(1, 1, 1, self.out_c).to(torch.bfloat16), dtype=prec.weight_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
         )
-        self.prepared: Dict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self.prepared: OrderedDict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]] = OrderedDict()
         self.conv_config = ttnn.Conv2dConfig(
             # Cached halo tables accumulate across aspect ratios; keep them out of the fixed small-L1 pool.
             config_tensors_in_dram=True,
@@ -148,7 +150,12 @@ class TTConv2d:
         slice_config = (
             ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=n_slices) if n_slices else None
         )
-        wt, bt = self.prepared.get((h, w), (self.host_w, self.host_b))
+        key = (h, w)
+        if key not in self.prepared and len(self.prepared) == 4:
+            _, old = self.prepared.popitem(last=False)
+            for tensor in old:
+                ttnn.deallocate(tensor)
+        wt, bt = self.prepared.get(key, (self.host_w, self.host_b))
         out, (oh, ow), (wt, bt) = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=wt,
@@ -171,7 +178,8 @@ class TTConv2d:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        self.prepared[(h, w)] = (wt, bt)
+        self.prepared[key] = (wt, bt)
+        self.prepared.move_to_end(key)
         return ttnn.reshape(out, (1, 1, oh * ow, self.out_c)), oh, ow
 
 

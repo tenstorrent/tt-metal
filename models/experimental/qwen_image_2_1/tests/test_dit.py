@@ -61,6 +61,15 @@ def _conds(model, t01):
     return sc, DeviceCond.from_host(model.dev, sc)
 
 
+def test_zero_layers_does_not_load_transformer_blocks(dev):
+    checkpoint = transformer_ckpt()
+    try:
+        shell = QwenImageDiT(dev, checkpoint, layers=0)
+        assert shell.layers == []
+    finally:
+        checkpoint.close()
+
+
 def test_prefix_kv_matches_reference(dev, model, goldens):
     m, ck = model
     te, dn = goldens
