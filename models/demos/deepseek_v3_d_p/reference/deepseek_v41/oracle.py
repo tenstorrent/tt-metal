@@ -436,8 +436,80 @@ def _align_engram_hash(hash_state: v41.NgramHashState, spec: OracleSpec) -> None
     hash_state.multipliers = multipliers[sel]
 
 
+# queries per indexer score block: [block, index_n_heads, S/ratio] bf16 = 1.8 GB at S=56320 (the unblocked score is
+# [S, index_n_heads, S/ratio], 200 GB at S=56320 ratio 1, plus as much again for the weighted product)
+INDEXER_QUERY_BLOCK = 512
+
+
+@torch.no_grad()
+def _indexer_forward_blocked(self: v41.Indexer, x, qr, latent, start_pos: int, offset: int):
+    """``v41.Indexer.forward`` with the score, visibility mask, candidate selection and top-k run per block of
+    ``INDEXER_QUERY_BLOCK`` queries, so host memory grows with S * S/ratio instead of S * heads * S/ratio. Every step
+    after the index keys is row-local (a query's score row, its mask, its candidate blocks and its top-k depend only
+    on that query), and no score's summation order changes: the per-(query, head, key) dot product is the same GEMM
+    element and the head reduction the same sum over dim 2. Bit-identical to ``v41.Indexer.forward``
+    (tests/v41/torch/test_v41_oracle.py); keep the two in step. Installed on every reference ``build_reference``
+    makes."""
+    assert self.freqs_cis is not None
+    assert v41.world_size == 1, "the oracle runs on one rank (no index-score all-reduce)"
+    bsz, seqlen, _ = x.size()
+    ratio, rd, end_pos = self.compress_ratio, self.rope_head_dim, start_pos + seqlen
+    shared = v41.shared_attn
+
+    if self.owns_k and latent is not None:  # as v41.Indexer.forward
+        freqs = (
+            self.freqs_cis[: seqlen - seqlen % ratio : ratio]
+            if start_pos == 0
+            else self.freqs_cis[start_pos + 1 - ratio].unsqueeze(0)
+        )
+        k = self.k_norm(self.wk(latent))
+        v41.apply_rotary_emb(k[..., -rd:], freqs)
+        v41.fp4_act_quant(k, v41.fp4_block_size, True)
+        self.k_cache[:bsz, start_pos // ratio : start_pos // ratio + k.size(1)] = k
+        shared.index_k = self.k_cache
+
+    q = self.wq_b(qr).unflatten(-1, (self.n_local_heads, self.index_head_dim))
+    v41.apply_rotary_emb(q[..., -rd:], self.freqs_cis[start_pos:end_pos])
+    v41.fp4_act_quant(q, v41.fp4_block_size, True)
+
+    index_k = shared.index_k[:bsz, : end_pos // ratio]
+    weights = self.weights_proj(x) * (self.softmax_scale * self.n_heads**-0.5)
+    if start_pos == 0:
+        compress_lens = (torch.arange(1, seqlen + 1, device=x.device) // ratio).unsqueeze(-1)
+    else:
+        compress_lens = end_pos // ratio
+    topk = min(self.index_topk, end_pos // ratio)
+    candidates, idxs = [], []
+    for s0 in range(0, seqlen, INDEXER_QUERY_BLOCK):
+        s1 = min(s0 + INDEXER_QUERY_BLOCK, seqlen)
+        lens = compress_lens[s0:s1] if start_pos == 0 else compress_lens
+        score = torch.einsum("bshd,btd->bsht", q[:, s0:s1], index_k)
+        score = (score.relu_() * weights[:, s0:s1].unsqueeze(-1)).sum(dim=2)
+        if start_pos == 0:
+            score.masked_fill_(torch.arange(seqlen // ratio, device=x.device) >= lens, -torch.inf)
+        if self.is_candidate_source:
+            candidates.append(
+                v41.select_candidate_blocks(score, lens, self.candidate_topk_blocks, self.candidate_block_size)
+            )
+        elif self.uses_candidates:
+            score = score.masked_fill(~shared.candidates[:, s0:s1], -torch.inf)
+        block = score.topk(topk, dim=-1, sorted=False).indices.sort(dim=-1).values
+        idxs.append(torch.where(block < lens, block + offset, -1).int())
+        del score
+    if self.is_candidate_source:
+        shared.candidates = torch.cat(candidates, dim=1)
+    return torch.cat(idxs, dim=1)
+
+
+def _install_blocked_indexer(model: v41.Transformer) -> None:
+    for mod in model.modules():
+        if isinstance(mod, v41.Indexer):
+            mod.forward = _indexer_forward_blocked.__get__(mod)
+
+
 def build_reference(spec: OracleSpec) -> v41.Transformer:
-    """The reference model for ``spec`` with synthetic (seeded, disk-cached) or checkpoint weights."""
+    """The reference model for ``spec`` with synthetic (seeded, disk-cached) or checkpoint weights. Its indexers
+    score in query blocks (``_indexer_forward_blocked``, bit-identical to the reference's)."""
     with v41.set_dtype(torch.bfloat16):
         model = v41.Transformer(spec.args, _tokenizer(spec))
     if model.engram_hash is not None:
@@ -454,6 +526,7 @@ def build_reference(spec: OracleSpec) -> v41.Transformer:
                 _synthetic_unit(name, unit, spec.seed)
             else:
                 _checkpoint_unit(name, unit, checkpoint)
+    _install_blocked_indexer(model)
     return model.eval()
 
 
@@ -633,7 +706,7 @@ def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | Lazy
     path = cache_path(spec, tokens)
     if path.is_file():
         timing_events.cache(True, "oracle", path.stem, path.stat().st_size)
-        return torch.load(path)
+        return torch.load(path, mmap=True)  # pages in what the caller reads (tens of GB at long prompts)
     timing_events.cache(False, "oracle", path.stem)
     model = _model(model, spec)
     with timing_events.phase("oracle", key=path.stem):
@@ -675,21 +748,23 @@ def noise_drift(
     count: int,
     noise: tuple[float, float, int],
     model: v41.Transformer | LazyReference | None = None,
+    chunk: int | None = None,
 ) -> dict:
     """{layer id: {"all": pcc, "tail": pcc}}: how far each block output of the prefill under ``noise`` (as
     ``tail_logits``) drifts from the clean ``oracle`` result, over all rows and over the last ``count`` rows: the
-    per-layer floor a free-running implementation's streams are gated against. Cached like ``tail_logits``."""
-    path = _noisy_path(spec, tokens, count, noise, "drift")
+    per-layer floor a free-running implementation's streams are gated against. ``chunk`` adds ``"chunk"``: the drift
+    over the last ``chunk`` rows (the last chunk of a chunked prefill). Cached like ``tail_logits``."""
+    path = _noisy_path(spec, tokens, count, noise, "drift", chunk)
     if path.is_file():
         timing_events.cache(True, "oracle.drift", path.stem, path.stat().st_size)
         return torch.load(path)
     timing_events.cache(False, "oracle.drift", path.stem)
-    return _noisy_run(spec, tokens, count, model, noise)[1]
+    return _noisy_run(spec, tokens, count, model, noise, chunk)[1]
 
 
-def _noisy_path(spec: OracleSpec, tokens: torch.Tensor, count: int, noise, kind: str) -> Path:
+def _noisy_path(spec: OracleSpec, tokens: torch.Tensor, count: int, noise, kind: str, chunk: int | None = None) -> Path:
     base = cache_path(spec, tokens)
-    tag = f"-tail{count}" if kind == "tail" else f"-drift{count}"
+    tag = f"-tail{count}" if kind == "tail" else f"-drift{count}" + (f"-chunk{chunk}" if chunk else "")
     tag += f"-noise-out{noise[0]:g}-in{noise[1]:g}-{noise[2]}" if noise else ""
     return base.with_name(base.stem + tag + ".pt")
 
@@ -705,10 +780,14 @@ def _save(obj, path: Path) -> None:
     tmp.replace(path)
 
 
-def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise) -> tuple[torch.Tensor, dict | None]:
+def _noisy_run(
+    spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise, chunk: int | None = None
+) -> tuple[torch.Tensor, dict | None]:
     """One prefill (with ``noise`` if given): stores and returns the tail logits and, with noise, the drift."""
     if not 0 < count <= tokens.size(1):
         raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
+    if chunk is not None and not 0 < chunk <= tokens.size(1):
+        raise ValueError(f"chunk must be in (0, {tokens.size(1)}], got {chunk}")
     model = _model(model, spec)
     clean = oracle(spec, tokens, model) if noise is not None else None  # before the noisy run resets the state
     _reset_state(model)
@@ -757,7 +836,9 @@ def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise)
     for lid, x in blocks.items():
         ref = clean["blocks"][lid]["x_out"]
         drift[lid] = {"all": _pcc(ref, x), "tail": _pcc(ref[-count:], x[-count:])}
-    _save(drift, _noisy_path(spec, tokens, count, noise, "drift"))
+        if chunk:
+            drift[lid]["chunk"] = _pcc(ref[-chunk:], x[-chunk:])
+    _save(drift, _noisy_path(spec, tokens, count, noise, "drift", chunk))
     return logits, drift
 
 

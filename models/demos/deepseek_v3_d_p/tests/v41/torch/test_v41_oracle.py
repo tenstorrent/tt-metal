@@ -19,6 +19,7 @@ import torch
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as o
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.engram import EngramLayout
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41.testing import init_weights
 
 SEQ = 41  # > window (16), odd (ratio-2 carry), not a multiple of the 16-token test chunk
 
@@ -231,6 +232,9 @@ def test_tail_logits_match_reference_and_noise_floor(cache, monkeypatch):
     assert set(drift) == set(spec.layer_ids)
     assert all(0.5 < d[k] < 1.0 for d in drift.values() for k in ("all", "tail")), drift
     assert torch.equal(noisy, o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 0)))  # same noisy run
+    # the last-chunk window: a chunk as long as the tail drifts like the tail; all / tail as without it
+    chunked = o.noise_drift(spec, tokens, 5, (0.045, 4e-3, 0), model, chunk=5)
+    assert all(chunked[l] == drift[l] | {"chunk": drift[l]["tail"]} for l in drift), (chunked, drift)
 
     def no_prefill(*args):
         raise AssertionError("cache hit must not run the reference")
@@ -238,6 +242,58 @@ def test_tail_logits_match_reference_and_noise_floor(cache, monkeypatch):
     monkeypatch.setattr(o, "prefill", no_prefill)
     assert torch.equal(o.tail_logits(spec, tokens, 5), tail)  # hit: bit-identical reload
     assert o.noise_drift(spec, tokens, 5, (0.045, 4e-3, 0)) == drift
+
+
+def _unblocked(model: torch.nn.Module) -> None:
+    """Back to the reference's own ``Indexer.forward`` (``build_reference`` installs the blocked one)."""
+    for mod in model.modules():
+        if isinstance(mod, v41.Indexer):
+            del mod.forward
+
+
+def test_blocked_indexer_oracle_is_bit_identical(cache, monkeypatch):
+    """Every capture, shared tensor and final state of the oracle is bit-identical with the indexer scored in query
+    blocks (7 rows: a partial last block) and unblocked (all six block types, candidates, ratio 1 and 2)."""
+    spec, tokens = _small()
+    monkeypatch.setattr(o, "INDEXER_QUERY_BLOCK", 7)
+    model = o.build_reference(spec)
+    blocked = o._run(model, spec, tokens)
+    _unblocked(model)
+    _assert_same(o._run(model, spec, tokens), blocked)
+
+
+def test_blocked_indexer_real_dims_is_bit_identical(monkeypatch):
+    """Real dims (32 index heads x 128, ratio 2 and 1, 96 of 256 candidate blocks), S=2048, through the attention
+    of the index sources V4.1 2, 20 (candidate source) and 24 (candidate consumer): the attention output, top-k and
+    candidates are bit-identical blocked (6 whole blocks of 300 queries and a partial one) and unblocked. The real
+    prompt lengths are checked end to end by the long-context oracle runs (bead 8y7.19.1)."""
+    seq = 2048
+    args = o.real_spec((0, 2, 3, 20, 21, 24), seq, candidate_topk_blocks=96).args
+    monkeypatch.setattr(o, "INDEXER_QUERY_BLOCK", 300)
+    monkeypatch.setattr(v41, "default_dtype", torch.float8_e4m3fn)  # as Transformer.__init__ sets for fp8 args
+    with v41.set_dtype(torch.bfloat16):
+        attns = torch.nn.ModuleList(v41.Attention(pos, args) for pos in (1, 3, 5))  # V4.1 layers 2, 20, 24
+    init_weights(attns, seed=3)
+    x = torch.randn(1, seq, args.dim, generator=torch.Generator().manual_seed(4)).bfloat16()
+
+    def run():
+        o._reset_state(attns)
+        out = []
+        with torch.no_grad(), v41.set_dtype(torch.bfloat16):
+            for attn in attns:
+                y = attn(x, 0)
+                candidates = v41.shared_attn.candidates
+                out.append((y, v41.shared_attn.topk_idxs.clone(), None if candidates is None else candidates.clone()))
+        return out
+
+    o._install_blocked_indexer(attns)
+    blocked = run()
+    _unblocked(attns)
+    reference = run()
+    assert blocked[1][2] is not None and not blocked[1][2].all()  # candidates select (not every block)
+    for (y, idx, cand), (y_ref, idx_ref, cand_ref) in zip(blocked, reference):
+        assert torch.equal(idx, idx_ref) and torch.equal(y, y_ref)
+        assert (cand is None) == (cand_ref is None) and (cand is None or torch.equal(cand, cand_ref))
 
 
 def test_window_ring_hand_values():
