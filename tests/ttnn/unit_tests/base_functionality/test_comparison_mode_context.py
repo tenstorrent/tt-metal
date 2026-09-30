@@ -529,35 +529,108 @@ def test_bitcast_fallback_keeps_requested_dtype(device, input_dtype, output_dtyp
     assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(input_tensor).view(float_dtype))
 
 
+CONCAT_BW_GRAD_SHAPE = (1, 1, 64, 32)
+TENSOR_OPERANDS = ("input_tensor", "other_tensor")
+TENSOR_AB_OPERANDS = ("input_tensor_a", "input_tensor_b")
+
+
+def _binary_backward_inputs(device, grad_shape=SINGLE_TILE):
+    # input_a < input_b and input_b > 0 keep xlogy, remainder, fmod, min and max away from their branch boundaries.
+    grad = _to_device(torch.rand(grad_shape, dtype=torch.bfloat16), device)
+    input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
+    input_b = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
+    return grad, input_a, input_b
+
+
 @pytest.mark.requires_fast_runtime_mode_off
-def test_addalpha_bw_with_disabled_gradient_in_comparison_mode(device):
-    grad, input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(3))
+@pytest.mark.parametrize(
+    "operation, extra_args, grad_shape",
+    [
+        pytest.param(ttnn.addalpha_bw, (2.0,), SINGLE_TILE, id="addalpha_bw"),
+        pytest.param(ttnn.subalpha_bw, (2.0,), SINGLE_TILE, id="subalpha_bw"),
+        pytest.param(ttnn.rsub_bw, (), SINGLE_TILE, id="rsub_bw"),
+        pytest.param(ttnn.assign_bw, (), SINGLE_TILE, id="assign_bw"),
+        pytest.param(ttnn.concat_bw, (2,), CONCAT_BW_GRAD_SHAPE, id="concat_bw"),
+    ],
+)
+def test_binary_backward_with_disabled_gradient_in_comparison_mode(device, operation, extra_args, grad_shape):
+    grad, input_a, input_b = _binary_backward_inputs(device, grad_shape)
 
     # With are_required_outputs=[True, False] the device returns None for the disabled gradient, so the golden
     # must return the same list layout instead of computing both gradients.
     with comparison_mode():
-        gradients = ttnn.addalpha_bw(grad, input_a, input_b, 2.0, are_required_outputs=[True, False])
+        gradients = operation(grad, input_a, input_b, *extra_args, are_required_outputs=[True, False])
 
     assert gradients[1] is None
 
 
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
-    "operation, operand_names, extra_kwargs",
+    "operation, operand_names, extra_kwargs, grad_shape",
     [
-        pytest.param(ttnn.sub_bw, ("input_tensor", "other_tensor"), {}, id="sub_bw"),
-        pytest.param(ttnn.subalpha_bw, ("input_tensor_a", "input_tensor_b"), {"alpha": 2.0}, id="subalpha_bw"),
-        pytest.param(ttnn.squared_difference_bw, ("input_tensor_a", "input_tensor_b"), {}, id="squared_difference_bw"),
+        pytest.param(ttnn.add_bw, TENSOR_OPERANDS, {}, SINGLE_TILE, id="add_bw"),
+        pytest.param(ttnn.sub_bw, TENSOR_OPERANDS, {}, SINGLE_TILE, id="sub_bw"),
+        pytest.param(ttnn.mul_bw, TENSOR_OPERANDS, {}, SINGLE_TILE, id="mul_bw"),
+        pytest.param(ttnn.div_bw, TENSOR_OPERANDS, {}, SINGLE_TILE, id="div_bw"),
+        pytest.param(ttnn.addalpha_bw, TENSOR_AB_OPERANDS, {"alpha": 2.0}, SINGLE_TILE, id="addalpha_bw"),
+        pytest.param(ttnn.subalpha_bw, TENSOR_AB_OPERANDS, {"alpha": 2.0}, SINGLE_TILE, id="subalpha_bw"),
+        pytest.param(ttnn.squared_difference_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="squared_difference_bw"),
+        pytest.param(ttnn.remainder_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="remainder_bw"),
+        pytest.param(ttnn.fmod_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="fmod_bw"),
+        pytest.param(ttnn.atan2_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="atan2_bw"),
+        pytest.param(ttnn.xlogy_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="xlogy_bw"),
+        pytest.param(ttnn.hypot_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="hypot_bw"),
+        pytest.param(ttnn.ldexp_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="ldexp_bw"),
+        pytest.param(ttnn.logaddexp_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="logaddexp_bw"),
+        pytest.param(ttnn.logaddexp2_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="logaddexp2_bw"),
+        pytest.param(ttnn.rsub_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="rsub_bw"),
+        pytest.param(ttnn.min_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="min_bw"),
+        pytest.param(
+            ttnn.max_bw,
+            TENSOR_AB_OPERANDS,
+            {},
+            SINGLE_TILE,
+            id="max_bw",
+            marks=pytest.mark.xfail(strict=True, reason="max_bw returns the other-input gradient first"),
+        ),
+        pytest.param(ttnn.assign_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="assign_bw"),
+        pytest.param(ttnn.concat_bw, TENSOR_AB_OPERANDS, {"dim": 2}, CONCAT_BW_GRAD_SHAPE, id="concat_bw"),
+        pytest.param(ttnn.bias_gelu_bw, TENSOR_AB_OPERANDS, {}, SINGLE_TILE, id="bias_gelu_bw"),
     ],
 )
-def test_binary_backward_with_keyword_operands_in_comparison_mode(device, operation, operand_names, extra_kwargs):
-    grad, input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(3))
+def test_binary_backward_with_keyword_operands_in_comparison_mode(
+    device, operation, operand_names, extra_kwargs, grad_shape
+):
+    grad, input_a, input_b = _binary_backward_inputs(device, grad_shape)
     operands = dict(zip(operand_names, (input_a, input_b)))
 
     # The public keyword names for the operands differ per op (input_tensor/other_tensor vs input_tensor_a/b) and
     # the golden must accept them, instead of failing on a call that only works positionally.
     with comparison_mode():
         operation(grad_tensor=grad, **operands, **extra_kwargs)
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize(
+    "operation, operand_name, extra_kwargs",
+    [
+        pytest.param(ttnn.add_bw, "input_tensor_a", {"scalar": 2.0}, id="add_bw"),
+        pytest.param(ttnn.sub_bw, "input_tensor_a", {"scalar": 2.0}, id="sub_bw"),
+        pytest.param(ttnn.mul_bw, "input_tensor_a", {"scalar": 2.0}, id="mul_bw"),
+        pytest.param(ttnn.div_bw, "input_tensor_a", {"scalar": 2.0}, id="div_bw"),
+        pytest.param(ttnn.remainder_bw, "input_tensor_a", {"scalar": 2.0}, id="remainder_bw"),
+        pytest.param(ttnn.fmod_bw, "input_tensor_a", {"scalar": 2.0}, id="fmod_bw"),
+        pytest.param(ttnn.bias_gelu_bw, "input_tensor", {"bias": 0.5}, id="bias_gelu_bw"),
+        pytest.param(ttnn.assign_bw, "input_tensor", {}, id="assign_bw"),
+    ],
+)
+def test_binary_backward_with_keyword_scalar_in_comparison_mode(device, operation, operand_name, extra_kwargs):
+    grad, input_a, _ = _binary_backward_inputs(device)
+
+    # The scalar overloads name the tensor operand input_tensor_a (input_tensor for bias_gelu_bw) and the unary
+    # assign_bw overload input_tensor, unlike the input_tensor/other_tensor names of the tensor overloads.
+    with comparison_mode():
+        operation(grad_tensor=grad, **{operand_name: input_a}, **extra_kwargs)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
