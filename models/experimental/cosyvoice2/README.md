@@ -13,7 +13,7 @@ The whole model runs on device, non-streaming: text → speech tokens (LLM) → 
 (HiFT vocoder). **The four Stage 1 targets are met.** Streaming runs too: chunks of audio are produced while the LLM
 generates, on upstream's chunk schedule. That schedule, run over fixed tokens, matches upstream's own streaming run
 (`docs/VALIDATION.md`). It misses both Stage 3 targets: the first audio arrives after 1.31–1.50 s, and the worst
-streaming RTF is 1.06–1.12.
+streaming RTF is 1.10–1.12.
 
 | target (#54104) | stage | measured | status |
 |---|---|---|---|
@@ -23,8 +23,8 @@ streaming RTF is 1.06–1.12.
 | speaker similarity > 0.60 (cosine) | 1 | **0.959** (0.958–0.959 over five draws); the PyTorch reference 0.952 | met |
 | time to first packet < 500 ms; streaming RTF < 0.4 | 3 | first audio **1.31–1.50 s**; streaming RTF worst **1.10–1.12**, aggregate 0.84–0.85 | missed |
 
-- Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The non-streaming RTF and token-accuracy
-  gates are enforced by tests; the two streaming figures are recorded there but not enforced yet.
+- Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). Tests enforce the non-streaming RTF, the
+  token accuracy and both streaming figures; the missed streaming targets are each held inside a recorded band.
 - A second N150 (2026-09-29) reproduced the 09-28 figures, with the same tokens and scores. The figures above are
   its re-run of 2026-09-30, after HiFT's padded calls were masked to match upstream's endings.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) has the per-utterance tables and how each figure was produced.
@@ -144,29 +144,36 @@ $REF $S/eval_draws.py --out draws.json --group "TT Stage 1" <draws dir>/tt_stage
 ## Tests
 
 ```bash
-# host tier: no device, 113 tests
+# host tier: no device, 134 tests
 pytest models/experimental/cosyvoice2/tests -k "not test_device"
 
-# the whole suite (95 device tests). Some need reference-side files, and skip without them.
+# the whole suite (100 device tests, the two perf tests deselected). Some need reference-side files, and skip
+# without them.
 COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS \
 COSYVOICE2_TOKEN_REF=<token_accuracy_reference.py out dir> \
 COSYVOICE2_HIFT_STREAM_REF=<hift_streaming_reference.py out dir> \
-pytest models/experimental/cosyvoice2/tests \
-  --deselect 'models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py::test_device_nonstreaming_rtf_distinct_utterances[device_params0]'
+COSYVOICE2_STREAM_REF=<streaming_reference.py out dir> \
+pytest models/experimental/cosyvoice2/tests --deselect models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py
 
-# the Stage 1 RTF gate, in its own process
-COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py
+# the Stage 1 RTF gate, then Stage 3's two figures, each in its own process
+COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest "models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py::test_device_nonstreaming_rtf_distinct_utterances"
+COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest "models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py::test_device_streaming_first_audio_and_rtf_distinct_utterances"
 ```
 
 - **The token-accuracy test's references** come from the reference venv:
   1. `run_reference.py --parity` and `run_reference.py --extension`, one output directory each;
   2. `token_accuracy_reference.py --inputs $COSYVOICE2_INPUTS --run-dir <each of the two> --out-dir <one token dir>`.
 - **The chunked-HiFT seam gate's reference** is `scripts/hift_streaming_reference.py --out-dir <dir>`.
-- `tests/reference/test_reference_env.py` checks the reference venv's two transformers shims. It runs there as a
-  plain script and skips under `python_env`.
+- **The streaming gates' reference** is upstream streaming the demo's tokens:
+  `scripts/streaming_reference.py --inputs $COSYVOICE2_INPUTS --tokens-from <Stage 1 run dir> --out-dir <dir>`.
+- `tests/reference/` runs in the reference venv as plain scripts and skips under `python_env`:
+  - `test_reference_env.py` checks the reference venv's two transformers shims;
+  - `test_you_clip.py` transcribes the "you" clip's 11 noise draws, which the device suite writes when
+    `COSYVOICE2_YOU_OUT` is set, and fails on a trailing "you" (`docs/VALIDATION.md`, "Masked end padding").
 - An allocation-tracker test for the CFM traces is opt-in: it must run alone, with
   `COSYVOICE2_RUN_TRACE_ALLOC_TRACKER=1`.
-- The suite took 73 minutes on an N150 from an empty kernel cache, and about 16 with the kernels on disk.
+- The suite took 73 minutes on an N150 from an empty kernel cache (2026-09-29). On 2026-09-30, with most kernels
+  on disk, it took 27 minutes and compiled 1,103.
 
 ## Known issues
 
@@ -179,12 +186,13 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
   - Where the weight prepared for the activation's TILE layout is wrong, one prepared declaring a ROW_MAJOR input
     is usually right. The checks then keep that one, so the conv stays on a prepared (traceable) weight
     (`docs/VALIDATION.md`, "Prepared conv weights").
-  - The checks rerun in every process: 21.5 s of the warm start.
+  - The checks rerun in every process: 35 s of the warm start (23.5 s for the buckets, 11.5 s for the streaming
+    set).
 - **Cached kernels are reused only when a process allocates identically.**
   - With conv config tensors in DRAM, the conv and halo reader kernels take those tensors' DRAM addresses as
     compile-time arguments.
-  - So start-up runs a fixed warm-up sequence. It takes 3.2 minutes when the kernels are on disk and 30.5 minutes on
-    an empty cache ([`PERF.md`](PERF.md)).
+  - So start-up runs a fixed warm-up sequence. It takes 3.1 minutes when the kernels are on disk and 31.4 minutes on
+    an empty cache, and the streaming set adds 2.5 and 13.0 minutes ([`PERF.md`](PERF.md)).
   - Any change to the code, the configuration or the checkpoint costs one cold start.
 - **Streaming needs its own warm-up.** A chunk runs between decode steps while the LLM's decode trace is alive, so
   `warmup_streaming()` compiles and verifies every streaming geometry first (2.5 minutes with the kernels on disk).
@@ -223,12 +231,13 @@ forward twin for the NSF source. The identity is the one the CosyVoice1 port
 
 | path | what |
 |---|---|
-| `tt/pipeline.py` | the whole model, wired: `CosyVoice2TTNN.synthesize`, the configuration, bucketing, the warm-up |
+| `tt/pipeline.py` | the whole model, wired: `CosyVoice2TTNN.synthesize` and `synthesize_stream`, the configuration, bucketing, the warm-ups |
+| `tt/streaming.py` | streaming: upstream's chunk schedule, `StreamSession`, HiFT over a stream with upstream's cache |
 | `tt/text.py`, `tt/prompt.py` | the text frontend; what a call is conditioned on and what it draws at random |
 | `tt/llm/` | the Qwen2 backbone (adapted from tt_transformers) and RAS sampling |
 | `tt/flow/` | the Conformer encoder, the CFM estimator and solver, and the module that ties them together |
 | `tt/hifigan/` | the vocoder: convs with per-geometry checks, resblocks, NSF source, F0 predictor, STFT/iSTFT, chunking |
 | `tt/checkpoint.py`, `tt/geometry_cache.py` | checkpoint loading; the per-geometry weight caches |
 | `demo/demo.py` | the Stage 1 demo; `--stream` for streaming |
-| `scripts/` | reference-venv scripts: the corpus, inputs, the PyTorch reference, the scorer, the references for two tests |
-| `tests/` | `e2e/` (pipeline, text, prompt, token accuracy), `pcc/` (per module, against torch or upstream), `perf/` (the gates) |
+| `scripts/` | reference-venv scripts: the corpus, inputs, the PyTorch reference and upstream's streaming, the scorer and its noise-draw report, the tests' references; `noise_draws.py` runs on the device |
+| `tests/` | `e2e/` (pipeline, text, prompt, token accuracy, streaming), `pcc/` (per module, against torch or upstream), `perf/` (the gates), `reference/` (reference-venv checks) |

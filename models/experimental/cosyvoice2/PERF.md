@@ -22,34 +22,51 @@ python models/experimental/cosyvoice2/demo/demo.py --inputs <scripts/prepare_inp
 # streaming: both warm-ups, then the same six targets
 python models/experimental/cosyvoice2/demo/demo.py --inputs <scripts/prepare_inputs.py dir> --out <dir> --stream
 
-# the Stage 1 RTF gate
-COSYVOICE2_INPUTS=<dir> pytest models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py
+# the Stage 1 RTF gate, then Stage 3's two figures, each in its own process
+COSYVOICE2_INPUTS=<dir> pytest "models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py::test_device_nonstreaming_rtf_distinct_utterances"
+COSYVOICE2_INPUTS=<dir> pytest "models/experimental/cosyvoice2/tests/perf/test_pipeline_perf.py::test_device_streaming_first_audio_and_rtf_distinct_utterances"
 ```
 
 ## Start-up
 
 At start-up the pipeline runs every flow and HiFT bucket once (`warmup_buckets()`), so no request compiles:
-8 LLM prefill lengths and a decode, 17 flow buckets, and 2 HiFT buckets, which chunked HiFT reuses.
+8 LLM prefill lengths and a decode, 17 flow buckets, and 2 HiFT buckets, which chunked HiFT reuses. Streaming adds
+its own set (`warmup_streaming()`): the streaming flow at the 17 buckets, and HiFT's streaming calls.
 
-| start | warm-up | kernels compiled | before chunked HiFT (12 HiFT buckets) |
+Measured on 2026-09-30, on the masked HiFT, in two fresh processes against one new kernel-cache directory
+(`TT_METAL_CACHE`). The first process started empty; the second was identical.
+
+| start | `warmup_buckets()` | then `warmup_streaming()` | kernels compiled |
 |---|---|---|---|
-| cold: empty kernel cache | **30.5 min** (1,831 s), after a 16 s build | 9,959 | 76 min (4,561 s), 19,068 kernels |
-| warm: kernels on disk | **3.2 min** (195 s), after a 13 s build | 0 | 9.6 min (577 s) |
+| cold: empty kernel cache | **31.4 min** (1,885 s), after a 15 s build | 13.0 min (779 s) | 9,910 + 2,766 |
+| warm: kernels on disk | **3.1 min** (188 s), after a 12 s build | 2.5 min (150 s) | 0 |
+
+09-28's measurement of the buckets, on chunked HiFT before the masking, was 30.5 and 3.2 min. Before chunked HiFT
+it was 76 and 9.6 min.
 
 - **The warm start, split:**
-  - conv safety checks: 21.5 s (11 %);
-  - conv weight preparation: 7.9 s (4 %);
-  - each geometry's first run: 165 s (85 %).
-
-  By stage: LLM 2.4 s, flow 157 s (81 %), HiFT 20 s. The Stage 1 demo and perf test, later warm starts on the same
-  cache, warmed in 179 s and 176 s.
-- **The cold start is mostly kernel compilation:** the 1,636 s it adds is 89 % of it.
+  - conv safety checks 23.5 s, plus 11.5 s for the streaming set;
+  - conv weight preparation 9.2 s, plus 3.9 s;
+  - by stage: LLM 2.4 s, flow 165 s, HiFT 21 s; then the streaming flow 124 s and streaming HiFT 26 s.
+- **The cold start is kernel compilation and first-sight checks.** The checks compile the reference convs' kernels
+  too (452 s and 281 s cold). Over the warm start, cold adds 1,697 s for the buckets and 629 s for the streaming
+  set.
 - **Any change** to the code, the configuration, the checkpoint or the warm-up sequence costs one cold start. Some
   conv kernels carry DRAM addresses in their compile-time arguments, so a cached binary is reused only when a
   process allocates exactly as the one that compiled it.
-- **Cold first request, no warm-up** (`demo.py --warmup none`, one utterance, fresh process; measured before chunked
-  HiFT): 277.2 s for 8.52 s of audio, **RTF 32.5**, with 706 kernels compiled. That is the cost the warm-up moves to
-  start-up.
+- **Cold first request, no warm-up** (`demo.py --warmup none`, one utterance, 121-127105-0003 at 8.52 s, fresh
+  process, 2026-09-30):
+
+  | kernel cache | wall | RTF | kernels compiled |
+  |---|---|---|---|
+  | empty | 563.4 s | **66.1** | 2,929 |
+  | holding every binary it needs (the day's earlier runs) | 17.4 s | **2.04** | 0 |
+
+  - With the kernels on disk, what remains is each geometry's first run. HiFT's first-sight conv checks alone take
+    10.7 s.
+  - A filled cache is not one figure: it holds whatever earlier processes compiled. 09-28's RTF 32.5 came from a
+    cache that still lacked 706 of this request's binaries.
+  - This is the cost the warm-up moves to start-up. Warmed, the same utterance takes 3.76 s (RTF 0.441).
 
 ## Requests after start-up (Stage 1)
 
@@ -79,7 +96,8 @@ HiFT, 2026-09-30):
 | streaming RTF, aggregate | 0.851 | 0.836 | |
 
 09-29's two runs, before the final call was masked, fall in the same spread: 1.336–1.479 s; aggregate RTF
-0.843–0.853.
+0.843–0.853. The streaming perf test enforces both figures, each inside its recorded band (its first run: worst
+first audio 1,469 ms, worst RTF 1.110).
 
 - **Start-up** adds `warmup_streaming()` after `warmup_buckets()`: 149 s with the kernels on disk (the bucket
   warm-up took 184 s in the same runs). A streaming request is refused without it.

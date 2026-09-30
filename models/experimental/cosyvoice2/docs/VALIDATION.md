@@ -10,7 +10,7 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **met: corpus WER 0.68 % in each of five noise draws**, the same as the PyTorch reference's (2026-09-30, masked HiFT; "WER and similarity over five noise draws" below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **met: 95.88 (95.84–95.92 over five noise draws)**, reference 95.22 (95.21–95.24) (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
-| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.31–1.50 s, worst streaming RTF 1.10–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups on the masked HiFT (2026-09-30; "Streaming, measured" below); `Misses()` recorded, with the lever | not yet by a device test: `demo/demo.py --stream` |
+| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.31–1.50 s, worst streaming RTF 1.10–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups on the masked HiFT (2026-09-30; "Streaming, measured" below); `Misses()` recorded, with the lever | `tests/perf/test_pipeline_perf.py` (streaming): each figure held inside its recorded band |
 
 ## How the figures are produced
 
@@ -778,6 +778,37 @@ Everything was re-run on `5317572d0c` on the second N150 (KMD 2.9.0), with nothi
   The warm-ups took 184.6 and 149.0 s, then 184.3 and 149.4 s, and compiled nothing. The final call's masks move
   neither figure outside the spread of 09-29's runs. The first chunk: 0.37–0.47 s until it starts, flow
   0.82–0.91 s (CFM 0.68–0.74 s), HiFT 0.12–0.13 s.
+- **The streaming perf test** (`tests/perf/test_pipeline_perf.py`, R6, its own process, the same protocol) enforces
+  both Stage 3 figures through `tests/perf/gates.py`. Its first run: worst first audio 1,469 ms (best 1,404) and
+  worst RTF 1.110 (aggregate 0.867), both inside their bands. Both warm-ups took 335 s.
+
+## Start-up and the cold first request, re-measured (2026-09-30)
+
+On the masked HiFT (R6; notes B22, D37: the rebuild spec's figures for these were unverified). Two fresh processes
+ran against one new `TT_METAL_CACHE` directory, the first starting empty and the second identical, each timing
+construction and both warm-ups (notes: `scripts/2026-09-30/startup_measure.py`):
+
+| | cold: empty kernel cache | warm: every kernel on disk |
+|---|---|---|
+| construction | 15.4 s | 12.0 s |
+| `warmup_buckets()` | 1,885 s (31.4 min), 9,910 kernels | 188 s (3.1 min), 0 kernels |
+| of it: LLM / flow / HiFT | 152 / 1,159 / 574 s | 2.4 / 165 / 21 s |
+| of it: conv safety checks / weight preparation | 452 / 9.9 s | 23.5 / 9.2 s |
+| `warmup_streaming()` | 779 s (13.0 min), 2,766 kernels | 150 s (2.5 min), 0 kernels |
+| of it: streaming flow / streaming HiFT | 125 / 654 s | 124 / 26 s |
+
+- **The buckets reproduce 09-28's figures** (1,831 s cold with 9,959 kernels, 195 s warm; "Stage 1 on chunked HiFT"
+  above), the kernel count within 1 %. The masking changes none of the convs.
+- **A cold streaming start is 44 minutes;** a warm one, 5.6.
+
+**The cold first request** (`demo.py --warmup none`, one utterance, 121-127105-0003 at 8.52 s, fresh process):
+- **On an empty kernel cache:** 563.4 s, RTF 66.1, 2,929 kernels compiled. HiFT took 386 s of it. The spec's 64.3 is
+  close.
+- **On a cache holding every binary it needs** (the day's earlier runs had compiled them): 17.4 s, RTF 2.04, nothing
+  compiled. HiFT's first-sight conv checks take 10.7 s of it.
+- **The spec's "RTF 32.5 on a cache filled by earlier warmed runs" doesn't reproduce as a figure.** It was 09-28's
+  run above, on a cache that still lacked 706 of this request's binaries. What a filled cache gives depends on what
+  compiled into it before.
 
 ## Streaming, stage A: offline, from fixed tokens (2026-09-29)
 
@@ -899,7 +930,8 @@ is on the host; it is the time to first packet.
   plus the chunk).
 - Its HiFT: 0.121–0.127 s.
 
-**Against the targets** (recorded as `Misses()` in `tests/perf/gates.py`; no device test enforces them yet):
+**Against the targets** (recorded as `Misses()` in `tests/perf/gates.py`; since 2026-09-30 the streaming perf test
+holds each inside its band):
 - **Time to first packet < 500 ms: missed**, by about 3x. Without its flow, the first chunk would be ready at
   0.51–0.59 s (the time until it starts, plus HiFT), so even a free flow would miss. The flow is the lever.
 - **Streaming RTF < 0.4: missed.** Every chunk reruns the flow over the whole prefix, as upstream does, and the final
@@ -977,8 +1009,9 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 
 ## Open
 
-- **Start-up is 3.2 minutes with the kernels on disk, 30.5 without** (chunked HiFT, above). The flow is now 81 %
-  of the warm start (157 s). Persisting the conv safety checks' verdicts (21.5 s now) is deferred.
+- **Start-up is 3.1 minutes with the kernels on disk and 31.4 without; the streaming set adds 2.5 and 13.0**
+  ("Start-up and the cold first request, re-measured"). The flow is 88 % of the warm bucket start (165 of 188 s).
+  Persisting the conv safety checks' verdicts (35 s of the warm start) won't be done (notes: D27).
 - **tenstorrent/tt-metal#36487** (prepared conv weights wrong under DRAM slicing) is worked around by the per-geometry
   checks. Where the TILE-prepared weight is wrong, a ROW_MAJOR-prepared one usually isn't, and the checks keep it.
   A comment with our geometries is drafted, not posted.
@@ -986,5 +1019,5 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
   - first audio at 1.31–1.50 s against 0.5 s (four runs, 09-29 and 09-30);
   - a worst streaming RTF of 1.06–1.12 against 0.4.
 
-  The first chunk's flow is the lever: its CFM alone takes 0.67–0.73 s. No device test enforces the two figures
-  yet. A cold streaming start (the warm-ups on an empty kernel cache) is not measured.
+  The first chunk's flow is the lever: its CFM alone takes 0.67–0.74 s. The streaming perf test holds both figures
+  inside their recorded bands.

@@ -89,7 +89,8 @@ WORMHOLE: dict = {
     "speaker_similarity": Meets(),
     # Streaming (demo.py --stream): warmup_buckets() and warmup_streaming() first, then the six distinct corpus
     # utterances, in fresh processes; two runs on 2026-09-29 and two on the masked HiFT on 2026-09-30. The figure is
-    # the worst utterance, as for rtf_nonstreaming. Not yet enforced by a device test.
+    # the worst utterance, as for rtf_nonstreaming. Enforced by tests/perf/test_pipeline_perf.py's streaming test
+    # (2026-09-30: worst 1,469 ms and RTF 1.110).
     # Time to first packet: worst 1,455 and 1,479 ms (09-29), 1,502 and 1,432 ms (09-30); best 1,313. The first chunk
     # is 0.37-0.47 s of text and LLM until its 25 or 32 tokens and 3 look-ahead, then the flow over the prompt and the
     # chunk, 0.81-0.92 s, and HiFT, 0.12-0.13 s.
