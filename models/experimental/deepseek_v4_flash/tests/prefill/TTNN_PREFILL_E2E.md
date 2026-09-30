@@ -5,10 +5,10 @@ Branch **`sdawle/dsv4-flash-prefill-decode-1glx`** (tenstorrent/tt-metal). It me
 ttnn **traced decode** (`models/experimental/deepseek_v4_flash`, from branch `smanoj/ds_v4_flash`), and adds the
 hand-off between them. It is all tt-metal: nothing imports tt-blaze (`blaze` is not even importable in the venv).
 
-> **Status, 2026-09-30 00:00.** Merged, built and pushed. **The decode alone runs on device**: on host 41's firmware
-> 19.11 (where its weight prefetcher cannot run) the 4-layer decode builds, replays the 128-token prompt and generates
-> 32 tokens (`1 passed`, 2026-09-29 23:58, after three prefetcher-off fixes). The 43-layer decode run (first real text
-> check) started at 23:58 (§5). **The prefill→decode e2e has not run yet.**
+> **Status, 2026-09-30 01:10.** Merged, built and pushed. **The full 43-layer decode runs on device and generates coherent
+> text** on host 41's firmware 19.11 (where its weight prefetcher cannot run): `1 passed`, 64 tokens at **34.90 tok/s**
+> (batch 1, 2 TP4 stages, prefetcher off), 2026-09-30 01:05, after three prefetcher-off fixes. The decode bf4 cache is now
+> complete (43 layers). **The prefill→decode e2e has not run yet** (next: §6 step 3).
 
 ## 1. Where to run it
 
@@ -32,7 +32,7 @@ Somewhere else: `git clone https://github.com/tenstorrent/tt-metal.git && git ch
 | Blackhole firmware bundle | **19.11.0.0** | decode's DRISC weight prefetcher needs ≥ 19.12.0.0; on older firmware the decode now turns it off by itself (§4) |
 | `transformers==5.12.1` in `python_env` | installed | the decode imports `transformers.models.deepseek_v4` |
 | HF checkpoint in the hub layout | `~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731` → `/mnt/tt-data/sdawle/models/DeepSeek-V4-Flash-0731` | the decode tests hard-code the hub path |
-| decode bf4 tile cache `DEEPSEEK_V4_CACHE_DIR=/mnt/tt-data/sdawle/dsv4_sankar_cache` | layers 0-3 only | the first 43-layer build converts every weight (~85-97 s per layer measured cold, so ~1 h+) |
+| decode bf4 tile cache `DEEPSEEK_V4_CACHE_DIR=/mnt/tt-data/sdawle/dsv4_sankar_cache` | **complete** (43 layers, built 2026-09-30 00:00-01:05) | the first 43-layer build converted every weight (~85-100 s per layer cold, 66 min total); later builds load it |
 | prefill tile cache `PREFILL_TTNN_CACHE=/mnt/tt-data/sdawle/dsv4_flash_ttnn_cache` | `…_bh_32dev/8x4` only (282 GB); **no `4x4`** | the first prefill build on the 4x4 submesh converts every weight (unmeasured). It can be built on another galaxy in parallel (shared NFS; the prefill does not use the prefetcher) |
 
 Never force `TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1` on firmware 19.11: tt-metal documents a collision with
@@ -110,24 +110,22 @@ receiver core) on every decode chip, and the prefill is L1-tight. Analysis: tt-b
 | decode A try1 | all 4 layers built (cold, ~85-97 s/layer); first step, layer 0 `kv_proj` | `Number of shards along height 512 must not exceed number of cores 16` | `b3fd4b277db` |
 | decode A try2 | layer 0 attention + hyper-connection; layer 0 MoE router | `per_core_M must be greater than 0` (`ttnn.linear` fed the hub-mode replica) | `172db491b2a` |
 | decode A try3 | **PASS**: 4 layers (warm cache, ~1.5 s/layer), 128-token prompt replay, 32 generated tokens, `1 passed` in 66 s | — | the text is meaningless with 4 of 43 layers, and 204 tok/s for 4 layers is not a model number |
-| decode B | started 2026-09-29 23:58: all 43 layers, 64 new tokens; converts layers 4-42 cold first (~1 h) | running at hand-off | see §5a |
+| decode B | **PASS** 2026-09-30 01:05: all 43 layers (cold conversion of layers 4-42, 66 min), 128-token prompt replay, **64 coherent tokens at 34.90 tok/s** ("**The Top 10 Best Movies of All Time (According to My Couch, My Snack Bowl, and My Unshakable Bias)** *Note: These are objectively correct. Do not fight me.* 1. **The Godfather (1972, Francis Ford Coppola)** – …") | — | first end-to-end evidence that the prefetcher-off decode computes correctly |
 
 Logs: `/home/ttuser/sdawle/e2e_runs/{run1,run2,run3}.log`, `demoA_try1.log`, `demoA_try2.log`, `demoA.log` (try3),
 `demoB.log` (the 43-layer run), `demo.out` (the launcher's summary lines).
 
-### 5a. Running on host 41 at hand-off
+### 5a. Host 41 at hand-off
 
-The 43-layer decode run (stage B of `/home/ttuser/sdawle/e2e_runs/run_decode_demo.sh`, the pre-repo copy of
-`tests/decode/run_decode_demo_galaxy.sh`), started 2026-09-29 23:58, launcher PID 684208 (its own session / process group).
-Check it: `tail -f /home/ttuser/sdawle/e2e_runs/demo.out` and `grep -a -E "Layer [0-9]+ is|GENERATED|decode throughput|passed|failed|TT_FATAL" /home/ttuser/sdawle/e2e_runs/demoB.log`.
-It builds the 43-layer bf4 cache, so let it finish if you can. To stop it: `kill -- -684208` (the whole process group),
-then `sudo tt-smi -glx_reset_auto`. Do not `pkill -f` with a pattern (it matches your own shell).
+Idle (the 43-layer decode finished 2026-09-30 01:05, rc=0). The decode bf4 cache is complete, so a decode build now
+loads in minutes instead of converting for an hour.
 
 ## 6. What is next, in order
 
 1. ~~Decode alone, 4 layers~~ — **done** (try3, above).
-2. **Decode alone, 43 layers** (running at hand-off, §5a; else `STAGES="A B"`): coherent text on the default prompt, and
-   tok/s (not comparable with Sankar's prefetched numbers). If it fails, expect a prefetcher-off blocker like the three
+2. ~~Decode alone, 43 layers~~ — **done** (decode B above: coherent, 34.90 tok/s). Still open: a per-layer numeric check of
+   the prefetcher-off path against the HF reference (`tests/decode/test_decoder_layer_pcc.py`, it has a `prefetch` switch),
+   and the prefetched-vs-off comparison once a galaxy runs firmware >= 19.12. If it fails, expect a prefetcher-off blocker like the three
    fixed so far -- the prefetcher-off decode path was never run by its authors ("always on"). The rule that has held: keep
    every projection a `LinearDecode` with the prefetched path's layout, only without the GCB (`hub_mode`). Watch L1 (the
    DRAM→L1 weight copies are L1 the prefetched path does not use). Alternative: flash firmware ≥ 19.12 and run with the
