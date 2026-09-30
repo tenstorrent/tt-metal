@@ -663,6 +663,7 @@ class ttMLA:
         # indexed, single-shot -> rotary_embedding_llama.
         # NoPE (Kimi-K3) binds a pass-through: the op is dropped but the nope/rope slices stay (they
         # are dimension-driven), so the cached latent is still 576 wide and rope_tensors goes unused.
+        self._use_indexed_rope = not self._use_nope and (self.is_chunked or self._has_indexer)
         if self._use_nope:
             assert not self._has_indexer, (
                 "mla_use_nope with a DSA indexer is not supported: TtIndexer applies its own rope to "
@@ -670,9 +671,7 @@ class ttMLA:
             )
             self._apply_rope = self._apply_rope_none
         else:
-            self._apply_rope = (
-                self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
-            )
+            self._apply_rope = self._apply_rope_padded if self._use_indexed_rope else self._apply_rope_one_shot
 
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
         # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
@@ -917,7 +916,12 @@ class ttMLA:
         )
 
     def _apply_rope_padded(
-        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: int, metadata: Optional[ttnn.Tensor] = None
+        self,
+        t: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: int,
+        metadata: Optional[ttnn.Tensor] = None,
+        concat_prefix: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
@@ -927,22 +931,14 @@ class ttMLA:
         Per-element-tensor (trace-safe) path: `metadata` is a 3-tuple of 1-element uint32 tensors
         (slot_id, actual_start, actual_end); rope reads kv_actual_global = actual_start = metadata[1].
         """
-        if metadata is not None:
-            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-                t,
-                rope_tensors["cos_matrix"],
-                rope_tensors["sin_matrix"],
-                rope_tensors["trans_matrix"],
-                metadata[1],  # actual_start = kv_actual_global (1-element tensor)
-                cluster_axis=self.sp_axis,
-            )
         return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             t,
             rope_tensors["cos_matrix"],
             rope_tensors["sin_matrix"],
             rope_tensors["trans_matrix"],
-            kv_actual_global=kv_actual_isl,
+            kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
             cluster_axis=self.sp_axis,
+            concat_prefix=concat_prefix,
         )
 
     def _apply_rope_none(
@@ -1139,7 +1135,7 @@ class ttMLA:
         metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
-        → concat. Consumes qr (the indexer, if any, has already read it by this point)."""
+        → query assembly. Consumes qr (the indexer, if any, has already read it by this point)."""
         num_heads_local = self.num_heads // self.tp_factor
         tt_q = ttnn.linear(
             qr,
@@ -1165,10 +1161,16 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
-        tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
-
-        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        if self._use_indexed_rope:
+            # The indexed RoPE writer copies the absorbed channels into the same output.
+            tt_q = self._apply_rope_padded(
+                tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata, concat_prefix=tt_q_nope
+            )
+        else:
+            rotated_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
+            tt_q = ttnn.concat([tt_q_nope, rotated_q_rope], dim=-1)
+            if rotated_q_rope is not tt_q_rope:
+                ttnn.deallocate(rotated_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
 
@@ -1377,7 +1379,9 @@ class ttMLA:
         cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
         update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
         already folded its single-shot onto the block-cyclic update_padded write)."""
+        declared_topology = kvpe_cache.storage.tensor_topology()
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
+        kvpe_cache.storage.update_tensor_topology(declared_topology)
 
     def _update_kv_cache(
         self,

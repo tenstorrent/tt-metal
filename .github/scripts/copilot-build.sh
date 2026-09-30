@@ -77,7 +77,17 @@ fi
 echo "[copilot-build] image: ${IMAGE}"
 echo "[copilot-build] args : ${*:-<none>}"
 
-exec docker run "${DOCKER_ARGS[@]}" "${IMAGE}" bash -lc '
+# Not `exec`: a RESULT line printed after the build (below) is the one thing meant to be
+# pasted straight into the PR description's `### Verification` section (see
+# .github/instructions/copilot-cloud.instructions.md) - it has to survive the run.
+# Full, runnable-from-repo-root path (per the Usage comment above) and properly quoted
+# per argument, so the RESULT line below can be pasted verbatim and actually reproduce
+# the build, not just describe it.
+CMD_DISPLAY=".github/scripts/copilot-build.sh"
+for arg in "$@"; do CMD_DISPLAY+=" $(printf '%q' "${arg}")"; done
+START_TS="$(date +%s)"
+set +e
+docker run "${DOCKER_ARGS[@]}" "${IMAGE}" bash -lc '
   set -euo pipefail
   git config --global --add safe.directory /work
   git config --global --add safe.directory "*"
@@ -85,3 +95,12 @@ exec docker run "${DOCKER_ARGS[@]}" "${IMAGE}" bash -lc '
   echo "--- ccache summary ---"
   ccache -sv 2>/dev/null | sed -n "/[Rr]emote storage/,/^$/p" || true
 ' _ "$@"
+STATUS=$?
+set -e
+ELAPSED=$(( $(date +%s) - START_TS ))
+if [[ "${STATUS}" -eq 0 ]]; then
+  echo "[copilot-build] RESULT: success (${ELAPSED}s) cmd: ${CMD_DISPLAY}"
+else
+  echo "[copilot-build] RESULT: failure exit=${STATUS} (${ELAPSED}s) cmd: ${CMD_DISPLAY}" >&2
+fi
+exit "${STATUS}"
