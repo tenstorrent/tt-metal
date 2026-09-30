@@ -14,11 +14,12 @@ constexpr uint32_t cb_out = get_compile_time_arg_val(1);
 constexpr uint32_t repeats = get_compile_time_arg_val(2);
 constexpr bool runtime_output = get_compile_time_arg_val(3);
 constexpr uint32_t outputs_per_section = 4 + 3 * repeats;
+constexpr auto pool_type = get_compile_time_arg_val(4) ? ckernel::PoolType::MAX : ckernel::PoolType::SUM;
 
 template <ckernel::ReduceDim dim>
 ALWI void pack_reduced(uint32_t output_index) {
     const uint32_t output_cb = runtime_output ? get_arg_val<uint32_t>(0) : cb_out;
-    PACK((llk_pack_reduce_mask_config<ckernel::PoolType::SUM, dim, ckernel::PackMode::Default>(output_cb)));
+    PACK((llk_pack_reduce_mask_config<pool_type, dim, ckernel::PackMode::Default>(output_cb)));
     for (uint32_t i = 0; i < repeats; ++i) {
         pack_tile<true>(i % 2, output_cb, output_index + i);
     }
