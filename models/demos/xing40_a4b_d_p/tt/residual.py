@@ -13,7 +13,11 @@ Per chip (r, c): x [1, 1, S/4, 4 x 1792] fp32 streams (tt/layout.py, stream-majo
 [1, 1, S/4, 4 x 1792] fp32. Every chip mixes its own rows and hidden columns: no collective, no weight.
 
 XING_RESIDUAL_MIX selects the path:
-- addcmul (default): 4 x (multiply + 4 x addcmul), all fp32 on the SFPU, so the fp32 streams keep full precision.
+- fused (default): ttnn.bringup.mhc_post (bring-up fork mhc_post_ttnn) in one program, with comb_transposed=False
+  (Xing's comb, not the op's default comb^T). post / comb are sliced from hc (columns 4..7 / 8..23, row-major comb,
+  which is the op's comb[j*n + i] for output j). fp32 mix in DEST on the SFPU, like addcmul.
+- addcmul: 4 x (multiply + 4 x addcmul), all fp32 on the SFPU, so the fp32 streams keep full precision (the P.2
+  baseline, 90 ms per chunk).
 - matmul: glm53's block-diagonal Mix (load-time 0/1 selector with the Xing comb index, diagonal mask) as one batched
   HiFi4 fp32-DEST matmul. The FPU reads the fp32 streams as tf32, so this rounds the residual each layer; kept for
   comparison only.
@@ -30,11 +34,11 @@ import ttnn
 from .layout import HC
 
 TILE = 32
-MIX_MODES = ("addcmul", "matmul")
+MIX_MODES = ("fused", "addcmul", "matmul")
 
 
 def residual_mix_mode() -> str:
-    mode = os.environ.get("XING_RESIDUAL_MIX", "addcmul")
+    mode = os.environ.get("XING_RESIDUAL_MIX", "fused")
     assert mode in MIX_MODES, f"XING_RESIDUAL_MIX={mode!r}, want one of {MIX_MODES}"
     return mode
 
@@ -75,9 +79,25 @@ class TtHcResidual:
             )
 
     def __call__(self, x: ttnn.Tensor, hc: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
+        if self.mode == "fused":
+            return self._fused_mix(x, hc, y)
         if self.mode == "matmul" and x.shape[-2] % TILE == 0:
             return self._matmul_mix(x, hc, y)
         return self._addcmul_mix(x, hc, y)
+
+    def _fused_mix(self, x, hc, y):
+        n = self.n
+        s4 = x.shape[-2]
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        h32 = _f32(hc)
+        post = ttnn.slice(h32, [0, 0, 0, n], [1, 1, s4, 2 * n], memory_config=dram)
+        comb = ttnn.slice(h32, [0, 0, 0, 2 * n], [1, 1, s4, 2 * n + n * n], memory_config=dram)
+        if h32 is not hc:
+            ttnn.deallocate(h32)
+        out = ttnn.bringup.mhc_post(y, x, post, comb, comb_transposed=False)
+        ttnn.deallocate(post)
+        ttnn.deallocate(comb)
+        return out
 
     def _addcmul_mix(self, x, hc, y):
         n = self.n
