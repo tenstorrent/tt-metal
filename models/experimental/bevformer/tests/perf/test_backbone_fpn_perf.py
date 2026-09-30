@@ -21,7 +21,6 @@ from tracy import signpost
 
 import ttnn
 from models.experimental.bevformer.tests.backbone_common import (
-    assert_pcc,
     build_reference_backbone,
     build_reference_fpn,
     from_conv_layout,
@@ -30,6 +29,7 @@ from models.experimental.bevformer.tests.backbone_common import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
+from models.experimental.bevformer.tests.test_utils import assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing_backbone import (
     create_fpn_parameters,
     create_resnet_parameters,
