@@ -292,10 +292,7 @@ class TtDFlashDrafter:
     def import_partial(self, sharded: ttnn.Tensor, *, owned: bool = True) -> None:
         """Seed the running partial with the upstream rank's finalized sharded partial [1,1,seq,H/tp]
         (from its export_partial). Non-first pipeline ranks call this once per chunk, before the tap phase.
-
-        ``owned=True``: the drafter takes ownership (freed in _finalize_sharded_partial/reset).
-        ``owned=False``: ``sharded`` is a persistent buffer the caller refreshes in place (the traced
-        runtime's ``_trace_partial_in``); it is only read, never freed, so a capture can record the read."""
+        ``owned=False``: a caller-owned persistent buffer, read but never freed (traced path)."""
         assert self._running_sharded is None, "import_partial called twice without reset()"
         self._running_sharded = sharded
         self._running_owned = owned
@@ -405,11 +402,8 @@ class TtDFlashDrafter:
         layer count (draft layer i -> global ``layer_ack_base + i``). Used by the host-callback path only;
         the device path is counted positionally by ``LayerAckService`` and ignores the record's contents.
 
-        ``metadata`` is the trace-safe form of the three per-chunk scalars: a (slot_id, actual_start,
-        actual_end) tuple of 1-element uint32 device tensors (``ChunkMetadata``), read on-device by the rope
-        and cache-write ops. When given, ``kv_actual_global``/``slot_idx``/``actual_end`` are ignored and their
-        range checks are skipped, since the host does not know the values. ``trace_controller`` routes the
-        host-callback ack through ``SubDeviceTraceController.layer_ack`` so a capture splits at each ack.
+        ``metadata``: (slot_id, actual_start, actual_end) device tensors, replacing the host scalars for
+        tracing. ``trace_controller`` routes the host-callback ack via ``layer_ack``.
 
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
@@ -577,8 +571,7 @@ class TtDFlashDrafter:
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             elif on_layer_complete is not None:
-                # Same routing as kv_ack.zero_pad_and_ack: a controller carrying the ack callback splits a
-                # capture here and fires the ack between segments at replay.
+                # The controller splits the capture at the ack, like kv_ack.zero_pad_and_ack.
                 if trace_controller is not None and trace_controller.has_layer_ack():
                     trace_controller.layer_ack(layer_ack_base + i)
                 else:

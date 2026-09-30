@@ -218,10 +218,8 @@ def test_dflash_finalize_trace_matches_eager(
     drafter_cfg,
     drafter_state_dict,
 ):
-    """Taps AND the KV finalize in one capture, driven by metadata tensors, against the eager host-scalar
-    path. Every chunk replays the same recorded commands, so a scalar frozen at capture (offset, slot or
-    valid end) writes the wrong rows and shows up as a diff. Slot 1 and a short last chunk make the slot
-    and valid-end reads observable, not just the offset."""
+    """Taps + KV finalize captured with metadata tensors must match eager bit-exactly. Slot 1 and a short
+    last chunk make a frozen slot or valid end visible, not just a frozen offset."""
     topology = per_axis_topology(device_params["fabric_config"])[1]
     cfg = drafter_cfg
     mesh_shape = tuple(mesh_device.shape)

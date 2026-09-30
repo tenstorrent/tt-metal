@@ -677,8 +677,7 @@ class TtPrefillRuntime:
         out = self._forward_traced(kv_caches)
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
-        # The last shared-expert reduce_scatter input was allocated inside the capture, so its address
-        # belongs to the trace and every replay rewrites it. Holding it only pins a stale buffer.
+        # Allocated inside the capture: the trace owns that address.
         get_tt_ccl(self.mesh_device).set_shared_rs_input_keepalive(None)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
         self._trace_output = out if not self.config.is_last_rank else None
@@ -731,9 +730,7 @@ class TtPrefillRuntime:
             ttnn.deallocate(word)
 
     def _stage_trace_inputs(self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor) -> None:
-        """Copy one chunk's input, upstream drafter partial and metadata into the persistent buffers the
-        capture reads, then free the per-chunk tensors. They must not be alive at replay: they were
-        allocated after the capture, so their addresses may overlap trace-owned temporaries."""
+        """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
         model_input = input_tensor
         if self.config.dflash_enabled and not self.config.is_first_rank:
             model_input, partial = self._unpack_activation(input_tensor)
@@ -755,9 +752,8 @@ class TtPrefillRuntime:
         return self._trace_metadata_msg
 
     def send_warmup_inputs(self, words: tuple) -> Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]:
-        """An activation and packed metadata record with the specs of the traced D2D send's operands,
-        both allocated before the capture, for the driver to send once so the send program is compiled
-        before it. The caller owns and frees both. Returns None on the last rank or once taken."""
+        """Pre-capture operands with the traced send's specs, to compile the send once. Caller frees them;
+        None on the last rank or once taken."""
         activation, self._send_warmup_activation = self._send_warmup_activation, None
         if activation is None:
             return None
@@ -774,10 +770,7 @@ class TtPrefillRuntime:
         tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
         if it were to land inside begin_capture().
 
-        DFlash: the drafter is part of the same capture. Its upstream partial is read from the persistent
-        _trace_partial_in, the last rank's KV finalize reads its scalars from `metadata`, and a non-last
-        rank's output is the packed [hidden | partial] activation, so no drafter op runs outside the trace
-        and every drafter program is warmed by the same passes that warm the verifier."""
+        DFlash: the drafter runs in the same capture; a non-last rank returns the packed [hidden | partial]."""
         dflash = self.config.dflash_enabled
         if dflash:
             self.drafter.reset()
@@ -825,9 +818,7 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
-            # The upstream drafter partial is read inside the capture, so it needs a fixed address that
-            # predates it; prefill_chunk copies each chunk's partial here before the replay. Same
-            # [1, planes, chunk/sp, H/tp] shape as the hidden half.
+            # The capture reads the upstream partial here; same shape as the hidden half.
             self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
@@ -852,11 +843,9 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
 
-        # Compile the staging copies and slices too: prefill_chunk runs them after the capture, and a
-        # program-cache entry created then is a DRAM buffer the replay may overwrite.
+        # Warm the staging ops too: a program compiled after the capture can land on trace memory.
         self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta3_dev((0, 0, chunk)))
-        # Warm/compile the metadata-variant programs. A non-last rank keeps the output: it has the spec
-        # of the captured one, which send_warmup_inputs needs.
+        # Keep the output: send_warmup_inputs needs its spec.
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
 

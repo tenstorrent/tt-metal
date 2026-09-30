@@ -343,9 +343,7 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
 
 
 def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
-    """Send one warm-up record downstream with the traced send's operand specs, so the send program is
-    compiled before this rank's capture; the next rank drops it. The lease wait fences the capture's
-    fabric ops behind the transfer."""
+    """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
     if inputs is None:
@@ -988,9 +986,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
-    # Captured once the first record has arrived, and after the send warm-up: the socket ops compile
-    # on first use, and a program-cache entry created after the capture is a DRAM buffer the replay
-    # may overwrite. A non-first rank's first record is its upstream's warm-up.
+    # Capture after the first record so the socket programs are compiled first; on non-first ranks
+    # that record is the upstream warm-up.
     traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
