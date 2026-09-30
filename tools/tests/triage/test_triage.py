@@ -402,6 +402,15 @@ class TestTriage:
             len(non_state_failures) == 0
         ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
 
+    def test_dump_circular_buffers(self):
+        result = self.run_triage_script("dump_circular_buffers.py")
+        assert result is not None, "Expected CB rows for the hung core"
+
+        # The compute kernel waited on c_0 and c_1, then hit ebreak before popping them or pushing c_16.
+        core = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        counts = {row.result.cb: (row.result.pushed, row.result.popped) for row in result if row.location == core}
+        assert counts == {0: (1, 0), 1: (1, 0), 16: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
+
     def test_dump_fast_dispatch(self):
         self.run_triage_script("dump_fast_dispatch.py")
 
