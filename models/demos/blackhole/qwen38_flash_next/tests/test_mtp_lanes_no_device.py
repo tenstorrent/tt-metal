@@ -55,6 +55,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     _ple_module,
     _residual_rows,
     _seed_state,
+    install_source_chunk_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (
     BLOCKS,
@@ -181,6 +182,7 @@ def make_lane_fake(chunk: FakeLaneChunk) -> SimpleNamespace:
 @pytest.fixture
 def fake(monkeypatch):
     chunk = FakeLaneChunk()
+    install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn = make_lane_fake(chunk)
     for module in (
         qsa_module,
