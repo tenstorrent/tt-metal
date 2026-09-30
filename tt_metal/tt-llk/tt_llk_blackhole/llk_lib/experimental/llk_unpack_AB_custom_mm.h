@@ -277,20 +277,11 @@ inline void _llk_unpack_AB_custom_mm_run_(
         }
     }
 
-    // Release the configuration context only once the unpacker has drained the queued unpacks, so the next call's
-    // configuration writes cannot reach a context that is still being read (the stall of tt-metal#58450).
-    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    // No second poll of the context semaphore here: the release above, the context switch and the counter resets are
-    // Tensix instructions that execute in order behind the MOP, and the next call polls the semaphore before it writes
-    // its configuration. Returning at once lets the RISC compute and prepare the next call while the unpacker drains
-    // this one instead of idling the unpacker for that work.
-    //
-    // Hand the other configuration context to whatever follows. This call ran on context 0; an unpack LLK of the
-    // two-context protocol (wait_for_next_context(2)) may start while the release above is still pending, and with the
-    // context switched it writes context 1's registers first and waits for this release before it touches context 0.
-    // The next custom matmul call resets to context 0 at its entry as before.
-    switch_config_context(unp_cfg_context);
+    // Wait for all contexts to be free
+    wait_for_next_context(1);
+    reset_config_context();
 
     // Reset counters at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

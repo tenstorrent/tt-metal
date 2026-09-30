@@ -160,12 +160,11 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
 
     TT_MOP(0, (kt_dim / 2) - 1, 0);
 
-    // Release the configuration context only once the unpacker has drained the queued unpacks (the stall of
-    // tt-metal#58450); the next call polls the semaphore before it writes its configuration, so the RISC returns at once
-    // and prepares the next call while the unpacker drains this one, and the other context is handed to a follower of
-    // the two-context protocol (see llk_unpack_AB_custom_mm.h).
-    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
-    switch_config_context(unp_cfg_context);
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // Wait for all contexts to be free
+    wait_for_next_context(1);
+    reset_config_context();
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
