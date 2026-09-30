@@ -4,8 +4,9 @@
 
 """Standalone ``all_to_all_async_generic`` at the V4.1 attention reshard shapes (bead 8y7.9.1).
 
-``TtV41Attention.forward`` reshards q head->sequence before ``sparse_sdpa`` and the output sequence->head after it,
-over TP (cluster_axis 1). On the LoudBox 2x4 mesh TP has 4 chips; on 4x2 it has 2, where the block test hung.
+``TtV41Attention.forward`` reshards q head->sequence before ``sparse_sdpa`` (in the seq-major projection layout, heads
+side by side: ``head_to_seq_flat``) and the output sequence->head after it, over TP (cluster_axis 1). On the LoudBox
+2x4 mesh TP has 4 chips; on 4x2 it has 2, where the block test hung.
 Each case runs one direction on one mesh axis and checks the result bit-exact against the torch reshard:
 global tensor sharded [in_dim over the axis, out_dim over the other axis] -> the same global tensor sharded
 [out_dim over the axis, ...], i.e. the op must concatenate ``in_dim`` and split ``out_dim`` across the axis.
@@ -33,7 +34,7 @@ SIZES = {
     "small": dict(heads=32, seq=512, head_dim=128),  # SmallV41Config, SMALL_SEQ
     "production": dict(heads=64, seq=2048, head_dim=512),  # V4.1 Flash, block test SEQ
 }
-DIRECTIONS = {"head_to_seq": (1, 2), "seq_to_head": (2, 1)}  # (in_dim, out_dim)
+DIRECTIONS = {"head_to_seq": (1, 2), "head_to_seq_flat": (3, 2), "seq_to_head": (2, 1)}  # (in_dim, out_dim)
 NUM_LINKS = (1, 2)
 
 
@@ -54,11 +55,13 @@ def _make_input(mesh_device, cluster_axis, size, direction):
     axis_size, other_size = mesh_device.shape[cluster_axis], mesh_device.shape[1 - cluster_axis]
     in_dim, out_dim = DIRECTIONS[direction]
     # per-chip input of the attention reshard (head->seq: [1, H/tp, S/sp, D]; seq->head: [1, H, S/(sp*tp), D])
-    if direction == "head_to_seq":
+    if direction.startswith("head_to_seq"):
         heads, rows = dims["heads"] // tp, dims["seq"] // sp
     else:
         heads, rows = dims["heads"], dims["seq"] // (sp * tp)
     local = [1, heads, rows, dims["head_dim"]]
+    if direction == "head_to_seq_flat":  # wq_b's output: [1, 1, S/sp, H/tp * D]
+        local = [1, 1, rows, dims["heads"] // tp * dims["head_dim"]]
     global_shape = list(local)
     global_shape[in_dim] *= axis_size
     global_shape[out_dim] *= other_size

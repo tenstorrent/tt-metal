@@ -4,9 +4,12 @@
 
 """V4.1 attention glue around ``sparse_sdpa`` (bead 8y7.9.7): contracts of the reshaped data paths.
 
-* ``_rope_tail`` (q after the head->sequence reshard) equals the previous path bit for bit: RoPE on the full heads
-  by slice + rotary + concat before the reshard, then untilize. Same for ``_inverse_rope_tail`` (sparse_sdpa output,
-  row-major, before the sequence->head reshard) against tilize + reshard + slice / rotary / concat.
+* the fused head layout through the TP reshards (bead 8y7.9.9) equals the previous path bit for bit: q as
+  ``wq_b`` emits it, resharded head->sequence (``in_dim`` 3: the chips' heads side by side) and split into
+  sparse_sdpa's row-major heads with the RoPE tail by ``q_heads``, against nlp_create_qkv_heads + reshard (``in_dim``
+  1) + the RoPE tail glue (slice / rotary / untilize / slice_write); the sparse_sdpa output taken to the tiled head
+  groups with the inverse RoPE by ``o_heads`` and resharded sequence->head, against the inverse RoPE tail glue +
+  tilize + reshard + nlp_concat_heads of each group.
 * ``_index_rows`` returns, per query, its valid KV rows in [window, top-k] order followed by a sentinel tail, on the
   first chunk (queries with missing window rows: compacted) and on a later chunk (no compaction). The expected rows
   are built in torch from the same window table and top-k.
@@ -29,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.v41 import rope as v41_rope
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
+from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 
 MESH = [
@@ -56,17 +60,6 @@ def _glue(mesh_device, cfg):
     return SimpleNamespace(rope_dim=cfg.QK_ROPE_HEAD_DIM, trans_mat=trans, window=cfg.SLIDING_WINDOW)
 
 
-def _old_rope(g, t, cos, sin, inverse=False):
-    """The previous ``TtV41Attention._rope``: slice nope / rope, rotate, concat."""
-    b, h, s, d = t.shape
-    nope = ttnn.slice(t, [0, 0, 0, 0], [b, h, s, d - g.rope_dim])
-    rope = ttnn.slice(t, [0, 0, 0, d - g.rope_dim], [b, h, s, d])
-    rope = ttnn.experimental.rotary_embedding_llama(
-        rope, cos, ttnn.neg(sin) if inverse else sin, g.trans_mat, is_decode_mode=False
-    )
-    return ttnn.concat([nope, rope], dim=-1)
-
-
 def _mesh_tensor(mesh_device, t, dims, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     shape = tuple(mesh_device.shape)
     return ttnn.from_torch(
@@ -86,31 +79,61 @@ def _cos_sin(mesh_device, cfg, chunk):
     return tuple(_mesh_tensor(mesh_device, t.reshape(sp, 1, chunk // sp, -1), (0, None)) for t in (cos, sin))
 
 
+def _old_rope_tail(g, t, cos, sin):
+    """``TtV41Attention._rope_tail`` before 8y7.9.9: tiled [b, h, s, d] -> row-major, RoPE on the tail."""
+    b, h, s, d = t.shape
+    tail = ttnn.slice(t, [0, 0, 0, d - g.rope_dim], [b, h, s, d])
+    tail = ttnn.experimental.rotary_embedding_llama(tail, cos, sin, g.trans_mat, is_decode_mode=False)
+    out = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.experimental.slice_write(
+        ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), out, [0, 0, 0, d - g.rope_dim], [b, h, s, d], [1, 1, 1, 1]
+    )
+    return out
+
+
+def _old_inverse_rope_tail(g, t, cos, sin):
+    """``TtV41Attention._inverse_rope_tail`` before 8y7.9.9: row-major [b, h, s, d] (in place) -> tiled."""
+    b, h, s, d = t.shape
+    tail = ttnn.to_layout(ttnn.slice(t, [0, 0, 0, d - g.rope_dim], [b, h, s, d]), ttnn.TILE_LAYOUT)
+    tail = ttnn.experimental.rotary_embedding_llama(tail, cos, ttnn.neg(sin), g.trans_mat, is_decode_mode=False)
+    ttnn.experimental.slice_write(
+        ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), t, [0, 0, 0, d - g.rope_dim], [b, h, s, d], [1, 1, 1, 1]
+    )
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+
+
 @pytest.mark.parametrize("size", list(SIZES))
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
-def test_v41_rope_tail_matches_slice_concat(mesh_device, device_params, size):
+def test_v41_head_layout_matches_glue(mesh_device, device_params, size):
     cfg, chunk = SIZES[size]
     sp, tp = tuple(mesh_device.shape)
     g, ccl = _glue(mesh_device, cfg), V41Collectives(mesh_device)
-    heads, d = cfg.NUM_ATTENTION_HEADS, cfg.HEAD_DIM
+    heads, d, groups = cfg.NUM_ATTENTION_HEADS, cfg.HEAD_DIM, cfg.O_GROUPS
     cos, sin = _cos_sin(mesh_device, cfg, chunk)
     cos_s, sin_s = (ttnn.mesh_partition(t, dim=2, cluster_axis=TP_AXIS) for t in (cos, sin))
     torch.manual_seed(0)
-    # q per chip [1, H/tp, S/sp, d] (after nlp_create_qkv_heads)
-    q = _mesh_tensor(mesh_device, torch.randn(sp, heads, chunk // sp, d).to(torch.bfloat16), (0, 1))
-    old = ttnn.to_layout(ccl.tp_all_to_all(_old_rope(g, q, cos, sin), in_dim=1, out_dim=2), ttnn.ROW_MAJOR_LAYOUT)
-    new = TtV41Attention._rope_tail(g, ccl.tp_all_to_all(q, in_dim=1, out_dim=2), cos_s, sin_s)
-    assert new.layout == ttnn.ROW_MAJOR_LAYOUT
+    # q per chip as wq_b emits it: [1, 1, S/sp, H/tp * d]
+    q_host = torch.randn(sp, 1, chunk // sp, heads * d).to(torch.bfloat16)
+    q = _mesh_tensor(mesh_device, q_host, (0, 3))
+    old_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, num_heads=heads // tp, num_kv_heads=0, transpose_k_heads=False
+    )
+    old = _old_rope_tail(g, ccl.tp_all_to_all(old_q, in_dim=1, out_dim=2), cos_s, sin_s)
+    new = q_heads(ccl.tp_all_to_all(q, in_dim=3, out_dim=2), cos_s, sin_s, g.trans_mat, heads, g.rope_dim)
+    assert new.layout == ttnn.ROW_MAJOR_LAYOUT and tuple(new.shape) == tuple(old.shape), (new.shape, old.shape)
     assert torch.equal(_down(mesh_device, old), _down(mesh_device, new))
 
-    # sparse_sdpa output: per chip [1, H, S/(sp*tp), d] row-major
+    # sparse_sdpa output: per chip [1, H, S/(sp*tp), d] row-major -> per chip [1, G/tp, S/sp, (H/G) * d] tiled
     o_host = torch.randn(sp, tp * heads, chunk // (sp * tp), d).to(torch.bfloat16)
     o_old = _mesh_tensor(mesh_device, o_host, (0, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
     o_new = _mesh_tensor(mesh_device, o_host, (0, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
-    old = _old_rope(
-        g, ccl.tp_all_to_all(ttnn.to_layout(o_old, ttnn.TILE_LAYOUT), in_dim=2, out_dim=1), cos, sin, inverse=True
-    )
-    new = ccl.tp_all_to_all(TtV41Attention._inverse_rope_tail(g, o_new, cos_s, sin_s), in_dim=2, out_dim=1)
+    old = ccl.tp_all_to_all(_old_inverse_rope_tail(g, o_old, cos_s, sin_s), in_dim=2, out_dim=1)
+    groups_local, rows = groups // tp, chunk // sp
+    old = ttnn.reshape(old, [groups_local, heads // groups, rows, d])
+    old = ttnn.reshape(ttnn.experimental.nlp_concat_heads(old), [1, groups_local, rows, heads // groups * d])
+    new = o_heads(o_new, cos_s, ttnn.neg(sin_s), g.trans_mat, groups, g.rope_dim)
+    new = ccl.tp_all_to_all(new, in_dim=2, out_dim=1)
+    assert tuple(new.shape) == tuple(old.shape), (new.shape, old.shape)
     assert torch.equal(_down(mesh_device, old), _down(mesh_device, new))
 
 

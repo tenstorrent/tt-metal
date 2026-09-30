@@ -16,7 +16,10 @@ nothing, so it can be traced.
 
 Every quantized GEMM input gets the reference's FP8 activation QDQ (dev-spec D-I). Layout: input/output
 ``[1, 1, S/sp, hidden/tp]``; the attention itself runs on a sequence shard of all heads (head->sequence
-all-to-all over TP), which is also the query layout of the indexer's selection.
+all-to-all over TP), which is also the query layout of the indexer's selection. The queries stay in the
+projection's seq-major layout through that all-to-all; one fused op (``head_layout.q_heads``) splits them into
+sparse_sdpa's row-major heads with the RoPE tail, and one (``head_layout.o_heads``) takes the output back to the
+tiled head groups of ``wo_a`` with the inverse RoPE (no create / concat-heads or RoPE-tail glue ops).
 """
 
 import torch
@@ -27,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
+from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
@@ -180,29 +184,6 @@ class TtV41Attention(LightweightModule):
         )
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _rope_tail(self, t, cos, sin):
-        """RoPE on the trailing ``rope_dim`` channels of tiled ``t`` [b, h, s, d] -> row-major [b, h, s, d] (the
-        layout sparse_sdpa reads): the untilize copies the other channels, the rotated tail is written over its
-        columns; no slice / concat of the full head."""
-        b, h, s, d = t.shape
-        tail = ttnn.slice(t, [0, 0, 0, d - self.rope_dim], [b, h, s, d])
-        tail = ttnn.experimental.rotary_embedding_llama(tail, cos, sin, self.trans_mat, is_decode_mode=False)
-        out = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.experimental.slice_write(
-            ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), out, [0, 0, 0, d - self.rope_dim], [b, h, s, d], [1, 1, 1, 1]
-        )
-        return out
-
-    def _inverse_rope_tail(self, t, cos, sin):
-        """Inverse RoPE on the trailing ``rope_dim`` channels of row-major ``t`` [b, h, s, d] (in place) -> tiled."""
-        b, h, s, d = t.shape
-        tail = ttnn.to_layout(ttnn.slice(t, [0, 0, 0, d - self.rope_dim], [b, h, s, d]), ttnn.TILE_LAYOUT)
-        tail = ttnn.experimental.rotary_embedding_llama(tail, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
-        ttnn.experimental.slice_write(
-            ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT), t, [0, 0, 0, d - self.rope_dim], [b, h, s, d], [1, 1, 1, 1]
-        )
-        return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
-
     def _index_rows(self, window, window_base: int, compressed, start: int):
         """``window``: the chunk's per-chip window rows (``V41ChunkTables.window_rows``) -> per-chip
         [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail.
@@ -247,8 +228,7 @@ class TtV41Attention(LightweightModule):
         """x [1, 1, S/sp, hidden/tp] bf16 (after attn_norm) for the chunk at ``state.start`` with ``length``
         valid tokens -> [1, 1, S/sp, hidden/tp] bf16. Writes this layer's window carry and, for a KV source,
         its compressed rows and carry; an index source publishes its selection in ``state.selection``."""
-        start, seq_local = state.start, x.shape[2]
-        heads_local = self.heads // self.tp
+        start = state.start
         tables = state.tables
         cos, sin = tables.rope(self.ratio > 0, 1, start)
         xq = fp8_qdq(x)
@@ -258,10 +238,7 @@ class TtV41Attention(LightweightModule):
             weight=self.q_norm,
             epsilon=self.eps,
         )
-        q = self._dense(fp8_qdq(qr), "wq_b")
-        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False
-        )
+        q = self._dense(fp8_qdq(qr), "wq_b")  # [1, 1, S/sp, H/tp * head_dim], this chip's heads side by side
 
         kv = ttnn.rms_norm(
             self.ccl.tp_all_reduce(self._dense(xq, "wkv")),
@@ -295,14 +272,15 @@ class TtV41Attention(LightweightModule):
                 compressed = state.selection["topk"]
         rows = self._index_rows(tables.window_rows(start), state.geometry.window_rows, compressed, start)
 
-        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence); RoPE and
-        # its inverse run on that shard (the chip's rows of cos / sin), next to the row-major sparse_sdpa operands
+        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence: the chips'
+        # head columns side by side, in head order); RoPE and its inverse run on that shard (the chip's rows of cos /
+        # sin), fused into the head layout ops around the row-major, head-major sparse_sdpa operands
         head_to_seq = self.tp > 1
         if head_to_seq:
-            q = self.ccl.tp_all_to_all(q, in_dim=1, out_dim=2)
+            q = self.ccl.tp_all_to_all(q, in_dim=3, out_dim=2)
             cos, sin = (ttnn.mesh_partition(t, dim=2, cluster_axis=TP_AXIS) for t in (cos, sin))
         attn = ttnn.transformer.sparse_sdpa(
-            self._rope_tail(q, cos, sin),
+            q_heads(q, cos, sin, self.trans_mat, self.heads, self.rope_dim),
             kv_tensor,
             rows,
             self.head_dim,
@@ -311,19 +289,16 @@ class TtV41Attention(LightweightModule):
             k_chunk_size=next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0),
             attention_sink=self.sink,
         )
-        attn = self._inverse_rope_tail(attn, cos, sin)
+        attn = o_heads(attn, cos, ttnn.neg(sin), self.trans_mat, self.o_groups, self.rope_dim)  # [1, G, S', G heads]
         if head_to_seq:
             attn = self.ccl.tp_all_to_all(attn, in_dim=2, out_dim=1)
         state.update_window_carry(self.layer, length)
-        return self._o_proj(attn, seq_local)
+        return self._o_proj(attn)
 
-    def _o_proj(self, attn, seq_local):
-        """[1, H/tp, S/sp, head_dim] -> [1, 1, S/sp, hidden/tp]."""
-        in_per_group = self.heads * self.head_dim // self.o_groups
-        groups_local = self.o_groups // self.tp
-        x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_local, self.head_dim])
-        x = ttnn.experimental.nlp_concat_heads(x)
-        x = ttnn.reshape(x, [1, groups_local, seq_local, in_per_group])
-        grouped = ttnn.experimental.nlp_concat_heads(self._dense(x, "wo_a"))  # [1, g, S, rank] -> [1, 1, S, g * rank]
+    def _o_proj(self, attn):
+        """[1, G/tp, S/sp, (H/G) * head_dim] (each group's heads side by side) -> [1, 1, S/sp, hidden/tp]."""
+        grouped = ttnn.experimental.nlp_concat_heads(
+            self._dense(attn, "wo_a")
+        )  # [1, g, S, rank] -> [1, 1, S, g * rank]
         out = ttnn.linear(fp8_qdq(grouped), self.wo_b, compute_kernel_config=self.compute_kernel_config)
         return self.ccl.tp_reduce_scatter(out)
