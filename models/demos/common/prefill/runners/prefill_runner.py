@@ -59,6 +59,7 @@ METADATA_SIZE_BYTES = 12
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
 SHUTDOWN_METADATA_WORD = -1
+WARMUP_METADATA_WORD = -2
 
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
@@ -210,6 +211,14 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
+def _is_warmup_sentinel(meta: dict) -> bool:
+    return (
+        meta["slot_id"] == WARMUP_METADATA_WORD
+        and meta["actual_start"] == WARMUP_METADATA_WORD
+        and meta["actual_end"] == WARMUP_METADATA_WORD
+    )
+
+
 def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
@@ -331,6 +340,23 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
     _d2d_send(d2d_out, dummy, rank, sentinel)
     d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
+
+
+def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
+    """Send one warm-up record downstream with the traced send's operand specs, so the send program is
+    compiled before this rank's capture; the next rank drops it. The lease wait fences the capture's
+    fabric ops behind the transfer."""
+    get_inputs = getattr(runtime, "send_warmup_inputs", None)
+    inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
+    if inputs is None:
+        return
+    activation, md_tensor = inputs
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2d_out, activation, metadata=md_tensor)
+    d2d_out.release_fabric_links()
+    d2d_out.wait_for_fabric_links()
+    ttnn.deallocate(activation)
+    ttnn.deallocate(md_tensor)
+    logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
 def _lease_reclaim(d2d_in, d2d_out) -> None:
@@ -467,9 +493,15 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
+        warmup = _is_warmup_sentinel(meta)
+        if warmup:
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
         if before_first_chunk is not None:
             before_first_chunk()
             before_first_chunk = None
+        if warmup:
+            continue
         t = _compute_and_send(
             runtime,
             kv_caches,
@@ -945,6 +977,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     def _capture_trace() -> None:
+        if d2d_out is not None:
+            _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -954,9 +988,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
-    # Captured once the first chunk has arrived: the inbound socket op compiles on its first
-    # receive, and a program-cache entry created after the capture is a DRAM buffer the replay may
-    # overwrite.
+    # Captured once the first record has arrived, and after the send warm-up: the socket ops compile
+    # on first use, and a program-cache entry created after the capture is a DRAM buffer the replay
+    # may overwrite. A non-first rank's first record is its upstream's warm-up.
     traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")

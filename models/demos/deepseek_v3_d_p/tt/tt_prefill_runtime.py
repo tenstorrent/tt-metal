@@ -191,6 +191,7 @@ class TtPrefillRuntime:
         self._trace_d2h_service = None
         self._trace_output = None
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
+        self._send_warmup_activation = None
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
@@ -753,6 +754,15 @@ class TtPrefillRuntime:
         ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
         return self._trace_metadata_msg
 
+    def send_warmup_inputs(self, words: tuple) -> Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """An activation and packed metadata record with the specs of the traced D2D send's operands,
+        both allocated before the capture, for the driver to send once so the send program is compiled
+        before it. The caller owns and frees both. Returns None on the last rank or once taken."""
+        activation, self._send_warmup_activation = self._send_warmup_activation, None
+        if activation is None:
+            return None
+        return activation, self._meta3_dev(tuple(w & 0xFFFFFFFF for w in words))
+
     def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
@@ -845,7 +855,9 @@ class TtPrefillRuntime:
         # Compile the staging copies and slices too: prefill_chunk runs them after the capture, and a
         # program-cache entry created then is a DRAM buffer the replay may overwrite.
         self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta3_dev((0, 0, chunk)))
-        self._forward_traced(kv_caches)  # warm/compile the metadata-variant programs
+        # Warm/compile the metadata-variant programs. A non-last rank keeps the output: it has the spec
+        # of the captured one, which send_warmup_inputs needs.
+        self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
 
     def _layer_complete_cb(self, request_id: int):
@@ -1120,6 +1132,7 @@ class TtPrefillRuntime:
         # service-core L1 release -- only works while the mesh is open, so it has to run from here
         # rather than from wherever the last reference happens to drop.
         self._trace_d2h_service = None
+        self._send_warmup_activation = None
 
     def warmup_ack_count(self) -> int:
         """How many D2H ack records capture_trace()'s warm pass will emit — one per layer of this rank's
