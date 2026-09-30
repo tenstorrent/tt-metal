@@ -1,4 +1,28 @@
 {
+ "B.1": {
+  "attempts": 0,
+  "duration_s": 18.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:06:10"
+   }
+  ],
+  "last_run": "2026-09-30T05:06:10",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/B.1.log",
+  "metrics": {
+   "all_gather_maxabs": 0.0,
+   "all_reduce_rel_err_axis0": 0.0028818442951887846,
+   "all_reduce_rel_err_axis1": 0.0050607286393642426,
+   "chips": 8,
+   "mesh_cols": 4,
+   "mesh_rows": 2
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T05:05:51",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 623.6,
