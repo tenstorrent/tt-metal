@@ -16,6 +16,7 @@ import torch
 from typing import Optional, List, Dict, Any
 
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
+from .tt_common import layer_norm
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -171,9 +172,7 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer TSA Complete")
 
         # Layer normalization (norm1)
-        temp_query = ttnn.layer_norm(
-            temp_query, weight=self.params.norm1.weight, bias=self.params.norm1.bias, epsilon=self.params.norm1.eps
-        )
+        temp_query = layer_norm(temp_query, self.params.norm1)
         bev_query = temp_query
 
         if use_signpost:
@@ -195,9 +194,7 @@ class TTBEVFormerLayer:
             signpost(header="BEVLayer SCA Complete")
 
         # Layer normalization (norm2)
-        spatial_query = ttnn.layer_norm(
-            spatial_query, weight=self.params.norm2.weight, bias=self.params.norm2.bias, epsilon=self.params.norm2.eps
-        )
+        spatial_query = layer_norm(spatial_query, self.params.norm2)
         bev_query = spatial_query
 
         if use_signpost:
@@ -211,12 +208,7 @@ class TTBEVFormerLayer:
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
-        bev_query = ttnn.layer_norm(
-            ffn_output_with_residual,
-            weight=self.params.norm3.weight,
-            bias=self.params.norm3.bias,
-            epsilon=self.params.norm3.eps,
-        )
+        bev_query = layer_norm(ffn_output_with_residual, self.params.norm3)
 
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward End")
