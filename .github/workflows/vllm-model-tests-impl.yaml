@@ -133,6 +133,8 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
+        # This isolated diagnostic revision is not qualification/performance evidence.
+        TT_FORMATTER_B1_DIAGNOSTIC: "1"
         # Every source-layout difference between the two vllm-source modes is
         # resolved here, so the test steps below stay mode-agnostic. PLUGIN_DIR
         # holds examples/ and tests/tt; BENCH_SRC_DIR holds the upstream
@@ -256,6 +258,11 @@ jobs:
           git -C vllm-source remote add origin https://github.com/vllm-project/vllm.git
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
+
+      - name: 🔬 Prepare isolated GPT B1 formatter diagnostic
+        if: ${{ matrix.test-group.name == 'GPT-OSS-120B (low-latency)' }}
+        run: |
+          python3 models/demos/gpt_oss/tests/formatter_b1_diagnostic.py --prepare "$PLUGIN_DIR" "$BENCH_SRC_DIR"
 
       - name: 🚀 Run server
         timeout-minutes: 1

@@ -1264,6 +1264,10 @@ class Model:
                 torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
         else:
             torch_out = self.concat_device_output(tt_out)
+        # Diagnostic branch only: compare the same already-host TP-gathered tensor.
+        from models.demos.gpt_oss.tests.formatter_b1_diagnostic import capture_post_gather
+
+        capture_post_gather(torch_out, B, S, self.vocab_size)
         # Trim vocabulary padding after TP gather, preserving the returned rows.
         # B is the serving limit; a bucketed decode can return fewer rows.
         return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
