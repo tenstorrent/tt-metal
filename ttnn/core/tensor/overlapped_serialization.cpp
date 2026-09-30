@@ -49,6 +49,12 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
+        // Serialize before opening the output file, so that a tensor the serializer rejects leaves no file behind.
+        std::vector<SerializedTensorBuffer> buffers;
+        flatbuffers::FlatBufferBuilder builder;
+        auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers);
+        builder.Finish(root_offset);
+
         FILE* output_file = fopen(file_name.c_str(), "wb");
         TT_FATAL(
             output_file != nullptr,
@@ -61,11 +67,6 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
                 log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
             }
         });
-
-        std::vector<SerializedTensorBuffer> buffers;
-        flatbuffers::FlatBufferBuilder builder;
-        auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers);
-        builder.Finish(root_offset);
 
         write_tensor_file(output_file, file_name, builder, buffers);
     }

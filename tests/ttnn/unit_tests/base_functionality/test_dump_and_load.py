@@ -82,6 +82,74 @@ def test_load_malformed_tensor_raises(tmp_path, expect_error, malformation):
     torch.testing.assert_close(ttnn.to_torch(ttnn.load_tensor(file_name)), expected, rtol=0, atol=0)
 
 
+def _mislabelled_replicate_tensor():
+    """A 1x2 host tensor sharded along dim 1 whose topology was relabelled as fully replicated.
+
+    The two shards hold different values (11s and 29s), so a serializer that trusts the Replicate label
+    writes the first shard for both coordinates and the second one is lost. Returns the tensor, the
+    label that describes the data, and the torch source.
+    """
+    shards = torch.cat([torch.full((32, 32), value, dtype=torch.bfloat16) for value in (11, 29)], dim=1)
+    mapper = ttnn.create_mesh_mapper(
+        ttnn.MeshShape(1, 2),
+        ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]),
+    )
+    tensor = ttnn.from_torch(shards, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+    # Spelled out rather than read back from the tensor: `tensor_topology()` aliases the tensor's own
+    # topology, which the update below overwrites.
+    mesh_coords = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
+    true_label = ttnn.TensorTopology(
+        ttnn.MeshShape(1, 2), [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)], mesh_coords
+    )
+    assert tensor.tensor_topology() == true_label, "test bug: the mapper's label is not the one spelled out here"
+    tensor.update_tensor_topology(
+        ttnn.TensorTopology(ttnn.MeshShape(1, 2), [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], mesh_coords)
+    )
+    return tensor, true_label, shards
+
+
+def _load_shards(file_name):
+    return [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn.load_tensor(file_name))]
+
+
+def test_dump_mislabelled_replicate_raises(tmp_path, expect_error):
+    """Negative control for the write-side replica check: before it, this dump succeeded and the loaded
+    tensor's second shard read back as a copy of the first. The tensor dumps once relabelled correctly.
+    """
+    tensor, true_label, shards = _mislabelled_replicate_tensor()
+    file_name = tmp_path / "mislabelled.tensorbin"
+
+    with expect_error(RuntimeError, "contents differ"):
+        ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    assert not file_name.exists(), "a rejected dump must not leave a file behind"
+
+    tensor.update_tensor_topology(true_label)
+    ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    torch.testing.assert_close(torch.cat(_load_shards(file_name), dim=1), shards, rtol=0, atol=0)
+
+
+def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
+    """With `verify_replicated_shards_on_dump` off, the label is trusted as it was before the check: one
+    copy, taken from the first replica, stands for the whole group."""
+    # The property is generated from `Config::attributes_t` by `reflect::for_each` in ttnn-nanobind/core.cpp.
+    assert hasattr(ttnn.CONFIG, "verify_replicated_shards_on_dump")
+    tensor, _, shards = _mislabelled_replicate_tensor()
+    file_name = tmp_path / "opted_out.tensorbin"
+
+    previous = ttnn.CONFIG.verify_replicated_shards_on_dump
+    ttnn.CONFIG.verify_replicated_shards_on_dump = False
+    try:
+        ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    finally:
+        ttnn.CONFIG.verify_replicated_shards_on_dump = previous
+
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 2
+    first_replica = shards[:, :32]
+    torch.testing.assert_close(loaded[0], first_replica, rtol=0, atol=0)
+    torch.testing.assert_close(loaded[1], first_replica, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

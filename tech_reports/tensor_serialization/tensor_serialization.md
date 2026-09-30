@@ -10,6 +10,7 @@
 - [3. File Format](#3-file-format)
   - [3.1 FlatBuffer Schema](#31-flatbuffer-schema)
   - [3.2 File Layout](#32-file-layout)
+  - [3.3 Replicated Shards](#33-replicated-shards)
 - [4. Multi-Host Support](#4-multi-host-support)
 - [5. Best Practices](#5-best-practices)
 - [6. Understanding Cache Hits and Misses](#6-understanding-cache-hits-and-misses)
@@ -108,6 +109,12 @@ The `.tensorbin` file format follows a simple structure:
 - Individual tensor buffers are aligned according to their element size
 
 The 8-byte alignment guarantee enables efficient memory-mapped file loading using `mmap`, allowing the tensor data to be accessed directly from the file without copying to RAM first.
+
+### 3.3 Replicated Shards
+
+The header records the tensor's topology (distribution shape, per-axis `Shard`/`Replicate` placements and the mesh coordinate of every shard). Shards whose coordinates differ only along `Replicate` axes are written once: every record in such a group points at the same data buffer, so a tensor replicated across 32 devices costs one copy on disk rather than 32.
+
+The topology is a label, and the writer checks it against the data before trusting it. Replicas in a group must have the same size and, by default, the same bytes; a labelled coordinate must hold a shard (unless it lives on another host in a `LOCAL` multi-host dump); and every populated local shard must be covered by the label. A tensor that fails any of these checks makes `dump_tensor` throw before the output file is created, so a rejected dump leaves no file behind. The usual cause is a tensor whose topology was relabelled by an operation without describing how the shards were actually produced; relabel it with `Tensor.update_tensor_topology` before dumping. The byte comparison costs one `memcmp` per replica and can be turned off with the `verify_replicated_shards_on_dump` entry of `ttnn.CONFIG` (for example `TTNN_CONFIG_OVERRIDES='{"verify_replicated_shards_on_dump": false}'`) when replicas are known to legitimately differ; the first replica is then the one written.
 
 ## 4. Multi-Host Support
 
