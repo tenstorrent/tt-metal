@@ -37,6 +37,7 @@ PHASE_ROWS = (
     + [(4096, 32, DESC, "stable", ph, True, False) for ph in ("sort", "merge", "rebuild")]
     + [(4096, 32, DESC, "fused", ph, True, False) for ph in ("sort", "merge", "rebuild", "fuse")]
     + [(4096, 32, DESC, "rank_stamped", ph, True, False) for ph in ("sort", "merge", "rebuild")]
+    + [(4096, 64, DESC, m, "sort", True, False) for m in ("stable", "rank_stamped")]
     + [(4096, 64, DESC, m, "sort", True, True) for m in ("unstable", "stable", "rank_stamped")]
 )
 PHASE_IDS = [
