@@ -2248,3 +2248,24 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI validation of PR #57398 (mirror branch, not part of the PR). Tests are opt-in via NLLB_TEST_*.
+- name: NLLB-200 600M unit tests
+  cmd: |
+    export TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+    export NLLB_ASSETS=$(ls -d /mnt/MLPerf/huggingface/hub/models--facebook--nllb-200-distilled-600M/snapshots/f8d333a*)
+    export NLLB_TEST_DEVICE=0 NLLB_TEST_CHECKPOINT=$NLLB_ASSETS NLLB_TEST_CONFIG=$NLLB_ASSETS/config.json NLLB_TEST_TOKENIZER=$NLLB_ASSETS
+    pytest --timeout 300 models/experimental/nllb/tests \
+      --deselect models/experimental/nllb/tests/test_packed_integration.py::test_portable_packed_native \
+      --ignore=models/experimental/nllb/tests/test_generation_envelope.py \
+      --ignore=models/experimental/nllb/tests/test_reusable_port.py \
+      --ignore=models/experimental/nllb/tests/test_trained_masks_recovery.py
+  model: nllb-200-600m
+  model_family: NLLB
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: unit

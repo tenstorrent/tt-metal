@@ -47,6 +47,7 @@ on:
           - vadv2
           - openpdn-mnist
           - yunet
+          - nllb-200-600m
           - xtts-v2
           - vibevoice-1.5b
       sku:
