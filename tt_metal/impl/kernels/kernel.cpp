@@ -458,10 +458,10 @@ ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
                                         .get_device_build_env(device.build_id())
                                         .build_env.get_out_kernel_root_path();
     // Resolve each binary's (path, load_type) exactly as read_binaries did when the loader loaded it, so
-    // llrt::get_binary_metadata is a cache read against the same entry -- no ELF handling here. buf_rw
-    // records are emitted only by data-movement binaries (compute's 3 TRISC and eth binaries carry none),
-    // so unioning across a kernel's binaries is naturally correct: a DM kernel's one binary is what
-    // matters; others contribute nothing.
+    // llrt::get_binary_metadata is a cache read against the same entry -- no ELF handling here. Records come
+    // mostly from data-movement binaries; a compute kernel's TRISC binaries carry them only where it holds a
+    // LocalTensorAccessor. Every binary of a kernel accesses on the kernel's behalf, so the kernel's R/W set is
+    // the union over its binaries.
     for (int i = 0; i < this->expected_num_binaries(); ++i) {
         const uint32_t processor_type = this->get_kernel_processor_type(i);
         const auto load_type = hal.get_jit_build_config(core_type, processor_class, processor_type).memory_load;

@@ -9,6 +9,7 @@
 #include "api/tensor/tensor_binding_token.h"
 #include "internal/tensor/array_wrapper.h"
 #include "internal/tensor/dspec.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "internal/tensor/helpers.h"
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
@@ -704,7 +705,11 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        }) {}
+        }) {
+        // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
+        // can't name its tensor, and the wrapper can't tell which the kernel will do.
+        tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
+    }
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
