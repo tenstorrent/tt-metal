@@ -85,6 +85,10 @@ Everything outside git lives under `/localdev/$USER/bringup/<model>/`: `hf/`, `g
 - A swap test gates every swapped step vs the CPU step on the same inputs (`checks="steps"`, F49), so swap tests are
   frozen without a test-role review unless `agents.swap_review` names the block type. `BRINGUP_IMPL=mutate:<kind>`
   (testing/mutate.py) proves on the CPU that a test catches a wrong module.
+- A component test runs built-in checks chosen by its output kind, on the golden and on second inputs
+  (`checks="auto"`, F56, testing/component_checks.py). It is frozen without a test-role review only when
+  `agents.component_review` leaves its block type out (default `all`: reviewed) and its CPU mistake sweep
+  (`BRINGUP_IMPL=mutations`) catches every standard mistake; otherwise the review starts with the sweep's log.
 - An agent step fails if the tree changed outside the brief's paths, if any command reached the device without a safe
   runner, or if the known-issues file lost its format.
 - Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.
