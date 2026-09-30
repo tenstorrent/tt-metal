@@ -244,8 +244,12 @@ def make_kda_conv1d_fn(
     if _conv_qknorm:
         assert (C // 32) % 4 == 0, f"channels={C}: fused_qk_l2_norm needs 4-tile blocks"
         tiled_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128, fused_qk_l2_norm=True)
+        # QWEN36_CONV_FID (LoFi|HiFi2|HiFi3|HiFi4; unset = HiFi4): math fidelity of the fused-qknorm conv's FPU work
+        # (tap ELWMULs, sum-of-squares, row-sum matmul, rsqrt broadcast multiply). fp32 dest etc. unchanged.
+        _conv_fid_name = os.environ.get("QWEN36_CONV_FID", "HiFi4")
+        assert _conv_fid_name in ("LoFi", "HiFi2", "HiFi3", "HiFi4"), f"QWEN36_CONV_FID={_conv_fid_name!r} illegal"
         _tiled_ckc = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, _conv_fid_name),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
