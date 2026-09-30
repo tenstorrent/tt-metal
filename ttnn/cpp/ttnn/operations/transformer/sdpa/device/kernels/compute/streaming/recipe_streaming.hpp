@@ -988,7 +988,9 @@ void salad_correct_fused(
     PACK((llk_pack_reconfig_l1_acc(1)));
 #else
 
+#ifndef SDPA_PA
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column * sdpa_out_stride);
+#endif
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row * sdpa_sum_stride);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
