@@ -318,3 +318,28 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   warms every chunk offset in slot 0.
 - Gate: PASS in 69 s; producer kv_latent min PCC 0.99761 (layer 31) over [0, 4064), slot 1; no contract failures.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## P.2 perf (run1, attempt 1): fused mHC residual (ttnn.bringup.mhc_post)
+- Part (1) done. Fork `mhc_post_ttnn` got an opt-in `comb_transposed=False` (default True, the same program as before):
+  X'_j = post_j F + sum_i comb[j*n + i] X_i. The kernel change is in `mhc_post_coef_expand.hpp` (raw column
+  j*n + (t-1)), behind the define `MHC_POST_COMB_DIRECT`. Only the DM kernels get that define, and only when the
+  option is off. The option is part of the program hash. Rebuilt with `./build_metal.sh`.
+- `tt/residual.py`: new mode `fused`, now the default of XING_RESIDUAL_MIX. It slices post (hc columns 4..7) and comb
+  (8..23) and calls `ttnn.bringup.mhc_post(y, x, post, comb, comb_transposed=False)` on the fp32 column-split
+  streams as they are. `XING_RESIDUAL_MIX=addcmul` gives the old path back. The profile records it as
+  `settings.residual_mix`.
+- Measured (BRINGUP_PROFILE_OPS profile, warm chunk [51200, 56320)): attn_residual 90.0 -> 10.9 ms, ffn_residual
+  90.5 -> 10.9 ms. Device time per chunk 1413 -> 1255 ms. attn_hc 39.2, ffn_hc 39.1 and the collapses 22.1 each are
+  unchanged. Ladder `last`: worst layer pcc 0.9924, final hidden 0.9985, top1 0.974.
+- Fork tests: new case `xing40_a4b_d_p-4x2-s1280-c1792-n4-fp32-comb` (fp32, pcc 1.0, rel ~0). It also asserts
+  that the comb and comb^T references differ. The fixture now opens the case mesh that matches the box (2x2 on the
+  4x2 box fails the FABRIC_2D handshake). Regression with the option off: unit 164 passed, golden 208 passed.
+- Part (2) (mhc_pre for hc + collapse) NOT done. It needs a new program entry: the reader and compute take the
+  reduced [S/4, 32] row instead of running the op's multi-core projection -> gather -> mcast. It also needs a
+  different Sinkhorn: clamp, exp(L - rowmax) with no initial softmax + eps, 20 x (row, col) instead of
+  softmax + col + 19 pairs, and no +eps on pre. That Sinkhorn is hand-scheduled SFPLOADMACRO code in
+  `mhc_pre_compute.cpp` (1617 lines). The op also does not output pre, and the frozen attn_hc tests check the
+  [S, 24] hc boundary, so the hc step would still have to produce pre. This is left as a separate step. It is worth
+  ~120 ms per chunk (hc 78 + collapse 44).
+- Re-run: `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`
+  (add `XING_RESIDUAL_MIX=addcmul` for the baseline). Fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/test_mhc_post_ttnn.py`.
