@@ -123,6 +123,17 @@ def _create_golden_function_topk():
         if indices_tensor is not None:
             # indices_tensor supplies the label returned for each position along dim.
             indices = torch.gather(indices_tensor.to(torch.int64), dim, indices)
+        if not stable:
+            # The unstable device network may return any index among equal values, including ties at the k-th
+            # boundary, so only positions whose value is unique in its row are compared exactly.
+            value_counts = (
+                (input_tensor.movedim(dim, -1).unsqueeze(-2) == values.movedim(dim, -1).unsqueeze(-1)).sum(-1)
+            ).movedim(-1, dim)
+            tie_mask = value_counts > 1
+            if bool(torch.any(tie_mask)):
+                ttnn.decorators.set_golden_comparison_config(
+                    indices, method="allclose", scope="all", rtol=0.0, atol=0.0, mask=~tie_mask
+                )
         return values, indices
 
     return golden_function
@@ -212,32 +223,36 @@ def _golden_function_ema(input_tensor, alpha, *_, **__):
 ttnn.attach_golden_function(ttnn.ema, golden_function=_golden_function_ema)
 
 
-def _hw_statistic_golden(torch_statistic, input_tensor):
-    """Evaluate a biased height-width statistic in float32, keeping the reduced axes as size 1."""
+def _hw_statistic_golden(input_tensor, take_sqrt):
+    """Evaluate the device height-width variance (or its square root) in float32, keeping the reduced axes as size 1."""
 
+    import torch
+
+    height, width = input_tensor.shape[-2:]
+    padded_height = -(-height // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    padded_width = -(-width // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    # The device sums squared deviations over the logical elements but divides by the tile-padded H * W,
+    # so non-tile-aligned inputs get a variance scaled by logical / padded area.
+    variance = torch.var(input_tensor.float(), dim=(-2, -1), keepdim=True, correction=0) * (
+        (height * width) / (padded_height * padded_width)
+    )
+    output_tensor = (torch.sqrt(variance) if take_sqrt else variance).to(input_tensor.dtype)
     # A single-plane statistic is one value, so PCC is undefined and the default allclose tolerance is
     # finer than one bfloat16 ULP; padding leaks would still shift the value by far more than a few ULP.
-    output_tensor = torch_statistic(input_tensor.float(), dim=(-2, -1), keepdim=True, correction=0).to(
-        input_tensor.dtype
-    )
     return ttnn.decorators.set_golden_comparison_config(
         output_tensor, method="ulp", scope="degenerate", ulp_threshold=4
     )
 
 
 def _golden_function_var_hw(input_tensor, *_, **__):
-    import torch
-
-    return _hw_statistic_golden(torch.var, input_tensor)
+    return _hw_statistic_golden(input_tensor, take_sqrt=False)
 
 
 ttnn.attach_golden_function(ttnn.var_hw, golden_function=_golden_function_var_hw)
 
 
 def _golden_function_std_hw(input_tensor, *_, **__):
-    import torch
-
-    return _hw_statistic_golden(torch.std, input_tensor)
+    return _hw_statistic_golden(input_tensor, take_sqrt=True)
 
 
 ttnn.attach_golden_function(ttnn.std_hw, golden_function=_golden_function_std_hw)

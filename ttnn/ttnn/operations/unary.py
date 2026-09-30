@@ -480,8 +480,9 @@ def _golden_function_atanh(input_tensor_a, *args, **kwargs):
     import torch
 
     result = torch.atanh(input_tensor_a)
+    # The bfloat16 device kernel keeps torch's -inf / +inf at -1 / 1 but returns +inf instead of NaN for |x| > 1.
     return (
-        result.masked_fill_((input_tensor_a <= -1) | (input_tensor_a >= 1), float("inf"))
+        result.masked_fill_(input_tensor_a.abs() > 1, float("inf"))
         if input_tensor_a.dtype == torch.bfloat16
         else result
     )

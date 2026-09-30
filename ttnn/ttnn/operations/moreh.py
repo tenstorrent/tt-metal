@@ -115,11 +115,33 @@ def _moreh_reduced_dims_and_shape(shape, dim, keepdim):
     return tuple(reduced_dims), output_shape
 
 
+def _with_bfloat16_accumulation_tolerance(output, reduced_magnitude):
+    """Relax the single-value comparison of a bfloat16 moreh reduction to its accumulation error.
+    reduced_magnitude is the same reduction applied to the absolute input values.
+    """
+
+    import torch
+
+    if output.dtype != torch.bfloat16:
+        return output
+    # The device accumulates in bfloat16 across tiles and reduction stages while torch rounds once, so a
+    # single-value result (where PCC is undefined) can differ by a few ULPs of the accumulated magnitudes.
+    eps = torch.finfo(torch.bfloat16).eps
+    return ttnn.decorators.set_golden_comparison_config(
+        output,
+        method="allclose",
+        scope="degenerate",
+        rtol=2 * eps,
+        atol=2 * eps * float(torch.amax(reduced_magnitude)),
+    )
+
+
 def _golden_sum(input, dim=None, *_, keepdim=False, **__):
     import torch
 
     dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
-    return torch.sum(input, dim=dims, keepdim=True).reshape(output_shape)
+    output = torch.sum(input, dim=dims, keepdim=True).reshape(output_shape)
+    return _with_bfloat16_accumulation_tolerance(output, torch.sum(input.float().abs(), dim=dims))
 
 
 ttnn.attach_golden_function(ttnn.moreh_sum, golden_function=_golden_sum)
@@ -129,7 +151,8 @@ def _golden_mean(input, dim=None, *_, keepdim=False, **__):
     import torch
 
     dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
-    return torch.mean(input, dim=dims, keepdim=True).reshape(output_shape)
+    output = torch.mean(input, dim=dims, keepdim=True).reshape(output_shape)
+    return _with_bfloat16_accumulation_tolerance(output, torch.mean(input.float().abs(), dim=dims))
 
 
 ttnn.attach_golden_function(ttnn.moreh_mean, golden_function=_golden_mean)

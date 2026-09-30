@@ -698,18 +698,18 @@ def test_rdiv_bw_with_keyword_rounding_mode_in_comparison_mode(device, rounding_
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_rpow_bw_matches_reverse_power_derivative_in_comparison_mode(device):
+def test_rpow_bw_matches_device_power_derivative_in_comparison_mode(device):
     torch_grad = torch.ones(SINGLE_TILE, dtype=torch.bfloat16)
     torch_input = torch.linspace(0.5, 2.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16)
     grad = _to_device(torch_grad, device)
     input_tensor = _to_device(torch_input, device)
 
-    # rpow computes base ** x, but the golden used to differentiate x ** base. Since TTNN and the golden now agree,
-    # both are also checked against the analytic derivative grad * ln(base) * base ** x.
+    # rpow_bw on device differentiates x ** exponent (not the forward rpow's exponent ** x), and PCC cannot tell
+    # the two monotone curves apart, so both are also checked against grad * exponent * x ** (exponent - 1).
     with comparison_mode():
         output = ttnn.rpow_bw(grad, input_tensor, 3.0)
 
-    ideal = torch_grad.float() * torch.log(torch.tensor(3.0)) * torch.pow(3.0, torch_input.float())
+    ideal = torch_grad.float() * 3.0 * torch_input.float() ** 2
     golden = _registered_golden_output(ttnn.rpow_bw, grad, input_tensor, 3.0)[0]
     torch.testing.assert_close(golden.float(), ideal, rtol=2e-2, atol=2e-2)
     torch.testing.assert_close(ttnn.to_torch(output[0]).float(), ideal, rtol=2e-2, atol=2e-2)
@@ -1513,7 +1513,8 @@ def test_moreh_mean_over_all_dims_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand((2, 3, 32, 64), dtype=torch.bfloat16), device)
 
     # moreh keeps a reduced tile dimension (one of the last two) as size 1 even with keepdim=False, so its output
-    # shape differs from torch's rank-reduced result and the shape check used to fail.
+    # shape differs from torch's rank-reduced result and the shape check used to fail. The single bfloat16 value
+    # must then match within the device's accumulation error rather than a sub-ULP tolerance.
     with comparison_mode():
         ttnn.moreh_mean(input_tensor, dim=None, keepdim=False)
 
@@ -1534,7 +1535,8 @@ def test_moreh_sum_of_rank_1_input_in_comparison_mode(device, dim):
     input_tensor = _to_device(torch.empty([5]).uniform_(-1, 1).to(torch.bfloat16), device)
 
     # For a rank-1 input the reduced dimension is a tile dimension that moreh keeps as size 1, so the output is
-    # [1] while torch returns a 0-d scalar, which used to fail the shape check.
+    # [1] while torch returns a 0-d scalar, which used to fail the shape check. The single bfloat16 value must
+    # then match within the device's accumulation error rather than a sub-ULP tolerance.
     with comparison_mode():
         ttnn.moreh_sum(input_tensor, dim, keepdim=False)
 
@@ -1554,7 +1556,9 @@ def test_topk_default_dim_in_comparison_mode(device):
 def test_topk_labels_and_stable_ties_in_comparison_mode(device, variant):
     shape = (1, 1, 32, 64)
     if variant == "indices_tensor":
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        # Distinct small integers are exact in bfloat16, so no ties can make the returned labels ambiguous.
+        torch_input = torch.stack([torch.randperm(shape[-1]) for _ in range(shape[-2])]).reshape(shape)
+        torch_input = torch_input.to(torch.bfloat16)
         labels = torch.arange(shape[-1] - 1, -1, -1, dtype=torch.int32).expand(shape).contiguous()
         topk_kwargs = {"indices_tensor": _to_device(labels, device, dtype=ttnn.uint16)}
     else:
@@ -1795,7 +1799,9 @@ def test_ring_joint_golden_with_circular_kv_cache():
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_moe_expert_token_remap_in_comparison_mode(device):
-    batch, seq, experts, reduction_size = 16, 1, 8, 16
+    # 32 bfloat16 experts make each topk row 64 bytes; narrower rows land misaligned in the double-buffered
+    # topk circular buffer, whose pages are only L1-aligned, and read corrupted data from DRAM.
+    batch, seq, experts, reduction_size = 16, 1, 32, 16
     topk = torch.rand((1, batch, seq, experts), dtype=torch.bfloat16) + 0.5
     mapping = torch.ones((1, 1, experts, 1), dtype=torch.int32)
     metadata = torch.arange(experts, dtype=torch.int32).expand(1, batch, seq, experts).contiguous()
@@ -1811,7 +1817,8 @@ def test_moe_expert_token_remap_in_comparison_mode(device):
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_moe_expert_token_remap_preallocated_outputs_update_global_golden(device, tmp_path):
-    batch, seq, experts, reduction_size = 16, 1, 8, 16
+    # 32 experts keep each topk row DRAM-aligned, as in test_moe_expert_token_remap_in_comparison_mode.
+    batch, seq, experts, reduction_size = 16, 1, 32, 16
     topk = torch.rand((1, batch, seq, experts), dtype=torch.bfloat16) + 0.5
     mapping = torch.ones((1, 1, experts, 1), dtype=torch.int32)
     metadata = torch.arange(experts, dtype=torch.int32).expand(1, batch, seq, experts).contiguous()
@@ -1891,7 +1898,8 @@ def test_logiteps_bw_with_negative_eps_in_comparison_mode(device):
 def test_std_hw_on_non_tile_aligned_input_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand((1, 1, 33, 33), dtype=torch.bfloat16), device)
 
-    # The tile padding of a 33x33 input must be excluded from the height-width standard deviation.
+    # The device sums squared deviations over the 33x33 logical elements but divides by the padded 64x64 area,
+    # which the golden must reproduce.
     with comparison_mode():
         ttnn.std_hw(input_tensor)
 
@@ -2059,13 +2067,13 @@ def test_bcast_width_with_tile_wide_operand_in_comparison_mode(device, math_op):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-def test_narrow_across_tile_boundary_in_comparison_mode(device):
-    input_tensor = _to_device(torch.rand((1, 1, 32, 33), dtype=torch.bfloat16), device)
+def test_narrow_before_partially_padded_tile_in_comparison_mode(device):
+    input_tensor = _to_device(torch.rand((1, 1, 33, 32), dtype=torch.bfloat16), device)
 
-    # The range [1, 33) ends at the logical width but spans the tile boundary into a partially padded tile;
-    # the device must return only logical values, matching the golden slice.
+    # TILE narrowing needs tile-aligned start and length, so the rows [0, 32) end at the tile boundary right
+    # before the partially padded second tile; the view must hold exactly those logical rows.
     with comparison_mode():
-        ttnn.narrow(input_tensor, -1, 1, 32)
+        ttnn.narrow(input_tensor, -2, 0, 32)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -2142,4 +2150,4 @@ def test_sort_wide_float32_descending_in_comparison_mode(device):
     with comparison_mode():
         _, indices = ttnn.sort(input_tensor, dim=-1, descending=True)
 
-    assert int(ttnn.to_torch(indices).max()) < width
+    assert int(ttnn.to_torch(indices).to(torch.int64).max()) < width
