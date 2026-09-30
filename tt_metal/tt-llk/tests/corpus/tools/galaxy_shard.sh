@@ -220,10 +220,31 @@ done
 echo "launched $NPAR chip-slices $(date -u +%H:%M:%SZ)" | tee -a "$OUT/DRIVER.log"
 shard_rc=0
 failed_chips=""
+# A slice's exit status carries TWO different things: "this process broke" and
+# "my comparison did not come out equal" (the streamers `return 0 if all_equal
+# and numeric_ok else 1`).  Treating every non-zero exit as a dead chip made
+# DIVERGENT structurally unreachable: each diverging slice landed in
+# failed_chips, so the combiner's `not all_equal and not invalid_list` branch
+# could never fire and a real, fully-covered divergence was reported INCOMPLETE.
+# Same for a GOLDEN=1 numeric-gate failure, which voided an established
+# bit-exactness verdict.  Distinguish them by what the slice LEFT BEHIND: a
+# decided verdict of its own for THIS run means it did its work.  Stale verdict
+# files were removed before launch, so any file here was written by this run, and
+# the combiner still re-checks its op/start/total/covered before believing it.
+_slice_decided() {  # $1 = chip index
+  local v="$OUT/slice-$1/$OP-VERDICT.txt"
+  [ -s "$v" ] && grep -qE \
+    'VERDICT=(BIT-EXACT-ALL-INPUTS|BIT-EXACT-PARTIAL-[0-9]+-OF-[^[:space:]]+|DIVERGENT)' "$v"
+}
 for i in "${!pids[@]}"; do
   if ! wait "${pids[$i]}"; then
-    shard_rc=1
-    failed_chips="${failed_chips:+$failed_chips,}${chips[$i]}"
+    if _slice_decided "${chips[$i]}"; then
+      echo "slice ${chips[$i]}: non-zero exit with a decided verdict (divergence" \
+           "and/or numeric gate), not a dead chip" | tee -a "$OUT/DRIVER.log"
+    else
+      shard_rc=1
+      failed_chips="${failed_chips:+$failed_chips,}${chips[$i]}"
+    fi
   fi
 done
 echo "all slices done $(date -u +%H:%M:%SZ) failed_chips=[${failed_chips}]" | tee -a "$OUT/DRIVER.log"

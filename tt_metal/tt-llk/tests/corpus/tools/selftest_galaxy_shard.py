@@ -11,8 +11,12 @@ arguments every slice would receive, and asserts:
   * every slice's own band enumeration (the same `min(band, start+total-s)`
     recurrence the streamers use) covers its interval exactly;
   * degenerate geometries are REFUSED rather than trivially "covered";
-  * a slice that exits non-zero is never counted as covered, including when a
-    stale slice verdict from an earlier run is sitting in its directory.
+  * a reduced SPACE reports BIT-EXACT-PARTIAL, never ALL-INPUTS -- tiling the
+    range you asked for is not exhausting the op's space;
+  * a slice that DIED is never counted as covered, including when a stale slice
+    verdict from an earlier run is sitting in its directory -- while a slice that
+    exited non-zero because its comparison DIVERGED is reported as a divergence
+    rather than as a dead chip.
 
 Run: python3 selftest_galaxy_shard.py
 """
@@ -57,6 +61,10 @@ with open(os.environ["SHARD_RECORD"], "a") as fh:
 if ns.chip in os.environ.get("DEAD_CHIPS", "").split(","):
     sys.exit(3)
 
+# A diverging slice writes its verdict and THEN exits non-zero, exactly as the
+# real streamers do (`return 0 if all_equal and numeric_ok else 1`).
+diverge = ns.chip in os.environ.get("DIVERGENT_CHIPS", "").split(",")
+
 out = pathlib.Path(ns.out)
 out.mkdir(parents=True, exist_ok=True)
 start, total = int(ns.start_bit, 0), int(ns.total, 0)
@@ -76,15 +84,20 @@ verdict = (
     if covered == (1 << 32)
     else "BIT-EXACT-PARTIAL-%d-OF-2^32" % covered
 )
+witness = "[]"
+if diverge:
+    verdict, witness = "DIVERGENT", "[(0, %d, %d)]" % (start, min(band, total))
 (out / (ns.op + "-VERDICT.txt")).write_text(
     "OP=%s VERDICT=%s start=%d total=%d bands=%d covered=%d "
-    "(full 2^32=%s) wall_s=0.0 witness_bands=[]\\n"
-    % (ns.op, verdict, start, total, n_bands, covered, covered == (1 << 32))
+    "(full 2^32=%s) wall_s=0.0 witness_bands=%s\\n"
+    % (ns.op, verdict, start, total, n_bands, covered, covered == (1 << 32), witness)
 )
 if ns.golden:
     (out / (ns.op + "-CORRECTNESS-VERDICT.txt")).write_text(
         "OP=%s NUMERIC_GATE=PASS ULP_ADMISSION=PASS\\n" % ns.op
     )
+if diverge:
+    sys.exit(1)
 '''
 
 PYSHIM = '#!/bin/sh\nexec "%s" "$@"\n' % sys.executable
@@ -113,7 +126,9 @@ class Farm:
         self.farm_root = root / "farm"
 
 
-def run_shard(tmp: Path, tag: str, sweep: str = "binary", dead: str = "", **env):
+def run_shard(
+    tmp: Path, tag: str, sweep: str = "binary", dead: str = "", diverge: str = "", **env
+):
     """Run the real galaxy_shard.sh; return (rc, last_line, [slice argv dicts])."""
     work = tmp / tag
     work.mkdir()
@@ -126,6 +141,7 @@ def run_shard(tmp: Path, tag: str, sweep: str = "binary", dead: str = "", **env)
     e.update(
         SHARD_RECORD=str(record),
         DEAD_CHIPS=dead,
+        DIVERGENT_CHIPS=diverge,
         OP="myop",
         SWEEP=sweep,
         STAGGER="0",
@@ -226,6 +242,37 @@ def test_reduced_space_cannot_certify(tmp: Path) -> None:
         # The comparison did pass, so rc stays 0; the LABEL carries the coverage.
         assert rc == 0, f"space={space}: rc={rc} :: {last}"
     print("PASS a reduced SPACE reports PARTIAL, never ALL-INPUTS")
+
+
+def test_divergence_is_reported_as_divergence(tmp: Path) -> None:
+    """A diverging slice is not a dead chip.
+
+    The streamers `return 0 if all_equal and numeric_ok else 1`, so every slice
+    that finds a difference exits non-zero.  The driver used to read any non-zero
+    exit as a dead chip, which put each diverging slice into --failed-chips and
+    made the combiner's `not all_equal and not invalid_list` branch unreachable:
+    a real, fully-covered divergence came back INCOMPLETE with the whole space
+    covered.  Observed on silicon for geluappx-fresh (18 of 32 slices diverging
+    on every band, covered=2^32, verdict=INCOMPLETE).
+    """
+    for tag, diverge in (("one", "7"), ("many", "0,1,2,3,16,17")):
+        rc, last, calls, _ = run_shard(
+            tmp, f"div-{tag}", diverge=diverge, NPAR=32, BAND_BITS=23, SPACE=TWO32
+        )
+        assert_exact_cover(calls, TWO32, 32)
+        assert "VERDICT=DIVERGENT" in last, f"{tag}: divergence lost :: {last}"
+        assert "invalid=[]" in last, f"{tag}: a diverging slice was called dead :: {last}"
+        assert f"covered={TWO32}" in last, last
+        # Still not bit-exact, so the driver's own status is non-zero.
+        assert rc != 0, f"{tag}: a divergence exited 0 :: {last}"
+    # And a chip that really dies is still a dead chip, even alongside divergence.
+    rc, last, calls, _ = run_shard(
+        tmp, "div-and-dead", diverge="7", dead="9", NPAR=32, BAND_BITS=23, SPACE=TWO32
+    )
+    assert "invalid=[9]" in last, last
+    assert "VERDICT=INCOMPLETE" in last, last
+    assert rc != 0, last
+    print("PASS a diverging slice reports DIVERGENT, not a dead chip")
 
 
 def test_degenerate_geometries_refuse(tmp: Path) -> None:
@@ -363,6 +410,7 @@ def main() -> int:
         test_exact_partition(root)
         test_partition_matrix(root)
         test_reduced_space_cannot_certify(root)
+        test_divergence_is_reported_as_divergence(root)
         test_degenerate_geometries_refuse(root)
         test_dead_slice_is_not_covered(root)
         test_stale_verdict_cannot_stand_in_for_a_dead_slice(root)

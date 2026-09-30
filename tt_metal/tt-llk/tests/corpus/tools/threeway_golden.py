@@ -251,6 +251,8 @@ SOFTPLUS_THRESHOLD = 20.0
 XIELU_ALPHA_P = 1.0
 XIELU_ALPHA_N = 1.0
 XIELU_BETA = 0.5
+PRELU_SLOPE = 0.25
+POLYGAMMA_ORDER = 1
 
 BF16_TINY = 2.0**-126  # FTZ threshold for Float16_b / Float32 (finfo.tiny)
 
@@ -385,6 +387,61 @@ def _tanh_derivative_lut(x):
 def _tanh_derivative_true(x):
     # The TRUE math tanh'(x) = sech^2(x) = 1 - tanh^2, computed stably as 1/cosh^2.
     return _np(1.0 / torch.cosh(_t(x)) ** 2)
+
+
+# laneMT corpus extension. Same rule as every body above: one expression, lifted
+# from the UnarySFPUGolden method of the same name, vectorized. The selftest
+# proves each one bit-for-bit against that scalar oracle -- nothing here is
+# trusted because it looks right.
+def _clamp(x):
+    # UnarySFPUGolden._clamp with the dispatch min/max: identical expression to
+    # _hardtanh, kept as its own name because they are two separate ops/rows.
+    return _np(torch.clamp(_t(x), CLAMP_MIN, CLAMP_MAX))
+
+
+def _identity(x):
+    return np.asarray(x, dtype=np.float64)
+
+
+def _prelu(x):
+    xf = np.asarray(x, dtype=np.float64)
+    return np.where(xf >= 0.0, xf, PRELU_SLOPE * xf)
+
+
+def _mish(x):
+    return _np(torch.nn.functional.mish(_t(x)))
+
+
+def _selu(x):
+    return _np(torch.nn.functional.selu(_t(x)))
+
+
+def _sqrt(x):
+    return _np(torch.sqrt(_t(x)))
+
+
+def _rsqrt(x):
+    return _np(torch.rsqrt(_t(x)))
+
+
+def _i0(x):
+    return _np(torch.special.i0(_t(x)))
+
+
+def _i1(x):
+    return _np(torch.special.i1(_t(x)))
+
+
+def _digamma(x):
+    return _np(torch.digamma(_t(x)))
+
+
+def _lgamma(x):
+    return _np(torch.lgamma(_t(x)))
+
+
+def _polygamma(x):
+    return _np(torch.polygamma(POLYGAMMA_ORDER, _t(x)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
