@@ -1374,8 +1374,6 @@ class Attention(LightweightModule):
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
-            if self.sliding_window is not None:
-                raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
             if isinstance(chunk_start_idx, ttnn.Tensor):
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                     input_tensor_q=q_heads_1QSD_8b,
@@ -1384,6 +1382,7 @@ class Attention(LightweightModule):
                     page_table_tensor=page_table,
                     chunk_start_idx=None,
                     chunk_start_idx_tensor=chunk_start_idx,
+                    sliding_window_size=self.sliding_window,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
                 )
@@ -1394,6 +1393,7 @@ class Attention(LightweightModule):
                     input_tensor_v=values_BKSD,
                     page_table_tensor=page_table,
                     chunk_start_idx=chunk_start_idx,
+                    sliding_window_size=self.sliding_window,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
                 )
