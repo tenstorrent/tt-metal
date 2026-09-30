@@ -135,8 +135,49 @@ def test_source_outcomes_from_junit(tmp_path):
     assert S._outcomes(x) == {"m::a": "passed", "m::b": "failed", "m::c": "skipped"}
 
 
-def test_gate_commit_stages_the_shared_paths_an_agent_may_change(fx):
-    """F49: fork edits (ttnn/ttnn/bringup) and knowledge entries are allowed paths, so the gate commit must carry them."""
+def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
+    """F48: a fork the agent made (or changed) and its knowledge-file entries are committed with the gate; other
+    forks' files are not staged (the formatting pass must not touch them)."""
+    import subprocess
+
+    from models.demos.common.bringup.core.gate import stage_paths
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+
+    s = Spec.load(fx())
+    repo = s.repo
+    git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)  # noqa: E731
+    git("init", "-q")
+    kn = repo / "models/demos/common/bringup/knowledge"
+    kn.mkdir(parents=True)
+    (kn / "known_issues.md").write_text("# issues\n")
+    (kn / "repo_map.md").write_text("# map\n")
+    old = repo / "ttnn/ttnn/bringup/old_fork"
+    old.mkdir(parents=True)
+    (old / "op.cpp").write_text("int a;\n")
+    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n")
+    git("add", "-A")
+    git("-c", "user.email=x@y", "-c", "user.name=x", "commit", "-qm", "base")
+    led = Ledger(s.bringup_dir)
+    task = {"id": "C.1", "step": "implement", "paths": []}
+    assert not [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
+    new = repo / "ttnn/ttnn/bringup/new_fork"
+    (new / "__pycache__").mkdir(parents=True)
+    (new / "op.cpp").write_text("int b;\n")
+    (new / "__pycache__" / "x.pyc").write_text("")
+    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n| new_fork |\n")
+    (kn / "known_issues.md").write_text("# issues\n- new entry\n")
+    got = [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
+    assert got == [
+        "models/demos/common/bringup/knowledge/known_issues.md",
+        "ttnn/ttnn/bringup/INDEX.md",
+        "ttnn/ttnn/bringup/new_fork/op.cpp",
+    ]
+
+
+def test_gate_commit_carries_new_fork_files_and_knowledge(fx):
+    """glm53 F49 (now F51), adapted to F48: in a repo with no commit yet, a fork the agent created (new files) and the
+    knowledge files are staged file by file and end up in the gate commit."""
     from models.demos.common.bringup.core.gate import git_commit, stage_paths
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import Spec
@@ -157,8 +198,10 @@ def test_gate_commit_stages_the_shared_paths_an_agent_may_change(fx):
     (know / "known_issues.md").write_text("# Known issues\n")
     (know / "repo_map.md").write_text("# Repo map\n")
     got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
-    assert "ttnn/ttnn/bringup" in got
+    assert "ttnn/ttnn/bringup" not in got  # F48: changed files, never the whole directory
     assert {
+        "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+        "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py",
         "models/demos/common/bringup/knowledge/known_issues.md",
         "models/demos/common/bringup/knowledge/repo_map.md",
     } <= set(got)
@@ -170,11 +213,29 @@ def test_gate_commit_stages_the_shared_paths_an_agent_may_change(fx):
 
 
 def test_gate_commit_skips_shared_paths_that_do_not_exist(fx):
+    """glm53 F49 (now F51): with no fork or knowledge file present, nothing shared is staged."""
     from models.demos.common.bringup.core.gate import stage_paths
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import Spec
 
     s = Spec.load(fx())
+    subprocess.run(["git", "init", "-q"], cwd=s.repo, check=True)
     led = Ledger(s.bringup_dir)
     got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
-    assert "ttnn/ttnn/bringup" not in got
+    assert not [p for p in got if p.startswith(("ttnn/", "models/demos/common/"))]
+
+
+def test_gate_outputs_are_allowed_for_the_agent(fx):
+    """F55: files the task's gate writes (e.g. O.1's results/fork_calls.json) never count as an agent path violation."""
+    from models.demos.common.bringup.core.gate import gate_outputs
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+    from models.demos.common.bringup.orchestrator import Orchestrator, allowed
+
+    s = Spec.load(fx())
+    o = Orchestrator(s)
+    task = {"id": "O.1", "step": "optests", "role": "optests", "paths": []}
+    pats = o.allowed_paths(task, "optests")
+    b = str(Ledger(s.bringup_dir).results_dir.relative_to(s.repo))
+    assert allowed(f"{b}/fork_calls.json", pats) and allowed(f"{b}/O.1.json", pats)
+    assert [p.name for p in gate_outputs(Ledger(s.bringup_dir), task)][-1] == "fork_calls.json"

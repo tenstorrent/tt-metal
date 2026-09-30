@@ -187,6 +187,18 @@ def gate_command(task: dict) -> str:
     return cmd
 
 
+def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
+    """F55: the files a task's gate writes itself: results/<task>.json, results/<task>_*.json and, for the derived-op
+    test task, results/fork_calls.json. One list, used three ways: the gate deletes them before it runs (so nothing an
+    agent left there survives), the gate commits them, and the agent may change them (orchestrator.allowed_paths), since
+    an agent that runs its own gate command rewrites them."""
+    tid = task["id"]
+    out = [ledger.results_dir / f"{tid}.json", *sorted(ledger.results_dir.glob(f"{tid}_*.json"))]
+    if task.get("step") == "optests":
+        out.append(ledger.results_dir / "fork_calls.json")
+    return out
+
+
 def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     repo = spec.repo
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
@@ -204,11 +216,9 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
             paths.append(rel(ledger.dir / extra))
     if ledger.breadcrumbs.exists():
         paths.append(rel(ledger.breadcrumbs))
-    # The task's other result files (<task>_profile.json, <task>_ops_profile.json, ...) and the record of the model's
-    # ttnn.bringup calls the derived-op test task writes.
-    paths += [rel(p) for p in sorted(ledger.results_dir.glob(f"{task['id']}_*.json"))]
-    if task.get("step") == "optests" and (ledger.results_dir / "fork_calls.json").exists():
-        paths.append(rel(ledger.results_dir / "fork_calls.json"))
+    # The files the task's own gate writes (gate_outputs): <task>_profile.json, <task>_ops_profile.json, ... and the
+    # record of the model's ttnn.bringup calls the derived-op test task writes.
+    paths += [rel(p) for p in gate_outputs(ledger, task) if p.exists() and p.name != f"{task['id']}.json"]
     paths += [p for p in task.get("paths", []) if _files_under(repo, [p])]  # an empty folder is no pathspec for git
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
@@ -313,6 +323,9 @@ def run_gate(
     if commit:
         format_paths(spec.repo, task.get("paths", []))
     M.reset(tid, ledger.results_dir)
+    for out in gate_outputs(ledger, task):  # F55: only what this gate writes now counts
+        if out.name != f"{tid}.json":
+            out.unlink(missing_ok=True)
     if record:
         ledger.update(tid, status="RUNNING", started=now())
     log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
