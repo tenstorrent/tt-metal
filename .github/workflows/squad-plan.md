@@ -329,7 +329,10 @@ reproduce the inner content, not the outer fence):
 - Build with `.github/scripts/copilot-build.sh` [+ the narrowest flag that covers the
   change: `--build-ttnn-tests` for `ttnn/`, `--build-metal-tests` for `tt_metal/`,
   `--build-tt-train` for `tt-train/`; `--configure-only` for CMake-only changes].
-  State the exact command and result in the PR description.
+  State the exact command and result under the `### Verification` heading in the PR
+  description (`.github/pull_request_template.md`) — that section exists specifically
+  for this and survives the summarization step that writes the PR description; anything
+  outside it routinely does not.
 - Run `pre-commit` on changed files (clang-format for C++).
 - [Any host-side unit tests that exercise the change and can run without a device.]
 - Device tests cannot run in the agent environment; say so in the PR if the change

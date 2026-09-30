@@ -64,6 +64,13 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_l1_acc((!last_K_chunk && K_chunk > 0) ? 1 : 0);
                 }
+#ifdef ARCH_QUASAR
+                // Quasar: the pack destination alternates between C_partials and C_slice each K chunk. The pack
+                // BFD is baked at pack_init (pack_reconfig_data_format is gasket-only, and only runs when the
+                // formats differ), so re-init the packer for the current target every K chunk — otherwise the
+                // last chunk's result is packed to the C_partials BFD left by compute_kernel_hw_startup.
+                pack_init(pack_target_id);
+#endif
 
                 // (m_tile, n_tile) is the subblock's first tile within the C slice.
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {

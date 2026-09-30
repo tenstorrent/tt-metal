@@ -21,7 +21,7 @@ Usage -- single device, shipping defaults:
         CVD_SPLIT_MODE=off python .../cpu_vs_device.py
 
 Env: CVD_MESH (default 1x1), CVD_T_FACTOR, CVD_MESH_AXIS, CVD_TRACED, CVD_BATCH (default 2, 1 for the
-real per-clip cost), CVD_SPLIT_MODE (off|weight|full),
+real per-clip cost), CVD_SPLIT_MODE (off|weight|full|kernel),
 CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
 
 Accuracy is scored against the CPU reference, i.e. an absolute number; the T-parallel test only scores
@@ -255,7 +255,7 @@ def main():
         mean_psnr = sum(r[3] for r in rows) / n
         mean_secs = sum(r[2] for r in rows) / n
         # The accuracy criterion is "no worse than the single-device path at the same levers", not a
-        # fixed number: the decoder's constructed defaults are accurate mode (split_mode='full')
+        # fixed number: the decoder's constructed defaults are accurate mode (split_mode='kernel')
         # and score ~67 dB, where all-fast scores far lower. A bar that does not name
         # its lever set is meaningless across that spread.
         # So the baseline has to be *measured* on this branch -- run once without the CVD_* variables and

@@ -144,6 +144,15 @@ repos:
       language: system
       pass_filenames: false
       files: ^tools/triage/
+- repo: local
+  hooks:
+    - id: compile-agentic-workflows
+      name: Regenerate agentic workflow lock files
+      entry: python3 .github/scripts/utils/update_agentic_workflows.py
+      language: system
+      files: ^\.github/workflows/[^/]+\.(md|lock\.yml)$
+      pass_filenames: true
+      require_serial: true
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
