@@ -98,7 +98,8 @@ CASES += [("bfp8", 8, 1, 16), ("bfp8", 8, 16, 16), ("bfp4", 8, 1, 16), ("bfp4", 
 @pytest.mark.perf
 @parametrize(case=CASES)
 def test_perf_compressed_custom_mm(perf_report, case):
-    pattern, in0_face_r_dim, ct, kt = case
+    # a single parametrized name arrives as a one-tuple (the helper's convention, as in test_dprint_tensix)
+    pattern, in0_face_r_dim, ct, kt = case[0]
     in1_format = DECLARED_IN1[pattern]
     configuration = PerfConfig(
         "sources/compressed_custom_mm_perf.cpp",
