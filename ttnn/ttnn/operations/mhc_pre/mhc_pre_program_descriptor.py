@@ -46,6 +46,9 @@ CB_PRE_COLS = 12
 CB_Y_OUT = 13
 CB_OUT_STAGE = 14
 CB_WEIGHT_SPLIT = 15  # aliases CB_WEIGHT's allocation (fp32 W only): bf16 pages [W_hi(k), W_lo(k)] per k
+CB_X_FP32 = 16  # aliases CB_X_RESIDENT's allocation (fp32 X only): the same tiles, read UnpackToDestFp32
+CB_X_PIECES = 17  # fp32 X only: bf16 pieces [x_hi, x_mid] of one K chunk window (streams K)
+CB_MIX_RUN = 18  # fp32 X only: running fp32 mix partial between K chunk windows (SFPU-exact reload)
 NUM_CB_SLOTS = 64
 UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_LOGITS_COEF)
 
@@ -57,6 +60,16 @@ def w_pieces(w_dtype):
     read it as ~tf32); a bf16 W is already exact. Single source for the descriptor and the compute kernel.
     """
     return 2 if w_dtype == ttnn.float32 else 1
+
+
+def x_pieces(x_dtype):
+    """bf16 pieces of X the projection consumes (Refinement 2, fp32 streams).
+
+    An fp32 X is split per K chunk into x_hi = bf16-truncate(x) and x_mid = bf16-RNE(x - x_hi)
+    (residual <= 2^-17 |x|, unbiased); the FPU would otherwise read it as ~tf32 (truncating). A bf16 X is
+    already exact. Single source for the descriptor and the compute kernel.
+    """
+    return 2 if x_dtype == ttnn.float32 else 1
 
 
 # ---- semaphores ----
@@ -76,6 +89,11 @@ W_CHUNK_TILES = 8
 # Math fidelity of the X @ W_lo products (fp32 W split). W_lo <= 2^-8 |W|, so LoFi's truncation lands far
 # below the FPU accumulation floor; set to the caller's fidelity to disable (byte-identical to one fidelity).
 W_LO_FIDELITY = ttnn.MathFidelity.LoFi
+# fp32 X only: K tiles per x-piece chunk window. The pieces are recomputed per chunk from the resident fp32
+# X block (never a second resident copy); larger = fewer running-partial reloads, more L1.
+X_CHUNK_K_TILES = 8
+X_PIECE_DEPTH = 2  # chunk windows in flight in cb_x_pieces
+DEST_TILES_FP32 = 4  # DEST_AUTO_LIMIT at fp32_dest_acc_en, half sync: bound on the projection sub-block height
 L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
 # Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
 # Measured on BH p150 (fp32, device kernel ns, bt=coarsest-fit -> bt=1): 640x7168 384->383 us,
@@ -139,8 +157,12 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
     f32, fT = ttnn.float32, F32_TILE_BYTES
     pieces = w_pieces(w_dtype)
     w_alias = ((CB_WEIGHT_SPLIT, w_tile // pieces, ttnn.bfloat16),) if pieces > 1 else ()
+    xp = x_pieces(x_dtype)
+    x_alias = ((CB_X_FP32, x_tile, x_dtype),) if xp > 1 else ()
+    sb_rows = min(bt, DEST_TILES_FP32)  # projection sub-block rows (<= DEST); concave in bt -> the affine
+    # L1 solve over-estimates it (conservative)
     table = [
-        (CB_X_RESIDENT, depth * bt * kmax, x_tile, x_dtype),
+        (CB_X_RESIDENT, depth * bt * kmax, x_tile, x_dtype, x_alias),
         (CB_WEIGHT, kmax, w_tile, w_dtype, w_alias),
         (CB_BIAS_COEF, 1, fT, f32),
         (CB_REDUCE_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
@@ -156,6 +178,11 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
         (CB_OUT_STAGE, OUT_STAGE_PAGES, fT, f32),
     ]
+    if xp > 1:
+        table += [
+            (CB_X_PIECES, X_PIECE_DEPTH * xp * X_CHUNK_K_TILES * sb_rows, BF16_TILE_BYTES, ttnn.bfloat16),
+            (CB_MIX_RUN, sb_rows, fT, f32),
+        ]
     return [e if len(e) == 5 else e + ((),) for e in table]
 
 
@@ -376,6 +403,12 @@ def create_program_descriptor(
         W_CHUNK_TILES,
         W_LO_FIDELITY.value,
         cfg.math_fidelity.value,
+        CB_X_FP32,
+        CB_X_PIECES,
+        CB_MIX_RUN,
+        x_pieces(x_tensor.dtype),
+        X_CHUNK_K_TILES,
+        min(bt, DEST_TILES_FP32),
     ]
 
     writer_ct = [
@@ -478,6 +511,9 @@ def create_program_descriptor(
     # The fp32 W CB is only read by the split's copy_tile (the matmul reads cb_weight_split); a bf16 W
     # feeds the FPU matmul directly and must stay Default.
     fp32_cbs = UNPACK_TO_DEST_FP32_CBS + ((CB_WEIGHT,) if w_pieces(w_tensor.dtype) > 1 else ())
+    # fp32 X: the FPU y-mix keeps reading CB_X_RESIDENT; the exact split / sum x^2 read the
+    # alias CB_X_FP32 straight into DEST. CB_MIX_RUN is reloaded exactly between K chunks.
+    fp32_cbs += (CB_X_FP32, CB_MIX_RUN) if x_pieces(x_tensor.dtype) > 1 else ()
     for idx in fp32_cbs:
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_cfg.unpack_to_dest_mode = modes

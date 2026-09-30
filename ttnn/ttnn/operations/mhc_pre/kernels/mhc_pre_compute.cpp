@@ -77,6 +77,16 @@ constexpr auto w_lo_fidelity = static_cast<ckernel::MathFidelity>(get_compile_ti
 // == MATH_FIDELITY, but visible on every TRISC (the unpack order depends on whether the lo pass is separate).
 constexpr auto w_main_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(22));
 constexpr uint32_t cb_w_matmul = w_pieces > 1 ? cb_weight_split : cb_weight;
+// fp32 X (x_pieces == 2): exact projection / sum x^2 path (Refinement 2). cb_x_fp32 aliases cb_x_resident
+// (same allocation, UnpackToDestFp32); cb_x_pieces streams one K chunk window of bf16 [x_hi, x_mid] pieces;
+// cb_mix_run carries the fp32 running mix between chunk windows.
+constexpr uint32_t cb_x_fp32 = get_compile_time_arg_val(23);
+constexpr uint32_t cb_x_pieces = get_compile_time_arg_val(24);
+constexpr uint32_t cb_mix_run = get_compile_time_arg_val(25);
+constexpr uint32_t x_pieces = get_compile_time_arg_val(26);         // 1: bf16 X (exact); 2: fp32 X -> hi/mid
+constexpr uint32_t x_chunk_k_tiles = get_compile_time_arg_val(27);  // K tiles per piece window
+constexpr uint32_t x_piece_rows = get_compile_time_arg_val(28);     // piece window rows (>= sub-block height)
+constexpr uint32_t x_window_pages = x_pieces * x_chunk_k_tiles * x_piece_rows;  // nominal push per window
 
 #ifdef TRISC_MATH
 namespace mhc_sfpu {
@@ -133,6 +143,43 @@ void w_split_hi_lo() {
         vFloat hi = as<vFloat>(as<vUInt>(v) & hi_mask);
         dst_reg[k] = hi;
         dst_reg[TILE_SLOTS + k] = v - hi;
+    }
+}
+
+// x split on one DEST tile pair: tile 0 = fp32 x in -> tile 0 = x_hi = bf16-truncate(x), tile 1 = x_mid =
+// bf16-RNE(x - x_hi). x - x_hi is exact in fp32; the dropped residual is <= 2^-17 |x| and unbiased.
+void x_split_hi_mid() {
+    vUInt hi_mask = 0xFFFF0000;
+#pragma GCC unroll 8
+    for (int k = 0; k < TILE_SLOTS; ++k) {
+        vFloat v = dst_reg[k];
+        vFloat hi = as<vFloat>(as<vUInt>(v) & hi_mask);
+        vUInt u = as<vUInt>(v - hi);
+        vUInt lsb = (u << 15) >> 31;
+        u = u + 0x7FFF;
+        u = u + lsb;
+        u = u & hi_mask;
+        dst_reg[k] = hi;
+        dst_reg[TILE_SLOTS + k] = as<vFloat>(u);
+    }
+}
+
+// Exact fp32 sum of squares: DEST tile 0 (+)= sum_{j < count} (DEST tile 1+j)^2, SFPU fp32 arithmetic.
+template <int COUNT, bool FIRST>
+void sq_accumulate() {
+#pragma GCC unroll 4
+    for (int k = 0; k < TILE_SLOTS; ++k) {
+        vFloat v0 = dst_reg[TILE_SLOTS + k];
+        vFloat acc = v0 * v0;
+        if constexpr (!FIRST) {
+            acc = dst_reg[k] + acc;
+        }
+#pragma GCC unroll 8
+        for (int j = 1; j < COUNT; ++j) {
+            vFloat v = dst_reg[TILE_SLOTS * (1 + j) + k];
+            acc = acc + v * v;
+        }
+        dst_reg[k] = acc;
     }
 }
 
@@ -371,6 +418,160 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
     }
 }
 
+// x_split_window: the bf16 pieces of X rows [r0, r0 + rows) x K tiles [k0, k0 + kc) -> one cb_x_pieces
+// window, page (r * kc + kk) * x_pieces + q. Recomputed per K chunk from the resident fp32 block (read via
+// the UnpackToDestFp32 alias), so the pieces never exist as a second resident copy of the block.
+ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, uint32_t core_k_tiles) {
+    constexpr uint32_t tiles_per_dest = compute_kernel_lib::DEST_AUTO_LIMIT / x_pieces;
+    cb_reserve_back(cb_x_pieces, x_window_pages);
+    reconfig_data_format_srca(cb_x_fp32);
+    pack_reconfig_data_format(cb_x_pieces);
+    copy_tile_to_dst_init_short(cb_x_fp32);
+    custom_sfpu_init();
+    const uint32_t total = rows * kc;
+    for (uint32_t u0 = 0; u0 < total; u0 += tiles_per_dest) {
+        const uint32_t nt = (total - u0) < tiles_per_dest ? (total - u0) : tiles_per_dest;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < nt; ++j) {
+            const uint32_t u = u0 + j;
+            const uint32_t r = u / kc;
+            const uint32_t kk = u - r * kc;
+            copy_tile(cb_x_fp32, (r0 + r) * core_k_tiles + k0 + kk, x_pieces * j);
+            MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::x_split_hi_mid, x_pieces * j, VectorMode::None)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < x_pieces * nt; ++j) {
+            pack_tile<true>(j, cb_x_pieces, x_pieces * u0 + j);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_x_pieces, x_window_pages);
+}
+
+// project_block_split (fp32 X): mix[t] = sum_k sum_{q + p <= 1} x_q[t][k] @ W_p[k], streamed over K in
+// x_chunk_k_tiles windows. Per (sub-block, chunk): x_split_window, then ONE DEST window that reloads the fp32
+// running partial exactly (UnpackToDestFp32 copy; an FPU reload would truncate it), accumulates the chunk's
+// products on top (main-fidelity products first, then the W_lo products at w_lo_fidelity), and packs the new
+// running partial (cb_mix_run) or, on the last chunk, the mix partial (cb_partial). The dropped products
+// (x_mid @ W_lo, <= 2^-16 relative) are below the FPU accumulation floor.
+ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h) {
+    static_assert(x_pieces == 2, "the fp32-X split path is hi/mid");
+    constexpr uint32_t sb_max = block_token_tiles < compute_kernel_lib::DEST_AUTO_LIMIT
+                                    ? block_token_tiles
+                                    : compute_kernel_lib::DEST_AUTO_LIMIT;
+    static_assert(sb_max <= x_piece_rows, "cb_x_pieces / cb_mix_run must hold a full projection sub-block");
+    constexpr bool lo_reinit = w_pieces > 1 && w_lo_fidelity != w_main_fidelity;
+    for (uint32_t r0 = 0; r0 < extent; r0 += sb_h) {
+        for (uint32_t k0 = 0; k0 < core_k_tiles; k0 += x_chunk_k_tiles) {
+            const uint32_t kc = (core_k_tiles - k0) < x_chunk_k_tiles ? (core_k_tiles - k0) : x_chunk_k_tiles;
+            const bool first = k0 == 0;
+            const bool last = k0 + kc >= core_k_tiles;
+            x_split_window(r0, sb_h, k0, kc, core_k_tiles);
+
+            cb_wait_front(cb_x_pieces, x_window_pages);
+            tile_regs_acquire();
+            if (!first) {
+                cb_wait_front(cb_mix_run, x_piece_rows);
+                reconfig_data_format_srca(cb_mix_run);
+                copy_tile_to_dst_init_short(cb_mix_run);
+                for (uint32_t r = 0; r < sb_h; ++r) {
+                    copy_tile(cb_mix_run, r, r);
+                }
+            }
+            reconfig_data_format(cb_w_matmul, cb_x_pieces);  // matmul: srca = in1, srcb = in0
+            matmul_init(cb_x_pieces, cb_w_matmul);
+            // main fidelity: x_q @ W_0 for every piece q (and every W piece if the lo pass is not separate)
+            for (uint32_t kk = 0; kk < kc; ++kk) {
+                for (uint32_t r = 0; r < sb_h; ++r) {
+                    for (uint32_t q = 0; q < x_pieces; ++q) {
+                        const uint32_t x_idx = (r * kc + kk) * x_pieces + q;
+                        matmul_tiles(cb_x_pieces, cb_w_matmul, x_idx, (k0 + kk) * w_pieces, r);
+                        if constexpr (!lo_reinit) {
+                            for (uint32_t p = 1; p + q < 2 && p < w_pieces; ++p) {
+                                matmul_tiles(cb_x_pieces, cb_w_matmul, x_idx, (k0 + kk) * w_pieces + p, r);
+                            }
+                        }
+                    }
+                }
+            }
+            if constexpr (lo_reinit) {
+                // x_hi @ W_lo (q = 0, p = 1) at the lo fidelity
+                MATH((llk_math_matmul_init<w_lo_fidelity, MM_THROTTLE>(cb_x_pieces, cb_w_matmul)));
+                for (uint32_t kk = 0; kk < kc; ++kk) {
+                    for (uint32_t r = 0; r < sb_h; ++r) {
+                        const uint32_t x_idx = (r * kc + kk) * x_pieces;
+                        UNPACK((llk_unpack_AB_matmul(cb_x_pieces, cb_w_matmul, x_idx, (k0 + kk) * w_pieces + 1)));
+                        MATH((llk_math_matmul<w_lo_fidelity, MM_THROTTLE>(r)));
+                    }
+                }
+            }
+            tile_regs_commit();
+            cb_pop_front(cb_x_pieces, x_window_pages);
+            if (!first) {
+                cb_pop_front(cb_mix_run, x_piece_rows);
+            }
+            const uint32_t cb_dst = last ? cb_partial : cb_mix_run;
+            const uint32_t dst_pages = last ? sb_h : x_piece_rows;  // cb_mix_run: nominal (never wraps mid-window)
+            cb_reserve_back(cb_dst, dst_pages);
+            pack_reconfig_data_format(cb_dst);
+            tile_regs_wait();
+            for (uint32_t r = 0; r < sb_h; ++r) {
+                pack_tile<true>(r, cb_dst, r);
+            }
+            tile_regs_release();
+            cb_push_back(cb_dst, dst_pages);
+        }
+    }
+}
+
+#ifdef TRISC_MATH
+template <int C>
+ALWI void sq_accumulate_run(bool first) {
+    if (first) {
+        _llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::sq_accumulate<C, true>, 0, VectorMode::None);
+    } else {
+        _llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::sq_accumulate<C, false>, 0, VectorMode::None);
+    }
+}
+// runtime tile count (ragged last round) -> compile-time SFPU body
+template <uint32_t MAX_COUNT, int C = 1>
+ALWI void sq_accumulate_dispatch(uint32_t count, bool first) {
+    if constexpr (C < static_cast<int>(MAX_COUNT)) {
+        if (count != static_cast<uint32_t>(C)) {
+            sq_accumulate_dispatch<MAX_COUNT, C + 1>(count, first);
+            return;
+        }
+    }
+    sq_accumulate_run<C>(first);
+}
+#endif
+
+// sumsq_row_exact (fp32 X): Q = sum_k x_k * x_k for one token tile-row, exact fp32 on the SFPU from the
+// UnpackToDestFp32 alias (the FPU would read x as ~tf32), DEST-accumulated in one window -> cb_sq_acc.
+ALWI void sumsq_row_exact(uint32_t base, uint32_t core_k_tiles) {
+    constexpr uint32_t per_round = compute_kernel_lib::DEST_AUTO_LIMIT - 1;  // DEST tile 0 = accumulator
+    static_assert(per_round >= 1 && per_round <= 7, "sq_accumulate dispatch covers 1..7 tiles per round");
+    cb_reserve_back(cb_sq_acc, 1);
+    reconfig_data_format_srca(cb_x_fp32);
+    pack_reconfig_data_format(cb_sq_acc);
+    copy_tile_to_dst_init_short(cb_x_fp32);
+    custom_sfpu_init();
+    tile_regs_acquire();
+    for (uint32_t k0 = 0; k0 < core_k_tiles; k0 += per_round) {
+        const uint32_t nt = (core_k_tiles - k0) < per_round ? (core_k_tiles - k0) : per_round;
+        for (uint32_t j = 0; j < nt; ++j) {
+            copy_tile(cb_x_fp32, base + k0 + j, 1 + j);
+        }
+        MATH((sq_accumulate_dispatch<per_round>(nt, k0 == 0)));
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_sq_acc);
+    tile_regs_release();
+    cb_push_back(cb_sq_acc, 1);
+}
+
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t core_token_tiles = get_arg_val<uint32_t>(1);
@@ -415,7 +616,15 @@ void kernel_main() {
                 break;
             }
         }
-        if constexpr (w_pieces > 1) {
+        if constexpr (x_pieces > 1) {
+            // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
+            // reader's data is guaranteed by the cb_x_resident wait).
+            cb_reserve_back(cb_x_fp32, x_block_pages);
+            cb_push_back(cb_x_fp32, x_block_pages);
+            cb_wait_front(cb_x_resident, extent * core_k_tiles);
+            cb_wait_front(cb_x_fp32, x_block_pages);
+            project_block_split(extent, core_k_tiles, sb_h);
+        } else if constexpr (w_pieces > 1) {
             project_block_pieces<w_pieces>(extent, core_k_tiles, sb_h);
         } else {
             matmul_block<
@@ -436,33 +645,37 @@ void kernel_main() {
         // ---- sumsq_block: per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse ----
         for (uint32_t t = 0; t < extent; ++t) {
             const uint32_t base = t * core_k_tiles;
-            eltwise_chain(
-                IterationShape::tiles(core_k_tiles),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(
-                        cb_x_resident,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Block,
+            if constexpr (x_pieces > 1) {
+                sumsq_row_exact(base, core_k_tiles);
+            } else {
+                eltwise_chain(
+                    IterationShape::tiles(core_k_tiles),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(
+                            cb_x_resident,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Block,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        input(
+                            cb_x_resident,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Block,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        Dst::D0,
+                        DestAccumulation::WholeShape>{base, base},
+                    PackTile<output(
+                        cb_sq_acc,
+                        ReservePolicy::OneUpfront,
+                        PushPolicy::OneAtEnd,
                         DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    input(
-                        cb_x_resident,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Block,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D0,
-                    DestAccumulation::WholeShape>{base, base},
-                PackTile<output(
-                    cb_sq_acc,
-                    ReservePolicy::OneUpfront,
-                    PushPolicy::OneAtEnd,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Direct,
-                    DestAccumulation::WholeShape)>{});
+                        TileAddressing::Direct,
+                        DestAccumulation::WholeShape)>{});
+            }
             reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
@@ -552,6 +765,9 @@ void kernel_main() {
                     DestAccumulation::PerRow)>{});
         }
         cb_pop_front(cb_pre_cols, n_streams * extent);
+        if constexpr (x_pieces > 1) {
+            cb_pop_front(cb_x_fp32, x_block_pages);  // alias kept in lockstep
+        }
         cb_pop_front(cb_x_resident, x_block_pages);  // X block freed: the reader may load block+2
 
         // ---- sinkhorn_block (owned rows), after the y-mix (stall-shadow reorder) ----
