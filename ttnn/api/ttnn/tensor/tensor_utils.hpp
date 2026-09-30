@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
 // Exports symbols
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -82,15 +83,24 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  * Returns buffer->address() + address_offset when a buffer is present,
  * or just address_offset when no buffer is set (manually placed CB).
  */
+// The address the CB is programmed at. A per-core-allocated buffer sits at a different address on each core,
+// so that is its address on the CB's cores (which must share one), not Buffer::address(), the first core's.
 inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
     auto addr_offset = desc.address_offset;
-    if (desc.buffer != nullptr) {
-        return desc.buffer->address() + addr_offset;
+    const tt::tt_metal::Buffer* buffer = desc.buffer;
+    if (buffer == nullptr && desc.tensor != nullptr) {
+        buffer = desc.tensor->mesh_buffer().get_reference_buffer();
     }
-    if (desc.tensor != nullptr) {
-        return desc.tensor->address() + addr_offset;
+    if (buffer == nullptr) {
+        return addr_offset;
     }
-    return addr_offset;
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(*buffer) &&
+        !desc.core_ranges.ranges().empty()) {
+        return tt::tt_metal::experimental::per_core_allocation::get_shard_base_address(
+                   *buffer, desc.core_ranges.ranges().front().start_coord) +
+               addr_offset;
+    }
+    return buffer->address() + addr_offset;
 }
 
 }  // namespace ttnn

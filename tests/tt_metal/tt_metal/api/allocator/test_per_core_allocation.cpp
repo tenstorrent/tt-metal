@@ -6,6 +6,8 @@
 // These tests require a real device (slow dispatch).
 
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/circular_buffer.hpp"
+#include "impl/program/program_impl.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -187,6 +189,100 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     auto buf2 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
+}
+
+// ================== Circular buffers backed by per-core buffers ==================
+// A per-core buffer sits at a different address on each core, and Buffer::address() is only its first
+// core's. A circular buffer has one address for all its cores, so it must come from the CB's own cores.
+
+namespace {
+
+std::shared_ptr<Buffer> make_per_core_buffer(IDevice* device, const std::vector<CoreCoord>& cores, uint32_t pages) {
+    std::vector<CoreRange> ranges;
+    for (const auto& core : cores) {
+        ranges.emplace_back(core, core);
+    }
+    const auto num_cores = static_cast<uint32_t>(cores.size());
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(ranges), {32 * pages, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {pages * num_cores, 1});
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(shard_args, true);
+    return BufferImpl::create(device, PAGE_SIZE * pages * num_cores, PAGE_SIZE, BufferType::L1, shard_args);
+}
+
+CBDescriptor per_core_cb_descriptor(Buffer& buffer, const CoreRangeSet& cores, uint32_t address_offset) {
+    CBDescriptor descriptor;
+    descriptor.total_size = PAGE_SIZE;
+    descriptor.core_ranges = cores;
+    descriptor.format_descriptors.push_back(
+        CBFormatDescriptor{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE});
+    descriptor.buffer = &buffer;
+    descriptor.address_offset = address_offset;
+    return descriptor;
+}
+
+}  // namespace
+
+// The second core's shard sits above the first core's (which Buffer::address() reports), and the CB
+// is placed at the very end of it, so neither the address nor the size check may use the first core's.
+TEST_F(PerCoreAllocationTest, CircularBufferOnPerCoreBufferUsesItsOwnCoresAddress) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord first(0, 0), second(1, 0);
+    // Reserve L1 on the first core only, so the next per-core buffer lands lower there than on the second.
+    auto skew = make_per_core_buffer(device, {first}, 4);
+    auto buffer = make_per_core_buffer(device, {first, second}, 2);
+    ASSERT_NE(per_core::get_per_core_address(*buffer, first), per_core::get_per_core_address(*buffer, second));
+    ASSERT_EQ(buffer->address(), per_core::get_per_core_address(*buffer, first));
+
+    const auto last_page = static_cast<uint32_t>(buffer->aligned_size_per_bank() - PAGE_SIZE);
+    for (const auto& core : {first, second}) {
+        CircularBufferImpl cb(per_core_cb_descriptor(*buffer, CoreRangeSet(CoreRange(core, core)), last_page));
+        EXPECT_EQ(cb.address(), per_core::get_per_core_address(*buffer, core) + last_page) << core.str();
+    }
+}
+
+// The same through a Program, whose CBs take their address when added and again when re-pointed at a
+// new buffer (as a cached program is between runs).
+TEST_F(PerCoreAllocationTest, ProgramCircularBufferFollowsPerCoreBuffer) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord first(0, 0), second(1, 0);
+    auto skew = make_per_core_buffer(device, {first}, 4);
+    auto buffer = make_per_core_buffer(device, {first, second}, 2);
+    auto next_skew = make_per_core_buffer(device, {second}, 8);
+    auto next_buffer = make_per_core_buffer(device, {first, second}, 2);
+
+    Program program = CreateProgram();
+    CircularBufferConfig config(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}}, *buffer);
+    config.set_page_size(0, PAGE_SIZE);
+    const CBHandle handle = CreateCircularBuffer(program, CoreRange(second, second), config);
+    EXPECT_EQ(program.impl().get_circular_buffer(handle)->address(), per_core::get_per_core_address(*buffer, second));
+
+    UpdateDynamicCircularBufferAddress(program, handle, *next_buffer);
+    EXPECT_EQ(
+        program.impl().get_circular_buffer(handle)->address(), per_core::get_per_core_address(*next_buffer, second));
+}
+
+// A CB has one address, so one spanning cores where its per-core buffer sits at different addresses
+// has no right address and must be rejected rather than silently use the first core's.
+TEST_F(PerCoreAllocationTest, CircularBufferAcrossDifferingPerCoreAddressesIsRejected) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord first(0, 0), second(1, 0);
+    auto skew = make_per_core_buffer(device, {first}, 4);
+    auto buffer = make_per_core_buffer(device, {first, second}, 2);
+    ASSERT_NE(per_core::get_per_core_address(*buffer, first), per_core::get_per_core_address(*buffer, second));
+
+    EXPECT_ANY_THROW(CircularBufferImpl(per_core_cb_descriptor(*buffer, CoreRangeSet(CoreRange(first, second)), 0)));
+}
+
+// Where the per-core buffer shares one address across the CB's cores, one CB can still span them.
+TEST_F(PerCoreAllocationTest, CircularBufferAcrossMatchingPerCoreAddresses) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord first(0, 0), second(1, 0);
+    auto buffer = make_per_core_buffer(device, {first, second}, 2);
+    ASSERT_EQ(per_core::get_per_core_address(*buffer, first), per_core::get_per_core_address(*buffer, second));
+
+    CircularBufferImpl cb(per_core_cb_descriptor(*buffer, CoreRangeSet(CoreRange(first, second)), 0));
+    EXPECT_EQ(cb.address(), per_core::get_per_core_address(*buffer, first));
 }
 
 // ================== Per-core socket data-buffer allocation (Phase B) ==================

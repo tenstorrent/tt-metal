@@ -5,6 +5,7 @@
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <array>
 #include <string>
 
@@ -20,6 +21,41 @@ namespace tt::tt_metal {
 static constexpr uint32_t cb_page_count_bits = 16;
 static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
 
+namespace {
+
+// Address of ``buffer`` on the cores of a CB. A per-core-allocated buffer sits at a different address on
+// each core and Buffer::address() is only its first core's, while a CB has one address for all its
+// cores, so it is taken from the CB's own cores. They must agree, or no single CB address is right.
+DeviceAddr cb_buffer_base_address(const Buffer& buffer, const CoreRangeSet& core_ranges) {
+    if (!experimental::per_core_allocation::is_per_core_allocation(buffer)) {
+        return buffer.address();
+    }
+    std::optional<DeviceAddr> base;
+    std::optional<CoreCoord> base_core;
+    for (const CoreRange& core_range : core_ranges.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            const DeviceAddr address = experimental::per_core_allocation::get_shard_base_address(buffer, core);
+            if (!base.has_value()) {
+                base = address;
+                base_core = core;
+            }
+            TT_FATAL(
+                address == *base,
+                "Circular buffer on cores {} is backed by a per-core-allocated buffer that sits at {:#x} on core {} "
+                "but {:#x} on core {}; a circular buffer has one address, so split it into one per address",
+                core_ranges.str(),
+                *base,
+                base_core->str(),
+                address,
+                core.str());
+        }
+    }
+    TT_FATAL(base.has_value(), "Circular buffer backed by a per-core-allocated buffer has no cores");
+    return *base;
+}
+
+}  // namespace
+
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
 CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config) :
@@ -33,6 +69,9 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
     if (globally_allocated()) {
         globally_allocated_address_ = config.globally_allocated_address().value();
+        if (config_.shadow_global_buffer != nullptr) {
+            this->assign_global_address();
+        }
     }
 }
 
@@ -71,6 +110,9 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     } else {
         if (globally_allocated()) {
             globally_allocated_address_ = config_.globally_allocated_address().value();
+            if (config_.shadow_global_buffer != nullptr) {
+                this->assign_global_address();
+            }
         }
     }
 }
@@ -189,7 +231,8 @@ void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_
 }
 
 void CircularBufferImpl::assign_global_address() {
-    globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
+    globally_allocated_address_ =
+        cb_buffer_base_address(*config_.shadow_global_buffer, this->core_ranges_) + config_.address_offset();
     ++config_generation_;
 }
 
