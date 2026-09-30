@@ -18,7 +18,8 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, to_torch
+from .band_ltx import temporal_band_mask
 from .quant_config import LtxQuantProfile
 
 # to_gate_logits and to_q/to_qkv are both ColParallelLinear fed the SAME activation, and each fuses
@@ -34,6 +35,26 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 # silently if the two consumers end up wired to different tensors; the equivalence gate must catch
 # it. A green gate that has never been shown to go red proves nothing.
 LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
+
+
+def _parse_colon_ints(name):
+    spec = os.environ.get(name, "")
+    return tuple(int(v) for v in spec.split(":")) if spec else None
+
+
+# EXPERIMENT: temporal-band video self-attention. LTX_SELF_BAND="N:tokens_per_frame:W" limits
+# self-attn at logical length N to keys within W latent frames of the query's frame. Tokens are
+# frame-major, so each query chunk sees one contiguous key range, which a ring kernel can skip to.
+# Here the band is a masked SDPA over gathered K/V: it measures quality, not speed.
+LTX_SELF_BAND = _parse_colon_ints("LTX_SELF_BAND")
+
+# EXPERIMENT: LTX_DUMP_QKV="N:num_layers:layer_stride:first_step:last_step" saves the SDPA inputs
+# (TP rank 0 heads, SP-gathered, unpadded) of self-attn calls at logical length N, for every
+# layer_stride-th layer and the last one, to $LTX_DUMP_QKV_DIR as q_s{step}_l{layer}.pt etc.
+# Reads back to host, so eager runs only; call c is layer c % num_layers of step c // num_layers,
+# so run without a warmup gen.
+LTX_DUMP_QKV = _parse_colon_ints("LTX_DUMP_QKV")
+_dump_calls = 0
 
 
 def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
@@ -667,6 +688,37 @@ class LTXAttention(Module):
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
         return ttnn.permute(gate, (1, 3, 2, 0))
 
+    # Shared by every layer: one band mask is ~380 MB per device at stage-2 size.
+    _band_masks: dict = {}
+
+    def _band_mask(self, n_pad, n_real, tokens_per_frame, window):
+        key = (n_pad, n_real, tokens_per_frame, window)
+        if key not in LTXAttention._band_masks:
+            mask = temporal_band_mask(n_pad, n_real, tokens_per_frame, window)[None, None]
+            LTXAttention._band_masks[key] = bf16_tensor(
+                mask, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=2
+            )
+        return LTXAttention._band_masks[key]
+
+    def _dump_qkv(self, q_BHNE, k_BHNE, v_BHNE, N):
+        global _dump_calls
+        _, num_layers, layer_stride, first_step, last_step = LTX_DUMP_QKV
+        layer, step = _dump_calls % num_layers, _dump_calls // num_layers
+        _dump_calls += 1
+        if not first_step <= step <= last_step or (layer % layer_stride and layer != num_layers - 1):
+            return
+        out_dir = os.environ["LTX_DUMP_QKV_DIR"]
+        os.makedirs(out_dir, exist_ok=True)
+        axes = [
+            None,
+            self.parallel_config.tensor_parallel.mesh_axis,
+            self.parallel_config.sequence_parallel.mesh_axis,
+            None,
+        ]
+        for name, t in (("q", q_BHNE), ("k", k_BHNE), ("v", v_BHNE)):
+            x = to_torch(t, mesh_axes=axes)[0, : self.n_local_heads, :N].to(torch.bfloat16).contiguous()
+            torch.save(x, os.path.join(out_dir, f"{name}_s{step}_l{layer}.pt"))
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -880,11 +932,28 @@ class LTXAttention(Module):
             v_BHNE = maybe_cast_activation(v_BHNE, sdpa_input_dtype)
             dummy_joint = maybe_cast_activation(dummy_joint, sdpa_input_dtype)
 
+        if LTX_DUMP_QKV is not None and prompt_1BLP is None and not skip_qk and N == LTX_DUMP_QKV[0]:
+            self._dump_qkv(q_BHNE, k_BHNE, v_BHNE, N)
+        band = LTX_SELF_BAND if LTX_SELF_BAND is not None and N == LTX_SELF_BAND[0] else None
+
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
-            if sp_factor > 1 and attn_mask is None:
+            if band is not None and sp_factor > 1 and attn_mask is None:
+                sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+                k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
+                v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
+                spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
+                    q_BHNE,
+                    k_full,
+                    v_full,
+                    attn_mask=self._band_mask(k_full.shape[2], N, band[1], band[2]),
+                    is_causal=False,
+                    program_config=self.sdpa_program_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                )
+            elif sp_factor > 1 and attn_mask is None:
                 spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
