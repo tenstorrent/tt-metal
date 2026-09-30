@@ -978,42 +978,6 @@ bool configure_pgd_psd_host_alignment_constraints(
         // target group must therefore be carvable inside one PSD host. Groups are free to share a host, so a
         // host_topology finer than the physical hosts stays legal; what is rejected is a single declared rank
         // whose chips would have to come from two different hosts.
-        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
-            std::set<uint32_t> fam;
-            for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
-                fam.insert(*pos.second);
-            }
-            std::string famstr;
-            for (uint32_t a : fam) {
-                famstr += std::to_string(a) + ",";
-            }
-            std::string tg;
-            for (std::size_t r = 0; r < target_groups.size(); ++r) {
-                std::set<std::string> slots;
-                for (LogicalChipId nd : target_groups[r]) {
-                    if (nd < grouping_info.items.size()) {
-                        slots.insert(fmt::format(
-                            "t{}/a{}", *grouping_info.items[nd].tray_id, *grouping_info.items[nd].asic_location));
-                    }
-                }
-                tg += fmt::format("rank{}=[{}] ", r, fmt::join(slots, ","));
-            }
-            const bool ok = constraints.set_same_rank_groups_constraint(target_groups, global_groups);
-            log_info(
-                tt::LogFabric,
-                "DBGRANK name='{}' asics=[{}] n_global_host_groups={} constraint_ok={} :: {}",
-                grouping_info.name,
-                famstr,
-                global_groups.size(),
-                ok,
-                tg);
-            if (!ok) {
-                return false;
-            }
-            constraints.set_max_same_rank_groups_used(target_groups.size());
-            return true;
-        }
         if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
             return false;
         }
@@ -1038,8 +1002,7 @@ bool add_pgd_to_psd_constraints(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<LogicalChipId, AsicID>& constraints,
-    std::string* error_out = nullptr,
-    bool skip_host_alignment_DBG = false) {
+    std::string* error_out = nullptr) {
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
     constraints.set_quiet_mode(true);
 
@@ -1075,22 +1038,8 @@ bool add_pgd_to_psd_constraints(
         global_location_traits[asic_id] = asic_location;
     }
 
-    // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
-    // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
-    // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
-    // DEBUG-CLEANUP(remove; normal default when unset = PGD tray/asic-location trait constraints APPLIED):
-    // TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS
-    const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
-    const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
-    if (relax_pgd_slot_traits) {
-        log_warning(
-            tt::LogFabric,
-            "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
-            "PGD→PSD embedding");
-    }
-
     // Add trait constraints for tray_id and asic_location
-    if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
+    if (!target_tray_traits.empty() && !global_tray_traits.empty()) {
         if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
             if (error_out) {
                 *error_out = "Failed to add required trait constraint for tray_id";
@@ -1098,7 +1047,7 @@ bool add_pgd_to_psd_constraints(
             return false;
         }
     }
-    if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
+    if (!target_location_traits.empty() && !global_location_traits.empty()) {
         if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
             if (error_out) {
                 *error_out = "Failed to add required trait constraint for asic_location";
@@ -1107,8 +1056,8 @@ bool add_pgd_to_psd_constraints(
         }
     }
 
-    if (!skip_host_alignment_DBG && !configure_pgd_psd_host_alignment_constraints(
-                                        grouping_info, physical_graph, physical_system_descriptor, constraints)) {
+    if (!configure_pgd_psd_host_alignment_constraints(
+            grouping_info, physical_graph, physical_system_descriptor, constraints)) {
         if (error_out != nullptr) {
             *error_out =
                 fmt::format("Failed to configure host alignment constraints for grouping '{}'", grouping_info.name);
@@ -1127,6 +1076,12 @@ bool add_pgd_to_psd_constraints(
 // further distinct mapping" signal, and the ONLY trustworthy "this list is complete" flag. Never moved
 // once used -- the DFS engine keeps pointers into the session's own snapshots -- so keep it behind a
 // unique_ptr (or in an object that is itself never moved) when it lives in a container.
+}  // namespace
+
+namespace tt::tt_fabric {
+// Resumable per-variant enumeration state. Lives in the named namespace (not the surrounding anonymous
+// one) so SatPlacementEnumerationSession::CandidatePool -- which has external linkage -- can hold it as a
+// subobject without tripping -Werror=subobject-linkage (external class, internal-linkage member type).
 struct GroupingVariantEnumeration {
     const GroupingInfo* variant = nullptr;  // the grouping being enumerated
     std::unique_ptr<TopologyMappingEnumerationSession<LogicalChipId, AsicID>> session;
@@ -1136,6 +1091,9 @@ struct GroupingVariantEnumeration {
     bool started = false;
     bool exhausted = false;
 };
+}  // namespace tt::tt_fabric
+
+namespace {
 
 // Enumerate distinct placements (unique_shapes=true, so the solver skips permutations that reuse the same
 // ASIC set) of one grouping against the physical graph, returning up to `max_solutions` of them
@@ -1177,32 +1135,6 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         // This is the "host match" phase.
         const bool encoded =
             add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
-        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && grouping_info.name.find("SplitHost") != std::string::npos) {
-            std::set<uint32_t> asics;
-            for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
-                asics.insert(*pos.second);
-            }
-            std::map<uint32_t, uint32_t> hg;
-            for (const auto& [n, g] : grouping_info.mesh_node_to_host_group) {
-                hg[g]++;
-            }
-            std::string fam;
-            for (uint32_t a : asics) {
-                fam += std::to_string(a) + ",";
-            }
-            std::string hgs;
-            for (const auto& [g, c] : hg) {
-                hgs += fmt::format("{}:{} ", g, c);
-            }
-            log_info(
-                tt::LogFabric,
-                "DBGENC name='{}' footprint_asics=[{}] host_group_split=[{}] encoded={}",
-                grouping_info.name,
-                fam,
-                hgs,
-                encoded);
-        }
         if (!encoded) {
             state.exhausted = true;
             return {};
@@ -1231,25 +1163,6 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         MappingResult<LogicalChipId, AsicID> mapping = state.session->next();
         ++state.solves;
         if (!mapping.success) {
-            // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-            if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
-                grouping_info.name.find("SplitHost") != std::string::npos) {
-                std::set<uint32_t> asics;
-                for (const auto& [c, pos] : grouping_info.mesh_node_to_asic_position) {
-                    asics.insert(*pos.second);
-                }
-                std::string fam;
-                for (uint32_t a : asics) {
-                    fam += std::to_string(a) + ",";
-                }
-                log_info(
-                    tt::LogFabric,
-                    "DBGEMBED name='{}' footprint_asics=[{}] solves={} FAIL err='{}'",
-                    grouping_info.name,
-                    fam,
-                    state.solves,
-                    mapping.error_message);
-            }
             state.exhausted = true;
             break;
         }
@@ -1622,37 +1535,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 if (n >= required_nodes) {
                     candidates_by_diff[n - required_nodes].emplace_back(name, idx);
                 }
-                // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-                if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
-                    grouping_info.name.find("SplitHost") != std::string::npos &&
-                    grouping_info.name.find("hostedge") != std::string::npos) {
-                    std::set<uint32_t> fam;
-                    std::map<uint32_t, std::set<uint32_t>> pgdhg;
-                    for (uint32_t nd : grouping_info.adjacency_graph.get_nodes()) {
-                        if (nd < grouping_info.items.size() && *grouping_info.items[nd].asic_location != 0) {
-                            fam.insert(*grouping_info.items[nd].asic_location);
-                        }
-                    }
-                    for (const auto& [nd, hgi] : grouping_info.mesh_node_to_pgd_host_group) {
-                        if (nd < grouping_info.items.size()) {
-                            pgdhg[hgi].insert(*grouping_info.items[nd].tray_id);
-                        }
-                    }
-                    std::string famstr, hgs;
-                    for (uint32_t a : fam) {
-                        famstr += std::to_string(a) + ",";
-                    }
-                    for (const auto& [hgi, tys] : pgdhg) {
-                        hgs += fmt::format("hg{}={{{}}} ", hgi, fmt::join(tys, ","));
-                    }
-                    log_info(
-                        tt::LogFabric,
-                        "DBGCENSUS var='{}' nodes={} asics=[{}] pgd_hg=[{}]",
-                        grouping_info.name,
-                        n,
-                        famstr,
-                        hgs);
-                }
             }
         }
 
@@ -1719,37 +1601,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         constraints,
                         ConnectionValidationMode::STRICT,
                         true);
-                    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-                    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr && name.find("SplitHost") != std::string::npos) {
-                        std::set<uint32_t> asics, trays;
-                        for (uint32_t nd : grouping_info.adjacency_graph.get_nodes()) {
-                            if (nd < grouping_info.items.size() && *grouping_info.items[nd].asic_location != 0) {
-                                asics.insert(*grouping_info.items[nd].asic_location);
-                                trays.insert(*grouping_info.items[nd].tray_id);
-                            }
-                        }
-                        std::string fam;
-                        for (uint32_t a : asics) {
-                            fam += std::to_string(a) + ",";
-                        }
-                        std::map<uint32_t, std::set<uint32_t>> pgdhg;
-                        for (const auto& [nn, hgi] : grouping_info.mesh_node_to_pgd_host_group) {
-                            if (nn < grouping_info.items.size()) {
-                                pgdhg[hgi].insert(*grouping_info.items[nn].tray_id);
-                            }
-                        }
-                        std::string hgs;
-                        for (const auto& [hgi, tys] : pgdhg) {
-                            hgs += fmt::format("hg{}={{{}}} ", hgi, fmt::join(tys, ","));
-                        }
-                        log_info(
-                            tt::LogFabric,
-                            "DBGPROF var='{}' asics=[{}] pgd_hg=[{}] solve={}",
-                            grouping_info.name,
-                            fam,
-                            hgs,
-                            mapping_result.success);
-                    }
                     if (mapping_result.success) {
                         best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                     } else {
@@ -1833,46 +1684,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         instance_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
                     for (const auto& match : best_matches_topology) {
                         const GroupingInfo committed_candidate = make_committed_grouping(match);
-                        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-                        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
-                            match.name.find("SplitHost") != std::string::npos) {
-                            std::set<uint32_t> asics;
-                            for (const auto& [c, pos] : committed_candidate.mesh_node_to_asic_position) {
-                                asics.insert(*pos.second);
-                            }
-                            std::string fam;
-                            for (uint32_t a : asics) {
-                                fam += std::to_string(a) + ",";
-                            }
-                            // Embed with trait constraints ON (slots forced to their {tray,asic}) but
-                            // host-alignment OFF: isolates whether a slot-correct physical embedding exists vs
-                            // whether host-alignment is excluding it.
-                            MappingConstraints<LogicalChipId, tt::tt_metal::AsicID> traits_only;
-                            const bool enc_ok = add_pgd_to_psd_constraints(
-                                committed_candidate,
-                                *psd_physical_graph,
-                                *physical_system_descriptor,
-                                traits_only,
-                                nullptr,
-                                /*skip_host_alignment_DBG=*/true);
-                            bool traits_embed = false;
-                            if (enc_ok) {
-                                auto tmap = solve_topology_mapping<LogicalChipId, tt::tt_metal::AsicID>(
-                                    committed_candidate.adjacency_graph,
-                                    *psd_physical_graph,
-                                    traits_only,
-                                    gate_validation_mode,
-                                    true);
-                                traits_embed = tmap.success;
-                            }
-                            log_info(
-                                tt::LogFabric,
-                                "DBGRAW name='{}' footprint_asics=[{}] traits_only_embed(no_host_align)={} enc_ok={}",
-                                match.name,
-                                fam,
-                                traits_embed,
-                                enc_ok);
-                        }
                         MappingConstraints<LogicalChipId, tt::tt_metal::AsicID> solve_constraints;
                         const auto placements = enumerate_flat_grouping_embeddings(
                             committed_candidate,
@@ -1881,36 +1692,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             /*max_solutions=*/1,
                             solve_constraints,
                             gate_validation_mode);
-                        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-                        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr &&
-                            match.name.find("SplitHost") != std::string::npos) {
-                            std::set<uint32_t> asics;
-                            for (const auto& [c, pos] : committed_candidate.mesh_node_to_asic_position) {
-                                asics.insert(*pos.second);
-                            }
-                            std::string fam;
-                            for (uint32_t a : asics) {
-                                fam += std::to_string(a) + ",";
-                            }
-                            std::map<uint32_t, std::set<uint32_t>> pgdhg;
-                            for (const auto& [n, hgi] : committed_candidate.mesh_node_to_pgd_host_group) {
-                                if (n < committed_candidate.items.size()) {
-                                    pgdhg[hgi].insert(*committed_candidate.items[n].tray_id);
-                                }
-                            }
-                            std::string hgstr;
-                            for (const auto& [hgi, trays] : pgdhg) {
-                                hgstr += fmt::format("hg{}={{{}}} ", hgi, fmt::join(trays, ","));
-                            }
-                            log_info(
-                                tt::LogFabric,
-                                "DBGGATE var='{}' asics=[{}] pgd_hg=[{}] mode={} placed={}",
-                                committed_candidate.name,
-                                fam,
-                                hgstr,
-                                gate_validation_mode == ConnectionValidationMode::RELAXED ? "RELAXED" : "STRICT",
-                                !placements.empty());
-                        }
                         if (!placements.empty()) {
                             best_matches_psd_placed.push_back(match);
                         } else {
@@ -2173,8 +1954,6 @@ PhysicalGroupingDescriptor::enumerate_distinct_placements_for_grouping(
 // Joint placement types used by the SAT seating session.
 using GlobalMeshId = MeshId;
 
-namespace {
-
 // =====================================================================================================
 // Two-layer joint placement (TOPOLOGY_MAPPER_PLAN_4_SAT_JOINT_PLACEMENT.md).
 //
@@ -2213,8 +1992,6 @@ private:
     std::unordered_map<AsicID, std::size_t> asic_to_dense_;
     std::vector<AsicID> dense_to_asic_;
 };
-
-}  // namespace
 
 // One legal seating of one grouping variant. Footprint-only: the per-node mapping from the inner solve is
 // deliberately dropped -- downstream reconstructs positions
@@ -2671,8 +2448,6 @@ CandidatePoolMap create_sat_placement_pools(
     const std::map<GlobalMeshId, ConnectionValidationMode>& sat_intra_mesh_mode_by_mesh,
     const std::map<GlobalMeshId, std::set<AsicID>>& allowed_asics_by_mesh) {
     CandidatePoolMap pools;
-    // DEBUG-CLEANUP(remove): TT_METAL_SAT_NO_SHARE=1 disables pool sharing for A/B measurement.
-    const bool share = std::getenv("TT_METAL_SAT_NO_SHARE") == nullptr;
     std::map<std::size_t, std::shared_ptr<CandidatePool>> pool_by_key;
     for (const auto& [mesh_id, groupings] : global_mesh_groupings) {
         const auto mode_it = sat_intra_mesh_mode_by_mesh.find(mesh_id);
@@ -2684,19 +2459,15 @@ CandidatePoolMap create_sat_placement_pools(
         if (const auto asic_it = allowed_asics_by_mesh.find(mesh_id); asic_it != allowed_asics_by_mesh.end()) {
             allowed_asics = asic_it->second;
         }
-        const std::size_t key = share ? sat_mesh_pool_hash(groupings, mode_it->second, allowed_asics) : 0;
+        const std::size_t key = sat_mesh_pool_hash(groupings, mode_it->second, allowed_asics);
         std::shared_ptr<CandidatePool> pool;
-        if (share) {
-            if (const auto it = pool_by_key.find(key); it != pool_by_key.end()) {
-                pool = it->second;  // an identical mesh already built this pool; alias it
-            }
+        if (const auto it = pool_by_key.find(key); it != pool_by_key.end()) {
+            pool = it->second;  // an identical mesh already built this pool; alias it
         }
         if (pool == nullptr) {
             pool = std::make_shared<CandidatePool>(
                 groupings, physical_graph, physical_system_descriptor, mode_it->second, std::move(allowed_asics));
-            if (share) {
-                pool_by_key.emplace(key, pool);
-            }
+            pool_by_key.emplace(key, pool);
         }
         pools.emplace(mesh_id, std::move(pool));
     }
@@ -2758,7 +2529,7 @@ bool inject_sat_placement_fallbacks(
     return added;
 }
 
-// Footprint dedup (default ON; TT_METAL_SAT_NO_DEDUP=1 disables): collapse candidates that share the same (grouping
+// Footprint dedup: collapse candidates that share the same (grouping
 // variant, physical ASIC footprint) into ONE canonical node. N meshes of the same descriptor share the SAME physical
 // footprints, so without dedup each mesh gets its own private copy of every footprint (n_meshes x n_footprints seat
 // nodes)
@@ -2783,19 +2554,12 @@ std::string sat_footprint_key(const Candidate* c) {
     return fmt::format("{}|{}|{}", v != nullptr ? v->name : "", v != nullptr ? v->type : "", fmt::join(asics, ","));
 }
 
-const Candidate* sat_footprint_canonical(
-    const Candidate* c, bool dedup, std::map<std::string, const Candidate*>& canon) {
-    if (!dedup) {
-        return c;
-    }
+const Candidate* sat_footprint_canonical(const Candidate* c, std::map<std::string, const Candidate*>& canon) {
     return canon.emplace(sat_footprint_key(c), c).first->second;
 }
 
 AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
     const CandidatePoolMap& pools, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
-    const bool dedup =
-        // DEBUG-CLEANUP(remove; normal default when unset = footprint dedup ON): TT_METAL_SAT_NO_DEDUP
-        std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     AdjacencyMatrixCache adjacency_cache;
     // Two-tier edge handling under node dedup:
@@ -2813,7 +2577,7 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
         auto& seats = mesh_seats[mesh_id];
         seats.reserve(pool->candidates().size());
         for (const Candidate& candidate : pool->candidates()) {
-            const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
+            const Candidate* seat = sat_footprint_canonical(&candidate, canon);
             seats.push_back(seat);
             seat_adj[seat];  // ensure node present
         }
@@ -2856,74 +2620,7 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
             seat_adj[pair.second].push_back(pair.first);
         }
     }
-    {
-        // DEBUG-CLEANUP(remove): DBGSEAT diagnostic stats block (logs unconditionally)
-        std::size_t total_edges = 0, unique_edges = 0, max_deg = 0, max_unique_deg = 0;
-        std::map<std::size_t, std::size_t> unique_deg_hist;  // unique-degree -> #seats
-        for (const auto& [seat, nbrs] : seat_adj) {
-            total_edges += nbrs.size();
-            max_deg = std::max(max_deg, nbrs.size());
-            std::set<const Candidate*> u(nbrs.begin(), nbrs.end());
-            unique_edges += u.size();
-            max_unique_deg = std::max(max_unique_deg, u.size());
-            unique_deg_hist[u.size()]++;
-        }
-        log_info(
-            tt::LogFabric,
-            "DBGSEAT nodes={} edges_with_mult={} unique_edges={} max_deg={} max_unique_deg={} mult_ratio={:.2f}",
-            seat_adj.size(),
-            total_edges,
-            unique_edges,
-            max_deg,
-            max_unique_deg,
-            unique_edges ? static_cast<double>(total_edges) / static_cast<double>(unique_edges) : 0.0);
-        // Diagnostic (TT_METAL_SAT_DIAG=1): unique-degree distribution. Low-degree seats are propagation
-        // "anchors" that force assignments; a graph with none (all-uniform degree) makes CDCL search blindly.
-        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-            std::string hist;
-            for (const auto& [deg, cnt] : unique_deg_hist) {
-                hist += fmt::format("deg{}={} ", deg, cnt);
-            }
-            log_info(tt::LogFabric, "DBGDEG unique-degree histogram: {}", hist);
-        }
-    }
     return AdjacencyGraph<const Candidate*>(std::move(seat_adj));
-}
-
-// Diagnostic (TT_METAL_SAT_PIN_SOLUTION=/path): load a known-good placement as mesh_id -> sorted ASIC-set.
-// File format: one line per mesh "meshId asic0,asic1,...". Used to pin the SAT to exactly that placement
-// so we can tell whether a valid placement is a satisfiable SAT model (adjacency correct, just hard) or is
-// rejected by the encoding (adjacency/footprint bug). Returns empty map when env unset / file unreadable.
-// DEBUG-CLEANUP(remove; normal default = empty pin map): whole load_sat_pin_solution() debug helper
-std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
-    std::map<uint64_t, std::vector<uint64_t>> pin;
-    // DEBUG-CLEANUP(remove; normal default when unset = empty pin map, no pinning): TT_METAL_SAT_PIN_SOLUTION
-    const char* path = std::getenv("TT_METAL_SAT_PIN_SOLUTION");
-    if (path == nullptr) {
-        return pin;
-    }
-    std::ifstream in(path);
-    std::string line;
-    while (std::getline(in, line)) {
-        std::istringstream ls(line);
-        uint64_t mesh = 0;
-        std::string csv;
-        if (!(ls >> mesh >> csv)) {
-            continue;
-        }
-        std::vector<uint64_t> asics;
-        std::stringstream cs(csv);
-        std::string tok;
-        while (std::getline(cs, tok, ',')) {
-            if (!tok.empty()) {
-                asics.push_back(std::stoull(tok));
-            }
-        }
-        std::sort(asics.begin(), asics.end());
-        pin[mesh] = std::move(asics);
-    }
-    return pin;
 }
 
 bool build_sat_placement_constraints(
@@ -2932,22 +2629,8 @@ bool build_sat_placement_constraints(
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) {
     constraints = {};
-    // DEBUG-CLEANUP(remove; normal default = empty pin_solution, block below no-ops): TT_METAL_SAT_PIN_SOLUTION call
-    // site
-    const std::map<uint64_t, std::vector<uint64_t>> pin_solution = load_sat_pin_solution();
-    // TT_METAL_SAT_ANCHOR_N=k: anchor only the first k meshes (by mesh_id order) to their pinned footprint,
-    // leaving the rest free. k<0 / unset => pin ALL meshes (full-pin test). Used to measure how many anchors
-    // it takes to collapse the interchange symmetry (adjacency-stage symmetry break).
-    int anchor_n = -1;
-    // DEBUG-CLEANUP(remove; normal default = no anchoring since pin map empty): TT_METAL_SAT_ANCHOR_N
-    if (const char* v = std::getenv("TT_METAL_SAT_ANCHOR_N")) {
-        anchor_n = std::atoi(v);
-    }
     // Same footprint dedup as build_sat_placement_seat_graph -- MUST use the identical canonicalization so the
     // constraint's allowed seats match the graph's nodes. Meshes stay distinct targets; only seats are shared.
-    const bool dedup =
-        // DEBUG-CLEANUP(remove; normal default when unset = footprint dedup ON): TT_METAL_SAT_NO_DEDUP
-        std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     std::map<const Candidate*, std::vector<uint32_t>> seat_to_asics;
     // Lex/instance symmetry break. Interchangeable instances share a pool (B's dedup => same candidate set) AND are
@@ -2956,8 +2639,8 @@ bool build_sat_placement_constraints(
     // distinct neighbors -> singletons -> no break (windowing them is unsound). Independent identical meshes (no
     // inter-mesh edges, e.g. disaggregated prefill) are all mutual twins -> one big group. For a twin group of k over
     // its shared ordered n-seat domain, member i is restricted to the window seats[i..n-k+i]; under the bijection this
-    // keeps the sorted representative and prunes the k! permutations, soundly. Opt out: TT_METAL_SAT_NO_LEX_SYM=1.
-    const bool instance_sym = std::getenv("TT_METAL_SAT_NO_LEX_SYM") == nullptr && pin_solution.empty();
+    // keeps the sorted representative and prunes the k! permutations, soundly.
+    const bool instance_sym = true;
     std::map<GlobalMeshId, std::size_t> sym_pos, sym_size;
     if (instance_sym) {
         const auto neighbor_sig = [&mesh_level_graph](const GlobalMeshId& m) {
@@ -3004,37 +2687,12 @@ bool build_sat_placement_constraints(
             }
         }
     }
-    std::size_t mesh_index = 0;
     for (const auto& [mesh_id, pool] : pools) {
         std::set<const Candidate*> seats;
-        // When pinning, restrict this mesh to only candidates whose sorted ASIC-set matches the pinned set.
-        const std::vector<uint64_t>* pinned = nullptr;
-        const bool within_anchor = (anchor_n < 0) || (static_cast<int>(mesh_index) < anchor_n);
-        if (!pin_solution.empty() && within_anchor) {
-            auto it = pin_solution.find(*mesh_id);
-            pinned = (it != pin_solution.end()) ? &it->second : nullptr;
-        }
-        ++mesh_index;
         for (const Candidate& candidate : pool->candidates()) {
-            const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
-            if (pinned != nullptr) {
-                std::vector<uint64_t> cand_asics;
-                cand_asics.reserve(candidate.asics().size());
-                for (const AsicID& a : candidate.asics()) {
-                    cand_asics.push_back(*a);
-                }
-                std::sort(cand_asics.begin(), cand_asics.end());
-                if (cand_asics != *pinned) {
-                    continue;  // not the pinned footprint for this mesh -> exclude
-                }
-            }
+            const Candidate* seat = sat_footprint_canonical(&candidate, canon);
             seats.insert(seat);
             seat_to_asics[seat] = candidate.dense_asics();
-        }
-        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-        if (!pin_solution.empty() && std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-            log_info(
-                tt::LogFabric, "DBGPIN mesh={} pinned_seats={} (pinned={})", *mesh_id, seats.size(), pinned != nullptr);
         }
         if (instance_sym) {
             const std::size_t k = sym_size[mesh_id];
@@ -3055,74 +2713,6 @@ bool build_sat_placement_constraints(
             return false;
         }
     }
-    {
-        // DEBUG-CLEANUP(remove): DBGSAT diagnostic stats block (logs unconditionally)
-        std::size_t max_seats = 0, min_seats = SIZE_MAX;
-        for (const auto& [mesh_id, pool] : pools) {
-            (void)mesh_id;
-            const std::size_t n = pool->candidates().size();
-            max_seats = std::max(max_seats, n);
-            min_seats = std::min(min_seats, n);
-        }
-        log_info(
-            tt::LogFabric,
-            "DBGSAT meshes={} total_seats={} seats_per_mesh[min={},max={}]",
-            pools.size(),
-            seat_to_asics.size(),
-            min_seats == SIZE_MAX ? 0 : min_seats,
-            max_seats);
-    }
-    // Diagnostic (TT_METAL_SAT_DIAG=1): per-mesh candidate-variant table. Shows which grouping variants
-    // generated the seats for each mesh (name+type -> seat count), plus a global histogram across all
-    // meshes. Lets us compare which variants the solver has to choose among for revAB vs revC.
-    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-        std::map<std::string, std::size_t> global_variant_seats;
-        log_info(tt::LogFabric, "DBGVAR ==== per-mesh candidate variant table ({} meshes) ====", pools.size());
-        for (const auto& [mesh_id, pool] : pools) {
-            std::map<std::string, std::size_t> per_mesh;
-            std::set<std::string> distinct_asic_sets;  // same ASIC footprint, different orientation => duplicate set
-            for (const Candidate& candidate : pool->candidates()) {
-                const GroupingInfo* v = candidate.variant();
-                const std::string key = v != nullptr ? fmt::format("{}[{}]", v->name, v->type) : "<null>";
-                per_mesh[key]++;
-                global_variant_seats[key]++;
-                std::vector<uint64_t> sorted_asics;
-                sorted_asics.reserve(candidate.asics().size());
-                for (const AsicID& a : candidate.asics()) {
-                    sorted_asics.push_back(*a);
-                }
-                std::sort(sorted_asics.begin(), sorted_asics.end());
-                const std::string set_key = fmt::format("{}", fmt::join(sorted_asics, ","));
-                distinct_asic_sets.insert(set_key);
-                // TT_METAL_SAT_DUMP_CANDS=1: emit each candidate's sorted ASIC-id set so we can check whether
-                // the known-good greedy placement's per-mesh ASIC set is even present in the SAT candidate pool->
-                // DEBUG-CLEANUP(remove): TT_METAL_SAT_DUMP_CANDS diagnostic (DBGCAND dump)
-                if (std::getenv("TT_METAL_SAT_DUMP_CANDS") != nullptr) {
-                    log_info(tt::LogFabric, "DBGCAND mesh={} asics={}", *mesh_id, set_key);
-                }
-            }
-            std::string row;
-            for (const auto& [name, cnt] : per_mesh) {
-                row += fmt::format("{}={} ", name, cnt);
-            }
-            log_info(
-                tt::LogFabric,
-                "DBGVAR mesh={} candidates={} distinct_asic_sets={} orientations_per_set={:.2f} variants={} | {}",
-                *mesh_id,
-                pool->candidates().size(),
-                distinct_asic_sets.size(),
-                distinct_asic_sets.empty()
-                    ? 0.0
-                    : static_cast<double>(pool->candidates().size()) / static_cast<double>(distinct_asic_sets.size()),
-                per_mesh.size(),
-                row);
-        }
-        log_info(tt::LogFabric, "DBGVAR ==== global variant histogram (across all meshes) ====");
-        for (const auto& [name, cnt] : global_variant_seats) {
-            log_info(tt::LogFabric, "DBGVAR GLOBAL variant={} total_seats={}", name, cnt);
-        }
-    }
     // Chip disjointness: each ASIC is claimed by at most one chosen seat.
     //
     // When footprint dedup is on AND the deduped footprints are pairwise DISJOINT (each ASIC belongs to exactly
@@ -3134,9 +2724,8 @@ bool build_sat_placement_constraints(
     // the same permutation/pigeonhole propagation as the mesh-level solve (the thing that makes ring-into-
     // sparse-graph instances converge). Any overlap between distinct footprints (heterogeneous shapes, grown
     // pools, MGD fallback variants) keeps the resource constraints exactly as before.
-    bool footprints_disjoint = false;
-    if (dedup) {
-        footprints_disjoint = true;
+    bool footprints_disjoint = true;
+    {
         std::set<uint32_t> claimed;
         for (const auto& [seat, asics] : seat_to_asics) {
             (void)seat;
@@ -3149,14 +2738,6 @@ bool build_sat_placement_constraints(
             if (!footprints_disjoint) {
                 break;
             }
-        }
-        // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-            log_info(
-                tt::LogFabric,
-                "DBGSAT dedup footprints_disjoint={} -> resource constraints {}",
-                footprints_disjoint,
-                footprints_disjoint ? "SKIPPED (injectivity subsumes; completeness enabled)" : "kept");
         }
     }
     if (!footprints_disjoint && !constraints.add_resource_constraint<uint32_t>(seat_to_asics)) {
@@ -3472,44 +3053,6 @@ void SatPlacementEnumerationSession::finish_init(
         if (!global_mesh_groupings_.contains(mesh_id)) {
             log_warning(tt::LogFabric, "SAT joint placement: mesh {} has no grouping variants; falling back", *mesh_id);
             return;
-        }
-    }
-
-    // DEBUG-CLEANUP(remove): TT_METAL_SAT_DIAG-gated diagnostic logging
-    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-        for (const auto& [mesh_id, gs] : global_mesh_groupings_) {
-            if (*mesh_id > 1) {
-                continue;
-            }
-            for (std::size_t gi = 0; gi < gs.size(); ++gi) {
-                std::set<uint32_t> fam;
-                for (const auto& [c, pos] : gs[gi].mesh_node_to_asic_position) {
-                    fam.insert(*pos.second);
-                }
-                std::string famstr;
-                for (uint32_t a : fam) {
-                    famstr += std::to_string(a) + ",";
-                }
-                // pgd_host_group seam (drives MGD->PGD solve orientation) grouped by tray.
-                std::map<uint32_t, std::set<uint32_t>> trays_by_pgd_hg;
-                for (const auto& [n, hg] : gs[gi].mesh_node_to_pgd_host_group) {
-                    if (n < gs[gi].items.size()) {
-                        trays_by_pgd_hg[hg].insert(*gs[gi].items[n].tray_id);
-                    }
-                }
-                std::string pgdhg;
-                for (const auto& [hg, trays] : trays_by_pgd_hg) {
-                    pgdhg += fmt::format("hg{}=trays{{{}}} ", hg, fmt::join(trays, ","));
-                }
-                log_info(
-                    tt::LogFabric,
-                    "DBGFP mesh={} g[{}]='{}' asics=[{}] pgd_host_group_by_tray:: {}",
-                    *mesh_id,
-                    gi,
-                    gs[gi].name,
-                    famstr,
-                    pgdhg);
-            }
         }
     }
 

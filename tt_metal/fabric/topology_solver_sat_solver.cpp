@@ -15,13 +15,7 @@ struct TopologySatSolver::Impl {
     mutable CaDiCaL::Solver solver;
 
     Impl() {
-        // Diagnostic (TT_METAL_SAT_VERBOSE=1): un-quiet CaDiCaL and enable its periodic 'report' lines so we
-        // can watch the conflict count climb during a long placement solve and read the final total.
-        const bool verbose = std::getenv("TT_METAL_SAT_VERBOSE") != nullptr;
-        solver.set("quiet", verbose ? 0 : 1);
-        if (verbose) {
-            solver.set("report", 1);
-        }
+        solver.set("quiet", 1);
         // Congruence closure (gate extraction, CaDiCaL >= 2.1) spends minutes on the guarded at-least-k
         // cardinality encodings this solver emits (preferred-hit objective under a host-group cap) and buys
         // nothing for these CNFs: with it off the same instances solve in seconds. Correctness is unaffected;

@@ -1698,24 +1698,6 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         if (seating.empty()) {
             return give_up();
         }
-        // Diagnostic (TT_METAL_SAT_DIAG=1): dump the winning mesh -> grouping/seat assignment so we can
-        // validate a successful placement and compare it against expected physical layout.
-        if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-            log_info(tt::LogFabric, "DBGMAP successful seating: {} meshes placed", seating.size());
-            for (const PlacedMesh& placed : seating) {
-                std::string asic_list;
-                for (const auto& a : placed.placement.asics) {
-                    asic_list += fmt::format("{} ", *a);
-                }
-                log_info(
-                    tt::LogFabric,
-                    "DBGMAP mesh={} -> grouping='{}' type='{}' asics=[{}]",
-                    *placed.mesh_id,
-                    placed.grouping_name,
-                    placed.grouping_type,
-                    asic_list);
-            }
-        }
 
         PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph_, seating);
         print_logical_adjacency_map(logical_);

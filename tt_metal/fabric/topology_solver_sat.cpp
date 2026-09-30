@@ -1589,11 +1589,6 @@ bool topology_sat_decode_hard_solution(
 // precondition is a bijection, where this symmetry (and the resulting hardness) actually arises. Returns 0 when no
 // hint applies.
 int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data, const TopologySatHardEncoding& enc) {
-    // TT_METAL_SAT_NO_ANCHOR=1: disable the anchor assumption entirely, so we can measure whether dedup ALONE
-    // (adjacency-stage symmetry reduction) collapses the search without any solver-side anchoring.
-    if (std::getenv("TT_METAL_SAT_NO_ANCHOR") != nullptr) {
-        return 0;
-    }
     if (graph_data.n_target != graph_data.n_global) {
         return 0;
     }
@@ -1621,14 +1616,6 @@ bool SatSearchBackend::start(
     impl_ = std::make_unique<Impl>();
     auto& s = *impl_;
     s.conflict_cap = conflict_cap_;
-    // Diagnostic override: TT_METAL_SAT_PLACEMENT_CAP forces the per-solve conflict budget for every SAT
-    // solve this run, so we can raise the cap for a base-instance SAT/UNSAT probe without a rebuild.
-    if (const char* v = std::getenv("TT_METAL_SAT_PLACEMENT_CAP")) {
-        const int parsed = std::atoi(v);
-        if (parsed > 0) {
-            s.conflict_cap = parsed;
-        }
-    }
     s.solver.configure_for_blocking_clause_enumeration();
     s.unique_shapes = unique_shapes;
     s.enc = {};
@@ -1784,19 +1771,6 @@ bool SatSearchBackend::start(
         topology_sat_build_shape_blocking_clause(s.enc, shape_key, forbid_clause);
         topology_sat_add_shape_clause_or_unsat(s.solver, s.enc, forbid_clause);
     }
-    // Diagnostic (TT_METAL_SAT_DIAG=1): CNF size of the encoded instance. n_target/n_global identify which
-    // instance (placement = large n_target/n_global; intra-mesh = small). Lets us compare revAB vs revC CNF.
-    if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-        log_info(
-            tt::LogFabric,
-            "DBGCNF n_target={} n_global={} active_vars={} irredundant_clauses={} redundant_clauses={} cap={}",
-            graph_data.n_target,
-            graph_data.n_global,
-            s.solver.active_vars(),
-            s.solver.irredundant_clauses(),
-            s.solver.redundant_clauses(),
-            s.conflict_cap);
-    }
     return true;
 }
 
@@ -1879,30 +1853,6 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                 }
                 ++s.solve_calls;
                 const int status = s.solver.solve_limited(s.conflict_cap);
-                // Diagnostic (TT_METAL_SAT_DIAG=1): distinguish SAT / UNSAT / budget-exhausted so we can tell
-                // solver hardness (never returns within budget) from an unrepresentable instance (UNSAT).
-                if (std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
-                    const char* status_str = "UNKNOWN(budget-exhausted)";
-                    if (status == TopologySatSolver::kSat) {
-                        status_str = "SAT";
-                    } else if (status == TopologySatSolver::kUnsat) {
-                        status_str = "UNSAT";
-                    }
-                    log_info(
-                        tt::LogFabric,
-                        "DBGSOLVE stage={} symhint={} cap={} status={}({}) solve_call={}",
-                        s.stage,
-                        with_symmetry_hint,
-                        s.conflict_cap,
-                        status,
-                        status_str,
-                        s.solve_calls);
-                    // Dump full CaDiCaL stats (conflicts/decisions/props) for LARGE solves only (the joint
-                    // placement, >10k vars) to avoid spamming the thousands of tiny intra-mesh solves.
-                    if (s.solver.active_vars() > 10000) {
-                        s.solver.print_statistics();
-                    }
-                }
                 return status == TopologySatSolver::kSat;
             };
             if ((s.symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
