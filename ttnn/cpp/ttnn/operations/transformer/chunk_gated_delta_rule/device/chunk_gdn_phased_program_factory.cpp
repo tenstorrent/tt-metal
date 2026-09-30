@@ -149,6 +149,19 @@ bool gdn_scan_mcast_env_enabled() {
     return enabled;
 }
 
+// TT_GDN_SCAN_MCAST_2D (default on; "0" = 1 x NV row segments only, the previous placement): when the 1 x NV
+// head groups do not fit the grid (TP=2: BH=24, NV=4 on 11x10 needs 12 rows of 2 groups), lay each group out as
+// a gw x gh rectangle (gw * gh == NV, smallest gh that fits: 2x2 -> 5 groups per row pair, 25 >= 24) so the
+// leader-multicast reader still applies. Placement only: every core runs the same (head, v-block) scan, so the
+// output is bit-identical to the row-major fallback. Where 1 x NV segments fit (TP=4, TP=1) nothing changes.
+bool gdn_scan_mcast_2d_env_enabled() {
+    static const bool enabled = [] {
+        const char* e = std::getenv("TT_GDN_SCAN_MCAST_2D");
+        return e == nullptr || e[0] != '0';
+    }();
+    return enabled;
+}
+
 // TT_GDN_PREP_PREFETCH=1: the prep reader runs one work-item ahead (issue (head, chunk) i+1's
 // q/k/v/g/beta reads while the compute consumes i) instead of stalling on every DRAM read. Needs
 // 2-slot input CBs; off => today's synchronous reader and today's 1-slot CBs, bit for bit.
@@ -181,17 +194,32 @@ ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, IDevice* 
     d.head.reserve(total);
     d.vblk.reserve(total);
     std::set<CoreRange> crs;
-    // Leader-multicast placement: heads_per_row = grid.x / NV head groups per row, each group a contiguous
-    // 1 x NV segment (a tight NoC rectangle on Blackhole's translated coords). Falls back to row-major if the
-    // groups do not fit or a rectangle is not tight.
-    const uint32_t heads_per_row = (NV > 1) ? grid.x / NV : 0;
-    bool mcast = gdn_scan_mcast_env_enabled() && device != nullptr && NV > 1 && heads_per_row > 0 &&
-                 (BH + heads_per_row - 1) / heads_per_row <= grid.y;
+    // Leader-multicast placement: heads_per_row = grid.x / gw head groups per row, each group a contiguous
+    // gw x gh rectangle (gw * gh == NV; gh = 1, i.e. a 1 x NV row segment, whenever that fits) -- a tight NoC
+    // rectangle on Blackhole's translated coords. Falls back to row-major if the groups do not fit or a
+    // rectangle is not tight.
+    uint32_t gw = NV, gh = 1;
+    auto groups_fit = [&](uint32_t w, uint32_t hgt) {
+        const uint32_t per_row = grid.x / w;
+        return per_row > 0 && ((BH + per_row - 1) / per_row) * hgt <= grid.y;
+    };
+    bool fits = NV > 1 && groups_fit(gw, gh);
+    if (NV > 1 && !fits && gdn_scan_mcast_2d_env_enabled()) {
+        for (uint32_t cand_h = 2; cand_h <= NV && !fits; cand_h++) {
+            if (NV % cand_h == 0 && groups_fit(NV / cand_h, cand_h)) {
+                gw = NV / cand_h;
+                gh = cand_h;
+                fits = true;
+            }
+        }
+    }
+    const uint32_t heads_per_row = fits ? grid.x / gw : 0;
+    bool mcast = gdn_scan_mcast_env_enabled() && device != nullptr && fits;
     if (mcast) {
         const CoreCoord full_grid = device->logical_grid_size();
         for (uint32_t i = 0; i < total; i++) {
             const uint32_t h = i / NV, v = i % NV;
-            const CoreCoord core{(h % heads_per_row) * NV + v, h / heads_per_row};
+            const CoreCoord core{(h % heads_per_row) * gw + v % gw, (h / heads_per_row) * gh + v / gw};
             d.cores.push_back(core);
             d.head.push_back(h);
             d.vblk.push_back(v);

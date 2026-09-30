@@ -69,6 +69,8 @@ def _blocks_for(isl):
         pytest.param(8192, "0,1,2,3", 1, id="tp2_8192_L4"),
         pytest.param(16384, "0,1,2,3", 1, id="tp2_16384_L4"),
         pytest.param(32768, "0,1,2,3", 1, id="tp2_32768_L4"),
+        pytest.param(8192, ",".join(str(i) for i in range(16)), 1, id="tp2_8192_L16"),  # lane L: layer-count scaling
+        pytest.param(32768, ",".join(str(i) for i in range(16)), 1, id="tp2_32768_L16"),
         pytest.param(2048, "all", 1, id="tp2_2048_all"),
         pytest.param(8192, "all", 1, id="tp2_8192_all"),
         pytest.param(32768, "all", 1, id="tp2_32768_all"),
