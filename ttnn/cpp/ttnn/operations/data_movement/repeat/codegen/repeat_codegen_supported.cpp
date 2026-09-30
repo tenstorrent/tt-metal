@@ -137,8 +137,8 @@ const std::array<UngeneralizedDemotion, 16> kUngeneralizedDemotions = {{
     // cost is unmeasured.
     {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::BFLOAT16, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
     {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
-    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output. The factory already reads each source
-    // tile once and writes every copy from the reader (direct_outer_tile); kept demoted as measured.
+    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output, served by the sequenced reader/writer
+    // pair. No mechanism identified; kept demoted as measured.
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::BFLOAT16, Layout::TILE, kHeight, 8, kHeight, {}},
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::TILE, kHeight, 8, kHeight, {}},
 }};
