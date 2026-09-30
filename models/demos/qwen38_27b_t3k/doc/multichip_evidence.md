@@ -56,8 +56,12 @@ it takes effect. **The serving path cannot set it from here.** The vLLM plugin b
 fabric argument and drops the key: the served run logs
 `tt/worker.py:796] Setting fabric config: {'config': FabricConfig.FABRIC_1D_RING,
 'reliability_mode': FabricReliabilityMode.STRICT_INIT}`, with no router config, and
-`ttnn.set_fabric_config(..., router_config=...)` is the only way to carry the size. There is no
-environment variable for it.
+the size can only be carried by the last argument of
+`ttnn.set_fabric_config(config, reliability_mode, num_planes, fabric_tensix_config,
+fabric_udm_mode, fabric_manager_mode, router_config)`, where `router_config` is a
+`ttnn.FabricRouterConfig` whose single field `max_packet_payload_size_bytes` defaults to `None`.
+Passing only the first two arguments leaves that field unset, which is the 4352 B default. There
+is no environment variable for it.
 
 Benchmark run 36682118819 proves the key is inert rather than merely undocumented. It ran with
 `fabric_max_packet_payload_size_bytes: 6144` accepted into `additional_config` and echoed in the
@@ -331,13 +335,19 @@ The shape of the gap identifies where it is not. TPOT is flat within 13 ms acros
 length from 128 to 32768, so it is not attention or KV work, which grow with context. It barely
 improves from concurrency 1 to 8, 168.6 ms to 159.5 ms, where this tree's own local measurement
 moves the other way, 60.3 ms to 89.5 ms at batch 8, because more batch is more compute. A
-per-step cost that ignores both context and batch is a serialized host round trip, not device
-time. The plugin says as much at startup: `Using custom scheduler class
-vllm_tt_plugin.scheduler.TTScheduler ... If you have subclassed Scheduler instead of
-AsyncScheduler, you will see degraded performance due to async scheduling being disabled.`
+per-step cost that ignores both context and batch is a fixed cost per step, either host work that
+does not overlap the device or a constant inside the collectives.
 
-That is a hypothesis with a mechanism, not a measurement. Confirming it needs a profiled serving
-step, and the remedy is in the plugin either way.
+It is not async scheduling. The run logs `Asynchronous scheduling is enabled.` twice, the
+plugin's own `Disabling async scheduling` warning never fires, and `TTScheduler` subclasses
+`AsyncScheduler`. The `scheduler.py:192` warning about degraded performance is vLLM's standard
+notice for any custom scheduler class and is conditional on subclassing `Scheduler` instead,
+which is not the case here.
+
+Async scheduling being enabled does not prove the host work overlaps the device step, so the
+cost is still unattributed. Separating it needs a decode-step trace on the tt-metal side, host
+time against device time for one step; until that exists, nothing here says whether the fixed
+cost is host-side or in the collectives.
 
 Acceptance reported `PASS` for this run on `0/26 passed, 6 waived, 20 NA`. No benchmark target
 was met: the strictest tier wants 16.89 t/s/u and the functional tier 1.68, so only the
