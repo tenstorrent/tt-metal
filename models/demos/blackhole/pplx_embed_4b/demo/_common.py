@@ -519,6 +519,14 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_SDPA_REUSE_KV", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_REUSE_KV", "1")
         os.environ.setdefault("QWEN_SDPA_REUSE_Q_CHUNK", "128")
+    # bs8 / bs16 (ISL 512): the heads op writes K / V to L1 interleaved (Q stays in DRAM), so reuse_kv SDPA reads them
+    # from L1. Standalone SDPA per call: bs8 237.0 -> 201.2 us, bs16 355.8 -> 308.7 (bench_sdpa_bs16_ablate.py <bs> l1;
+    # Q or the output in L1 add little on top). sustained_run.sh, 3 alternating rounds, cold / sustained (chips 0 / 1): bs8
+    # 78.3 / 97.2 -> 77.0 / 97.2 ms (the settled clock drops ~20 MHz), bs16 145.6 / 192.6 -> 144.5 / 191.5 ms; STS-B
+    # embeddings bit-identical at both. bs32's K / V (297 KB per core) clash with a later op's static CBs (TT_THROW).
+    # Opt out: QWEN_HEADS_KV_L1=0.
+    if batch_size in (8, 16) and seq_len == 512:
+        os.environ.setdefault("QWEN_HEADS_KV_L1", "1")
     # bs1 SDPA: q_chunk 256 doubles the work units (32 -> 64) so the 8x8 grid is full; k stays 256.
     # Standalone at the model's config (LoFi, fp32 acc off = streaming kernel, exp approx, bfp8
     # Q/K/V in L1): q512/k256 79.1 us -> q256/k256 55.0 us (-30%); q256/k512 71.5, q128/k128 72.2,
