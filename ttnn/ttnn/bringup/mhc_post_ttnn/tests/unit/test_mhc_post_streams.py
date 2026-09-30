@@ -12,7 +12,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.bringup.mhc_post_ttnn import mhc_post
+mhc_post = ttnn.bringup.mhc_post  # the C++ op (the Python builder is the parity reference)
 
 from .test_mhc_post import reference_mhc_post, to_device
 
