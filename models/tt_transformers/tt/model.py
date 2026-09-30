@@ -837,7 +837,8 @@ class Transformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
         return tt_out
 
     def ttnn_prefill_forward(
