@@ -47,6 +47,16 @@ MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Ope
         compute_output_specs(operation_attributes, tensor_args), tensor_args.tmp_pow_sum.device());
 }
 
+std::vector<tt::tt_metal::TensorTopology> MorehClipGradNormStep2Operation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // The caller's total_norm is written in place and handed back: it keeps the label it arrived with rather than
+    // taking tmp_pow_sum's (same rule as moreh_adamw). A fresh total_norm is left to the framework's union default.
+    if (tensor_args.total_norm.has_value()) {
+        return {tensor_args.total_norm->tensor_topology()};
+    }
+    return {};
+}
+
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
 
 namespace ttnn::prim {

@@ -90,6 +90,20 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
 
     return ret;
 }
+
+std::vector<tt::tt_metal::TensorTopology> MorehSgdOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    std::vector<std::reference_wrapper<const Tensor>> inputs = {tensor_args.param_in, tensor_args.grad};
+    if (tensor_args.momentum_buffer_in.has_value()) {
+        inputs.emplace_back(*tensor_args.momentum_buffer_in);
+    }
+    // Slot order matches compute_output_specs / create_output_tensors.
+    return preallocated_or_union_output_topologies(
+        std::move(inputs),
+        tensor_args.param_in,
+        compute_output_specs(operation_attributes, tensor_args),
+        {tensor_args.param_out, tensor_args.momentum_buffer_out});
+}
 }  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn::prim {
@@ -118,7 +132,8 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
         momentum_initialized,
         param_out_memory_config.value_or(param_in.memory_config()),
         momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
-        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

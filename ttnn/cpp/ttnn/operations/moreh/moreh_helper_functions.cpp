@@ -13,6 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "tt-metalium/hal.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::operations {
 
@@ -502,6 +503,46 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
 
     return {Wt, Ht, inner_tile_size, reduce_tile_size};
+}
+
+std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
+    std::vector<std::reference_wrapper<const Tensor>> inputs,
+    const Tensor& primary_input,
+    const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
+    const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs) {
+    TT_FATAL(
+        output_specs.size() == preallocated_outputs.size(),
+        "Expected one preallocated-output slot per output spec, got {} slots for {} specs",
+        preallocated_outputs.size(),
+        output_specs.size());
+
+    bool any_preallocated = false;
+    for (const auto& output : preallocated_outputs) {
+        any_preallocated |= output.get().has_value();
+    }
+    if (!any_preallocated) {
+        return {};
+    }
+
+    for (const auto& output : preallocated_outputs) {
+        if (output.get().has_value()) {
+            inputs.emplace_back(*output.get());
+        }
+    }
+    auto [union_placements, union_shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(inputs);
+    const tt::tt_metal::TensorTopology union_topology(
+        std::move(union_shape), std::move(union_placements), primary_input.tensor_topology().mesh_coords());
+
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(output_specs.size());
+    for (size_t i = 0; i < output_specs.size(); ++i) {
+        if (!output_specs[i].has_value()) {
+            continue;
+        }
+        const auto& preallocated = preallocated_outputs[i].get();
+        topologies.push_back(preallocated.has_value() ? preallocated->tensor_topology() : union_topology);
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::operations
