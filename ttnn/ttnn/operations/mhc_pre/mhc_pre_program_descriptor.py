@@ -73,6 +73,9 @@ OUT_STAGE_PAGES = 2  # one post + one comb staging tile
 # W is pushed into cb_weight in chunks of this many tiles (one read barrier each), so the compute kernel's
 # fp32 W hi/lo split of chunk j runs under the DRAM read of chunk j+1 instead of after the whole W slice.
 W_CHUNK_TILES = 8
+# Math fidelity of the X @ W_lo products (fp32 W split). W_lo <= 2^-8 |W|, so LoFi's truncation lands far
+# below the FPU accumulation floor; set to the caller's fidelity to disable (byte-identical to one fidelity).
+W_LO_FIDELITY = ttnn.MathFidelity.LoFi
 L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
 # Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
 # Measured on BH p150 (fp32, device kernel ns, bt=coarsest-fit -> bt=1): 640x7168 384->383 us,
@@ -371,6 +374,8 @@ def create_program_descriptor(
         CB_WEIGHT_SPLIT,
         w_pieces(w_tensor.dtype),
         W_CHUNK_TILES,
+        W_LO_FIDELITY.value,
+        cfg.math_fidelity.value,
     ]
 
     writer_ct = [

@@ -44,9 +44,9 @@ INPUT_TAGGERS = {
 
 # weight_dtype bfloat16: added by the verifier on measured evidence (every golden cell with a bf16 W passes;
 # the CB formats / page sizes already follow the tensor dtypes via `_cb_table`, helpers reconfigure per operand).
-# dtype bfloat16 (streams) is NOT claimed yet: the kernel runs it, but bf16-X x fp32-W post/comb sit at
-# rel-RMS 5.0-5.5e-4 vs the 5e-4 gate on 11 golden cells + the bf16 depth chain (the FPU drops the tf32 LSB
-# of W and its in-tile matmul accumulation is not fp32-exact). See op_requirements.md Refinement 1.
+# dtype bfloat16 (streams): Refinement 1. An fp32 W is split once per kernel on the SFPU into the exact bf16
+# pair (W_hi, W_lo) and both products accumulate in one DEST window, so bf16-X x fp32-W post/comb went from
+# rel-RMS 5.0-5.5e-4 (FPU reading W as ~tf32) to 2.4-3.1e-4 (the FPU in-tile accumulation floor).
 SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],

@@ -71,6 +71,11 @@ constexpr uint32_t group_cores = get_compile_time_arg_val(17);
 constexpr uint32_t cb_weight_split = get_compile_time_arg_val(18);
 constexpr uint32_t w_pieces = get_compile_time_arg_val(19);       // 1: bf16 W (exact); 2: fp32 W -> hi/lo
 constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(20);  // reader's W push quantum
+// Math fidelity of the W_lo products (pieces p >= 1). W_lo is tiny (<= 2^-8 |W|) and, for a tf32-valued W,
+// carries <= 3 significant bits, so a low fidelity costs ~nothing in precision and saves FPU phases.
+constexpr auto w_lo_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(21));
+// == MATH_FIDELITY, but visible on every TRISC (the unpack order depends on whether the lo pass is separate).
+constexpr auto w_main_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(22));
 constexpr uint32_t cb_w_matmul = w_pieces > 1 ? cb_weight_split : cb_weight;
 
 #ifdef TRISC_MATH
@@ -316,7 +321,8 @@ ALWI void w_split_block(uint32_t core_k_tiles) {
 }
 
 // project_block_pieces: mix[t] = sum_k sum_p X[t][k] @ Wp[k] (Wp page k*PIECES + p), every product of an
-// output sub-block accumulated in one DEST window, then packed once (fp32) to cb_partial.
+// output sub-block accumulated in one DEST window, then packed once (fp32) to cb_partial. Piece 0 (W_hi, or
+// the bf16 W itself) runs at MATH_FIDELITY; pieces >= 1 (W_lo) at w_lo_fidelity (math re-init only; same DEST).
 template <uint32_t PIECES>
 ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h) {
     cb_wait_front(cb_x_resident, extent * core_k_tiles);  // retained: sumsq + y-mix reuse the block
@@ -324,12 +330,33 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
     pack_reconfig_data_format(cb_partial);
     matmul_init(cb_x_resident, cb_w_matmul);
     for (uint32_t r0 = 0; r0 < extent; r0 += sb_h) {
+        constexpr bool lo_reinit = PIECES > 1 && w_lo_fidelity != w_main_fidelity;
         tile_regs_acquire();
+        if constexpr (lo_reinit) {
+            if (r0 > 0) {
+                MATH((llk_math_matmul_init<w_main_fidelity, MM_THROTTLE>(cb_x_resident, cb_w_matmul)));
+            }
+        }
         for (uint32_t k = 0; k < core_k_tiles; ++k) {
             for (uint32_t r = 0; r < sb_h; ++r) {
                 const uint32_t x_idx = (r0 + r) * core_k_tiles + k;
-                for (uint32_t p = 0; p < PIECES; ++p) {
-                    matmul_tiles(cb_x_resident, cb_w_matmul, x_idx, k * PIECES + p, r);
+                matmul_tiles(cb_x_resident, cb_w_matmul, x_idx, k * PIECES, r);
+                if constexpr (!lo_reinit) {
+                    for (uint32_t p = 1; p < PIECES; ++p) {
+                        matmul_tiles(cb_x_resident, cb_w_matmul, x_idx, k * PIECES + p, r);
+                    }
+                }
+            }
+        }
+        if constexpr (lo_reinit) {
+            MATH((llk_math_matmul_init<w_lo_fidelity, MM_THROTTLE>(cb_x_resident, cb_w_matmul)));
+            for (uint32_t k = 0; k < core_k_tiles; ++k) {
+                for (uint32_t r = 0; r < sb_h; ++r) {
+                    const uint32_t x_idx = (r0 + r) * core_k_tiles + k;
+                    for (uint32_t p = 1; p < PIECES; ++p) {
+                        UNPACK((llk_unpack_AB_matmul(cb_x_resident, cb_w_matmul, x_idx, k * PIECES + p)));
+                        MATH((llk_math_matmul<w_lo_fidelity, MM_THROTTLE>(r)));
+                    }
                 }
             }
         }

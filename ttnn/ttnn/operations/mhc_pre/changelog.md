@@ -27,3 +27,49 @@
     fp32-exact. It is not claimed; it moves to Refinement 1 (W hi/lo split).
 - **Tests added**: `test_mhc_pre_precision_baseline.py` (verifier), plus probes 002–007. The acceptance
   suite (`test_mhc_pre.py`), `test_mhc_pre_blocking.py` and `test_mhc_pre_perf.py` were already in place.
+
+## Refinement 1 — bf16 residual streams (lands the perf-focus contract)
+- **Date**: 2026-09-30
+- **What was done**:
+  - `SUPPORTED["dtype"]` gains `bfloat16`.
+  - For an fp32 W, the compute kernel runs `w_split_block` once, before block 0:
+    - Each resident fp32 W tile is loaded via `copy_tile`, with `cb_weight` tagged UnpackToDestFp32.
+    - The SFPU computes `W_hi = W & 0xFFFF0000` and `W_lo = W − W_hi`.
+    - Both are packed as bf16, in place, into `cb_weight_split`, a second buffer index aliasing
+      `cb_weight`'s allocation. There is 0 extra L1, and both are declared in `_cb_table`.
+  - `project_block_pieces<2>` (a thin block op over `matmul_tiles`; `matmul_block` cannot take two in1
+    operands into one DEST window) accumulates X@W_hi (HiFi4) and X@W_lo (`W_LO_FIDELITY` = LoFi) in the
+    same DEST window. The X block is still retained for Σx² and the y-mix.
+  - A bf16 W keeps the unchanged `matmul_block` helper path (`w_pieces == 1`).
+  - Perf levers: the reader pushes W in `W_CHUNK_TILES = 8` chunks, so the split overlaps the W DRAM read.
+    The LoFi lo pass saves 3 of the 4 fidelity phases on half of the doubled matmul.
+  - Knobs `W_CHUNK_TILES`, `W_LO_FIDELITY` and `w_pieces()` are single-source in the descriptor.
+- **Reused**: the op file gate, `_cb_table`, the reader W load, the `matmul_block` path (bf16 W), and every
+  other phase.
+- **Added**: the `cb_weight_split` alias, `w_split_block`, and `project_block_pieces`.
+- **Accuracy achieved** (bf16 X × fp32 W, `test_mhc_pre_bf16_stream_fp32_weight_precision`):
+  - post rel-RMS 2.4–3.1e-4 and comb 2.5–2.6e-4 on 17×512, 1000×7168 and 256×6144, against the 5e-4 gate.
+    Before this refinement they were 5.0–5.5e-4.
+  - The fp32-X baseline shapes are unchanged or better (post/comb ≤ 4.0e-4 rel-RMS, PCC ≥ 0.99999993).
+- **Golden test progress**: 205/206 (was 106 pass + 98 xfail + 1 fail).
+  - All 98 bf16 cells pass, plus `test_comb_depth_chain[bf16]`.
+  - The only failure is `test_large_sinkhorn_logits[T64_nC4096]` (Refinement 2, unchanged at worst row
+    0.0674).
+- **Perf** (BH, device kernel ns, bf16 X / fp32 W, before → after):
+
+  | Shape (T×C) | Before | After |
+  |---|---|---|
+  | 640×7168 | 267.3 µs | 269.6 µs |
+  | 640×1792 | 103.6 µs | 105.1 µs |
+  | 1280×4096 | 261.9 µs | 264.6 µs |
+  | 4096×1792 | 371.6 µs | 373.4 µs |
+
+  fp32 X, after: 640×7168 378 µs (was 382–383), 4096×1792 523 µs (was 521).
+
+  The first split measured 295 µs. Ablation showed ~20 µs from the SFPU split sitting serially after the W
+  read, and ~6 µs from the doubled HiFi4 matmul. The chunked W push and the LoFi lo pass removed both.
+- **Issues encountered**: `MATH_FIDELITY` exists only on TRISC_MATH. The lo-pass layout decision must match
+  on every TRISC, so the main fidelity is passed as a CT arg.
+- **Tests added**:
+  - `test_mhc_pre_precision_baseline.py::test_mhc_pre_bf16_stream_fp32_weight_precision` (3 shapes).
+  - `test_mhc_pre_perf.py` is parametrized over X dtype.

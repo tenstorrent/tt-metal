@@ -54,7 +54,7 @@ failure and one deferred regime):
 | group-combine latency / overlap for small C | scheme-change or knob-turn (lamp L2 / L1) | Refinement 4 (perf) |
 | block-size × buffer-depth co-tune for bf16 streams | knob-turn | Refinement 5 (perf) |
 
-### [ ] Refinement 1 — bf16 residual streams (lands the perf-focus contract)
+### [x] Refinement 1 — bf16 residual streams (lands the perf-focus contract)
 
 **Goal**: add `ttnn.bfloat16` to `SUPPORTED["dtype"]`, so that all 98 `xfail_expected` cells pass. That is 50
 `test_op` cells and 48 `test_op_loose` cells, and it also turns on `test_comb_depth_chain[bf16]`.
@@ -104,6 +104,17 @@ Fix (a) with an exact **bf16 hi/lo split of the resident W**:
   loose cases and `test_comb_depth_chain[bf16]`.
 - No regression on the fp32 cells.
 - 640×7168 bf16 device-ns is not worse than 270.9 µs beyond noise.
+
+**Outcome**: landed.
+- `dtype = bfloat16` is in SUPPORTED. The golden suite is 205/206; the only failure is the pre-existing
+  Refinement 2 cell. Every bf16 cell passes, including `test_comb_depth_chain[bf16]`.
+- bf16-X × fp32-W post/comb rel-RMS went from 5.0–5.5e-4 to 2.4–3.1e-4, which is the bf16-W floor.
+- 640×7168 bf16 / fp32 W: 267.3 µs baseline on this box → 269.6 µs (+0.9 %, noise).
+- The naive split measured 295 µs:
+  - The SFPU split sat after the whole W read. Fixed by pushing W in `W_CHUNK_TILES = 8` chunks, so the
+    split runs under the W DRAM read.
+  - The doubled matmul cost ~6 µs. Fixed by running the W_lo products at `W_LO_FIDELITY = LoFi`.
+- This op is still DRAM-bound on the W re-read; that is Refinement 3.
 
 ### [ ] Refinement 2 — fp32-stream projection precision (large Sinkhorn logits)
 
