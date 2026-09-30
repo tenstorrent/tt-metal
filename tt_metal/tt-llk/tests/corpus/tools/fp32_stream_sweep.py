@@ -421,6 +421,13 @@ def _new_leg():
         "max_ulp_graded": -1.0,
         "max_ulp_graded_input": "-",
         "graded_witness": None,
+        # IN-CLAIM = graded AND inside the kernel's documented accuracy range.
+        # The number that separates "a fit degrading where it promised nothing"
+        # from "wrong inside its own declared range".
+        "n_in_claim": 0,
+        "n_out_in_claim": 0,
+        "max_ulp_in_claim": -1.0,
+        "claim_witness": None,
     }
 
 
@@ -462,6 +469,24 @@ def _fold_leg(acc, corr):
             )
             if acc["graded_witness"] is None or cand[0] < acc["graded_witness"][0]:
                 acc["graded_witness"] = cand
+    if "n_out_in_claim" in corr:
+        acc["n_in_claim"] += int(corr["n_in_claim"])
+        acc["n_out_in_claim"] += int(corr["n_out_in_claim"])
+        acc["max_ulp_in_claim"] = max(
+            acc["max_ulp_in_claim"], float(corr["max_ulp_in_claim"])
+        )
+        try:
+            cw = int(corr.get("claim_witness", "0x0"), 0)
+        except ValueError:
+            cw = 0
+        if int(corr["n_out_in_claim"]) > 0 and cw != 0:
+            cand = (
+                cw,
+                corr.get("claim_witness_dev", "?"),
+                corr.get("claim_witness_golden", "?"),
+            )
+            if acc["claim_witness"] is None or cand[0] < acc["claim_witness"][0]:
+                acc["claim_witness"] = cand
     fw = corr.get("first_witness", "0x00000000")
     try:
         fwi = int(fw, 0)
@@ -554,7 +579,9 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
             "hand_in_contract\tsem_n_out\thand_n_out\tulp_nonregression\t"
             "ulp_reason\tverdict\tfirst_witness\twitness_class\t"
             "sem_max_ulp_graded\thand_max_ulp_graded\tsem_n_out_graded\t"
-            "hand_n_out_graded\tn_graded\tgraded_witness\tnote\n"
+            "hand_n_out_graded\tn_graded\tgraded_witness\t"
+            "n_in_claim\tsem_n_out_in_claim\thand_n_out_in_claim\t"
+            "sem_max_ulp_in_claim\thand_max_ulp_in_claim\tnote\n"
         )
 
         def fw(a):
@@ -602,6 +629,11 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
                         else "0x%08x"
                         % (sem["graded_witness"] or hand["graded_witness"])[0]
                     ),
+                    sem["n_in_claim"] if sem["checked"] else "n/a",
+                    sem["n_out_in_claim"] if sem["checked"] else "n/a",
+                    hand["n_out_in_claim"] if hand["checked"] else "n/a",
+                    ("%.0f" % sem["max_ulp_in_claim"]) if sem["checked"] else "n/a",
+                    ("%.0f" % hand["max_ulp_in_claim"]) if hand["checked"] else "n/a",
                     note,
                 )
             )
@@ -613,7 +645,10 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
         f"sem_out_graded={sem['n_out_graded']} hand_out_graded={hand['n_out_graded']} "
         f"n_graded={sem['n_graded']} "
         f"sem_max_ulp_graded={sem['max_ulp_graded']:.0f} "
-        f"hand_max_ulp_graded={hand['max_ulp_graded']:.0f}",
+        f"hand_max_ulp_graded={hand['max_ulp_graded']:.0f} "
+        f"n_in_claim={sem['n_in_claim']} "
+        f"sem_out_in_claim={sem['n_out_in_claim']} "
+        f"hand_out_in_claim={hand['n_out_in_claim']}",
         flush=True,
     )
     gate_ok = leg_in(sem) and leg_in(hand) and ulp_ok

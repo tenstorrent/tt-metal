@@ -789,6 +789,100 @@ def case_domain():
     )
 
 
+# ── case 6b: every joint-pointwise binary golden vs BinarySFPUGolden ─────────
+# The oracle's binary methods are per-element scalar, so this sweeps a full base
+# STRATUM: one fixed base and all 65536 exponent patterns -- exactly the band the
+# device leg runs -- for each of several representative bases, including the
+# specials (0, +-1, +-inf, nan, a subnormal) that a random sample would miss.
+_BINARY_OP_TO_MATHOP = {
+    "binarypow": "SfpuElwpow",
+    "binarypow-fresh": "SfpuElwpow",
+    "binary-float": "SfpuElwsub",
+    "binarycomp": "SfpuElwEq",
+    "binaryfmod": "SfpuBinaryFmod",
+    "binaryremainder": "SfpuBinaryRemainder",
+    "atan2": "SfpuAtan2",
+    "atan2-fitted": "SfpuAtan2",
+    "minmax-max": "SfpuBinaryMax",
+    "minmax-min": "SfpuBinaryMin",
+    "isclose": "SfpuIsclose",
+    "isclose-fresh": "SfpuIsclose",
+    "mask": "SfpuMask",
+}
+
+# Representative bases, chosen to be the hard ones: both zeros, both units, both
+# infinities, a NaN, a subnormal, the bf16 near-max, and two ordinary values.
+_BINARY_BASES = [
+    0x0000, 0x8000, 0x3F80, 0xBF80, 0x7F80, 0xFF80, 0x7FC0, 0x0001,
+    0x7F70, 0x4130, 0xC0A1, 0x3F70,
+]
+
+
+def case_binary_registry():
+    print("case 6b: BINARY_REGISTRY goldens == BinarySFPUGolden, per base stratum")
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+    from helpers.llk_params import MathOperation
+
+    reg = {op: sp for op, sp in tg.BINARY_REGISTRY.items() if sp.checkable}
+    check(
+        "binary-registry-coverage",
+        set(reg) <= set(_BINARY_OP_TO_MATHOP),
+        f"unverified binary specs: {sorted(set(reg) - set(_BINARY_OP_TO_MATHOP))}",
+    )
+    oracle = BinarySFPUGolden()
+    exp16 = np.arange(65536, dtype=np.uint32)
+    b_vals = tg._bf16_bits_to_f32(exp16)
+    bt = torch.from_numpy(b_vals.astype(np.float32)).to(torch.bfloat16)
+
+    for op in sorted(reg):
+        spec = reg[op]
+        mathop = getattr(MathOperation, _BINARY_OP_TO_MATHOP[op])
+        fn = oracle.ops[mathop]
+        worst_note, ok_all, total_diff, total_n = "", True, 0, 0
+        for base_bits in _BINARY_BASES:
+            a_vals = tg._bf16_bits_to_f32(np.full(65536, base_bits, dtype=np.uint32))
+            at = torch.from_numpy(a_vals.astype(np.float32)).to(torch.bfloat16)
+            try:
+                # The oracle's binary methods are scalar; apply elementwise.
+                ref_hp = np.array(
+                    [float(fn(at[i], bt[i])) for i in range(0, 65536, 1)],
+                    dtype=np.float64,
+                )
+            except Exception as e:
+                ok_all = False
+                worst_note = f"oracle raised at base 0x{base_bits:04x}: {type(e).__name__}: {e}"
+                break
+            ref = tg.format_golden_f32_noacc(ref_hp)
+            mine = tg.format_golden_f32_noacc(spec.math(a_vals.astype(np.float64), b_vals.astype(np.float64)))
+            mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
+            mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+            d = np.where(mb != rb)[0]
+            total_n += 65536
+            total_diff += d.size
+            if d.size:
+                g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
+                fin = np.isfinite(g) & np.isfinite(m)
+                minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+                F32MAX = float(np.finfo(np.float32).max)
+                ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
+                near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
+                bad = ~(near | ovf | minf)
+                if bad.any():
+                    ok_all = False
+                    worst_note = (
+                        f"base 0x{base_bits:04x}: {int(bad.sum())} UNEXPLAINED, e.g. "
+                        f"a={float(a_vals[d][bad][0])!r} b={float(b_vals[d][bad][0])!r} "
+                        f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
+                    )
+                    break
+        note = worst_note or (
+            f"{total_n - total_diff}/{total_n} bit-identical across "
+            f"{len(_BINARY_BASES)} base strata ({total_diff} explained diffs)"
+        )
+        check(f"faithful-binary[{op}]", ok_all, note)
+
+
 def case_binarypow():
     print("case 6: binarypow golden faithful to BinarySFPUGolden._pow + region accum")
     import torch
@@ -869,6 +963,7 @@ def main():
     case_known_correct()
     case_seeded_bug()
     case_domain()
+    case_binary_registry()
     case_binarypow()
     print()
     if FAILED:

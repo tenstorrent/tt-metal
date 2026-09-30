@@ -1479,6 +1479,19 @@ class CorrectnessAccumulator:
     graded_witness_dev: float = 0.0
     graded_witness_golden: float = 0.0
     n_graded: int = 0
+    # IN-CLAIM: graded AND inside the kernel's DOCUMENTED accuracy range
+    # (CLAIMED_ACCURACY_DOMAIN). On an exhaustive band this is the number that
+    # decides the headline: a fitted body degrading at x = 1e30 never promised
+    # anything there, but the same body wrong at x = 3.2 inside its declared
+    # [1, 10] is a defect. Reporting only in the sense that no gate reads it --
+    # but it is the difference between "out-of-claim" and "defect" in the writeup,
+    # and one global counter cannot express it.
+    n_in_claim: int = 0
+    n_out_in_claim: int = 0
+    max_ulp_in_claim: float = 0.0
+    claim_witness_u32: int = -1
+    claim_witness_dev: float = 0.0
+    claim_witness_golden: float = 0.0
     # tanhderiv extra: distance to the TRUE math (sech^2), reported alongside the LUT contract.
     max_ulp_true: float = 0.0
     class_ulp: dict[str, tuple[int, float]] = field(default_factory=dict)
@@ -1543,6 +1556,27 @@ class CorrectnessAccumulator:
             if graded[gi] and ulp[gi] > self.max_ulp_graded:
                 self.max_ulp_graded = float(ulp[gi])
                 self.max_ulp_graded_input = int(u32[gi])
+        claim = CLAIMED_ACCURACY_DOMAIN.get(self.spec.op)
+        if claim is not None:
+            lo, hi = claim
+            in_claim = graded & (xin >= lo) & (xin <= hi)
+        else:
+            in_claim = np.zeros(xin.shape, dtype=bool)
+        self.n_in_claim += int(np.count_nonzero(in_claim))
+        c_out = out & in_claim
+        n_c = int(np.count_nonzero(c_out))
+        if in_claim.any():
+            ci = int(np.argmax(np.where(in_claim & np.isfinite(ulp), ulp, -1.0)))
+            if in_claim[ci] and ulp[ci] > self.max_ulp_in_claim:
+                self.max_ulp_in_claim = float(ulp[ci])
+        if n_c:
+            self.n_out_in_claim += n_c
+            if self.claim_witness_u32 < 0:
+                c = int(np.argmax(c_out))
+                self.claim_witness_u32 = int(u32[c])
+                self.claim_witness_dev = float(dev[c])
+                self.claim_witness_golden = float(golden[c])
+
         g_out = out & graded
         n_g = int(np.count_nonzero(g_out))
         if n_g:
@@ -1606,6 +1640,11 @@ class CorrectnessAccumulator:
             f"graded_witness_class={self.graded_witness_class or '-'},"
             f"graded_witness_dev={self.graded_witness_dev!r},"
             f"graded_witness_golden={self.graded_witness_golden!r},"
+            f"n_in_claim={self.n_in_claim},n_out_in_claim={self.n_out_in_claim},"
+            f"max_ulp_in_claim={self.max_ulp_in_claim:.0f},"
+            f"claim_witness=0x{max(self.claim_witness_u32,0):08x},"
+            f"claim_witness_dev={self.claim_witness_dev!r},"
+            f"claim_witness_golden={self.claim_witness_golden!r},"
             f"atol={self.spec.atol},rtol={self.spec.rtol},"
             "zero_sign_policy=tolerance_equal_not_bitexact,"
             f"class_ulp={format_class_ulp(self.class_ulp)}{extra}"
@@ -1624,6 +1663,186 @@ BINARY_POW_ATOL = 0.05
 BINARY_POW_RTOL = 0.05
 _ELEMS_PER_TILE = 1024
 
+# Dispatch constants for the binary rows, from the ISCLOSE dispatch bit patterns
+# and torch's own defaults, which the kernel hard-codes.
+ISCLOSE_RTOL = 1e-5
+ISCLOSE_ATOL = 1e-8
+
+
+@dataclass
+class BinaryGoldenSpec:
+    """A two-operand true-math golden over the joint bf16 x bf16 space.
+
+    `math(a, b)` takes two fp64 arrays of the EXACT bf16 values the kernel
+    receives (raw patterns, so subnormals/NaN payloads are delivered) and returns
+    fp64 true math. Same contract as the unary GoldenSpec; the difference is only
+    the arity, so the ULP/class/tolerance machinery below is shared verbatim.
+    """
+
+    op: str
+    math: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]]
+    atol: float = 0.05
+    rtol: float = 0.05
+    note: str = ""
+    checkable: bool = True
+    kind: str = "bf16_joint"
+
+
+def _b_pow(a, b):
+    with np.errstate(all="ignore"):
+        return np.power(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+
+
+def _b_sub(a, b):
+    return np.asarray(a, dtype=np.float64) - np.asarray(b, dtype=np.float64)
+
+
+def _b_eq(a, b):
+    return (np.asarray(a, dtype=np.float64) == np.asarray(b, dtype=np.float64)).astype(
+        np.float64
+    )
+
+
+def _b_fmod(a, b):
+    with np.errstate(all="ignore"):
+        return _np(torch.fmod(_t(a), _t(b)))
+
+
+def _b_remainder(a, b):
+    with np.errstate(all="ignore"):
+        return _np(torch.remainder(_t(a), _t(b)))
+
+
+def _b_atan2(a, b):
+    # calculate_sfpu_atan2 computes atan2(in0, in1) = atan2(y, x), y = operand A.
+    return _np(torch.atan2(_t(a), _t(b)))
+
+
+def _b_max(a, b):
+    return np.maximum(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+
+
+def _b_min(a, b):
+    return np.minimum(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+
+
+def _b_isclose(a, b):
+    af = np.asarray(a, dtype=np.float64)
+    bf = np.asarray(b, dtype=np.float64)
+    # torch.isclose semantics exactly (equal_nan=False): the tolerance test applies
+    # ONLY to two finite values. Same-signed infinities are close; every other pair
+    # involving a non-finite value is not. Writing it as a bare
+    # `|a-b| <= atol + rtol*|b|` gets inf-vs-0 wrong, because rtol*inf is inf and
+    # `inf <= inf` is True -- which would report 0.0 as close to +inf.
+    both_finite = np.isfinite(af) & np.isfinite(bf)
+    with np.errstate(all="ignore"):
+        close = both_finite & (
+            np.abs(af - bf) <= (ISCLOSE_ATOL + ISCLOSE_RTOL * np.abs(bf))
+        )
+    both_inf = np.isinf(af) & np.isinf(bf) & (np.signbit(af) == np.signbit(bf))
+    return (close | both_inf).astype(np.float64)
+
+
+def _b_mask(a, b):
+    # calculate_mask: data (A) passes through where the mask (B) is nonzero, else 0.
+    af = np.asarray(a, dtype=np.float64)
+    return np.where(np.asarray(b, dtype=np.float64) != 0.0, af, af * 0.0)
+
+
+# The 12 joint-pointwise Float16_b binary corpus rows. `logsigmoid` is NOT here
+# and must not be: its two operands are PAIRED -- the kernel takes exp(-x) as its
+# second operand and the test bakes that into the stimuli -- so a band that sweeps
+# B independently of A violates the kernel's own precondition and would grade it
+# against inputs it is not defined for.
+BINARY_REGISTRY: dict[str, BinaryGoldenSpec] = {
+    spec.op: spec
+    for spec in [
+        BinaryGoldenSpec("binarypow", _b_pow, note="a**b (BinarySFPUGolden._pow)"),
+        BinaryGoldenSpec("binarypow-fresh", _b_pow, note="a**b; fresh_cpp arm"),
+        BinaryGoldenSpec("binary-float", _b_sub, note="a-b (SfpuElwsub)"),
+        BinaryGoldenSpec("binarycomp", _b_eq, note="1.0 if a==b else 0.0 (SfpuElwEq)"),
+        BinaryGoldenSpec("binaryfmod", _b_fmod, note="fmod(a,b) -- sign of a"),
+        BinaryGoldenSpec(
+            "binaryremainder", _b_remainder, note="remainder(a,b) -- sign of b"
+        ),
+        BinaryGoldenSpec("atan2", _b_atan2, note="atan2(a,b) = atan2(y,x)"),
+        BinaryGoldenSpec("atan2-fitted", _b_atan2, note="atan2(a,b); fitted_cpp arm"),
+        BinaryGoldenSpec("minmax-max", _b_max, note="max(a,b)"),
+        BinaryGoldenSpec("minmax-min", _b_min, note="min(a,b)"),
+        BinaryGoldenSpec(
+            "isclose",
+            _b_isclose,
+            note=f"|a-b| <= {ISCLOSE_ATOL}+{ISCLOSE_RTOL}|b| -> 1.0/0.0",
+        ),
+        BinaryGoldenSpec("isclose-fresh", _b_isclose, note="isclose; fresh_cpp arm"),
+        BinaryGoldenSpec(
+            "mask", _b_mask, note="data A passes through where mask B != 0, else 0"
+        ),
+    ]
+}
+
+
+# The binary corpus rows that a joint bf16 band cannot grade, each with its own
+# reason. Registered rather than absent, so `--golden <row>` says why.
+#
+# Fourteen of the fifteen 32-bit binary rows are EXACT-INTEGER. That is not a
+# harness gap that a wider band would close, and it is worth being precise about
+# why, because "run it anyway" is the wrong instinct here:
+#   * the joint input space of two Int32 operands is 2^64, not 2^32. The joint
+#     index the binary streamer enumerates is base16<<16 | exp16 -- sixteen bits
+#     per operand -- and there is no 32-bit index that addresses a 2^64 space, so
+#     an exhaustive sweep does not merely cost more, it is not expressible.
+#   * and there is nothing for a ULP band to find. Every one of them (gcd, lcm,
+#     mulint32, the shifts, the int adds/subs, divint32floor, rsubint32) is an
+#     EXACT integer function: no polynomial, no LUT, no bounded range, no setexp
+#     exponent-field write. A bf16 ULP distance is not their metric, and their
+#     correctness question -- "is the integer arithmetic right" -- is an
+#     exact-equality question that the 2x2 correctness node already answers and
+#     that formal_equiv is the right tool for. Manufacturing an ULP test for
+#     `a & b` would be inventing coverage, not adding it.
+BINARY_UNREACHABLE = {
+    "logsigmoid": "paired operands: the kernel takes exp(-x) as its SECOND operand "
+    "and the test bakes that into the stimuli, so a joint band that varies B "
+    "independently of A feeds the kernel a pair it is not defined for. Its golden "
+    "reads only A -- there is no two-operand contract to grade",
+    "binary-bcast": "broadcast row (bcast_dim=ROW): the second operand is a "
+    "replicated row, so out[i] = f(a[i], b[row(i)]) depends on the element's "
+    "position and the joint (a,b) index does not describe it",
+    "addint": "exact-integer (SfpuElwadd on Int32): joint space 2^64, no "
+    "approximation surface, exact-equality contract",
+    "subint": "exact-integer (SfpuElwsub on Int32): as addint",
+    "binarybitwise": "exact-integer (SfpuBitwiseAnd on Int32): a bit-pattern "
+    "identity, not a float ULP surface",
+    "mulint32": "exact-integer (SfpuMulInt32): joint space 2^64, exact-equality "
+    "contract",
+    "mulint32-fresh": "exact-integer (SfpuMulInt32, fresh arm): as mulint32",
+    "divint32floor": "exact-integer (SfpuDivInt32Floor): exact floor division, no "
+    "approximation surface",
+    "divint32floor-fresh": "exact-integer (SfpuDivInt32Floor, fresh arm)",
+    "gcd": "exact-integer (SfpuGcd): a number-theoretic function with no "
+    "polynomial/LUT/bounded surface; exact-equality contract",
+    "gcd-fresh": "exact-integer (SfpuGcd, fresh arm)",
+    "lcm": "exact-integer (SfpuLcm): as gcd",
+    "lcm-fresh": "exact-integer (SfpuLcm, fresh arm)",
+    "leftshift-fresh": "exact-integer (SfpuElwLeftShift): a bit-pattern identity",
+    "shift": "exact-integer (SfpuElwRightShift): a bit-pattern identity",
+    "rsubint32": "exact-integer (SfpuRsubInt32): exact integer subtraction",
+}
+for _op, _why in BINARY_UNREACHABLE.items():
+    if _op in BINARY_REGISTRY:
+        raise RuntimeError(f"{_op} is both graded and refused")
+    BINARY_REGISTRY[_op] = BinaryGoldenSpec(
+        _op,
+        None,
+        note=_why,
+        checkable=False,
+        kind=("exact-int" if _why.startswith("exact-integer") else "not-pointwise"),
+    )
+
+
+def get_binary_spec(op: str) -> Optional[BinaryGoldenSpec]:
+    return BINARY_REGISTRY.get(op)
+
 
 def binary_pow_golden_bf16(base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
     """pow(base, exp) per BinarySFPUGolden._pow: (a_fp32 ** b_fp32) rounded to bf16, as fp32."""
@@ -1638,8 +1857,18 @@ def binary_pow_golden_bf16(base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
 
 @dataclass
 class BinaryPowAccumulator:
-    """Streaming correctness for binarypow: device even-tile outputs vs torch.pow (bf16)."""
+    """Streaming correctness for a binary row: device even-tile outputs vs true math.
 
+    Generalized from the binarypow-only form: `spec` carries the two-operand
+    golden, so every joint-pointwise binary row rides the same accumulator instead
+    of one class per op. Left unset it keeps the original pow behaviour, so the
+    existing binarypow callers and the selftest are unchanged.
+
+    Output always lives in the EVEN tile of each pair -- every binary op in
+    sources/sfpu_binary_test.cpp is dispatched as `call(tile, tile + 1, tile)`.
+    """
+
+    spec: Optional[BinaryGoldenSpec] = None
     atol: float = BINARY_POW_ATOL
     rtol: float = BINARY_POW_RTOL
     joints: int = 0
@@ -1658,6 +1887,24 @@ class BinaryPowAccumulator:
         with np.errstate(all="ignore"):
             self._update(dispatch_start, pairs, result_region_bytes)
 
+    def __post_init__(self) -> None:
+        if self.spec is not None:
+            self.atol = self.spec.atol
+            self.rtol = self.spec.rtol
+
+    @property
+    def op(self) -> str:
+        return self.spec.op if self.spec is not None else "binarypow"
+
+    def _golden(self, base16: np.ndarray, exp16: np.ndarray) -> np.ndarray:
+        if self.spec is None:
+            return binary_pow_golden_bf16(base16, exp16)
+        a = _bf16_bits_to_f32(base16).astype(np.float64)
+        b = _bf16_bits_to_f32(exp16).astype(np.float64)
+        with np.errstate(all="ignore"):
+            hp = self.spec.math(a, b)
+        return format_golden_f32_noacc(hp).astype(np.float32)
+
     def _update(self, dispatch_start: int, pairs: int, res: bytes) -> None:
         tile_bytes = _ELEMS_PER_TILE * 2  # bf16 tile = 1024 * 2 bytes
         for p in range(pairs):
@@ -1666,7 +1913,7 @@ class BinaryPowAccumulator:
             lo = joint0 & 0xFFFF
             exp16 = (np.arange(_ELEMS_PER_TILE, dtype=np.uint32) + lo).astype(np.uint16)
             base_arr = np.full(_ELEMS_PER_TILE, base16, dtype=np.uint16)
-            golden = binary_pow_golden_bf16(base_arr, exp16)  # fp32 (bf16-valued)
+            golden = self._golden(base_arr, exp16)  # fp32 (bf16-valued)
 
             even_off = (2 * p) * tile_bytes  # output lives in the EVEN tile of the pair
             dev16 = np.frombuffer(res[even_off : even_off + tile_bytes], dtype="<u2")
@@ -1710,7 +1957,7 @@ class BinaryPowAccumulator:
     def result_line(self, leg: str) -> str:
         w = max(self.first_witness_joint, 0)
         return (
-            f"SFPU_CORRECTNESS,leg={leg},op=binarypow,joints={self.joints},"
+            f"SFPU_CORRECTNESS,leg={leg},op={self.op},joints={self.joints},"
             f"max_bf16_ulp={self.max_ulp:.0f},max_ulp_joint=0x{max(self.max_ulp_joint,0):08x},"
             f"n_out_of_tol={self.n_out_of_tol},within_contract={self.n_out_of_tol == 0},"
             f"first_witness=0x{w:08x},first_witness_class={self.first_witness_class or '-'},"

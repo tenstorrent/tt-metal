@@ -458,10 +458,18 @@ def _lanemk_run_binary_stream(configuration, spec):
     # result tiles (device pow output) with NO retention; writes a "<outfile>.corr".
     _gold = os.environ.get("SFPU_GOLDEN")
     _bacc = None
-    if _gold and _gold.split(",", 1)[0] == "binarypow":
+    _bnote = ""
+    if _gold:
         import threeway_golden as _tgm
 
-        _bacc = _tgm.BinaryPowAccumulator()
+        _bop = _gold.split(",", 1)[0]
+        _bspec = _tgm.get_binary_spec(_bop)
+        if _bspec is not None and _bspec.checkable:
+            # Every joint-pointwise binary row now rides the shared accumulator,
+            # not just binarypow: the golden comes from BINARY_REGISTRY.
+            _bacc = _tgm.BinaryPowAccumulator(spec=_bspec)
+        else:
+            _bnote = f"no binary golden registered for {_bop}"
 
     sha = hashlib.sha256()
     sum64 = 0
@@ -488,9 +496,15 @@ def _lanemk_run_binary_stream(configuration, spec):
         runs += 1
     dt = time.time() - t0
 
-    if _bacc is not None:
+    if _gold:
         _leg_id = _gold.split(",", 1)[1] if "," in _gold else "?"
-        _corr = _bacc.result_line(_leg_id)
+        if _bacc is not None:
+            _corr = _bacc.result_line(_leg_id)
+        else:
+            _corr = (
+                f"SFPU_CORRECTNESS,leg={_leg_id},op={_gold.split(',',1)[0]},"
+                f"joints={joints},status=UNCHECKED,reason={_bnote!r}"
+            )
         print(_corr, flush=True)
         with open(outfile + ".corr", "w") as _fh:
             _fh.write(_corr + "\n")
