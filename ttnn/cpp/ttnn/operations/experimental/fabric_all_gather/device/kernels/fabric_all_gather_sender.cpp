@@ -56,7 +56,7 @@ void kernel_main() {
     // (the peer's link worker that sends to this chip) [6, 7] peer link worker core [8] peer mesh id [9] peer chip id
     // [10, 11, 12] upstream entries that are whole / first half / second half [13] entries, then entries
     // (rank | part << 16), then the fabric connection (only when the worker sends anything or sends ready).
-    uint32_t a = 0;
+    size_t a = 0;
     const uint32_t first = get_arg_val<uint32_t>(a++);
     const uint32_t stride = get_arg_val<uint32_t>(a++);
     const uint32_t rot = get_arg_val<uint32_t>(a++);

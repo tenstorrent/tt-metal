@@ -47,7 +47,7 @@ void kernel_main() {
 
     // Per-core args: [0] first bank [1] bank stride [2] walk rotation [3] entries, then entries (rank | part << 16);
     // entry 0 is this chip's own shard (read from the input), the rest are relays (read from the output).
-    uint32_t a = 0;
+    size_t a = 0;
     const uint32_t first = get_arg_val<uint32_t>(a++);
     const uint32_t stride = get_arg_val<uint32_t>(a++);
     const uint32_t rot = get_arg_val<uint32_t>(a++);
