@@ -9,8 +9,8 @@
 #include <memory>
 #include <string>
 
-#include "tt_metal/distributed/host_uva_layout.hpp"
-#include "tt_metal/distributed/host_uva.hpp"
+#include "hostdevcommon/uva_layout.h"
+#include "hostdevcommon/uva.h"
 
 namespace ttsl {
 template <typename T>

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <string>
 
-#include "tt_metal/distributed/host_uva_frame.hpp"
+#include "hostdevcommon/uva_frame.h"
 
 namespace tt::tt_metal::experimental {
 
