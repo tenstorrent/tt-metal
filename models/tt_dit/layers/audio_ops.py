@@ -29,9 +29,6 @@ from ..utils.tap_filter_configs import (
 )
 from ..utils.tensor import local_device_to_torch
 
-# Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
-_ZEROS_CACHE: dict = {}
-
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
 _TAP_WARNED = _ONCE_WARNINGS  # name used by tests/unit/test_audio_tap_path.py
@@ -776,57 +773,36 @@ def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_confi
     return x_BTC
 
 
-def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Cached read-only zeros constant for (shape, dtype, layout); avoids per-call host→device writes so traces capture."""
-    cache = _ZEROS_CACHE.setdefault(id(mesh_device), {})
-    key = (tuple(shape), dtype, layout)
-    z = cache.get(key)
-    if z is None:
-        z = ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh_device)
-        cache[key] = z
-    return z
+# The zero padding below is done with ``ttnn.pad``: one device kernel that writes the zeros itself. It
+# replaces a per-shape cache of ``ttnn.zeros`` constants (host-built, so they had to be cached for trace
+# capture) that grew without bound -- every new clip length added activation-sized zero blocks that
+# were never released (~210 MiB per DRAM bank over the 16 warmup lengths on the 4x8 Wormhole Galaxy).
+# ``ttnn.pad`` is a device op, so it traces, and allocates nothing that outlives the call.
 
 
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Zero-pad along the T axis."""
     if pad_left == 0 and pad_right == 0:
         return x_BTC
-    B, T, C = x_BTC.shape
-    pieces = []
-    dtype = x_BTC.get_dtype()
-    if pad_left > 0:
-        zeros = _persistent_zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-        pieces.append(zeros)
-    pieces.append(x_BTC)
-    if pad_right > 0:
-        zeros = _persistent_zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-        pieces.append(zeros)
-    return ttnn.concat(pieces, dim=1)
+    return ttnn.pad(x_BTC, [(0, 0), (pad_left, pad_right), (0, 0)], 0.0)
 
 
 def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, channel_align: int = 32) -> ttnn.Tensor:
     """Pad C up to ``aligned_channels(C, channel_align)`` with zeros. No-op if aligned."""
-    B, T, C = x_BTC.shape
+    C = x_BTC.shape[2]
     aligned = aligned_channels(C, channel_align)
     if aligned == C:
         return x_BTC
-    pad_c = aligned - C
-    dtype = x_BTC.get_dtype()
-    zeros = _persistent_zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
-    return ttnn.concat([x_BTC, zeros], dim=2)
+    return ttnn.pad(x_BTC, [(0, 0), (0, 0), (0, aligned - C)], 0.0)
 
 
 def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Insert ``stride-1`` zeros between T samples (output ``T*s - (s-1)``) via concat+reshape."""
+    """Insert ``stride-1`` zeros between T samples (output ``T*s - (s-1)``) via pad+reshape."""
     if stride == 1:
         return x_BTC
     B, T, C = x_BTC.shape
-    dtype = x_BTC.get_dtype()
     x_btoc = ttnn.reshape(x_BTC, (B, T, 1, C))
-    zero_block = _persistent_zeros(
-        (B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device
-    )
-    stacked = ttnn.concat([x_btoc, zero_block], dim=2)
+    stacked = ttnn.pad(x_btoc, [(0, 0), (0, 0), (0, stride - 1), (0, 0)], 0.0)
     interleaved = ttnn.reshape(stacked, (B, T * stride, C))
     out_len = T * stride - (stride - 1)
     return ttnn.slice(interleaved, [0, 0, 0], [B, out_len, C])
@@ -945,19 +921,9 @@ class Conv2dViaConv3d(Module):
         B, H, W, C = x_BHWC.shape
 
         if self.padding_mode == "causal_height" and self.pad_h > 0:
-            B_, H_, W_, C_ = x_BHWC.shape
-            pad_tensor_shape = (B_, self.pad_h, W_, C_)
-            zero_pad = _persistent_zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
-            )
-            x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=1)
+            x_BHWC = ttnn.pad(x_BHWC, [(0, 0), (self.pad_h, 0), (0, 0), (0, 0)], 0.0)
         elif self.padding_mode == "causal_width" and self.pad_w > 0:
-            B_, H_, W_, C_ = x_BHWC.shape
-            pad_tensor_shape = (B_, H_, self.pad_w, C_)
-            zero_pad = _persistent_zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
-            )
-            x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=2)
+            x_BHWC = ttnn.pad(x_BHWC, [(0, 0), (0, 0), (self.pad_w, 0), (0, 0)], 0.0)
 
         x_5d = ttnn.reshape(x_BHWC, (x_BHWC.shape[0], 1, x_BHWC.shape[1], x_BHWC.shape[2], x_BHWC.shape[3]))
 
