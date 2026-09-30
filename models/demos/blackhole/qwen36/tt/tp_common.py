@@ -575,6 +575,16 @@ def c2_sgrn_gab_dram():
     return os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and not r3_enabled("SGRN_GAB_L1")
 
 
+def sgrn_compute_config(p300):
+    """Compute kernel config of the sigmoid_gated_rms_norm op. p300 (the P300 D1 L1-gab path) runs it with fp32 dest OFF
+    (C2_SGRN_CKC_FP32_OFF) by default; env QWEN36_SGRN_FP32_DEST=1 (default 0) switches that path to fp32 dest ON
+    (C2_SGRN_CKC), the config the fused kernel variants 4 / 5 were validated with on the P150. Every other path keeps
+    C2_SGRN_CKC (fp32 dest on), whatever the flag."""
+    if p300 and os.environ.get("QWEN36_SGRN_FP32_DEST", "0") != "1":
+        return C2_SGRN_CKC_FP32_OFF
+    return C2_SGRN_CKC
+
+
 def sgrn_kernel_variant():
     """P6_INT1C item 2 (fused gated RMSNorm, sgrn_fast_vs_r3.patch): the sigmoid_gated_rms_norm op's
     kernel_variant (0 = legacy 7-pass kernel; 1-3 = fused kernel variants, bit-exact with each other;

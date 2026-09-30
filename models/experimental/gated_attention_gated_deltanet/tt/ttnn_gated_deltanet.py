@@ -1468,7 +1468,7 @@ def gated_deltanet_forward_ttnn(
                 f"{o.memory_config().buffer_type}, gab {list(_c2_gab.shape)} {_c2_gab.dtype} "
                 f"{_c2_gab.memory_config().buffer_type}, weight {list(o_norm_weight.shape)} {o_norm_weight.dtype} "
                 f"{o_norm_weight.layout}, H={num_v_heads}, epsilon={norm_eps}, silu, gate_col_offset_tiles=0, "
-                f"out bf16 {mc_scan}, HiFi4 approx=F fp32_dest={'F' if _sgrn_p300 else 'T'} packer_l1_acc=F) gab placement variant "
+                f"out bf16 {mc_scan}, HiFi4 approx=F fp32_dest={'T' if tpc.sgrn_compute_config(_sgrn_p300).fp32_dest_acc_en else 'F'} packer_l1_acc=F, kernel_variant={tpc.sgrn_kernel_variant()}) gab placement variant "
                 f"{'b (DRAM)' if _c2_gab.memory_config().buffer_type == ttnn.BufferType.DRAM else 'a (L1)'}",
                 flush=True,
             )
@@ -1480,7 +1480,8 @@ def gated_deltanet_forward_ttnn(
             epsilon=norm_eps,
             memory_config=mc_scan,
             # P300 L1-gab path: fp32 dest off (HiFi4), ~16% faster (48.8 -> 41.2 us per GDN layer at T=1024).
-            compute_kernel_config=tpc.C2_SGRN_CKC_FP32_OFF if _sgrn_p300 else tpc.C2_SGRN_CKC,
+            # (QWEN36_SGRN_FP32_DEST=1 turns fp32 dest back on there, tpc.sgrn_compute_config.)
+            compute_kernel_config=tpc.sgrn_compute_config(_sgrn_p300),
             output_dtype=ttnn.bfloat16,
             gate_activation="silu",
             gate_col_offset_tiles=0,
