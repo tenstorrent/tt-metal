@@ -491,6 +491,16 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
+    } else if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>) {
+        // uniform_int_distribution can't take 8-bit types, so draw uint32 and narrow.
+        auto rand_value = std::bind(
+            std::uniform_int_distribution<uint32_t>(static_cast<uint32_t>(low), static_cast<uint32_t>(high)),
+            RANDOM_GENERATOR);
+        for (auto index = 0; index < output_buffer.size(); index++) {
+            output_buffer[index] = static_cast<T>(rand_value());
+        }
+    } else {
+        static_assert(sizeof(T) == 0, "uniform: unsupported element type");
     }
 
     return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
