@@ -81,19 +81,36 @@ struct AdamWKernels {
 
 namespace {
 
+inline constexpr uint32_t kGoldenRatio32 = 0x9E3779B9U;
+
 // splitmix32 finalizer -- decorrelates seeds derived from one base draw.
-uint32_t mix_seed(uint32_t x) {
+constexpr uint32_t mix_seed(uint32_t x) {
     x = (x ^ (x >> 16)) * 0x21F0AAADU;
     x = (x ^ (x >> 15)) * 0x735A2D97U;
     return x ^ (x >> 15);
 }
 
-// Spreads the caller's seed over the cores.
+// PRNG seed must not be 0 or 0xFFFFFFFF (the lock-up state of the XNOR LFSR).
+constexpr bool is_valid_prng_seed(uint32_t seed) {
+    return seed != 0U && seed != 0xFFFFFFFFU;
+}
+
+// Salt for re-hashing an invalid seed.
+inline constexpr uint32_t kSeedRemapSalt = 0x5BD1E995U;
+
+constexpr uint32_t make_core_seed(uint32_t base, uint32_t core_idx) {
+    uint32_t seed = mix_seed(base + core_idx * kGoldenRatio32);
+    while (!is_valid_prng_seed(seed)) {
+        seed = mix_seed(seed ^ kSeedRemapSalt);
+    }
+    return seed;
+}
+
 std::vector<uint32_t> make_stochastic_rounding_seeds(std::optional<uint32_t> base, uint32_t num_cores) {
     std::vector<uint32_t> seeds(num_cores, 0U);
     if (base.has_value()) {
         for (uint32_t i = 0; i < num_cores; ++i) {
-            seeds[i] = mix_seed(*base + i * 0x9E3779B9U);
+            seeds[i] = make_core_seed(*base, i);
         }
     }
     return seeds;
