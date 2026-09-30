@@ -109,6 +109,14 @@ agents:
       lives on the 4x2 grid and which collective moves it (axis and size), how the causal work is balanced over the 4
       rows at the last chunk, how the latent cache is laid out and gathered, and how dispatch / combine run on 4-chip
       columns with the existing forks; say where the Kimi layout does not carry over and why."
+    - "Attention SDPA (owner, 06:35): turn off fp32_dest_acc_en for ring_mla (compute_kernel_config
+      fp32_dest_acc_en=False, still HiFi4) so it takes the ring-joint streaming compute path, which is much faster
+      (ring_joint_sdpa_program_factory.cpp: use_streaming_compute = !fp32_dest_acc_en; with fp32 dest the kv_actual_isl
+      path TT_FATALs). Use ring_mla over axis 0 as planned, not the all_gather + chunked_flash_mla_prefill fallback. fp32
+      accumulation is not an owner rule (rule 7 is HiFi4 only); the plan's 'HiFi4 + fp32 accumulation everywhere' does
+      not bind here. The first attention attempt's work (ring_mla hit that TT_FATAL; chunked fallback overflowed L1 at
+      fp32 dest) is in /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/wip_attention_attempt1 (attention.py,
+      hooks.diff): reuse it."
     - "Text decoder only: never build, load or test the MTP layer (model.layers.40.*: eh_proj, enorm, hnorm,
       shared_head). There is no vision or audio part."
     - "Closest repo models: glm53_flash_d_p (the same mHC: 4 streams, 20-iteration Sinkhorn, tt/residual.py mix as one
