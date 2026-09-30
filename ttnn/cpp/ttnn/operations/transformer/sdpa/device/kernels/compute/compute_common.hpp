@@ -665,6 +665,17 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
+#if defined(SDPA_FP32_NORMALIZE)
+    // The LLK body's first parameter picks the exp its tests call ExpAccurate when true and a polynomial when false.
+    // The fp32 streaming kernel takes the polynomial at both settings, the faster of the two there at the same error.
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_exponential_first_column,
+        (false, scale_bf16, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::C);
+#else
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -672,6 +683,7 @@ void exp_tile_first_column(uint32_t idst) {
         (SDPA_EXP_APPROX_MODE, scale_bf16, is_fp32_dest_acc_en),
         idst,
         VectorMode::C);
+#endif
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
