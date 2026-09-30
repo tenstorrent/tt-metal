@@ -197,6 +197,6 @@ Any process that brings up fabric with `TT_METAL_FABRIC_GENERATE_MANIFEST=1` wri
 export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal   # required if CWD is not the repo
 export TT_METAL_SLOW_DISPATCH_MODE=1
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
-  --gtest_filter='Manifest1DFixture.*'
+  --gtest_filter='Fabric1DManifestFixture.*'
 ```
 

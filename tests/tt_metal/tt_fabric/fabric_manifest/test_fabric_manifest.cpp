@@ -10,11 +10,13 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -25,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_manifest_model.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_manifest.hpp"
@@ -149,8 +152,8 @@ protected:
     std::vector<RouterEntry> routers_;
 };
 
-using Manifest1DFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
-using Manifest2DFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
+using Fabric1DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
+using Fabric2DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
 
 // ============ Checks ============
 
@@ -181,10 +184,17 @@ void check_top_level(const json& manifest, const std::filesystem::path& manifest
     const auto& fabric_context = control_plane().get_fabric_context();
     const auto& block = manifest.at("fabric_context");
     std::set<std::string> context_keys{
-        "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes", "channel_buffer_size_bytes"};
+        "topology",
+        "is_2d_routing",
+        "packet_header_size_bytes",
+        "max_payload_size_bytes",
+        "channel_buffer_size_bytes",
+        "multi_txq"};
     context_keys.insert(
         fabric_context.is_2D_routing_enabled() ? "routing_2d_route_buffer_size" : "routing_1d_extension_words");
     EXPECT_EQ(keys_of(block), context_keys);
+    const auto& router_config = builder_context().get_fabric_router_config();
+    EXPECT_EQ(block.at("multi_txq"), router_config.sender_txq_id != router_config.receiver_txq_id);
     EXPECT_EQ(block.at("topology"), lower_enum_name(fabric_context.get_fabric_topology()));
     EXPECT_EQ(block.at("is_2d_routing"), fabric_context.is_2D_routing_enabled());
     EXPECT_EQ(block.at("channel_buffer_size_bytes"), fabric_context.get_fabric_channel_buffer_size_bytes());
@@ -215,6 +225,42 @@ void check_meshes(const json& manifest) {
         EXPECT_EQ(mesh.at("express_routing"), control_plane().express_routing_enabled(mesh_id));
     }
     EXPECT_EQ(keys_of(manifest.at("meshes")), expected_keys);
+}
+
+// A local mesh states each fabric VC's credit backing as the builder planned it, with a reason exactly when
+// the VC is on L1 counters. Other hosts' meshes are described by their own manifests.
+void check_credit_transport(const json& manifest) {
+    const auto local_mesh_ids = control_plane().get_local_mesh_id_bindings();
+    for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
+        SCOPED_TRACE(mesh_key(mesh_id));
+        const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
+        if (std::ranges::find(local_mesh_ids, mesh_id) == local_mesh_ids.end()) {
+            EXPECT_FALSE(mesh.contains("credit_transport"));
+            continue;
+        }
+
+        const auto& plan = builder_context().get_stream_assignment(mesh_id).plan();
+        const auto& transport = mesh.at("credit_transport");
+        std::set<std::string> expected_keys;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            if (builder_context().get_max_sender_channels_per_vc()[vc] == 0) {
+                continue;
+            }
+            const auto vc_key = fmt::format("vc{}", vc);
+            expected_keys.insert(vc_key);
+            SCOPED_TRACE(vc_key);
+            ASSERT_TRUE(transport.contains(vc_key));
+            const auto& entry = transport.at(vc_key);
+            EXPECT_EQ(keys_of(entry), (std::set<std::string>{"backing", "reasons"}));
+            EXPECT_EQ(entry.at("backing"), plan.vc_uses_counters(vc) ? "l1_counter" : "stream_register");
+            json expected_reasons = json::array();
+            for (const auto reason : plan.reasons(vc)) {
+                expected_reasons.push_back(lower_enum_name(reason));
+            }
+            EXPECT_EQ(entry.at("reasons"), expected_reasons);
+        }
+        EXPECT_EQ(keys_of(transport), expected_keys);
+    }
 }
 
 // Every chip in each mesh appears under its C key. Local chips carry their device ids, Z-port role and routers;
@@ -371,6 +417,59 @@ void check_router_shape(const std::vector<RouterEntry>& routers) {
     }
 }
 
+// The region is what the builder published.
+void expect_region(const json& region, const manifest::L1Region& published) {
+    EXPECT_EQ(region.at("address"), published.address);
+    EXPECT_EQ(region.at("size"), published.size);
+    EXPECT_EQ(region.at("num_elements"), published.num_elements.value());
+    EXPECT_EQ(region.at("size_per_element"), published.size_per_element.value());
+    EXPECT_EQ(region.at("schema"), published.schema);
+    EXPECT_EQ(region.at("host_cleared"), published.host_cleared);
+}
+
+// The four counter arrays are what the builder published, back to back and u32 each, and the host clears
+// them exactly when it says so.
+void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
+    const auto addresses_to_clear = builder_context().get_fabric_router_addresses_to_clear();
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& counters = entry.router->at("credit_counters");
+        const auto& published = entry.published->credit_counters;
+        const std::array<std::tuple<const char*, const manifest::L1Region*, const char*>, 4> arrays = {{
+            {"to_sender_ack", &published.to_sender_ack, "own_sender_compact"},
+            {"to_sender_completion", &published.to_sender_completion, "own_sender_compact"},
+            {"receiver_ack", &published.receiver_ack, "peer_sender_compact"},
+            {"receiver_completion", &published.receiver_completion, "peer_sender_compact"},
+        }};
+        EXPECT_EQ(
+            keys_of(counters),
+            (std::set<std::string>{"to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"}));
+
+        std::optional<uint32_t> next_address;
+        for (const auto& [name, published_array, index_space] : arrays) {
+            SCOPED_TRACE(name);
+            const auto& array = counters.at(name);
+            EXPECT_EQ(
+                keys_of(array),
+                (std::set<std::string>{
+                    "address", "size", "num_elements", "size_per_element", "schema", "host_cleared", "index_space"}));
+            expect_region(array, *published_array);
+            EXPECT_EQ(array.at("index_space"), index_space);
+            EXPECT_EQ(array.at("schema"), "u32");
+            EXPECT_EQ(
+                array.at("size").get<uint32_t>(),
+                array.at("num_elements").get<uint32_t>() * array.at("size_per_element").get<uint32_t>());
+            EXPECT_EQ(
+                array.at("host_cleared"),
+                std::ranges::find(addresses_to_clear, array.at("address").get<size_t>()) != addresses_to_clear.end());
+            if (next_address.has_value()) {
+                EXPECT_EQ(array.at("address"), *next_address);
+            }
+            next_address = array.at("address").get<uint32_t>() + array.at("size").get<uint32_t>();
+        }
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -400,30 +499,40 @@ TEST(ManifestNames, Spellings) {
 
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_1D), "fabric_1d");
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_2D), "fabric_2d");
+
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::MULTI_TXQ), "multi_txq");
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::EXPRESS), "express");
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER), "no_completion_register");
 }
 
-TEST_F(Manifest1DFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
-TEST_F(Manifest2DFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
+TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
+TEST_F(Fabric2DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
 
-TEST_F(Manifest1DFixture, Meshes) { check_meshes(manifest_); }
-TEST_F(Manifest2DFixture, Meshes) { check_meshes(manifest_); }
+TEST_F(Fabric1DManifestFixture, Meshes) { check_meshes(manifest_); }
+TEST_F(Fabric2DManifestFixture, Meshes) { check_meshes(manifest_); }
 
-TEST_F(Manifest1DFixture, Chips) { check_chips(manifest_); }
-TEST_F(Manifest2DFixture, Chips) { check_chips(manifest_); }
+TEST_F(Fabric1DManifestFixture, CreditTransport) { check_credit_transport(manifest_); }
+TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manifest_); }
 
-TEST_F(Manifest1DFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
-TEST_F(Manifest2DFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
+TEST_F(Fabric1DManifestFixture, Chips) { check_chips(manifest_); }
+TEST_F(Fabric2DManifestFixture, Chips) { check_chips(manifest_); }
 
-TEST_F(Manifest1DFixture, RouterIdentity) { check_router_identity(routers_); }
-TEST_F(Manifest2DFixture, RouterIdentity) { check_router_identity(routers_); }
+TEST_F(Fabric1DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
+TEST_F(Fabric2DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
 
-TEST_F(Manifest1DFixture, RouterLink) { check_router_link(routers_); }
-TEST_F(Manifest2DFixture, RouterLink) { check_router_link(routers_); }
+TEST_F(Fabric1DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
 
-TEST_F(Manifest1DFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
-TEST_F(Manifest2DFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
+TEST_F(Fabric1DManifestFixture, RouterLink) { check_router_link(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterLink) { check_router_link(routers_); }
 
-TEST_F(Manifest1DFixture, RouterShape) { check_router_shape(routers_); }
-TEST_F(Manifest2DFixture, RouterShape) { check_router_shape(routers_); }
+TEST_F(Fabric1DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterShape) { check_router_shape(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterShape) { check_router_shape(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

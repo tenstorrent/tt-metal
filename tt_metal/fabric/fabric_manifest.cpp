@@ -19,10 +19,12 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/fabric_manifest_model.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -30,6 +32,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 namespace tt::tt_fabric {
@@ -71,6 +74,12 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
     return run;
 }
 
+// Two TX queues, which the second ERISC enables. Credits on VC0 and VC1 then travel in L1 counters.
+bool uses_multi_txq(const FabricBuilderContext& builder_context) {
+    const auto& router_config = builder_context.get_fabric_router_config();
+    return router_config.sender_txq_id != router_config.receiver_txq_id;
+}
+
 // Returns a JSON object with the fabric context block information.
 json make_fabric_context_json(const FabricContext& fabric_context) {
     json block;
@@ -84,12 +93,38 @@ json make_fabric_context_json(const FabricContext& fabric_context) {
     } else {
         block["routing_1d_extension_words"] = fabric_context.get_1d_pkt_hdr_extension_words();
     }
+    block["multi_txq"] = uses_multi_txq(fabric_context.get_builder_context());
     return block;
 }
 
-// ============ Paths ============
-// One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
+// ============ Credit transport ============
 
+// Each fabric VC's credit transport backing on the mesh.
+json make_credit_transport_json(const FabricBuilderContext& builder_context, MeshId mesh_id) {
+    const auto& plan = builder_context.get_stream_assignment(mesh_id).plan();
+
+    json transport = json::object();
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        // Skip VCs that have no senders
+        if (builder_context.get_max_sender_channels_per_vc()[vc] == 0) {
+            continue;
+        }
+        json reasons = json::array();
+        for (const auto reason : plan.reasons(vc)) {
+            reasons.push_back(lower_enum_name(reason));
+        }
+
+        json entry;
+        entry["backing"] = plan.vc_uses_counters(vc) ? "l1_counter" : "stream_register";
+        entry["reasons"] = std::move(reasons);
+        transport[fmt::format("vc{}", vc)] = std::move(entry);
+    }
+    return transport;
+}
+
+// ============ Paths ============
+
+// One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
 std::string router_path(FabricNodeId node, const std::string& key) {
     return fmt::format("{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), key);
 }
@@ -136,6 +171,8 @@ bool is_wrap_link(
     const MeshShape mesh_shape = mesh_graph.get_mesh_shape(node.mesh_id);
     const bool is_east_west = direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST;
     const bool is_north_south = direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+
+    // Wrap links require a 2D mesh, a peer, and an east-west or north-south direction
     if (mesh_shape.dims() != 2 || !peer.has_value() || peer->first.mesh_id != node.mesh_id ||
         !(is_east_west || is_north_south)) {
         return false;
@@ -148,6 +185,23 @@ bool is_wrap_link(
     const uint32_t there = mesh_graph.chip_to_coordinate(node.mesh_id, peer->first.chip_id)[axis];
     const uint32_t delta = here > there ? here - there : there - here;
     return delta == mesh_shape[axis] - 1;
+}
+
+// ============ Regions ============
+
+json l1_region_json(const manifest::L1Region& region) {
+    json out;
+    out["address"] = region.address;
+    out["size"] = region.size;
+    if (region.num_elements.has_value()) {
+        out["num_elements"] = *region.num_elements;
+    }
+    if (region.size_per_element.has_value()) {
+        out["size_per_element"] = *region.size_per_element;
+    }
+    out["schema"] = region.schema;
+    out["host_cleared"] = region.host_cleared;
+    return out;
 }
 
 // ============ Router ============
@@ -180,6 +234,22 @@ json router_shape_json(const manifest::RouterShape& shape) {
     out["num_active_eriscs"] = shape.num_active_eriscs;
     out["channel_trimming_overrides_applied"] = shape.channel_trimming_overrides_applied;
     out["vc0_bubble_flow_control"] = shape.vc0_bubble_flow_control;
+    return out;
+}
+
+// index_space says whose sender channels an element belongs to: the to_sender arrays are indexed by this
+// router's sender compact index, and the receiver arrays by the peer's.
+json credit_counters_json(const manifest::L1CreditCounters& counters) {
+    const auto counter_array = [](const manifest::L1Region& region, const char* index_space) {
+        json out = l1_region_json(region);
+        out["index_space"] = index_space;
+        return out;
+    };
+    json out;
+    out["to_sender_ack"] = counter_array(counters.to_sender_ack, "own_sender_compact");
+    out["to_sender_completion"] = counter_array(counters.to_sender_completion, "own_sender_compact");
+    out["receiver_ack"] = counter_array(counters.receiver_ack, "peer_sender_compact");
+    out["receiver_completion"] = counter_array(counters.receiver_completion, "peer_sender_compact");
     return out;
 }
 
@@ -216,6 +286,7 @@ json make_router_json(
         control_plane.is_cross_host_eth_link(physical_chip_id, chan),
         is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));
     out["shape"] = router_shape_json(router.shape);
+    out["credit_counters"] = credit_counters_json(router.credit_counters);
     return out;
 }
 
@@ -335,6 +406,11 @@ json make_mesh_json(
         mesh["torus"] = std::move(torus);
     }
     mesh["express_routing"] = control_plane.express_routing_enabled(mesh_id);
+    // The builder context plans credits only for the meshes on this host.
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    if (std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end()) {
+        mesh["credit_transport"] = make_credit_transport_json(builder_context, mesh_id);
+    }
 
     json chips = json::object();
     for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
