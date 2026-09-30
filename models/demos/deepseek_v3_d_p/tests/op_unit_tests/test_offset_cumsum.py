@@ -282,8 +282,10 @@ def test_offset_cumsum(
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-# 260 % 8 != 0: covers the kernel's scalar tail.
-@pytest.mark.parametrize("width, experts_per_chip", [(256, 8), (260, 4)], ids=["w256", "w260"])
+# 260 % 8 != 0: covers the kernel's scalar tail. 384 experts over 12 per chip is DeepSeek-V4-Pro on a
+# Galaxy (384 // (sp * tp)), and the only case whose per-chip expert block is not a multiple of the
+# kernel's 8-column walk, so a chip's run straddles a block boundary.
+@pytest.mark.parametrize("width, experts_per_chip", [(256, 8), (260, 4), (384, 12)], ids=["w256", "w260", "w384"])
 def test_offset_cumsum_distinct_groups_cache(mesh_device, cluster_axis, memory_config, width, experts_per_chip):
     rows, cols = tuple(mesh_device.shape)
     if mesh_device.shape[cluster_axis] == 1:
