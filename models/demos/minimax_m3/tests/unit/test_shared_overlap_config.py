@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device-free checks of the shared-expert / dispatch overlap (tt/moe/shared_overlap.py, TtMiniMaxMoE.forward):
-the sub-device split, the 2D matmul configs sized to it, the knobs, and the op order of the overlap window
-(every ttnn op the forward calls is replaced by a recorder). The device test is test_ep_moe_vs_ref.py
-test_ep_moe_shared_schedule.
+the sub-device split, the 2D matmul configs sized to it, the knobs (plus the routed-expert hybrid threshold), and
+the op order of the overlap window (every ttnn op the forward calls is replaced by a recorder). The device test is
+test_ep_moe_vs_ref.py test_ep_moe_shared_schedule.
 """
 
 import math
@@ -25,7 +25,11 @@ from models.demos.minimax_m3.tt.moe.shared_overlap import (
     shared_expert_program_configs,
     split_grid,
 )
-from models.demos.minimax_m3.tt.moe.tt_minimax_moe import TtMiniMaxMoE
+from models.demos.minimax_m3.tt.moe.tt_minimax_moe import (
+    DEFAULT_HYBRID_TOKEN_THRESHOLD,
+    TtMiniMaxMoE,
+    hybrid_token_threshold,
+)
 
 GRID = (11, 10)  # Blackhole galaxy compute grid
 HIDDEN, SHARED_INTER, TP = 6144, 3072, 4
@@ -129,6 +133,25 @@ def test_knobs(monkeypatch, expect_error):
     monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "yes")
     with expect_error(ValueError, "must be 0 or 1"):
         overlap_shared_enabled()
+
+
+def test_hybrid_threshold_knob(monkeypatch, expect_error):
+    bh, wh = SimpleNamespace(arch=lambda: ttnn.Arch.BLACKHOLE), SimpleNamespace(arch=lambda: ttnn.Arch.WORMHOLE_B0)
+    bf4, bf8 = ttnn.bfloat4_b, ttnn.bfloat8_b
+    monkeypatch.delenv("M3_MOE_HYBRID_THRESHOLD", raising=False)
+    assert DEFAULT_HYBRID_TOKEN_THRESHOLD == 128
+    assert hybrid_token_threshold(bh, bf4) == 128
+    assert hybrid_token_threshold(bh, bf8) is None and hybrid_token_threshold(wh, bf4) is None
+    monkeypatch.setenv("M3_MOE_HYBRID_THRESHOLD", "")
+    assert hybrid_token_threshold(bh, bf4) == 128
+    monkeypatch.setenv("M3_MOE_HYBRID_THRESHOLD", "0")
+    assert hybrid_token_threshold(bh, bf4) is None
+    monkeypatch.setenv("M3_MOE_HYBRID_THRESHOLD", " 64 ")
+    assert hybrid_token_threshold(bh, bf4) == 64 and hybrid_token_threshold(bh, bf8) == 64
+    for bad in ("-1", "on", "1.5"):
+        monkeypatch.setenv("M3_MOE_HYBRID_THRESHOLD", bad)
+        with expect_error(ValueError, "M3_MOE_HYBRID_THRESHOLD"):
+            hybrid_token_threshold(bh, bf4)
 
 
 # ---- op order of TtMiniMaxMoE.forward, every ttnn call recorded ----

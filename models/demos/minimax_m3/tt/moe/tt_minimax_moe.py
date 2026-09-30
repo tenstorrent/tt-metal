@@ -21,6 +21,8 @@ swigluoai activation; only the shared-expert step of DeepSeek's TtMoe.forward is
 Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward).
 """
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
@@ -32,6 +34,28 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.minimax_m3.tt.moe.shared_overlap import SharedExpertOverlap
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
+
+# Hybrid routed experts (Blackhole, bf4 expert weights): experts with <= this many tokens run moe_fused_swiglu,
+# the rest unified_routed_expert_moe. 128 measured best for M3. moe_fused_swiglu's CBs do not fit L1 with M3's
+# bf8 expert weights, so the default leaves bf8 on unified_routed_expert_moe.
+DEFAULT_HYBRID_TOKEN_THRESHOLD = 128
+
+
+def hybrid_token_threshold(mesh_device, weights_dtype):
+    """TtRoutedExpert's hybrid_token_threshold: DEFAULT_HYBRID_TOKEN_THRESHOLD on Blackhole with bf4 expert weights,
+    else None (every expert on unified_routed_expert_moe). ``M3_MOE_HYBRID_THRESHOLD=<int>`` overrides it; ``0``
+    turns it off."""
+    value = os.getenv("M3_MOE_HYBRID_THRESHOLD")
+    if value is None or not value.strip():
+        default_on = mesh_device.arch() == ttnn.Arch.BLACKHOLE and weights_dtype == ttnn.bfloat4_b
+        return DEFAULT_HYBRID_TOKEN_THRESHOLD if default_on else None
+    try:
+        threshold = int(value)
+    except ValueError:
+        raise ValueError(f"M3_MOE_HYBRID_THRESHOLD must be an integer >= 0 (got {value!r})") from None
+    if threshold < 0:
+        raise ValueError(f"M3_MOE_HYBRID_THRESHOLD must be an integer >= 0 (got {value!r})")
+    return threshold or None
 
 
 class TtMiniMaxMoE(LightweightModule):
@@ -177,6 +201,7 @@ class TtMiniMaxMoE(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            hybrid_token_threshold=hybrid_token_threshold(mesh_device, routed_expert_weights_dtype),
         )
         # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
         # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
