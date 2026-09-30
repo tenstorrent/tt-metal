@@ -2692,12 +2692,24 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
-    def _torch_unary(self, x, torch_fn) -> float:
-        """Apply torch_fn to scalar x in fp32, then enforce the
-        format-aware NaN rule: convert +/-inf to NaN when the dest is
-        A-exponent (Float16).
+    def _work_dtype(self) -> torch.dtype:
+        """The dtype a torch-built golden computes in: the Dest dtype, except fp64 in
+        place of fp32. At a 32-bit Dest the fp32 dtype judged a Float32 output against
+        torch's own fp32 error. A 16-bit Dest keeps its dtype on purpose: computing in
+        it rounds to the Dest lattice before the golden flushes that format's
+        subnormals, as the hardware does -- in fp64, elu(-6.1e-5) would land below
+        fp16's smallest normal and be flushed to 0 instead of rounding up to it.
         """
-        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        dtype = format_dict[self.dst_format]
+        return torch.float64 if dtype == torch.float32 else dtype
+
+    def _torch_unary(self, x, torch_fn) -> float:
+        """Apply torch_fn to scalar x in fp64, then enforce the format-aware NaN rule:
+        convert +/-inf to NaN when the dest is A-exponent (Float16). fp64 so that a
+        Float32-output cell is measured against a correctly rounded reference rather
+        than one carrying torch's own fp32 sinh/cosh error.
+        """
+        result = torch_fn(torch.tensor(x, dtype=torch.float64)).item()
         if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
         return result
@@ -2860,11 +2872,15 @@ class UnarySFPUGolden:
         # Domain restricted to [-1, 1] by the stimuli spec -- same caveat as _asin.
         return self._torch_unary(x, torch.acos)
 
+    # Through torch, not `math`: `math.cosh(3.4e38)` raises OverflowError, which made
+    # the full-range ULP sweep skip every Cosh/Sinh cell and never re-verify their
+    # enrolled budgets. torch returns inf, and the sweep masks lanes whose golden is
+    # past the output format's range, the same way it does for exp.
     def _sinh(self, x):
-        return math.sinh(x)
+        return self._torch_unary(x, torch.sinh)
 
     def _cosh(self, x):
-        return math.cosh(x)
+        return self._torch_unary(x, torch.cosh)
 
     def _square(self, x):
         # A finite input that overflows saturates, and handle_infinite_numbers picks inf or NaN
@@ -2879,7 +2895,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
@@ -2958,7 +2974,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
@@ -2966,7 +2982,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.exp(input_tensor).item()
 
@@ -2974,7 +2990,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.exp2(input_tensor).item()
 
@@ -2985,7 +3001,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.exp(0.5 * input_tensor).item()
 
@@ -3096,7 +3112,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+            else torch.tensor(x, dtype=self._work_dtype())
         )
         return torch.nn.functional.sigmoid(input_tensor).item()
 
