@@ -57,7 +57,8 @@ inline uint32_t block_valid_col_tiles(uint32_t seg_col_tiles, uint32_t block_col
 }
 
 // ---- Expanded coefficient layout (cb_coef_bcast; reader writes it, compute reads it) ----
-// Output stream j has n+1 terms: t = 0 is post_j, t = 1+i is comb[i][j] (comb applied transposed).
+// Output stream j has n+1 terms: t = 0 is post_j, t = 1+i is comb[i][j] (comb applied transposed; comb[j][i]
+// with MHC_POST_COMB_DIRECT, the op's comb_transposed=False).
 // Two terms share one fp32 tile: term t occupies HALF (t % 2) of tile j*P + t/2, with
 // P = coef_tiles_per_stream = ceil((n+1)/2) (host CT arg). Half 0 = faces 0/2 (tile columns 0-15), half 1 =
 // faces 1/3 (columns 16-31); every element of tile row rho in a half holds the coefficient of token row rho.

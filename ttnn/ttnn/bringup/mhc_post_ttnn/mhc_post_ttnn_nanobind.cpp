@@ -25,14 +25,16 @@ tt::tt_metal::ProgramDescriptor program_descriptor_py(
     const ttnn::Tensor& post,
     const ttnn::Tensor& comb,
     const ttnn::Tensor& output_tensor,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config) {
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool comb_transposed) {
     return create_program_descriptor(
         input_tensor,
         residual,
         post,
         comb,
         output_tensor,
-        compute_kernel_config.value_or(default_compute_kernel_config()));
+        compute_kernel_config.value_or(default_compute_kernel_config()),
+        comb_transposed);
 }
 
 }  // namespace
@@ -76,6 +78,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.ComputeConfigDescriptor, optional): fp32_dest_acc_en must be True.
                 Defaults to HiFi4, fp32 DEST, approx off.
+            comb_transposed (bool, optional): True (default) applies comb transposed as above. False applies it
+                as stored: X'[t, j*C:(j+1)*C] = post[t, j] * F[t, :] + sum_i comb[t, j*n + i] * X[t, i*C:(i+1)*C].
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved.
@@ -86,7 +90,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("post"),
         nb::arg("comb"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("comb_transposed") = true);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",
@@ -98,6 +103,7 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("output_tensor"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("comb_transposed") = true,
         R"doc(Build ttnn.bringup.mhc_post's ProgramDescriptor with the C++ builder (no dispatch). Test-only.)doc");
 }
 

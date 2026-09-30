@@ -46,6 +46,7 @@ ttsl::hash::hash_t MhcPostDeviceOperation::compute_program_hash(
         static_cast<uint32_t>(cc.math_fidelity),
         cc.fp32_dest_acc_en,
         cc.math_approx_mode,
+        attrs.comb_transposed,
         tensor_args.input.tensor_spec(),
         tensor_args.residual.tensor_spec(),
         tensor_args.post.tensor_spec(),
@@ -61,9 +62,11 @@ ttnn::Tensor mhc_post_ttnn(
     const ttnn::Tensor& residual,
     const ttnn::Tensor& post,
     const ttnn::Tensor& comb,
-    const tt::tt_metal::ComputeConfigDescriptor& compute_config) {
+    const tt::tt_metal::ComputeConfigDescriptor& compute_config,
+    bool comb_transposed) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostDeviceOperation;
-    auto attrs = OperationType::operation_attributes_t{.compute_config = compute_config};
+    auto attrs =
+        OperationType::operation_attributes_t{.compute_config = compute_config, .comb_transposed = comb_transposed};
     auto args = OperationType::tensor_args_t{.input = input, .residual = residual, .post = post, .comb = comb};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

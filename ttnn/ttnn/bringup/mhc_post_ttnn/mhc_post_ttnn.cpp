@@ -118,11 +118,12 @@ Tensor mhc_post(
     const Tensor& residual,
     const Tensor& post,
     const Tensor& comb,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config) {
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool comb_transposed) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
     check_shapes(input_tensor, residual, post, comb);
-    return ttnn::prim::bringup::mhc_post_ttnn(input_tensor, residual, post, comb, cfg);
+    return ttnn::prim::bringup::mhc_post_ttnn(input_tensor, residual, post, comb, cfg, comb_transposed);
 }
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

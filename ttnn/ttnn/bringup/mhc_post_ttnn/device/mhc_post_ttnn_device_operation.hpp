@@ -38,5 +38,6 @@ ttnn::Tensor mhc_post_ttnn(
     const ttnn::Tensor& residual,
     const ttnn::Tensor& post,
     const ttnn::Tensor& comb,
-    const tt::tt_metal::ComputeConfigDescriptor& compute_config);
+    const tt::tt_metal::ComputeConfigDescriptor& compute_config,
+    bool comb_transposed = true);
 }  // namespace ttnn::prim::bringup
