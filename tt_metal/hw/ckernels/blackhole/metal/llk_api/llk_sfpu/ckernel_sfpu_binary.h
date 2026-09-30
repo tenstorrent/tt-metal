@@ -226,10 +226,8 @@ inline void calculate_sfpu_binary_mul(
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
             result = float32_to_bf16_rne(result);
-
-            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
-            v_endif;
+            // No zero guard: the SFPU multiply already returns +0 for a zero times any finite value (a denormal
+            // counts as zero), so the only products a guard would change are 0 * inf and 0 * NaN, which are NaN.
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
