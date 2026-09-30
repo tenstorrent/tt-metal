@@ -55,9 +55,9 @@ def _init_cross_attention(msda, generator):
         grid[:, :, i, :] *= i + 1
     msda.sampling_offsets.bias.copy_(grid.flatten())
 
-    # LayerNorm-ed queries have unit variance per channel, so a weight of std s gives
-    # outputs of std s * sqrt(in_features).
-    fan_in_scale = 1.0 / math.sqrt(in_features)
+    # The Linears read query + query_pos, of variance 2 (see _init_self_attention), so a
+    # weight of std s gives outputs of std s * sqrt(2 * in_features).
+    fan_in_scale = 1.0 / math.sqrt(2 * in_features)
     msda.sampling_offsets.weight.copy_(
         torch.randn(msda.sampling_offsets.weight.shape, generator=generator) * SAMPLING_OFFSET_STD_PX * fan_in_scale
     )
@@ -162,9 +162,8 @@ def layer_metrics(expected, actual, input_reference_points, bev_shape):
     """Per-layer accuracy of ``actual`` (output, reference points) against ``expected``, for logging.
 
     Per layer: the output PCC, the PCC of the refinement step in logit space for xy and z
-    apart, and the mean xy error of the refined points in BEV pixels. The absolute points
-    barely move per layer and read PCC > 0.98 even with the refinement removed, so the steps
-    are compared instead.
+    apart, and the mean xy error of the refined points in BEV pixels. The steps show the
+    refinement's accuracy, which the absolute points barely reflect: they move little per layer.
     """
     (expected_output, expected_points), (actual_output, actual_points) = expected, actual
     bev_h, bev_w = bev_shape

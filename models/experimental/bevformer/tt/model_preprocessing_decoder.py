@@ -8,7 +8,6 @@ Structure (heads, points, dims, the cross-attention config) is recorded next to 
 weights, so the TT modules take it from here rather than from separate arguments.
 """
 
-import dataclasses
 from types import SimpleNamespace
 
 import torch
@@ -47,11 +46,11 @@ def _self_attn_parameters(mha, device, dtype):
 
 
 def _cross_attn_parameters(msda, device, dtype):
-    """The reference module's parameters and its config, run batch-first on device."""
+    """The reference module's parameters and config."""
     if msda.num_levels != 1:
         raise ValueError(f"the decoder cross-attention is single-level, got {msda.num_levels} levels")
     params = preprocess_ms_deformable_attention_parameters(msda, device=device, dtype=dtype)
-    params.config = dataclasses.replace(msda.config, batch_first=True)
+    params.config = msda.config
     return params
 
 
