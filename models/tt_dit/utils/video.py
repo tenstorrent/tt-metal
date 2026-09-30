@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from fractions import Fraction
@@ -180,38 +182,61 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     YuvVideoExport(yuv_planar, output_path, fps=fps, audio_sampling_rate=rate).finish(audio)
 
 
+def _open_yuv_container(output_path: str, width: int, height: int, fps: int, audio_sampling_rate: int | None):
+    """Open the mp4 with the libx264 stream and, when ``audio_sampling_rate`` is set, the audio stream declared
+    up front (PyAV forbids adding streams once muxing starts). Returns ``(container, video, audio_or_None)``."""
+    import av
+
+    container = av.open(output_path, mode="w")
+    stream = container.add_stream("libx264", rate=int(fps))
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = "yuv420p"
+    stream.options = _x264_options()
+    stream.thread_type = "AUTO"
+    audio_stream = None
+    if audio_sampling_rate is not None:
+        audio_stream = _add_audio_stream(container, Audio(torch.empty(0), audio_sampling_rate))
+    return container, stream, audio_stream
+
+
+def _encode_yuv_frames(container, stream, yuv_planar) -> None:
+    import av
+
+    for frame_array in yuv_planar:
+        frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+
+
+def _check_audio(audio: Audio | None, declared_rate: int | None) -> None:
+    if (audio is None) != (declared_rate is None) or (audio is not None and audio.sampling_rate != declared_rate):
+        msg = f"audio {audio!r} does not match the declared rate {declared_rate}"
+        raise ValueError(msg)
+
+
 class YuvVideoExport:
     """:func:`export_video_audio_yuv` with the video track encoded on a worker thread, so the caller can
     produce the audio (e.g. decode it on device) while libx264 runs; :meth:`finish` then muxes the audio.
 
-    The audio stream is declared up front from its sampling rate because PyAV forbids adding streams once
-    muxing starts. Streams are added and packets muxed in the same order as a serial export, so the file is
-    byte-identical to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
+    Streams are added and packets muxed in the same order as a serial export, so the file is byte-identical
+    to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
 
     ``yuv_planar`` is read until :meth:`finish` returns; the fast YUV gather reuses its output buffer across
     calls, so the caller must not run another decode before then.
     """
 
     def __init__(self, yuv_planar, output_path: str, fps: int = 24, audio_sampling_rate: int | None = None) -> None:
-        import av
-
         t, h32, width = yuv_planar.shape
         self._output_path = output_path
         self._fps = fps
         self._frames = t
         self._audio_sampling_rate = audio_sampling_rate
-
-        self._container = av.open(output_path, mode="w")
-        stream = self._container.add_stream("libx264", rate=int(fps))
-        stream.width = width
-        stream.height = h32 * 2 // 3
-        stream.pix_fmt = "yuv420p"
-        stream.options = _x264_options()
-        stream.thread_type = "AUTO"
-        self._audio_stream = None
-        if audio_sampling_rate is not None:
-            self._audio_stream = _add_audio_stream(self._container, Audio(torch.empty(0), audio_sampling_rate))
-
+        self._container, stream, self._audio_stream = _open_yuv_container(
+            output_path, width, h32 * 2 // 3, fps, audio_sampling_rate
+        )
         self._error: BaseException | None = None
         self._thread = threading.Thread(
             target=self._encode_video, args=(stream, yuv_planar), name="yuv-video-export", daemon=True
@@ -219,15 +244,8 @@ class YuvVideoExport:
         self._thread.start()
 
     def _encode_video(self, stream, yuv_planar) -> None:
-        import av
-
         try:
-            for frame_array in yuv_planar:
-                frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
-                for packet in stream.encode(frame):
-                    self._container.mux(packet)
-            for packet in stream.encode():
-                self._container.mux(packet)
+            _encode_yuv_frames(self._container, stream, yuv_planar)
         except BaseException as e:  # re-raised on the caller's thread by finish()
             self._error = e
 
@@ -237,17 +255,218 @@ class YuvVideoExport:
             self._thread.join()
             if self._error is not None:
                 raise self._error
-            if (audio is None) != (self._audio_stream is None) or (
-                audio is not None and audio.sampling_rate != self._audio_sampling_rate
-            ):
-                msg = f"audio {audio!r} does not match the declared rate {self._audio_sampling_rate}"
-                raise ValueError(msg)
+            _check_audio(audio, self._audio_sampling_rate)
             if audio is not None:
                 _mux_audio(self._container, self._audio_stream, audio)
         finally:
             self._container.close()
         _dump_audio_sidecar(self._output_path, audio)
         logger.info(f"Saved: {self._output_path} ({self._frames}f @ {self._fps}fps, yuv420p fast path)")
+
+
+# Frame buffers in POSIX shared memory, keyed by name, so the encoder process maps the decoded frames
+# instead of receiving ~0.45 GB (1080p/145f) through a pipe.
+_SHARED_FRAME_BUFFERS: dict[str, tuple[object, np.ndarray]] = {}
+
+
+def shared_frame_buffer(shape: tuple[int, ...], *, reuse_key: str) -> np.ndarray:
+    """A uint8 array backed by shared memory, which :class:`YuvVideoExportProcess` hands to its encoder with no
+    copy. One buffer per ``reuse_key``, reallocated only when ``shape`` changes, so like any reused output
+    buffer it must not be rewritten while an export still reads it. Falls back to private memory if shared
+    memory is unavailable (the export then copies)."""
+    from multiprocessing import shared_memory
+
+    held = _SHARED_FRAME_BUFFERS.get(reuse_key)
+    if held is not None and held[1].shape == tuple(shape):
+        return held[1]
+    if held is not None:
+        _SHARED_FRAME_BUFFERS.pop(reuse_key)
+        _release_shm(held[0])
+    size = int(np.prod(shape))
+    try:
+        shm = shared_memory.SharedMemory(create=True, size=max(size, 1))
+    except OSError as e:
+        logger.warning(f"shared frame buffer unavailable ({e}); the process export will copy frames")
+        return np.empty(shape, dtype=np.uint8)
+    array = np.ndarray(shape, dtype=np.uint8, buffer=shm.buf)
+    _SHARED_FRAME_BUFFERS[reuse_key] = (shm, array)
+    return array
+
+
+@atexit.register
+def _release_shared_frame_buffers() -> None:
+    while _SHARED_FRAME_BUFFERS:
+        _release_shm(_SHARED_FRAME_BUFFERS.popitem()[1][0])
+
+
+def _release_shm(shm) -> None:
+    try:
+        shm.close()
+    except BufferError:
+        pass  # a caller still holds a view; unlinking below still frees it once that view goes
+    shm.unlink()
+
+
+def _shared_location(array: np.ndarray) -> tuple[str, int] | None:
+    """``(shm name, byte offset)`` when ``array`` is a C-contiguous view into a shared frame buffer."""
+    if not array.flags.c_contiguous or array.dtype != np.uint8:
+        return None
+    start = array.__array_interface__["data"][0]
+    for shm, base in _SHARED_FRAME_BUFFERS.values():
+        base_start = base.__array_interface__["data"][0]
+        if base_start <= start and start + array.nbytes <= base_start + base.nbytes:
+            return shm.name, start - base_start
+    return None
+
+
+class _EncoderProcess:
+    """A persistent child python that runs the YUV mp4 export. It holds no GIL shared with the pipeline:
+    ttnn calls such as ``synchronize_device`` keep the GIL for the whole device wait, which starves an
+    in-process encoder thread of the per-frame Python it needs to feed libx264.
+
+    The child inherits this process's CPU mask, so libx264 picks the same thread count and writes the same
+    bitstream as an in-process encode."""
+
+    _instance: "_EncoderProcess | None" = None
+
+    def __init__(self) -> None:
+        from multiprocessing.connection import Connection
+
+        to_child_r, to_child_w = os.pipe()
+        from_child_r, from_child_w = os.pipe()
+        cmd = [
+            sys.executable,
+            "-c",
+            f"from {__name__} import _encoder_main; _encoder_main({to_child_r}, {from_child_w})",
+        ]
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * __name__.count(".")))
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [repo_root, os.environ.get("PYTHONPATH")])))
+        self._proc = subprocess.Popen(cmd, pass_fds=(to_child_r, from_child_w), close_fds=True, env=env)
+        os.close(to_child_r)
+        os.close(from_child_w)
+        self._send = Connection(to_child_w, readable=False)
+        self._recv = Connection(from_child_r, writable=False)
+
+    @classmethod
+    def get(cls) -> "_EncoderProcess":
+        if cls._instance is None or cls._instance._proc.poll() is not None:
+            cls._instance = cls()
+        return cls._instance
+
+    def request(self, msg) -> None:
+        self._send.send(msg)
+
+    def reply(self):
+        try:
+            return self._recv.recv()
+        except EOFError:
+            _EncoderProcess._instance = None
+            msg = f"mp4 encoder process exited (code {self._proc.wait()})"
+            raise RuntimeError(msg) from None
+
+
+def start_encoder_process() -> None:
+    """Start the export's encoder process ahead of the first :class:`YuvVideoExportProcess` (its python and
+    PyAV import take a few seconds)."""
+    _EncoderProcess.get()
+
+
+def _pin_encoder(spec: str) -> None:
+    """Move the encoder to the CPUs in ``spec`` (e.g. ``32-63``, the SMT siblings a pinned pipeline leaves
+    idle). libx264 sizes its thread pool from the CPU count and the bitstream depends on it, so a set of a
+    different size than the inherited mask is refused."""
+    if not spec:
+        return
+    cpus = set()
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        cpus.update(range(int(lo), int(hi or lo) + 1))
+    inherited = os.sched_getaffinity(0)
+    if len(cpus) != len(inherited):
+        logger.warning(f"LTX_EXPORT_CPUS={spec} ignored: {len(cpus)} CPUs would change libx264's {len(inherited)}")
+        return
+    os.sched_setaffinity(0, cpus)
+
+
+def _encoder_main(recv_fd: int, send_fd: int) -> None:
+    """Child side of :class:`_EncoderProcess`: one ``("video", ...)`` then one ``("audio", ...)`` request per
+    file, one reply (an error string or None) after the file is closed."""
+    from multiprocessing import resource_tracker, shared_memory
+    from multiprocessing.connection import Connection
+
+    recv, send = Connection(recv_fd, writable=False), Connection(send_fd, readable=False)
+    _pin_encoder(os.environ.get("LTX_EXPORT_CPUS", "").strip())
+    attached: dict[str, shared_memory.SharedMemory] = {}
+    while True:
+        try:
+            _, shm_name, offset, shape, frames, output_path, fps, rate = recv.recv()
+        except EOFError:
+            return
+        error, container = None, None
+        try:
+            if shm_name is not None:
+                if shm_name not in attached:
+                    attached[shm_name] = shared_memory.SharedMemory(name=shm_name)
+                    # The parent owns the segment; the child's tracker must not unlink it on exit.
+                    resource_tracker.unregister(attached[shm_name]._name, "shared_memory")
+                yuv = np.ndarray(shape, dtype=np.uint8, buffer=attached[shm_name].buf, offset=offset)
+            else:
+                yuv = frames
+            container, stream, audio_stream = _open_yuv_container(output_path, shape[2], shape[1] * 2 // 3, fps, rate)
+            _encode_yuv_frames(container, stream, yuv)
+            del yuv
+        except BaseException as e:
+            error = f"{type(e).__name__}: {e}"
+        _, waveform, audio_rate = recv.recv()
+        try:
+            if error is None and waveform is not None:
+                _mux_audio(container, audio_stream, Audio(torch.from_numpy(waveform), audio_rate))
+        except BaseException as e:
+            error = f"{type(e).__name__}: {e}"
+        finally:
+            if container is not None:
+                container.close()
+        send.send(error)
+
+
+class YuvVideoExportProcess:
+    """:class:`YuvVideoExport` with the encode in a separate process (:class:`_EncoderProcess`), so the caller's
+    GIL-holding device calls no longer throttle it. Same streams, options and mux order: byte-identical file.
+
+    Frames in a :func:`shared_frame_buffer` are read in place until :meth:`finish` returns; any other array is
+    copied to the child up front."""
+
+    def __init__(self, yuv_planar, output_path: str, fps: int = 24, audio_sampling_rate: int | None = None) -> None:
+        self._output_path = output_path
+        self._fps = fps
+        self._frames = yuv_planar.shape[0]
+        self._audio_sampling_rate = audio_sampling_rate
+        location = _shared_location(yuv_planar)
+        shm_name, offset = location if location is not None else (None, 0)
+        frames = None if location is not None else np.ascontiguousarray(yuv_planar)
+        self._encoder = _EncoderProcess.get()
+        self._encoder.request(
+            ("video", shm_name, offset, tuple(yuv_planar.shape), frames, output_path, fps, audio_sampling_rate)
+        )
+
+    def finish(self, audio: Audio | None) -> None:
+        """Wait for the video track, mux ``audio`` and close the file. Always closes, also on error."""
+        try:
+            _check_audio(audio, self._audio_sampling_rate)
+        except ValueError:
+            self._encoder.request(("audio", None, None))
+            self._encoder.reply()
+            raise
+        waveform = None if audio is None else audio.waveform.detach().float().cpu().numpy()
+        self._encoder.request(("audio", waveform, None if audio is None else audio.sampling_rate))
+        error = self._encoder.reply()
+        if error is not None:
+            msg = f"mp4 export of {self._output_path} failed in the encoder process: {error}"
+            raise RuntimeError(msg)
+        _dump_audio_sidecar(self._output_path, audio)
+        logger.info(
+            f"Saved: {self._output_path} ({self._frames}f @ {self._fps}fps, yuv420p fast path, encoder process)"
+        )
 
 
 def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:

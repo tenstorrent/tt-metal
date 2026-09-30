@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only: the threaded YUV export writes the same mp4 bytes as a serial encode."""
+"""Host-only: the threaded and the process YUV exports write the same mp4 bytes as a serial encode."""
 
 from __future__ import annotations
 
@@ -13,10 +13,12 @@ import torch
 from models.tt_dit.utils.video import (
     Audio,
     YuvVideoExport,
+    YuvVideoExportProcess,
     _add_audio_stream,
     _mux_audio,
     _x264_options,
     export_video_audio_yuv,
+    shared_frame_buffer,
 )
 
 
@@ -65,3 +67,37 @@ def test_audio_rate_mismatch_raises_and_closes(tmp_path, clip, expect_error):
     with expect_error(ValueError, "does not match the declared rate"):
         export.finish(None)
     assert not export._thread.is_alive()
+
+
+@pytest.mark.parametrize("shared", [True, False])
+@pytest.mark.parametrize("with_audio", [True, False])
+def test_process_export_matches_serial(tmp_path, clip, with_audio, shared):
+    yuv, audio = clip
+    audio = audio if with_audio else None
+    ref, out = tmp_path / "ref.mp4", tmp_path / "out.mp4"
+    _serial_reference(yuv, str(ref), 24, audio)
+    if shared:  # a view into a larger shared buffer, as the pipeline's tail-pad trim hands over
+        buf = shared_frame_buffer((yuv.shape[0] + 1, *yuv.shape[1:]), reuse_key="test_process_export")
+        buf[: yuv.shape[0]] = yuv
+        yuv = buf[: yuv.shape[0]]
+    rate = audio.sampling_rate if audio is not None else None
+    YuvVideoExportProcess(yuv, str(out), fps=24, audio_sampling_rate=rate).finish(audio)
+    assert out.read_bytes() == ref.read_bytes()
+
+
+def test_process_export_rate_mismatch_raises_and_recovers(tmp_path, clip, expect_error):
+    yuv, audio = clip
+    export = YuvVideoExportProcess(yuv, str(tmp_path / "bad.mp4"), fps=24, audio_sampling_rate=audio.sampling_rate)
+    with expect_error(ValueError, "does not match the declared rate"):
+        export.finish(None)
+    ref, out = tmp_path / "ref.mp4", tmp_path / "out.mp4"
+    _serial_reference(yuv, str(ref), 24, audio)
+    YuvVideoExportProcess(yuv, str(out), fps=24, audio_sampling_rate=audio.sampling_rate).finish(audio)
+    assert out.read_bytes() == ref.read_bytes()
+
+
+def test_process_export_surfaces_encoder_errors(tmp_path, clip, expect_error):
+    yuv, _ = clip
+    export = YuvVideoExportProcess(yuv, str(tmp_path / "missing" / "out.mp4"), fps=24)
+    with expect_error(RuntimeError, "failed in the encoder process"):
+        export.finish(None)

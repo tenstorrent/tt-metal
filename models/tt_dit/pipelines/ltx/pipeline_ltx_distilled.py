@@ -29,7 +29,13 @@ from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
-from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
+from ...utils.video import (
+    YuvVideoExport,
+    YuvVideoExportProcess,
+    export_video_audio,
+    export_video_audio_yuv,
+    start_encoder_process,
+)
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
@@ -99,6 +105,10 @@ def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
     tier_steps = len(DISTILLED_SIGMA_VALUES) - 1
     extra = min(max(tier_steps - len(_KEYFRAME_S1_TAIL), 1 if latent_frames > 20 else 0), len(_KEYFRAME_S1_HEAD))
     return [1.0] + (_KEYFRAME_S1_HEAD[-extra:] if extra else []) + _KEYFRAME_S1_TAIL
+
+
+def _export_in_process() -> bool:
+    return os.environ.get("LTX_EXPORT_PROCESS", "1") != "0"
 
 
 def pixel_to_latent_frame(pixel_idx: int, num_frames: int) -> int:
@@ -286,6 +296,8 @@ class LTXDistilledPipeline(LTXPipeline):
         cleanly, its small kernel set compiling in-window."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
+        if _export_in_process():
+            start_encoder_process()  # its python + PyAV import overlaps the warmup instead of the first render
         valid = {"s1", "s2", "s1_ref", "s2_ref"}
         assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
         assert ref_num_frames is not None or not any(
@@ -711,7 +723,7 @@ class LTXDistilledPipeline(LTXPipeline):
             fps=self.fps,
         )
         if built:
-            (v_xpe_cos, v_xpe_sin, *_a_xpe) = prepare_av_cross_pe(
+            v_xpe_cos, v_xpe_sin, *_a_xpe = prepare_av_cross_pe(
                 latent_frames,
                 latent_h,
                 latent_w,
@@ -1993,13 +2005,15 @@ class LTXDistilledPipeline(LTXPipeline):
         # above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the eager vocoder
         # decode, which is trace-hidden in production but costs minutes untraced.
         video_only = os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True")
-        # The host libx264 encode of the video track (~0.7 s at 1080p/145f) runs on a worker thread
-        # under the device audio decode; the mp4 is byte-identical to the serial export.
-        # LTX_ASYNC_EXPORT=0 restores the serial export.
+        # The host libx264 encode of the video track (~0.5 s at 1080p/145f) runs under the device audio
+        # decode, in an encoder process by default: the audio path's GIL-holding device waits throttle an
+        # in-process encoder thread. The mp4 is byte-identical to the serial export either way.
+        # LTX_EXPORT_PROCESS=0 encodes on a thread instead; LTX_ASYNC_EXPORT=0 restores the serial export.
         video_export = None
         if yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0":
             rate = None if video_only else self.tt_vocoder_with_bwe.output_sampling_rate
-            video_export = YuvVideoExport(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
+            export_cls = YuvVideoExportProcess if _export_in_process() else YuvVideoExport
+            video_export = export_cls(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
         t0 = time.time()
         try:
             if video_only:

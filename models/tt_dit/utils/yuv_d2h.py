@@ -21,6 +21,7 @@ import ttnn
 from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
+from .video import shared_frame_buffer
 
 # Persistent host-side reassembly pool — strided uint8 copies release the GIL, so a few threads scale near-linearly
 _DEFAULT_REASSEMBLE_POOL: ThreadPoolExecutor | None = None
@@ -37,18 +38,10 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
-# Persistent output buffer for the C++ planar-concat fast path
-_PLANAR_OUT_BUF: np.ndarray | None = None
-_PLANAR_OUT_SHAPE: tuple[int, int] | None = None
-
-
 def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
-    global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
-    shape = (T, row_stride)
-    if _PLANAR_OUT_SHAPE != shape:
-        _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
-        _PLANAR_OUT_SHAPE = shape
-    return _PLANAR_OUT_BUF
+    """Persistent output buffer for the C++ planar-concat fast path. Shared memory lets the process mp4
+    export read the frames in place."""
+    return shared_frame_buffer((T, row_stride), reuse_key="yuv_planar_out")
 
 
 def _bt601_yuv_coefficients():
