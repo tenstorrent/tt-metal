@@ -65,7 +65,8 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
         del os.environ[k]
     os.environ.update(knobs)
     fidelity = getattr(ttnn.MathFidelity, knobs.get("MINIMAX_H3_SDPA_FIDELITY", "HiFi2"))
-    v_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_V_DTYPE"]) if "MINIMAX_H3_SDPA_V_DTYPE" in knobs else None
+    kv_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_KV_DTYPE"]) if "MINIMAX_H3_SDPA_KV_DTYPE" in knobs else None
+    v_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_V_DTYPE"]) if "MINIMAX_H3_SDPA_V_DTYPE" in knobs else kv_dtype
     for block in tt_model.transformer_blocks:
         attn = block.attn
         attn.sdpa_fixed_offset = False
@@ -74,12 +75,14 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
         attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=False, dst_full_sync_en=False
         )
-        attn.sdpa_v_dtype = v_dtype
-        attn.dummy_joint_v = (
-            attn.dummy_joint_input
-            if v_dtype is None
-            else typed_tensor(torch.zeros((1, attn.n_local_heads, 0, attn.head_dim)), v_dtype, mesh_device)
-        )
+
+        def dummy(dtype):
+            if dtype is None:
+                return attn.dummy_joint_input
+            return typed_tensor(torch.zeros((1, attn.n_local_heads, 0, attn.head_dim)), dtype, mesh_device)
+
+        attn.sdpa_k_dtype, attn.sdpa_v_dtype = kv_dtype, v_dtype
+        attn.dummy_joint_k, attn.dummy_joint_v = dummy(kv_dtype), dummy(v_dtype)
     spec = knobs.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS")
     if spec:
         tt_model._set_fixed_softmax_blocks(spec)
