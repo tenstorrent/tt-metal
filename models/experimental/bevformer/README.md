@@ -110,8 +110,8 @@ Tests the six-layer detection decoder, layer by layer.
 
 **What it tests:**
 - The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid and batch size 2
-- Each layer's output, and each layer's reference-point refinement step (in logit space, xy and z
-  apart) plus the mean xy error of the refined points in BEV pixels
+- PCC 0.99 on the stacked six-layer outputs and refined reference points; per-layer PCC and the
+  refined points' error in BEV pixels are logged
 - Traced runs: capture proves the forward has no host reads or writes, and the replay runs on new
   inputs
 - That a second eager run adds no programs to the program cache
@@ -119,8 +119,8 @@ Tests the six-layer detection decoder, layer by layer.
 It uses seeded random weights (`tests/decoder_common.py`): BEVFormer's sampling-offset grid init
 with random weights on top, so offsets spread over a few pixels, and peaked cross- and
 self-attention. The BEV features are random but spatially smooth, as the encoder's are, and the
-reference points include the grid edges. Per-layer bounds are in `THRESHOLDS`; bfloat16 error
-grows through the reference-point refinement, faster on the 200x200 grid.
+reference points include the grid edges. bfloat16 error grows through the reference-point
+refinement, faster on the 200x200 grid.
 
 **Usage:**
 ```bash
