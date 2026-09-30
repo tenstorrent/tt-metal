@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -39,6 +38,14 @@ def _test_module():
     return t
 
 
+def _transformer_dir() -> Path:
+    return Path(os.environ["MINIMAX_H3_MODEL_PATH"]) / "transformer"
+
+
+def _config(directory: Path) -> dict:
+    return {k: v for k, v in json.loads((directory / "config.json").read_text()).items() if not k.startswith("_")}
+
+
 def build_inputs(shape: str, seed: int, timesteps: list[float]) -> dict:
     t = _test_module()
     num_text, num_audio, num_video, grid = SHAPES[shape]
@@ -51,8 +58,7 @@ def build_inputs(shape: str, seed: int, timesteps: list[float]) -> dict:
     if len(timesteps) != num_timesteps:
         raise ValueError(f"shape {shape} has {num_timesteps} timestep slots, got {len(timesteps)} values")
 
-    directory = Path(os.environ["MINIMAX_H3_MODEL_PATH"]) / "transformer"
-    config = {k: v for k, v in json.loads((directory / "config.json").read_text()).items() if not k.startswith("_")}
+    config = _config(_transformer_dir())
     video_patch_dim = config["in_channels"] * int(np.prod(config["patch_size"]))
 
     g = torch.Generator().manual_seed(seed)
@@ -81,8 +87,8 @@ def run_reference(inp: dict, threads: int) -> dict:
 
     t = _test_module()
     torch.set_num_threads(threads)
-    directory = Path(os.environ["MINIMAX_H3_MODEL_PATH"]) / "transformer"
-    config = {k: v for k, v in json.loads((directory / "config.json").read_text()).items() if not k.startswith("_")}
+    directory = _transformer_dir()
+    config = _config(directory)
     start = time.time()
     model = MiniMaxH3Transformer3DModel(**config)
     model.load_state_dict(t._load_reference_state_dict(directory), strict=True)
@@ -169,4 +175,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

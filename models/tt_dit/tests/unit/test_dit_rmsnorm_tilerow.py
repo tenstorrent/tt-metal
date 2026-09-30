@@ -43,7 +43,7 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"),
-    [pytest.param((4, 8), {**ring_params, "trace_region_size": 131072}, id="galaxy_tp4")],
+    [pytest.param((4, 8), ring_params, id="galaxy_tp4")],
     indirect=["mesh_device", "device_params"],
 )
 def test_affine_tile_row_map(mesh_device):
@@ -66,11 +66,11 @@ def test_affine_tile_row_map(mesh_device):
     sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
 
     def run(weight, bias, tile_map=None):
-        extra = {} if tile_map is None else {"affine_tile_row_map": tile_map}
         # TP>1 needs the persistent stats/output buffer; a fresh one per call also moves its address between cache hits.
         pob = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
             x_tt, tp_axis, mesh_device, num_heads_per_device=1, per_head_norm=False, num_links=2, weight=weight
         )
+        extra = {} if tile_map is None else {"affine_tile_row_map": tile_map}
         out = ttnn.experimental.dit_fused_distributed_rmsnorm(
             x_tt,
             tp_axis,
@@ -85,7 +85,6 @@ def test_affine_tile_row_map(mesh_device):
             **extra,
         )
         ttnn.synchronize_device(mesh_device)
-        # concatenate the TP shards along the feature dim and stack the 8 replicas along dim 0
         full = ttnn.to_torch(
             out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=[-1, 0], mesh_shape=tuple(mesh_device.shape))
         )

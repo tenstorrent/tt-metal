@@ -8,7 +8,7 @@ expanded table, page by page as the fused norm's reader does, reproduces the per
 import pytest
 import torch
 
-from ....models.transformers.minimax_h3.adaln_tilerow import TILE, tilerow_remap
+from ....models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, TILE, tilerow_remap
 from ....pipelines.minimax_h3 import packing as p
 
 HIDDEN = 1344  # per-device hidden at TP=4: 42 tile columns
@@ -23,16 +23,16 @@ def _reader_gather(table: torch.Tensor, tile_map: torch.Tensor, expanded: torch.
         rows = table[e.long()]
         pages = rows.reshape(-1, TILE, cols, TILE).permute(0, 2, 1, 3).reshape(-1, TILE, TILE)
         page_ids = m.long()[:, None] * cols + torch.arange(cols)[None, :]
-        tiles = pages[page_ids]  # [T_local, cols, 32, 32]
+        tiles = pages[page_ids]
         out.append(tiles.permute(0, 2, 1, 3).reshape(-1, table.shape[1]))
     return torch.cat(out)
 
 
-def _check(indices: torch.Tensor, num_rows: int, sp_factor: int, max_mixed_tiles: int = 16) -> int:
+def _check(indices: torch.Tensor, num_rows: int, sp_factor: int) -> int:
     table = torch.randn(num_rows, HIDDEN).to(torch.bfloat16)
-    tile_map, expanded = tilerow_remap(indices, num_rows=num_rows, sp_factor=sp_factor, max_mixed_tiles=max_mixed_tiles)
+    tile_map, expanded = tilerow_remap(indices, num_rows=num_rows, sp_factor=sp_factor)
     assert tile_map.shape[0] == indices.shape[0] // TILE
-    assert expanded.shape[0] == sp_factor * (num_rows + max_mixed_tiles) * TILE
+    assert expanded.shape[0] == sp_factor * (num_rows + DEFAULT_MAX_MIXED_TILES) * TILE
     got = _reader_gather(table, tile_map, expanded, sp_factor)
     assert torch.equal(got.view(torch.int16), table[indices.long()].view(torch.int16))
     return int((tile_map >= num_rows).sum())
@@ -68,8 +68,9 @@ def test_random_runs_match_per_token_gather():
 
 @pytest.mark.parametrize("sp_factor", [8, 32])
 def test_packed_fl2va_layout(sp_factor):
+    # 997 text tokens with a keyframe's vision block inside them.
     tags = torch.ones(997, dtype=torch.long)
-    tags[20:70] = p.MINIMAX_H3_VIDEO_TAG  # a keyframe's vision block inside the text
+    tags[20:70] = p.MINIMAX_H3_VIDEO_TAG
     layout = p.build_packed_sequence(
         tags,
         p.video_latent_num_frames(124),
@@ -88,7 +89,7 @@ def test_packed_fl2va_layout(sp_factor):
 
 
 def test_too_many_mixed_tiles_raises():
-    indices = torch.arange(4 * TILE) % 2  # every tile mixed
+    indices = torch.arange(4 * TILE) % 2
     with pytest.raises(  # allow-pytest.raises: the message is the knob's contract
         ValueError, match="MINIMAX_H3_ADALN_MIXED_TILES"
     ):

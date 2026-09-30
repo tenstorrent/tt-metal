@@ -24,9 +24,9 @@ blackhole_only = pytest.mark.skipif(
 )
 
 
-def make_inputs(amp, seed=0):
+def make_inputs(amp):
     """bf16-rounded fp32 q, k, v so the torch reference and the device see the same values."""
-    torch.manual_seed(seed)
+    torch.manual_seed(0)
     q, k, v = torch.randn(B, NH, S, D) * amp, torch.randn(B, NH, S, D) * amp, torch.randn(B, NH, S, D)
     return tuple(t.bfloat16().float() for t in (q, k, v))
 
@@ -53,10 +53,10 @@ def program_config(device, **modes):
     )
 
 
-def run_sdpa(device, tensors, pc, is_causal=False, fidelity=ttnn.MathFidelity.HiFi2):
-    """Streaming path (fp32_dest_acc_en=False); returns the fp32 host copy of the bf16 output."""
+def run_sdpa(device, tensors, pc, is_causal=False):
+    """HiFi2 compute config on the streaming path; returns the fp32 host copy of the bf16 output."""
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=False
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
     )
     tq, tk, tv = tensors
     out = ttnn.transformer.scaled_dot_product_attention(
