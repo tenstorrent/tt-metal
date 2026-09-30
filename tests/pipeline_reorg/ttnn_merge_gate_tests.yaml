@@ -139,6 +139,10 @@
     tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_ldexp
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_logaddexp_ops
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_xlogy
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_bias_gelu
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
     or test_gelu or test_silu or test_01_volume_sin
@@ -156,7 +160,7 @@
     or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
     or test_unary_tanh_ttnn or test_unary_neg_ttnn
     or test_unary_log2_ttnn or test_unary_log1p_ttnn)
-    and not (fused_relu_with_broadcast or rne_approx_modes)"
+    and not fused_relu_with_broadcast"
     -m "not disable_fast_runtime_mode"
   skus:
     wh_n300_civ2:
