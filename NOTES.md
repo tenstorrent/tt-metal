@@ -39,3 +39,21 @@ blx03 broker power-cycled at 21:05 UTC (job 918); all 32 chips back, startup + f
 Relaunched drive37.sh detached on blx03. It waits for project job 922 (another task, blx03_ab.sh) to finish,
 then submits s2reuse0, then s2reuse1. Check: `ssh g14blx03 cat ~/fasth3/t37/jobs ~/fasth3/t37/drive37.log`;
 done when ~/fasth3/t37/DONE exists. Then follow "Next step on resume" above.
+
+## 2026-09-30 22:10 UTC (reference done, reuse=1 not run, blx03 unstable)
+Reference s2reuse0 = job 931, completed (180 s). Its log is tmp/t37/job931_s2reuse0.log (copied over
+blx03 ~/fasth3/out/t37/s2reuse0/run.log, which job 937 had overwritten). Hashes in tmp/t37/s2reuse0.md5.
+S2 denoise (table, replays gen1/gen2): 2.53 s / 2.54 s. S2 steps 818-828 ms. S2 prompt upload 35-36 ms of the
+47-49 ms denoise init: this is the most prompt reuse can save per request (~1.4% of S2).
+E2E wall gen1 8.758 s, gen2 7.108 s (conv decoder).
+
+Driver bug (mine): it parsed "^JOB ID:" but `tt-device-mcp run-bg` prints "Job <id> queued". The id stayed empty,
+so it resubmitted s2reuse0 after 931 (job 932) and again while the device was held (937). Both 932 and 937 were
+broker-killed when chips 8-15 left PCIe, both during the first S1 steps (strided all-gather warm-up); 932 led to
+a power cycle at 22:00 UTC. With t41's job 904 that is 3 of the last 4 LTX jobs on blx03 dropping the same tray.
+Fixed in tmp/t37/drive37.sh (and on blx03): parses "Job N queued", treats HELD/recover/reset/power as busy, skips
+s2reuse0 when its latents exist. NOT relaunched: waiting for a user call on whether blx03 is fit for more jobs.
+
+On resume (only once the user OKs more blx03 jobs): confirm `lspci -d 1e52: | wc -l` = 32 and no broker hold,
+then on blx03 `setsid nohup bash ~/fasth3/t37/drive37.sh > ~/fasth3/t37/drive37.log 2>&1 &` (runs s2reuse1 only).
+Reference outputs (70 MB) stay in blx03 ~/fasth3/out/t37 until then; delete that and ~/fasth3/t37 afterwards.
