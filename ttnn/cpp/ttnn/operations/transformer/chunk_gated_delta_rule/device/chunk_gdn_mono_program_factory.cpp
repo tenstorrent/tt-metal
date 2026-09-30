@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Program factory for the standalone chunk_gated_delta_rule op.
+// The Mono program factory of the chunk_gated_delta_rule device op (chunk_gdn_device_operation.hpp).
 // Parallelism: one Tensix core per (B*HV) head; each core loops over NC chunks
 // holding the recurrent state S [K,V] on-core. All math is in the compute kernel,
 // derived from flash-linear-attention `naive_chunk_gated_delta_rule`.
 
-#include "chunk_gated_delta_rule_program_factory.hpp"
+#include "chunk_gdn_device_operation.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
 #include <set>
@@ -58,14 +59,13 @@ constexpr uint32_t scr3 = tt::CBIndex::c_30;       // scratch [C,C]
 constexpr uint32_t s3 = tt::CBIndex::c_31;         // [K,V] ping-pong state buffer 3
 }  // namespace cb
 
-tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descriptor(
-    const ChunkGatedDeltaRuleParams& attrs, const ChunkGatedDeltaRuleInputs& in, std::vector<Tensor>& outputs) {
+tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
+    const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
 
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
@@ -139,9 +139,9 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     add_cb(cb::s3, kv, 2);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, has_s0};
+    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
-    // Reader compile args: {Ct,Kt,Vt,has_s0} + TensorAccessorArgs for each input (in order).
+    // Reader compile args: {Ct,Kt,Vt} + TensorAccessorArgs for each input (in order).
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
@@ -151,7 +151,7 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     TensorAccessorArgs(*in.eye_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tril_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.ones_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(*in.initial_state.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = ct_args;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
@@ -178,8 +178,7 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(BH);
 
     auto* q_buf = in.q.buffer();
@@ -190,7 +189,7 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     auto* eye_buf = in.eye_c.buffer();
     auto* tril_buf = in.tril_c.buffer();
     auto* ones_buf = in.ones_c.buffer();
-    auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 

@@ -40,6 +40,7 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -349,8 +350,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     // pointers for a serviced device must therefore be written into that device's DRAM, not
                     // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
                     // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel =
-                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
+                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
+                        this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
                         pointers.data(),
                         pointers.size() * sizeof(uint32_t),
@@ -377,7 +378,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
-    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, command_queue_program, /*force_slow_dispatch=*/true);
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
@@ -505,6 +506,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
+    if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
+        TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
+    }
     const uint32_t default_sub_device_worker_count =
         compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
@@ -530,8 +534,8 @@ void Device::configure_fabric() {
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    slow_dispatch::WriteRuntimeArgsToDevice(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed
