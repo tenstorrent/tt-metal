@@ -464,9 +464,10 @@ def test_sfpu_reduce(
     )
 
 
-def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 1000)):
-    """Build a single 32x32 Int32 tile, inject `injected_value` at a few scattered
-    positions, run the SFPU reduce on device, and return (golden_slice, device_slice).
+def _run_int32_reduce_grid(mathop, reduce_pool, grid):
+    """Run the SFPU reduce on device over one 32x32 Int32 tile given as `grid` (rows x columns) and
+    return (golden_slice, device_slice) along the reduced axis: one value per column for
+    ReduceColumn, one per row for ReduceRow.
     """
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
@@ -484,21 +485,8 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
         BlocksCalculationAlgorithm.Standard,
     )
 
-    stimuli_size = (tile_cnt * ELEMENTS_PER_TILE,)
-    torch.manual_seed(0)
-    src_A = torch.randint(
-        low=base_range[0], high=base_range[1], size=stimuli_size, dtype=torch_format
-    )
-
-    # Inject the extreme value at a handful of scattered positions (6 of the 32x32 grid). These land
-    # in 6 distinct columns and 6 distinct rows, so 6 of the 32 reduced columns (for column reduce) /
-    # rows (for row reduce) actually see the extreme value; the remaining lanes just reduce the random
-    # data. Positions taken on the 32x32 grid.
-    grid = src_A.view(TILE_DIM, TILE_DIM)
-    inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
-    for r, c in inject_positions:
-        grid[r, c] = injected_value
-    src_A = grid.flatten()
+    assert grid.shape == (TILE_DIM, TILE_DIM), "grid must be one 32x32 tile"
+    src_A = grid.to(torch_format).flatten()
 
     dst_dim = (
         [32, tile_cnt * 32]
@@ -561,6 +549,29 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     return golden_tensor[:, 0], res_tensor[:, 0]
 
 
+def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 1000)):
+    """Build a single 32x32 Int32 tile, inject `injected_value` at a few scattered
+    positions, run the SFPU reduce on device, and return (golden_slice, device_slice).
+    """
+    torch.manual_seed(0)
+    grid = torch.randint(
+        low=base_range[0],
+        high=base_range[1],
+        size=(TILE_DIM, TILE_DIM),
+        dtype=format_dict[DataFormat.Int32],
+    )
+
+    # Inject the extreme value at a handful of scattered positions (6 of the 32x32 grid). These land
+    # in 6 distinct columns and 6 distinct rows, so 6 of the 32 reduced columns (for column reduce) /
+    # rows (for row reduce) actually see the extreme value; the remaining lanes just reduce the random
+    # data. Positions taken on the 32x32 grid.
+    inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
+    for r, c in inject_positions:
+        grid[r, c] = injected_value
+
+    return _run_int32_reduce_grid(mathop, reduce_pool, grid)
+
+
 # Green on both arches. The Blackhole INT32_MIN divergence this was written against is fixed: #49589
 # routes Int32 MAX/MIN through calculate_reduce_max_min_int32_col and perform_reduce_row_max_min_int32,
 # dedicated two's-complement compare-and-swap paths correct over the full Int32 range, rather than the
@@ -619,6 +630,114 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} (see stdout)"
     )
+
+
+def _int32_order_edge_lanes() -> torch.Tensor:
+    """32 lanes x 32 values of Int32 ordering edge cases for test_int32_reduce_order_edges.
+
+    Each lane is one reduced row (ReduceRow) or column (ReduceColumn). The lanes pin the cases a
+    sign-magnitude comparator gets wrong for two's-complement operands: both-negative pairs, the
+    -1 / 0 boundary, INT32_MIN against its neighbours and against 0 / INT32_MAX, a lone extreme in
+    an otherwise constant lane, all-equal lanes (idempotent fold), sign-alternating powers of two,
+    and ramps / random draws spanning the full range.
+    """
+    g = torch.Generator().manual_seed(1)
+
+    def rep(*vals):
+        return [vals[i % len(vals)] for i in range(TILE_DIM)]
+
+    def one(value, fill, pos=17):
+        lane = [fill] * TILE_DIM
+        lane[pos] = value
+        return lane
+
+    def rand(low, high):
+        return torch.randint(
+            low, high, (TILE_DIM,), generator=g, dtype=torch.int64
+        ).tolist()
+
+    lanes = [
+        rep(INT32_MIN),
+        rep(INT32_MAX),
+        rep(0),
+        rep(-1),
+        rep(1),
+        rep(-5),
+        rep(7),
+        rep(INT32_MIN + 1),
+        rep(INT32_MIN, INT32_MAX),
+        rep(-1, 0),
+        rep(0, 1),
+        rep(-1, 1),
+        rep(INT32_MIN, -1),
+        rep(INT32_MIN, INT32_MIN + 1),
+        rep(INT32_MAX - 1, INT32_MAX),
+        rep(INT32_MIN, 0),
+        rep(INT32_MAX, 0),
+        rep(INT32_MIN + 1, INT32_MAX),
+        rep(INT32_MIN, INT32_MAX, -1, 0, 1),
+        one(INT32_MIN, 0),
+        one(INT32_MAX, 0),
+        one(-1, INT32_MIN),
+        one(0, -1),
+        one(1, -1),
+        one(-1, 1),
+        list(range(-16, 16)),
+        [(-1) ** k * (1 << (k % 31)) for k in range(TILE_DIM)],
+        [INT32_MIN + k * (1 << 27) for k in range(TILE_DIM)],
+        [INT32_MAX - k * (1 << 27) for k in range(TILE_DIM)],
+        rand(INT32_MIN, INT32_MAX),
+        rand(INT32_MIN, 0),
+        rand(0, INT32_MAX),
+    ]
+    assert len(lanes) == TILE_DIM
+    return torch.tensor(lanes, dtype=torch.int64)
+
+
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+def test_int32_reduce_order_edges(mathop, reduce_pool):
+    """Every reduced lane is an Int32 ordering edge case; the device result must equal torch exactly.
+
+    Companion to test_int32_reduce_extreme, which injects a single extreme into random data. Here
+    all 32 lanes are designed (see _int32_order_edge_lanes). On Blackhole the MAX/MIN kernel feeds
+    SFPSWAP an order-preserving map (x < 0 -> x ^ 0x7FFFFFFF) whose correctness rests on the
+    comparator ordering sign-magnitude -0 strictly below +0 and INT32_MIN's image below every other
+    value (tt-isa SFPSWAP.md, SignMagIsSmaller); the {-1, 0}, {INT32_MIN, -1} and
+    {INT32_MIN, INT32_MIN + 1} lanes pin exactly those cases.
+    """
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    lanes = _int32_order_edge_lanes()
+    # Lane = row for ReduceRow; lane = column for ReduceColumn.
+    grid = lanes if mathop == MathOperation.ReduceRow else lanes.t().contiguous()
+
+    golden_slice, res_slice = _run_int32_reduce_grid(mathop, reduce_pool, grid)
+
+    golden = golden_slice.to(torch.int64)
+    res = res_slice.to(torch.int64)
+
+    mismatch = golden != res
+    num_mismatch = int(mismatch.sum().item())
+    if num_mismatch:
+        idxs = torch.nonzero(mismatch).flatten().tolist()
+        detail = "\n".join(
+            f"  lane={i}: golden={int(golden[i])} device={int(res[i])}" for i in idxs
+        )
+        logger.info(
+            "\n{} {} order edges: {} mismatched lanes\n{}",
+            reduce_pool,
+            mathop,
+            num_mismatch,
+            detail,
+        )
+
+    assert (
+        num_mismatch == 0
+    ), f"{num_mismatch} mismatched Int32 order-edge lanes for {reduce_pool} {mathop} (see stdout)"
 
 
 # =============================================================================

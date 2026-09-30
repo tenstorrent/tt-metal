@@ -23,18 +23,7 @@ from helpers.test_variant_parameters import (
 )
 
 
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float32],
-        same=True,
-    ),
-    dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow],
-    reduce_pool=[ReducePool.Max],
-    loop_factor=list(range(10, 201, 10)),
-)
-def test_perf_sfpu_reduce(
+def _run_perf_sfpu_reduce(
     perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
 ):
     input_dimensions = [32, 32]
@@ -72,3 +61,46 @@ def test_perf_sfpu_reduce(
     )
 
     configuration.run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float32],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.Yes],
+    mathop=[MathOperation.ReduceRow],
+    reduce_pool=[ReducePool.Max],
+    loop_factor=list(range(10, 201, 10)),
+)
+def test_perf_sfpu_reduce(
+    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+):
+    _run_perf_sfpu_reduce(
+        perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+    )
+
+
+# Signed Int32 MAX/MIN, row and column. ttnn always routes Int32 max/min reductions to the SFPU
+# reduce (the FPU has no Int32 path), and on Blackhole they run on a dedicated order-mapped SFPSWAP
+# kernel (ckernel_sfpu_reduce.h) rather than the float LOADMACRO/replay paths measured above, so
+# they get their own MATH_ISOLATE variants. TILE_LOOP is reported per tile, so a single loop factor
+# is enough for an A/B; the row body runs 32 vector iterations per tile, the column body 4.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Int32],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.Yes],
+    mathop=[MathOperation.ReduceRow, MathOperation.ReduceColumn],
+    reduce_pool=[ReducePool.Max, ReducePool.Min],
+    loop_factor=[100],
+)
+def test_perf_sfpu_reduce_int32(
+    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+):
+    _run_perf_sfpu_reduce(
+        perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+    )
