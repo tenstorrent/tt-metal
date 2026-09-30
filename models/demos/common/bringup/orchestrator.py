@@ -58,6 +58,7 @@ from models.demos.common.bringup.core.gate import (
     _program,
     _segments,
     format_paths,
+    gate_outputs,
     git_commit,
     log_dir,
     run_gate,
@@ -360,6 +361,9 @@ class Orchestrator:
         extra.append(BRINGUP_OPS)
         if role == "implement" and OR.deferrable(task):
             extra.append(rel(self.spec, OR.root(self.spec)))  # an op request, if the agent defers the step (F46)
+        # F55: the files this task's gate writes are the agent's to change too (one list: core.gate.gate_outputs), so
+        # an agent that runs its own gate command is never charged for them; the gate deletes and rewrites them.
+        extra += [rel(self.spec, p) for p in gate_outputs(self.led, task)]
         return list(task.get("paths") or []) + extra + self.common_paths()
 
     # ---- briefs
