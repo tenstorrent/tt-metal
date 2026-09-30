@@ -90,6 +90,24 @@ def want_ops(s) -> bool:
     return bool(s.get("perf.op_profile", False)) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
 
 
+def op_layers(s, layers: list[int]) -> list[int]:
+    """The layers the per-op breakdown runs on: one representative layer per block type by default, or the list in
+    BRINGUP_PROFILE_LAYERS ("2" or "0,2"). Op mode syncs and reads the profiler after every ttnn call (about a minute
+    per layer), so it never runs over the whole model: the section times of the plain profile already cover every
+    layer. A perf change is judged by the e2e chunk time and its own section's time, before and after."""
+    env = os.environ.get("BRINGUP_PROFILE_LAYERS", "").strip()
+    if env:
+        want = sorted({int(x) for x in env.split(",") if x.strip()})
+        bad = [i for i in want if i not in layers]
+        assert not bad, f"BRINGUP_PROFILE_LAYERS={env}: layers {bad} are not in the profiled rung's layers"
+    else:
+        want = sorted({s.representative_layer(bt) for bt in s.data.get("block_types", {})} & set(layers))
+    assert (
+        0 < len(want) <= max(2, len(s.data.get("block_types", {})))
+    ), f"op mode on {len(want)} layers: it takes about a minute per layer; pick one layer per block type"
+    return want
+
+
 def op_profile(mesh, run) -> tuple[dict, dict | None]:
     """Two more warm runs. Op mode (F43): per layer and section ("L3.attention.qkv"), the ttnn ops in execution order
     with calls, device programs, device ms (slowest chip per call, summed) and ms per chip. Timeline (F44): the same
@@ -213,10 +231,12 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
 
     host = []
 
-    def run(count=False):
+    def run(count=False, only=None):
+        run_layers = layers if only is None else only
+        run_starts = starts if only is None else {k for n, k in enumerate(only) if n == 0 or only[n - 1] != k - 1}
         h = None
-        for i in layers:
-            if i in starts:
+        for i in run_layers:
+            if i in run_starts:
                 if h is not None:
                     model.free(h)
                 h = model.embed(tokens) if i == 0 else model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
@@ -230,7 +250,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             model.free(h)
             h = h2
         model.sync()
-        if count:  # the counting run is untimed: also check this chunk is still right (cheap accuracy for perf work)
+        if (
+            count and only is None
+        ):  # the counting run is untimed: also check this chunk is still right (cheap accuracy for perf work)
             got = model.to_host(h).float()
             metrics.record("pcc_chunk_out", metrics.pcc(got, g.layer(g.n_chunks - 1, layers[-1])["out"].float()))
         model.free(h)
@@ -257,7 +279,14 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     profiler.signpost("end")
     prof = profiler.result()
     profiler.disable()
-    ops, timeline = op_profile(mesh, run) if want_ops(s) else (None, None)
+    if want_ops(s):
+        sel = op_layers(s, layers)
+        print(f"op profile on layers {sel} (of {len(layers)})")
+        metrics.record("op_layers", len(sel))
+        reload()
+        ops, timeline = op_profile(mesh, lambda: run(only=sel))
+    else:
+        ops, timeline = None, None
     if ops is not None:
         metrics.record("op_rows", sum(len(v) for v in ops.values()))
         attached = all("gap_ms" in r for rows in ops.values() for r in rows)  # every op row got its timeline columns
