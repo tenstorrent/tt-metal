@@ -27,7 +27,7 @@ def reference(spec, layers=None, dtype=None):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm", "mlp"},
-    "moe": {"router", "experts"},
+    "moe": {"router", "experts", "shared_expert"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -48,6 +48,9 @@ _RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
 # Dense SwiGLU (tt/mlp.py:TtDenseMLP): row-split ffn_norm [S, H] (replicated over axis 1) in -> gate / up
 # column-parallel, down row-parallel -> reduce_scatter axis 1 -> column-split mlp_out [S, H] fp32.
 _MLP_STEPS = {"mlp"}
+# MoE shared expert: the same TtDenseMLP (SwiGLU 1024, 512 per column) on the mlp.shared_experts.* weights, same
+# boundary as mlp (row-split ffn_norm in, column-split shared_out fp32 out).
+_SHARED_EXPERT_STEPS = {"shared_expert"}
 # MoE router (tt/router.py:TtRouter): row-split ffn_norm [S, H] (replicated over axis 1) in -> replicated fp32 gate,
 # sigmoid, bias, top-4, renorm x 2.0 -> row-split dense routing [S, 64] fp32 (+ idx / weights for dispatch). No CCL.
 _ROUTER_STEPS = {"router"}
@@ -336,6 +339,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.mlp import build_mlp
 
         return _mlp_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
+    if step in _SHARED_EXPERT_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.mlp import build_mlp
+
+        return _mlp_host_fn(mesh, build_mlp(mesh, loader, cfg, layer, prefix="mlp.shared_experts."))
     if step in _ROUTER_STEPS:
         from models.demos.xing40_a4b_d_p.tt.router import build_router
 
