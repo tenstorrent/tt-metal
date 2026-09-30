@@ -2,3 +2,4 @@
 {"event":"perf","shape":"T640 C7168 fp32","ns":{"baseline":556210,"compute_stubbed":415020,"compute+expansion_stubbed":398021,"face_dup":531124},"roofline_ns":403000,"bound":"compute (~3.3us per output tile)","ts":"2026-09-30T01:56:56+00:00"}
 {"event":"perf","shape":"T640 C1792 fp32","ns":{"baseline":222621,"compute_stubbed":196916,"compute+expansion_stubbed":100677,"face_dup":168204},"bound":"reader coefficient expansion then compute","ts":"2026-09-30T01:56:56+00:00"}
 {"event":"perf","lever":"block_col_tiles cap","result":"B=4/2 slower (665/699us vs 560us at C7168); kept coarsest-fit default, MAX_BLOCK_COL_TILES knob parked at None","ts":"2026-09-30T01:56:56+00:00"}
+{"event":"friction","what":"none","ts":"2026-09-30T01:57:18+00:00"}
