@@ -37,13 +37,6 @@ when `skip_precompile=True`. That flag does not make late allocation safe.
 Expanding the set requires releasing live traces and rebuilding the model and
 generator with the complete configuration.
 
-`test_prepared_trace_io.py` checks ownership and tracker enforcement with small
-device operations. `test_prepared_trace_io_model.py` runs all 64 Qwen3-32B layers
-on T3K, compares traced results against eager results across prefill/decode
-alternation, and checks queued reads, retained copies and stable program caches.
-Run both with `TT_METAL_TRACE_ALLOC_TRACKING=1` and
-`TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0`.
-
 This applies to the base text generator's prepared paths. Models that replace
 capture or warmup must prepare their own full set before delegating to these
 paths. The separate Galaxy generator and its GCB/prefetcher lifecycle require

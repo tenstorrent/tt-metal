@@ -37,33 +37,6 @@ tt_tokens = sampling.sample(
 `SamplingGenerator.sample()` accepts `enable_trace=True` to record/replay
 sampling traces.
 
-## Trace output lifetime
-
-Construct `SamplingGenerator` before capturing any model or sampling trace. It
-allocates token output buffers up front, alongside the existing log-probability
-buffers. Compatible sampling trace keys and decode buckets reuse these buffers;
-argmax and regular sampling keep their existing, different output shapes.
-
-`precompile()` and `capture_trace()` use the same explicit token output. An
-optional output changes the program-cache key, so an enclosing model trace must
-also supply the token output used for its sampling warmup. Caller-provided
-`tt_out_tok` buffers must likewise exist before related traces are captured.
-
-Traced device results are **borrowed**, not snapshots. Read or copy tokens before
-another trace or warmup writes the same token buffer. Log-probabilities are reused
-by both traced and eager sampling. For retention, complete a host read or copy
-into separate device storage allocated before capture. An asynchronous read must
-be ordered before the next write; merely retaining a Python tensor reference does
-not preserve its contents.
-
-`reset_trace()` releases sampling traces but retains the sampler-owned token
-buffers, because model traces can remain live. Reinitialize the sampler and its
-related traces to change the configured sampling batch. Inputs must already be
-padded to that batch; trace capture never lazily allocates a new output shape.
-
-The eager `sample(enable_trace=False)` path still allocates its token output when
-`tt_out_tok` is omitted. Direct `TTSampling` calls retain their existing behavior.
-
 ## File Map
 
 | File | Purpose |
