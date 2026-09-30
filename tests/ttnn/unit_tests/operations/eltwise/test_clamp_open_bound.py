@@ -47,12 +47,9 @@ def test_clamp_open_bound_float32(device, x, min_v, max_v, expected):
 
 def test_clamp_open_bound_matches_tensor_overload(device):
     """The scalar-bound and tensor-bound overloads of ttnn.clamp must agree on finite input and ±inf."""
-    x = torch.tensor([[1.0, -2.0, float("inf"), float("-inf"), 3.0]] + [[0.0] * 5] * 31 * 32, dtype=torch.float32).view(
-        1, 1, 32, 32
-    )[:, :, :1, :5]
-    # Pad to a full 32x32 tile of zeros with the interesting row at [0, 0, 0, :5]
+    # A full 32x32 tile of zeros with the interesting row at [0, 0, 0, :5]
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
-    padded[0, 0, 0, :5] = x.view(-1)[:5]
+    padded[0, 0, 0, :5] = torch.tensor([1.0, -2.0, float("inf"), float("-inf"), 3.0])
 
     tx = ttnn.from_torch(padded, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     zero_tensor = ttnn.from_torch(torch.zeros_like(padded), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
