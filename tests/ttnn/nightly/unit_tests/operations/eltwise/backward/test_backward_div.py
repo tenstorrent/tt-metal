@@ -15,6 +15,8 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
+from tests.ttnn.utils_for_testing import assert_with_ulp
+
 
 
 @pytest.mark.parametrize(
@@ -346,8 +348,9 @@ def test_bw_binary_div_signed_zeros(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=1)
 
     # Examine zero divisor cases covered in #55392: mixed positive (+0.0) and negative (-0.0) zeros
-    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16)
     other_data[:, :, :, : input_shapes[-1] // 2] = -0.0
+    other_data.requires_grad = True
     other_tensor = ttnn.from_torch(other_data, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor)
@@ -355,8 +358,13 @@ def test_bw_binary_div_signed_zeros(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
-    assert comp_pass
+    for i in range(len(tt_output_tensor_on_device)):
+        if tt_output_tensor_on_device[i] is not None and golden_tensor[i] is not None:
+            assert_with_ulp(
+                expected_result=golden_tensor[i],
+                actual_result=tt_output_tensor_on_device[i],
+                allow_nonfinite=True,
+            )
 
 
 @pytest.mark.parametrize(
@@ -367,11 +375,12 @@ def test_bw_binary_div_signed_zeros(input_shapes, device):
 )
 def test_bw_binary_div_zero_grad_with_signed_zero_divisor(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=0)
-    grad_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    grad_data = torch.zeros(input_shapes, dtype=torch.bfloat16)
     grad_tensor = ttnn.from_torch(grad_data, layout=ttnn.TILE_LAYOUT, device=device)
 
-    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16)
     other_data[:, :, :, : input_shapes[-1] // 2] = -0.0
+    other_data.requires_grad = True
     other_tensor = ttnn.from_torch(other_data, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor)
@@ -379,5 +388,10 @@ def test_bw_binary_div_zero_grad_with_signed_zero_divisor(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
-    assert comp_pass
+    for i in range(len(tt_output_tensor_on_device)):
+        if tt_output_tensor_on_device[i] is not None and golden_tensor[i] is not None:
+            assert_with_ulp(
+                expected_result=golden_tensor[i],
+                actual_result=tt_output_tensor_on_device[i],
+                allow_nonfinite=True,
+            )
