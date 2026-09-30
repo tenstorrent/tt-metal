@@ -520,9 +520,6 @@ sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...
 // increments between them): the same instructions per vector, without the frame and the set-up of every call, which
 // cost the approximate exponential 35 to 38 cycles per tile and the accurate bf16 one 21. The fp32 accurate body is
 // an sfpi row loop and keeps the per-face walk.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-constexpr bool exp_full_tile_call = APPROXIMATION_MODE || !is_fp32_dest_acc_en;
-
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
