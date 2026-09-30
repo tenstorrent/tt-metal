@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.matmul import unpack_matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 
 
 class MatmulUnpacker(Unpacker):
@@ -60,10 +60,10 @@ class MatmulUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP1
-        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
-        id_a = bfd_current(BfdResource.UNP1)
-        id_b = bfd_current(BfdResource.UNP0)
+            BfdResource.UNP1, result_name="bfd_a"
+        ) + compute_unit.src_b.bfd_alloc_and_program(
+            BfdResource.UNP0, result_name="bfd_b"
+        )
         src_b_shape = compute_unit.src_a.tile_shape.cpp_value
         src_a_shape = compute_unit.src_b.tile_shape.cpp_value
         rt_dim = block.block_rows
@@ -72,8 +72,9 @@ class MatmulUnpacker(Unpacker):
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
 
         return (
-            bfd_program + f"_llk_unpack_matmul_init_<false>"
-            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim}, {src_b_shape}, {src_a_shape});\n"
+            "{\n" + bfd_program + "_llk_unpack_matmul_init_<false>"
+            f"(bfd_a, bfd_b, {ct_dim}, {rt_dim}, {kt_dim}, {src_b_shape}, {src_a_shape});\n"
+            "}\n"
         )
 
     def unpack(

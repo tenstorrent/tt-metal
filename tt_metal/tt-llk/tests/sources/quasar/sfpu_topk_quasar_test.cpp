@@ -101,19 +101,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t unpack_src_format = unpack_src_data_types[stage_index];
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
-                    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+                    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
                         ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_A[0]), unpack_src_format);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+                            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
                     }
                     else
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+                            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
                     }
 
                     const int first_tile_index  = tile_row_offset + stage_index * NUM_VALUE_TILES_PER_ROW + tile_pair_offset;
@@ -351,8 +351,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         l1_addr_16B                = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
-                    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+                    const auto bfd_pack =
+                        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
+                    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
                     _llk_pack_(stage_index * NUM_TILES_PER_STAGE, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
