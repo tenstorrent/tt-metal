@@ -117,3 +117,11 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   full-block swaps, rung last, profile attention < 1050 / total < 1700 ms), P.2 (fused mHC: mhc_post with a comb
   option, then mhc_pre split + Xing-math options; gate: frozen hc / collapse / residual tests, swaps, rung last,
   residuals < 60 ms each), P.3 (experts HiFi2, bfp8 weights; experts < 235 ms). X.3 now depends on P.3. approve perf.
+- 18:07-19:30 P.1 attempt 1 (agent): HiFi2 ring_mla fails the frozen C.moe.attention test (L02 median row norm -0.0068
+  vs 0.004); the agent turned to HiFi3 (never asked for). Owner: "I want either hifi2 or nothing". Stopped the
+  orchestrator and agent (19:15). Overseer end-to-end check at HiFi2 q64 / k256 (XING_MLA_SDPA_FIDELITY=HiFi2, results
+  in scratchpad): rung last min layer 0.99242 (HiFi4 0.99300), final 0.99848, logits 0.99900, top5 1.0; s56320 min
+  layer 0.99193 (0.99230), final 0.99835, logits 0.99838, state 0.99663, top1 0.963 (0.977), top5 1.0; rung wall
+  59.7 / 70.2 s vs 99.8 / 131.0 s. Owner: enable HiFi2 and fix the gate. Overseer: attention.py switch HiFi2 (default)
+  | HiFi4 only (HiFi3 removed), q64 at HiFi2; P.1 gate drops test_c_moe_attention.py (owner decision), keeps dense
+  attention, swaps, rung last, profile. Known-issues entry states the end-to-end result. Resumed.

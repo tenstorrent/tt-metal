@@ -573,15 +573,18 @@ class XingDeviceModel:
 
     def perf_settings(self):
         """Recorded in the profile: the mHC residual mix (XING_RESIDUAL_MIX), the ring_mla implementation
-        (XING_MLA_SDPA) and the routed-experts path (XING_EXPERTS_MODE)."""
+        (XING_MLA_SDPA), its fidelity / chunks (XING_MLA_SDPA_FIDELITY, XING_MLA_Q_CHUNK) and the routed-experts
+        path (XING_EXPERTS_MODE)."""
         import os
 
-        from models.demos.xing40_a4b_d_p.tt.attention import sdpa_impl
+        from models.demos.xing40_a4b_d_p.tt.attention import K_CHUNK, sdpa_fidelity, sdpa_impl, sdpa_q_chunk
         from models.demos.xing40_a4b_d_p.tt.residual import residual_mix_mode
 
         return {
             "residual_mix": residual_mix_mode(),
             "mla_sdpa": sdpa_impl(),
+            "mla_sdpa_fidelity": sdpa_fidelity(),
+            "mla_sdpa_chunks": f"q{sdpa_q_chunk()}/k{K_CHUNK}",
             "experts_mode": os.environ.get("XING_EXPERTS_MODE", "unified"),
         }
 
