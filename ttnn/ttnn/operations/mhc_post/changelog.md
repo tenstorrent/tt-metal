@@ -110,3 +110,115 @@
 - Tests added:
   - `test_mhc_post_dataflow_knobs.py`: 24 cases covering `COEF_EXPANDER` writer / reader × {default policy, coarsest fit, B = 1, B = 3} × {T640 C1792 bf16 (row-straddling cores), T100 C224 fp32 non-aligned, n = 5}.
   - `test_mhc_post_perf.py`: `MHC_POST_SWEEP_MAX_BLOCK` env sweep; `max_block = None` now keeps the descriptor's policy.
+
+## Perf 1 — perf tournament round 1 (2 experiments: 1 graduated, 1 regression)
+- Date: 2026-09-30. Box: Blackhole p150, 110 cores. All numbers are DEVICE KERNEL DURATION.
+- Focus (feature_spec `_PERF_FOCUS`, all bf16 streams, fp32_dest_acc_en = True, TILE, DRAM interleaved; all in SUPPORTED): T640 C7168, T640 C1792, T1280 C4096.
+- **Instrumentation (permanent)**: `MaybeDeviceZoneScope` on every stage boundary, from `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`.
+  - Compute: `compute_wait_in` / `compute_wait_coef` (the unpack starved on reader / expander), `compute_reserve_out` (writer back-pressure), `compute_mix` (occupancy).
+  - Reader: `reader_reserve` / `reader_issue` / `reader_barrier` / `reader_wait_help`.
+  - Writer: `writer_help_read` / `writer_issue` / `writer_barrier` / `writer_coef_start` / `writer_coef_expand`.
+  - The waits have their own zones, so each zone isolates either starvation or work.
+  - With read help on, the per-term coefficient steps carry no zone: one step per event-loop pass would exhaust the 250-marker budget.
+
+### Measured breakdown (op at Refinement 3; focus T640 C7168 / T640 C1792 / T1280 C4096)
+| cut | us |
+|---|---|
+| full | 219.5 / 67.5 / 267 |
+| DM floor (compute + expansion stubbed) | 188.7 / 52.3 / 214.6 |
+| compute only (NoC stubbed, CB handshakes kept) | 173.5 / 50.5 / 197.7 |
+| compute only, SFPU also stubbed | 124.8 / 38.2 / 141.6 |
+| compute stubbed, expansion kept | 196.8 / 65.2 / 219.1 |
+| SFPU stubbed, rest full | 246.5 / 73.6 / 286.9 (faster compute alone regresses: DRAM fairness) |
+| sync floor (everything stubbed at once) | 7.5 / 6.2 / 7.9 |
+| DRAM target (0.8 × 512 GB/s) | 201.7 / 50.4 / 230.5 |
+- Ranked bottleneck:
+  - The DM floor is DRAM-bound at ~85% of DRAM peak (~441 GB/s at C7168 / T1280), so it is at roofline in aggregate. Compute is below the DM floor.
+  - The wall exceeds the floor for two reasons:
+    - (a) the pipeline tail after each core's last read (median 37 µs at C7168, 25 µs at C1792), from block-granular (B = 8) CB hand-off;
+    - (b) uneven per-core DRAM service by grid position: the slowest core sets the wall.
+  - Speeding up compute alone does not help, because the stages are balanced.
+
+### Portfolio (cap: 2 experiments)
+1. **column_stream**: a column-granular pipeline. The reader pushes per column with trid-tracked reads (same bytes in flight); compute is column-outer; the writer writes per column and flushes before pop. Target: (a), the tail.
+2. **split_noc_reads**: reader/writer NoC balance. BRISC (idle ~80% of the kernel) issues a share of the input reads alongside its writes. Target: (b), the slow cores.
+
+### Verdicts
+- **column_stream — REGRESSION, not graduated.** 3 repeats, focus bf16:
+  - baseline 223.1 / 67.4 / 269.9 µs;
+  - pure column stream (G = 1): 299.8 / 76.6 / 335.5;
+  - DM-coarse + column hand-off: 229.4 / 74.8 / 294.7;
+  - G = B: 219.4 / 67.3 / 268.1, identical to the baseline.
+  - The column trickle makes the slow cores' reader-issue stalls worse (up to 165 µs at core (3,3)), and the per-column writer hurts too.
+  - Its one win was fp32-X T640 C1792 (1.10–1.20×), but fp32 T1000 C1792 was −10% and fp32 T640 C4096 −5%. Artifacts: `perf_experiments/column_stream/`.
+- **split_noc_reads — WIN over a measured domain, graduated with two measured carve-outs.**
+  - Measured variants: BRISC reads F / X streams on NoC1 or NoC0, NCRISC writes output streams, dynamic-NoC mode, split-CB compute, event-loop and "helper DMA" schedules.
+  - Nulls and regressions:
+    - Any read on NoC1: DM floor +4–5%, full +6–20%.
+    - NCRISC write help: +3–9%.
+    - Writes on NoC0: +10–17%.
+    - Split-CB compute: compute alone +4–8%.
+    - Help from block 0: T1280 +5%.
+  - Winner, `hF_n0_hf1_inc`:
+    - BRISC reads the F block of every block ≥ 1 straight into the reader's reserved window, on NoC0 (dynamic-NoC mode), with a two-semaphore hand-off.
+    - The op's CBs and compute kernel are unchanged, and the coefficient expansion is incremental (one term per event-loop pass).
+    - X-stream help (`hX1_n0_hf1_inc`) measured within 2% of it. F was chosen because its share is independent of n.
+  - Bit-exact against the op on 17 shapes: n = 1/2/3/5, fp32, mixed dtype, non-aligned, row-straddling, batch.
+  - Help on, bf16, `orig` → help (median of 3 where repeated):
+
+    | shape | blocks / core | orig µs | help µs | Δ |
+    |---|---|---|---|---|
+    | T1280 C4096 (focus) | 6 | 268 | 246 | −8% |
+    | T640 C7168 (focus) | 6 | 218 | 213 | −2.5% |
+    | T640 C1792 (focus) | 3 | 67 | 80 | +18% |
+    | T1024 C5120 | 6 | 275 | 245 | −11% |
+    | T1280 C6144 | 9 | 422 | 401 | −5% |
+    | T1024 C7168 | 9 | 406 | 385 | −5% |
+    | T4096 C2560 | 10 | 613 | 582 | −5% |
+    | T2048 C4096 | 10 | 451 | 433 | −4% |
+    | T2048 C7168 | 17 | 845 | 818 | −3% |
+    | T4096 C1792 | 9 | 412 | 408 | −1% |
+    | T1024 C4096 | 5 | 207 | 205 | −1% |
+    | T2048 C1792 | 5 | 182 | 189 | +4% |
+    | T512 C5120 | 3 | 150 | 156 | +4% |
+    | T256 C1792 | 3 | 37.4 | 39.8 | +7% |
+    | T640 C4096 | 3 | 148 | 151 | +3% |
+    | T256 C7168 | 3 | 112 | 115 | +2% |
+    | T1024 C2560 | 3 | 150 | 153 | +2% |
+    | T640 C2560 | 3 | 99.6 | 96.5 | −3% |
+  - fp32-X, help on: T1000 C7168 X fp32 / F bf16 678 → 700 (+3.2%, 3 runs, spread < 1%); X fp32 / F fp32 713 → 725 (+1.7%); T640 C7168 fp32 and T1280 C4096 fp32 −1…−2%; T640 C7168 mixed −0.5%.
+  - Help off (the same event-loop kernel): within ±2% of `orig` on 13 shapes. Tiny single-block shapes (T32 C32, T17 C128) +0.6 µs.
+  - Precision: no change. The help moves bytes only, and the arithmetic is the same kernel (bit-exact).
+
+### What graduated (`mhc_post_dm.cpp`, one DM source for both RISCs; the old `mhc_post_reader.cpp` / `mhc_post_writer.cpp` were deleted)
+- The DM path is now one kernel everywhere:
+  - role 0 (NCRISC) is the reader; its blocking loop reads F unless the block is helped.
+  - role 1 (BRISC) runs an event-loop writer: output blocks, coefficient loads, and read-help requests.
+- Read help is compiled in unless a carve-out applies. Both carve-outs have the right polarity (help off where it cannot pay):
+  1. The busiest core has < `HELP_MIN_BLOCKS` = 6 blocks. Measured +4…+18% at 3–5 blocks (table above). This keeps focus T640 C1792 on the unhelped schedule.
+  2. X is float32 (`HELP_FP32_STREAMS = False`). That datapath is compute-bound; measured +3.2% at T1000 C7168 X fp32 / F bf16.
+- With help off, the coefficient set is expanded in one go, as the old writer did. The incremental expansion measured T640 C1792 bf16 at a median of 68.9 vs 67.0 µs; in one go it is 67.35 µs.
+- Deleted:
+  - The `COEF_EXPANDER` knob and the reader-side expansion. The writer (the R3 default, measured faster) is now the only expander.
+  - `CoefExpander::expand()` / `load()`, replaced by a resumable `start()` / `step()` job.
+- New host knobs: `HELP_MIN_BLOCKS`, `HELP_FROM_BLOCK` = 1, `HELP_FP32_STREAMS`, `SEM_RD_GO` / `SEM_RD_DONE`. The NoC mode is `DM_DYNAMIC_NOC` only when help is on.
+- Whole op after graduation (`test_mhc_post_perf.py`; `perf_experiments/split_noc_reads/graduated_whole_op.txt`), before → after:
+  - Focus bf16: T640 C7168 218.3 → 213.7 (−2%); T640 C1792 67.0 → 67.1 (flat); **T1280 C4096 268.9 → 246.0 (−8.5%)**.
+  - fp32 perf cells (help carved out): T640 C7168 ~444 → 437; T640 C1792 ~134 → 136; T1280 C4096 ~532 → 533. All flat.
+  - Domain (bf16), for example: T1024 C5120 275 → 247 µs, T1280 C6144 422 → 396 µs, T4096 C2560 613 → 585 µs, T1024 C7168 406 → 381 µs. All help-off shapes are within ±2% of before.
+- Guard set (fp32 / bf16 / mixed × T640 / T1000 × C1792 / C7168; `orig` measured in the same session): every cell is flat within noise, except T1000 C7168 bf16 at 403 → 385 µs (−4%).
+  - The T640 C1792 bf16 guard cell ranges 67–73 µs on the same compiled program, which also measures 67.1 µs in the perf test. That matches Refinement 3's recorded 66–71 µs run-to-run range.
+- Correctness:
+  - Golden `eval/golden_tests/mhc_post/`: 208/208, run after every kernel/descriptor change.
+  - Unit dir: 110/110 + 33 perf.
+  - The knob test now covers help default / forced on (incl. fp32) / off × block policies × {T640 C1792 bf16 row-straddling, T100 C224 fp32 non-aligned, n = 5}.
+
+### Findings (not follow-ups)
+- **Escaped op bug:** found by the split_noc_reads optimizer; it predates this round.
+  - n = 2 with B ≥ 2 does not compile: the SFPU register spills (`cannot write SFPU object to memory`, `mhc_post_compute.cpp` `WeightedSumSfpu::row`). The optimizer reproduced it on the real op at T640 C1792 n = 2 bf16.
+  - Under the device profiler, n = 1 also fails to build (T640 C1792 n = 1).
+  - The existing n = 2 tests use only B = 1 shapes. This is a generality gap to report upstream, not a perf lever.
+- Remaining headroom: C1792 (the pipeline tail at ~3 blocks per core) and the 3–5-block band, where the help does not amortize. The fp32 cells are compute-bound.
+
+### Helper bypasses — none
+The new DM kernel uses dataflow_api only: noc_async_*, CB sync, L1 semaphores. There is no raw LLK. The compute kernel is unchanged; its R2 `WeightedSum` justification still stands.

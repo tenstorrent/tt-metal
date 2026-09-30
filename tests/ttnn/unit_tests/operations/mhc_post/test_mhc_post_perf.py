@@ -82,3 +82,45 @@ def test_mhc_post_perf_guard(device, T, C, dtypes):
     got = ttnn.to_torch(out).float().reshape(-1, N, C)
     tol = 1e-4 if x_dtype == ttnn.float32 else 2e-2
     assert torch.allclose(got, ref, rtol=tol, atol=tol)
+
+
+# Perf 1 domain sweep (bf16, the production precision): LOOSE perf dims x SP token counts spanning 3..17 blocks
+# per core — both sides of the read-help threshold (HELP_MIN_BLOCKS).
+DOMAIN_SHAPES = [
+    (256, 1792),
+    (2048, 1792),
+    (4096, 1792),
+    (640, 2560),
+    (1024, 2560),
+    (4096, 2560),
+    (640, 4096),
+    (1024, 4096),
+    (2048, 4096),
+    (512, 5120),
+    (1024, 5120),
+    (1280, 6144),
+    (256, 7168),
+    (1024, 7168),
+    (2048, 7168),
+]
+
+
+@pytest.mark.parametrize("T, C", DOMAIN_SHAPES, ids=[f"T{t}_C{c}" for t, c in DOMAIN_SHAPES])
+def test_mhc_post_perf_domain(device, T, C):
+    dtype = ttnn.bfloat16
+    torch.manual_seed(0)
+    f = torch.randn(1, 1, T, C)
+    x = torch.randn(1, 1, T, N * C)
+    post = torch.rand(1, 1, T, N) * 2
+    comb = torch.rand(1, 1, T, N * N)
+
+    def dev(t, dt):
+        return ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = mhc_post(dev(f, dtype), dev(x, dtype), dev(post, ttnn.float32), dev(comb, ttnn.float32))
+    f, x = f.bfloat16().float(), x.bfloat16().float()
+    ref = post.reshape(-1, N, 1) * f.reshape(-1, 1, C) + torch.einsum(
+        "tij,tic->tjc", comb.reshape(-1, N, N), x.reshape(-1, N, C)
+    )
+    got = ttnn.to_torch(out).float().reshape(-1, N, C)
+    assert torch.allclose(got, ref, rtol=2e-2, atol=2e-2)

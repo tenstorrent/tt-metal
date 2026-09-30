@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mhc_post compute.
+// mhc_post compute — COLUMN-STREAM candidate (perf_experiments/column_stream). Identical arithmetic to the op's
+// compute; the only changes: the CB handoff unit is a group of G columns (host CT arg 2 carries G in place of the
+// block size B, so every "block" below is a G-column group), and the cumulative coefficient waits run only in a
+// segment's first group.
 //
 // Helper substitution (documented per the helper-first policy): the per-term SFPU mix (MulBinary + n x
 // Addcmul, one SFPU pass per term) is replaced by ONE custom SFPU pass, `WeightedSum` below, that
@@ -292,11 +295,11 @@ ALWI void mix_tail_window(uint32_t j, uint32_t col0, uint32_t rem, bool& data_fi
 }
 
 // mix_block: all n output streams of one block.
-ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
+ALWI void mix_block(uint32_t valid_col_tiles, bool first_group, bool& data_first) {
     for (uint32_t j = 0; j < n; ++j) {
         // load_coefficients pushes the set one stream at a time (P tiles each); stream j needs streams
-        // 0..j. Cumulative, so a no-op after the segment's first block.
-        {
+        // 0..j. Cumulative: only the segment's first group waits (later groups find the whole set resident).
+        if (first_group) {
             MaybeDeviceZoneScope("compute_wait_coef");  // unpack: starved on the coefficient expander
             cb_wait_front(cb_coef_bcast, (j + 1) * coef_tiles_per_stream);
         }
@@ -329,17 +332,22 @@ void kernel_main() {
         for (uint32_t block_idx = 0; block_idx < blocks; ++block_idx) {
             const uint32_t valid = mhc_post::block_valid_col_tiles(seg.col_tiles, block_col_tiles, block_idx);
             {
-                MaybeDeviceZoneScope("compute_wait_in");  // unpack: starved on the reader
+                // unpack: starved on the reader / pack: back-pressure from the writer (one zone per group keeps
+                // the per-RISC marker count under the profiler's 250 at G = 1)
+                MaybeDeviceZoneScope("compute_wait_in");
                 cb_wait_front(cb_sublayer_tiles, block_col_tiles);
                 cb_wait_front(cb_residual_tiles, residual_block_tiles);
-            }
-            {
-                MaybeDeviceZoneScope("compute_reserve_out");  // pack: back-pressure from the writer
                 cb_reserve_back(cb_output_tiles, output_block_tiles);
             }
             {
                 MaybeDeviceZoneScope("compute_mix");  // math: occupancy (wait + work), see attribution doc
-                mix_block(valid, data_first);
+#ifndef CS_STUB_COMPUTE
+                mix_block(valid, block_idx == 0, data_first);
+#else
+                if (block_idx == 0) {
+                    cb_wait_front(cb_coef_bcast, num_coef_tiles);
+                }
+#endif
             }
 
             cb_push_back(cb_output_tiles, output_block_tiles);

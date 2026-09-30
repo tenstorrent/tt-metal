@@ -1,0 +1,18 @@
+{"label": "T640_C7168_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1_rb8", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1_rb4", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 4, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1_rb8_if15", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 8, "inflight_groups": 15}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g2_rb8", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 2, "RB": 8, "inflight_groups": 4}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1_rb8_w8", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1_rb8", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1_rb4", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1_rb8_if15", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g2_rb8", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 2, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1_rb8_w8", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 8, "RB": 4, "inflight_groups": 4}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|baseline"}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1_rb8", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 8, "inflight_groups": 8}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1_rb4", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 4, "inflight_groups": 8}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1_rb8_if15", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 8, "inflight_groups": 15}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g2_rb8", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 2, "RB": 8, "inflight_groups": 4}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1_rb8_w8", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}

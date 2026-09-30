@@ -15,8 +15,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "mhc_post_common.hpp"
 #include "mhc_post_coef_expand.hpp"
+#include "mhc_skip_noc.hpp"
 
 void kernel_main() {
     // ---- compile-time args ----
@@ -74,14 +76,13 @@ void kernel_main() {
         const uint32_t x_base = get_write_ptr(cb_residual_tiles);
         const uint32_t f_page0 = row * col_tiles_per_row + col_start;
         for (uint32_t c = 0; c < valid_cols; ++c) {
-            noc_async_read(
-                sublayer_acc.get_noc_addr(f_page0 + c), f_base + c * sublayer_page_bytes, sublayer_page_bytes);
+            data_read(sublayer_acc.get_noc_addr(f_page0 + c), f_base + c * sublayer_page_bytes, sublayer_page_bytes);
         }
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t x_page0 = row * residual_row_tiles + i * col_tiles_per_row + col_start;
             const uint32_t x_slot0 = x_base + i * block_col_tiles * residual_page_bytes;
             for (uint32_t c = 0; c < valid_cols; ++c) {
-                noc_async_read(
+                data_read(
                     residual_acc.get_noc_addr(x_page0 + c), x_slot0 + c * residual_page_bytes, residual_page_bytes);
             }
         }
@@ -97,24 +98,35 @@ void kernel_main() {
             const uint32_t valid = mhc_post::block_valid_col_tiles(seg.col_tiles, block_col_tiles, block_idx);
             const uint32_t col_start = seg.col0 + block_idx * block_col_tiles;
 
-            cb_reserve_back(cb_sublayer_tiles, block_col_tiles);
-            cb_reserve_back(cb_residual_tiles, residual_block_tiles);
-            if constexpr (expand_here) {
-                if (block_idx == 0) {
-                    coefs.issue_raw_reads(seg.row);  // shares block 0's barrier
-                }
+            {
+                MaybeDeviceZoneScope("reader_reserve");  // back-pressure from compute
+                cb_reserve_back(cb_sublayer_tiles, block_col_tiles);
+                cb_reserve_back(cb_residual_tiles, residual_block_tiles);
             }
-            issue_block_reads(seg.row, col_start, valid);
+            {
+                MaybeDeviceZoneScope("reader_issue");
+                if constexpr (expand_here) {
+                    if (block_idx == 0) {
+                        coefs.issue_raw_reads(seg.row);  // shares block 0's barrier
+                    }
+                }
+                issue_block_reads(seg.row, col_start, valid);
+            }
             if constexpr (expand_here) {
                 if (block_idx == expand_block && block_idx > 0) {
+                    MaybeDeviceZoneScope("reader_coef_expand");
                     coefs.expand();  // raw tiles landed with block 0; in block 1's read shadow
                 }
             }
-            noc_async_read_barrier();
+            {
+                MaybeDeviceZoneScope("reader_barrier");
+                noc_async_read_barrier();
+            }
             cb_push_back(cb_sublayer_tiles, block_col_tiles);
             cb_push_back(cb_residual_tiles, residual_block_tiles);
             if constexpr (expand_here) {
                 if (block_idx == expand_block && block_idx == 0) {
+                    MaybeDeviceZoneScope("reader_coef_expand");
                     coefs.expand();  // single-block segment
                 }
             }

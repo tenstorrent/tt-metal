@@ -15,15 +15,15 @@ from pathlib import Path
 
 import ttnn
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+KERNEL_DIR = Path(__file__).parent / "baseline_kernels"  # frozen copy of the op kernels (working tree, 2026-09-30)
 
 TILE_HW = 32
 
 # ---- CB slots (semantic names) ----
-CB_SUBLAYER_TILES = 0  # F block tiles              reader (+ writer's read help) -> compute
+CB_SUBLAYER_TILES = 0  # F block tiles              reader  -> compute
 CB_RESIDUAL_TILES = 1  # X block tiles (n streams)  reader  -> compute
-CB_COEF_RAW = 2  # raw post / comb tiles of one token row, private scratch of the writer (coefficient expander)
-CB_COEF_BCAST = 3  # n * P half-packed column-broadcast fp32 coefficient tiles, writer -> compute
+CB_COEF_RAW = 2  # raw post / comb tiles of one token row, private scratch of the COEF_EXPANDER kernel
+CB_COEF_BCAST = 3  # n * P half-packed column-broadcast fp32 coefficient tiles, COEF_EXPANDER -> compute
 CB_OUTPUT_TILES = 16  # X' block tiles (n streams) compute -> writer
 
 # ---- Block-model knobs (single source of truth) ----
@@ -44,25 +44,15 @@ MIN_BLOCKS_PER_CORE = 3  # blocks the busiest core's range is cut into, at least
 # data tiles at n = 4; the kernel derives its window layout from DEST_AUTO_LIMIT. False (SyncHalf, 4
 # slots) compiles only for n <= 2 (the kernel static_asserts the fit).
 DST_FULL_SYNC = True
-# Read help (Perf 1, split_noc_reads; mhc_post_dm.cpp): the writer RISC (BRISC) reads the F block of every block
-# index >= HELP_FROM_BLOCK straight into the reader's window, on NoC0 (dynamic-NoC mode). Enabled when the busiest
-# core has >= HELP_MIN_BLOCKS blocks; measured (Blackhole p150, 110 cores, bf16): -3..-11% at >= 6 blocks per core
-# (T1280 C4096 268 -> 246 us, T1024 C5120 275 -> 245 us), +4..+18% at 3-5 blocks (T640 C1792 67 -> 80 us,
-# T2048 C1792 +4%), which is why fewer blocks keep the unhelped schedule (the same kernel, help compiled out).
-# HELP_MIN_BLOCKS = None disables the help everywhere; 1 enables it at every block count.
-HELP_MIN_BLOCKS = 6
-# Carve-out: float32 residual streams keep the unhelped schedule. That datapath is compute-bound (fp32 X' through
-# UnpackToDestFp32), so the help cannot shorten the critical path and only adds its hand-off; measured
-# T1000 C7168 X fp32 / F bf16 677 -> 700 us (+3.2%, 3 runs, spread < 1%), X fp32 / F fp32 +1.7%, other fp32-X
-# cells +-2%. True applies the help to fp32 streams too (test coverage).
-HELP_FP32_STREAMS = False
-HELP_FROM_BLOCK = 1  # help from block 0 measured slower (it delays the writer's first coefficient set)
-SEM_RD_GO = 0  # reader -> helper: window of block k reserved (monotonic block counter)
-SEM_RD_DONE = 1  # helper -> reader: F of block k landed
+# Which DM kernel runs load_coefficients (raw post / comb read + column-broadcast expansion) and is therefore
+# the single producer of cb_coef_bcast: "writer" (BRISC, idle until the first output block; keeps the reader a
+# pure stream) or "reader" (NCRISC, expansion in the read shadow of block 1).
+COEF_EXPANDER = "writer"
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
 
+assert COEF_EXPANDER in ("reader", "writer")
 # The writer loads segment s+1's set while compute still holds segment s's: two sets in flight.
-assert COEF_DEPTH >= 2, "writer-side expansion needs COEF_DEPTH >= 2"
+assert COEF_EXPANDER == "reader" or COEF_DEPTH >= 2, "writer-side expansion needs COEF_DEPTH >= 2"
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
 
 
@@ -105,17 +95,6 @@ def _max_segment_col_tiles(assignment, col_tiles_per_row) -> int:
             u += seg
             left -= seg
     return longest
-
-
-def _core_blocks(start, count, col_tiles_per_row, block_col_tiles) -> int:
-    """Blocks of one core's unit range (segments of one token row, each cut into blocks) — kernel derivation."""
-    blocks, u, left = 0, start, count
-    while left:
-        seg = min(col_tiles_per_row - u % col_tiles_per_row, left)
-        blocks += math.ceil(seg / block_col_tiles)
-        u += seg
-        left -= seg
-    return blocks
 
 
 def _block_col_tiles_fit(
@@ -185,42 +164,45 @@ def create_program_descriptor(
         _cb(CB_OUTPUT_TILES, output_tensor.dtype, output_page, DEPTH_OUT * n * block_col_tiles, all_cores),
     ]
 
-    # ---- read help (see HELP_MIN_BLOCKS) ----
-    max_blocks_per_core = max(
-        _core_blocks(start, count, col_tiles_per_row, block_col_tiles) for _, start, count in assignment
-    )
-    read_help = HELP_MIN_BLOCKS is not None and max_blocks_per_core >= HELP_MIN_BLOCKS
-    if residual.dtype == ttnn.float32 and not HELP_FP32_STREAMS:
-        read_help = False  # carve-out: compute-bound datapath (see HELP_FP32_STREAMS)
+    # ---- reader ----
+    reader_ct = [
+        n,
+        col_tiles_per_row,
+        block_col_tiles,
+        post_tiles_per_row,
+        comb_tiles_per_row,
+        sublayer_page,
+        residual_page,
+        coef_page,
+        TILE_HW,
+        CB_SUBLAYER_TILES,
+        CB_RESIDUAL_TILES,
+        CB_COEF_RAW,
+        CB_COEF_BCAST,
+        coef_tiles_per_stream,
+        int(COEF_EXPANDER == "reader"),
+    ]
+    for t in (input_tensor, residual, post, comb):
+        reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
-    # ---- data movement: one source (mhc_post_dm.cpp), role 0 = reader (NCRISC), role 1 = writer (BRISC) ----
-    def dm_ct(role):
-        ct = [
-            n,
-            col_tiles_per_row,
-            block_col_tiles,
-            role,
-            int(read_help),
-            HELP_FROM_BLOCK,
-            DEPTH_IN,
-            CB_SUBLAYER_TILES,
-            CB_RESIDUAL_TILES,
-            CB_OUTPUT_TILES,
-            CB_COEF_RAW,
-            CB_COEF_BCAST,
-            post_tiles_per_row,
-            comb_tiles_per_row,
-            sublayer_page,
-            residual_page,
-            coef_page,
-            coef_tiles_per_stream,
-            SEM_RD_GO,
-            SEM_RD_DONE,
-            TILE_HW,
-        ]
-        for t in (input_tensor, residual, output_tensor, post, comb):
-            ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-        return ct
+    # ---- writer ----
+    writer_ct = [
+        n,
+        col_tiles_per_row,
+        block_col_tiles,
+        output_page,
+        CB_OUTPUT_TILES,
+        post_tiles_per_row,
+        comb_tiles_per_row,
+        coef_page,
+        TILE_HW,
+        CB_COEF_RAW,
+        CB_COEF_BCAST,
+        coef_tiles_per_stream,
+        int(COEF_EXPANDER == "writer"),
+    ]
+    for t in (output_tensor, post, comb):
+        writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     # ---- compute ----
     compute_ct = [
@@ -234,13 +216,15 @@ def create_program_descriptor(
         coef_tiles_per_stream,
     ]
 
-    dm_rt = ttnn.RuntimeArgs()
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     f_addr, x_addr = input_tensor.buffer_address(), residual.buffer_address()
     p_addr, m_addr = post.buffer_address(), comb.buffer_address()
     o_addr = output_tensor.buffer_address()
     for core, start, count in assignment:
-        dm_rt[core.x][core.y] = [f_addr, x_addr, o_addr, p_addr, m_addr, start, count]
+        reader_rt[core.x][core.y] = [f_addr, x_addr, p_addr, m_addr, start, count]
+        writer_rt[core.x][core.y] = [o_addr, start, count, p_addr, m_addr]
         compute_rt[core.x][core.y] = [start, count]
 
     # UnpackToDestFp32 on every Float32 CB compute reads with copy_tile (derived from the CB format).
@@ -260,24 +244,19 @@ def create_program_descriptor(
     compute_cfg.dst_full_sync_en = DST_FULL_SYNC
     compute_cfg.unpack_to_dest_mode = unpack_modes
 
-    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if read_help else ttnn.NOC_MODE.DM_DEDICATED_NOC
     reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "mhc_post_dm.cpp"),
+        kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
         core_ranges=all_cores,
-        compile_time_args=dm_ct(0),
-        runtime_args=dm_rt,
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0, noc_mode=noc_mode
-        ),
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "mhc_post_dm.cpp"),
+        kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=all_cores,
-        compile_time_args=dm_ct(1),
-        runtime_args=dm_rt,
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1, noc_mode=noc_mode
-        ),
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
@@ -286,7 +265,4 @@ def create_program_descriptor(
         runtime_args=compute_rt,
         config=compute_cfg,
     )
-    semaphores = [
-        ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0) for sem in (SEM_RD_GO, SEM_RD_DONE)
-    ]
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)

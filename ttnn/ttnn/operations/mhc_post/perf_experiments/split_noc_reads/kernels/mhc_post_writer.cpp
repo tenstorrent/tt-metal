@@ -14,8 +14,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "mhc_post_common.hpp"
 #include "mhc_post_coef_expand.hpp"
+#include "mhc_skip_noc.hpp"
 
 void kernel_main() {
     constexpr uint32_t n = get_compile_time_arg_val(0);
@@ -64,6 +66,7 @@ void kernel_main() {
     mhc_post::SegmentWalker ahead = walker;  // coefficient look-ahead (same derivation)
     if constexpr (expand_here) {
         if (!ahead.done()) {
+            MaybeDeviceZoneScope("writer_coef_load");
             coefs.load(ahead.next().row);
         }
     }
@@ -74,21 +77,31 @@ void kernel_main() {
             const uint32_t valid = mhc_post::block_valid_col_tiles(seg.col_tiles, block_col_tiles, block_idx);
             const uint32_t col_start = seg.col0 + block_idx * block_col_tiles;
 
-            cb_wait_front(cb_output_tiles, output_block_tiles);
-            const uint32_t out_base = get_read_ptr(cb_output_tiles);
-            for (uint32_t j = 0; j < n; ++j) {
-                const uint32_t page0 = seg.row * output_row_tiles + j * col_tiles_per_row + col_start;
-                const uint32_t slot0 = out_base + j * block_col_tiles * output_page_bytes;
-                for (uint32_t c = 0; c < valid; ++c) {
-                    noc_async_write(
-                        slot0 + c * output_page_bytes, output_acc.get_noc_addr(page0 + c), output_page_bytes);
+            {
+                MaybeDeviceZoneScope("writer_wait");  // starved on compute
+                cb_wait_front(cb_output_tiles, output_block_tiles);
+            }
+            {
+                MaybeDeviceZoneScope("writer_issue");
+                const uint32_t out_base = get_read_ptr(cb_output_tiles);
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t page0 = seg.row * output_row_tiles + j * col_tiles_per_row + col_start;
+                    const uint32_t slot0 = out_base + j * block_col_tiles * output_page_bytes;
+                    for (uint32_t c = 0; c < valid; ++c) {
+                        data_write(
+                            slot0 + c * output_page_bytes, output_acc.get_noc_addr(page0 + c), output_page_bytes);
+                    }
                 }
             }
-            noc_async_write_barrier();
+            {
+                MaybeDeviceZoneScope("writer_barrier");
+                noc_async_write_barrier();
+            }
             cb_pop_front(cb_output_tiles, output_block_tiles);
 
             if constexpr (expand_here) {
                 if (block_idx == 0 && !ahead.done()) {
+                    MaybeDeviceZoneScope("writer_coef_load");
                     coefs.load(ahead.next().row);  // next segment's set, ahead of compute
                 }
             }

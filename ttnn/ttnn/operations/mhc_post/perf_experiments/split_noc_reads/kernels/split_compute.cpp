@@ -1,7 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mhc_post compute.
+// mhc_post compute — split_noc_reads candidate (perf_experiments/split_noc_reads).
+//
+// Same math / DEST schedule as the op's compute kernel. Only the CB plumbing changes so the input reads and
+// output writes can be shared between the two DM RISCs (each CB keeps ONE producer / ONE consumer):
+//   X streams [0, NA)  -> cb_residual_tiles  (slot i*B + c),       X streams [NA, n) -> cb_residual_b (slot (i-NA)*B +
+//   c) out streams [0, MA) -> cb_output_tiles  (slot j*B + c),       out streams [MA, n) -> cb_output_b  (slot (j-MA)*B
+//   + c)
+// Which RISC produces / consumes each CB is the host's choice (split_program_descriptor.py).
 //
 // Helper substitution (documented per the helper-first policy): the per-term SFPU mix (MulBinary + n x
 // Addcmul, one SFPU pass per term) is replaced by ONE custom SFPU pass, `WeightedSum` below, that
@@ -49,6 +56,11 @@ constexpr uint32_t cb_residual_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t cb_coef_bcast = get_compile_time_arg_val(5);
 constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t coef_tiles_per_stream = get_compile_time_arg_val(7);  // P = ceil((n+1)/2)
+constexpr uint32_t cb_residual_b = get_compile_time_arg_val(8);
+constexpr uint32_t NA = get_compile_time_arg_val(9);  // X streams held in cb_residual_tiles
+constexpr uint32_t cb_output_b = get_compile_time_arg_val(10);
+constexpr uint32_t MA = get_compile_time_arg_val(11);  // output streams packed to cb_output_tiles
+static_assert(NA <= n && MA <= n);
 
 // ---- DEST window layout (single source: DEST_AUTO_LIMIT) ----
 constexpr uint32_t NUM_TERMS = n + 1;  // post term + n comb terms
@@ -146,16 +158,33 @@ template <uint32_t S, DataFormatReconfig R = DataFormatReconfig::Enabled>
 using ResidualCopy = CopyTile<
     input(cb_residual_tiles, WaitPolicy::None, PopPolicy::None, InputTileMapping::Scalar, R, TileAddressing::Offset),
     slot(S)>;
+template <uint32_t S, DataFormatReconfig R = DataFormatReconfig::Enabled>
+using ResidualCopyB = CopyTile<
+    input(cb_residual_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Scalar, R, TileAddressing::Offset),
+    slot(S)>;
 // The output CB is the kernel's only pack target and compute_kernel_hw_startup configured the packer
 // for it, so the per-window pack reconfig (unconditional at a chain's entry) is disabled.
-template <uint32_t S>
+template <uint32_t S, bool OutB>
 using PackOutput = PackTile<
     output(
-        cb_output_tiles, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled, TileAddressing::Offset),
+        OutB ? cb_output_b : cb_output_tiles,
+        ReservePolicy::None,
+        PushPolicy::None,
+        DataFormatReconfig::Disabled,
+        TileAddressing::Offset),
     slot(S)>;
 
 // CB tile of data term t (0 = F, 1+i = X_i) of block column c (sublayer CB for t = 0, residual CB else).
 constexpr uint32_t residual_tile(uint32_t t, uint32_t c) { return (t - 1) * block_col_tiles + c; }
+// Copy of X term t (1 + stream i) of block column c from whichever residual CB holds stream i.
+template <uint32_t S, uint32_t T, DataFormatReconfig R = DataFormatReconfig::Enabled>
+ALWI auto x_copy(uint32_t c) {
+    if constexpr (T - 1 < NA) {
+        return ResidualCopy<S, R>{(T - 1) * block_col_tiles + c};
+    } else {
+        return ResidualCopyB<S, R>{(T - 1 - NA) * block_col_tiles + c};
+    }
+}
 
 // ======================= "fits" regime: K columns per window =======================
 // Copies are grouped by source CB so the srcA format / unpack-mode switch (coefficients: fp32
@@ -166,21 +195,22 @@ constexpr uint32_t residual_tile(uint32_t t, uint32_t c) { return (t - 1) * bloc
 // Then K WeightedSums, then K packs.
 constexpr uint32_t data_slot(uint32_t c, uint32_t t) { return DST_DATA0 + c * NUM_TERMS + t; }
 
-template <uint32_t K, uint32_t C, class... Es>
+template <uint32_t K, uint32_t C, bool OutB, class... Es>
 ALWI void fit_packs(uint32_t out_tile0, Es... elts) {
     if constexpr (C == K) {
         eltwise_chain(IterationShape::one_tile(), elts...);
     } else {
-        fit_packs<K, C + 1>(out_tile0, elts..., PackOutput<data_slot(C, 0)>{out_tile0 + C});
+        fit_packs<K, C + 1, OutB>(out_tile0, elts..., PackOutput<data_slot(C, 0), OutB>{out_tile0 + C});
     }
 }
 
-template <uint32_t K, uint32_t C, class... Es>
+template <uint32_t K, uint32_t C, bool OutB, class... Es>
 ALWI void fit_sums(uint32_t out_tile0, Es... elts) {
     if constexpr (C == K) {
-        fit_packs<K, 0>(out_tile0, elts...);
+        fit_packs<K, 0, OutB>(out_tile0, elts...);
     } else {
-        fit_sums<K, C + 1>(out_tile0, elts..., WeightedSum<NUM_TERMS, 0, data_slot(C, 0), data_slot(C, 0), false>{});
+        fit_sums<K, C + 1, OutB>(
+            out_tile0, elts..., WeightedSum<NUM_TERMS, 0, data_slot(C, 0), data_slot(C, 0), false>{});
     }
 }
 
@@ -208,16 +238,15 @@ ALWI void data_copies(uint32_t col0, Next next, Es... elts) {
         if constexpr (t == 0) {
             data_copies<K, XFirst, First, Step + 1>(col0, next, elts..., SublayerCopy<data_slot(c, 0), R>{col0 + c});
         } else {
-            data_copies<K, XFirst, First, Step + 1>(
-                col0, next, elts..., ResidualCopy<data_slot(c, t), R>{residual_tile(t, col0 + c)});
+            data_copies<K, XFirst, First, Step + 1>(col0, next, elts..., x_copy<data_slot(c, t), t, R>(col0 + c));
         }
     }
 }
 
-template <uint32_t K, bool DataFirst>
-ALWI void fit_window(uint32_t j, uint32_t col0) {
-    const uint32_t out_tile0 = j * block_col_tiles + col0;
-    auto finish = [=](auto... elts) { fit_sums<K, 0>(out_tile0, elts...); };
+template <uint32_t K, bool DataFirst, bool OutB>
+ALWI void fit_window(uint32_t j, uint32_t out_j, uint32_t col0) {
+    const uint32_t out_tile0 = out_j * block_col_tiles + col0;
+    auto finish = [=](auto... elts) { fit_sums<K, 0, OutB>(out_tile0, elts...); };
     constexpr auto coef_seq = std::make_integer_sequence<uint32_t, coef_tiles_per_stream>{};
     if constexpr (DataFirst) {
         // X.., F.., then the coefficients
@@ -240,60 +269,62 @@ constexpr uint32_t group_count(uint32_t g) {
 }
 constexpr uint32_t group_slot0(uint32_t g) { return g == 0 ? DST_DATA0 : DST_DATA0 + 1; }
 
-template <uint32_t G, uint32_t K, class... Es>
-ALWI void grouped_terms(uint32_t j, uint32_t col, Es... elts) {
+template <uint32_t G, uint32_t K, bool OutB, class... Es>
+ALWI void grouped_terms(uint32_t out_j, uint32_t col, Es... elts) {
     if constexpr (group_first(G) >= NUM_TERMS) {
-        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0>{j * block_col_tiles + col});
+        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0, OutB>{out_j * block_col_tiles + col});
     } else if constexpr (K == group_count(G)) {
-        grouped_terms<G + 1, 0>(
-            j, col, elts..., WeightedSum<group_count(G), group_first(G), group_slot0(G), DST_DATA0, (G > 0)>{});
+        grouped_terms<G + 1, 0, OutB>(
+            out_j, col, elts..., WeightedSum<group_count(G), group_first(G), group_slot0(G), DST_DATA0, (G > 0)>{});
     } else {
         constexpr uint32_t t = group_first(G) + K;
         if constexpr (t == 0) {
-            grouped_terms<G, K + 1>(j, col, elts..., SublayerCopy<group_slot0(G) + K>{col});
+            grouped_terms<G, K + 1, OutB>(out_j, col, elts..., SublayerCopy<group_slot0(G) + K>{col});
         } else {
-            grouped_terms<G, K + 1>(j, col, elts..., ResidualCopy<group_slot0(G) + K>{residual_tile(t, col)});
+            grouped_terms<G, K + 1, OutB>(out_j, col, elts..., x_copy<group_slot0(G) + K, t>(col));
         }
     }
 }
 
-template <uint32_t... Ps>
-ALWI void grouped_window(uint32_t j, uint32_t col, std::integer_sequence<uint32_t, Ps...>) {
-    grouped_terms<0, 0>(j, col, CoefCopy<Ps>{j * coef_tiles_per_stream + Ps}...);
+template <bool OutB, uint32_t... Ps>
+ALWI void grouped_window(uint32_t j, uint32_t out_j, uint32_t col, std::integer_sequence<uint32_t, Ps...>) {
+    grouped_terms<0, 0, OutB>(out_j, col, CoefCopy<Ps>{j * coef_tiles_per_stream + Ps}...);
 }
 
 // ======================= block schedule =======================
 // `data_first` is the window-order parity of the "fits" regime; it advances once per window across the
 // whole kernel (blocks, streams, segments), so every window starts on the CB its predecessor ended on.
-template <uint32_t K>
-ALWI void mix_window(uint32_t j, uint32_t col0, bool& data_first) {
+template <uint32_t K, bool OutB>
+ALWI void mix_window(uint32_t j, uint32_t out_j, uint32_t col0, bool& data_first) {
     if constexpr (TERMS_FIT) {
         if (data_first) {
-            fit_window<K, true>(j, col0);
+            fit_window<K, true, OutB>(j, out_j, col0);
         } else {
-            fit_window<K, false>(j, col0);
+            fit_window<K, false, OutB>(j, out_j, col0);
         }
         data_first = !data_first;
     } else {
-        grouped_window(j, col0, std::make_integer_sequence<uint32_t, coef_tiles_per_stream>{});
+        grouped_window<OutB>(j, out_j, col0, std::make_integer_sequence<uint32_t, coef_tiles_per_stream>{});
     }
 }
 
 // Ragged tail window (rem < WINDOW_COL_TILES), dispatched to its compile-time width.
-template <uint32_t K>
-ALWI void mix_tail_window(uint32_t j, uint32_t col0, uint32_t rem, bool& data_first) {
+template <uint32_t K, bool OutB>
+ALWI void mix_tail_window(uint32_t j, uint32_t out_j, uint32_t col0, uint32_t rem, bool& data_first) {
     if constexpr (K > 0) {
         if (rem == K) {
-            mix_window<K>(j, col0, data_first);
+            mix_window<K, OutB>(j, out_j, col0, data_first);
         } else {
-            mix_tail_window<K - 1>(j, col0, rem, data_first);
+            mix_tail_window<K - 1, OutB>(j, out_j, col0, rem, data_first);
         }
     }
 }
 
 // mix_block: all n output streams of one block.
-ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
-    for (uint32_t j = 0; j < n; ++j) {
+template <bool OutB>
+ALWI void mix_streams(uint32_t j_lo, uint32_t j_hi, uint32_t valid_col_tiles, bool& data_first) {
+    for (uint32_t j = j_lo; j < j_hi; ++j) {
+        const uint32_t out_j = j - j_lo;
         // load_coefficients pushes the set one stream at a time (P tiles each); stream j needs streams
         // 0..j. Cumulative, so a no-op after the segment's first block.
         {
@@ -302,9 +333,16 @@ ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
         }
         uint32_t col0 = 0;
         for (; col0 + WINDOW_COL_TILES <= valid_col_tiles; col0 += WINDOW_COL_TILES) {
-            mix_window<WINDOW_COL_TILES>(j, col0, data_first);
+            mix_window<WINDOW_COL_TILES, OutB>(j, out_j, col0, data_first);
         }
-        mix_tail_window<WINDOW_COL_TILES - 1>(j, col0, valid_col_tiles - col0, data_first);
+        mix_tail_window<WINDOW_COL_TILES - 1, OutB>(j, out_j, col0, valid_col_tiles - col0, data_first);
+    }
+}
+
+ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
+    mix_streams<false>(0, MA, valid_col_tiles, data_first);
+    if constexpr (MA < n) {
+        mix_streams<true>(MA, n, valid_col_tiles, data_first);
     }
 }
 
@@ -312,13 +350,17 @@ ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
 
 void kernel_main() {
     constexpr uint32_t num_coef_tiles = n * coef_tiles_per_stream;
-    constexpr uint32_t residual_block_tiles = n * block_col_tiles;
-    constexpr uint32_t output_block_tiles = n * block_col_tiles;
+    constexpr uint32_t residual_block_tiles = NA * block_col_tiles;
+    constexpr uint32_t residual_b_block_tiles = (n - NA) * block_col_tiles;
+    constexpr uint32_t output_block_tiles = MA * block_col_tiles;
+    constexpr uint32_t output_b_block_tiles = (n - MA) * block_col_tiles;
 
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
 
-    compute_kernel_hw_startup(cb_residual_tiles, cb_coef_bcast, cb_output_tiles);
+    // Same-format CBs: start on whichever residual / output CB exists.
+    compute_kernel_hw_startup(
+        NA > 0 ? cb_residual_tiles : cb_residual_b, cb_coef_bcast, MA > 0 ? cb_output_tiles : cb_output_b);
 
     bool data_first = true;  // srcA starts on cb_residual_tiles (hw_startup), see "fits" regime
     mhc_post::SegmentWalker walker(start_unit, num_units, col_tiles_per_row);
@@ -331,19 +373,39 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("compute_wait_in");  // unpack: starved on the reader
                 cb_wait_front(cb_sublayer_tiles, block_col_tiles);
-                cb_wait_front(cb_residual_tiles, residual_block_tiles);
+                if constexpr (NA > 0) {
+                    cb_wait_front(cb_residual_tiles, residual_block_tiles);
+                }
+                if constexpr (NA < n) {
+                    cb_wait_front(cb_residual_b, residual_b_block_tiles);
+                }
             }
             {
                 MaybeDeviceZoneScope("compute_reserve_out");  // pack: back-pressure from the writer
-                cb_reserve_back(cb_output_tiles, output_block_tiles);
+                if constexpr (MA > 0) {
+                    cb_reserve_back(cb_output_tiles, output_block_tiles);
+                }
+                if constexpr (MA < n) {
+                    cb_reserve_back(cb_output_b, output_b_block_tiles);
+                }
             }
             {
                 MaybeDeviceZoneScope("compute_mix");  // math: occupancy (wait + work), see attribution doc
                 mix_block(valid, data_first);
             }
 
-            cb_push_back(cb_output_tiles, output_block_tiles);
-            cb_pop_front(cb_residual_tiles, residual_block_tiles);
+            if constexpr (MA > 0) {
+                cb_push_back(cb_output_tiles, output_block_tiles);
+            }
+            if constexpr (MA < n) {
+                cb_push_back(cb_output_b, output_b_block_tiles);
+            }
+            if constexpr (NA > 0) {
+                cb_pop_front(cb_residual_tiles, residual_block_tiles);
+            }
+            if constexpr (NA < n) {
+                cb_pop_front(cb_residual_b, residual_b_block_tiles);
+            }
             cb_pop_front(cb_sublayer_tiles, block_col_tiles);
         }
         cb_pop_front(cb_coef_bcast, num_coef_tiles);  // release_coefficients

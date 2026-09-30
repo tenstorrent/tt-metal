@@ -1,0 +1,83 @@
+{"label": "T640_C7168_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 1, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|cs_b", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|cs_b2", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 4}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|cs_b4", "B": 8, "G": 4, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|baseline"}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 1, "inflight_groups": 8}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|cs_b", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|cs_b2", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 4}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|cs_b4", "B": 8, "G": 4, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 2}
+{"label": "T640_C7168_n4_Xfp32_Ffp32|baseline"}
+{"label": "T640_C7168_n4_Xfp32_Ffp32|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 1, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xfp32_Ffp32|cs_b", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xfp32_Ffp32|cs_b2", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 4}
+{"label": "T640_C7168_n4_Xfp32_Ffp32|cs_b4", "B": 8, "G": 4, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xfp32_Ffp32|baseline"}
+{"label": "T640_C1792_n4_Xfp32_Ffp32|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xfp32_Ffp32|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xfp32_Ffp32|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xfp32_Ffp32|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T640_C7168_n4_Xfp32_Fbf16|baseline"}
+{"label": "T640_C7168_n4_Xfp32_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 1, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xfp32_Fbf16|cs_b", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xfp32_Fbf16|cs_b2", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 4}
+{"label": "T640_C7168_n4_Xfp32_Fbf16|cs_b4", "B": 8, "G": 4, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xfp32_Fbf16|baseline"}
+{"label": "T640_C1792_n4_Xfp32_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xfp32_Fbf16|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xfp32_Fbf16|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n4_Xfp32_Fbf16|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T1000_C1792_n4_Xbf16_Fbf16|baseline"}
+{"label": "T1000_C1792_n4_Xbf16_Fbf16|g1", "B": 6, "G": 1, "in_cap": 12, "out_cap": 12, "WG": 1, "RB": 1, "inflight_groups": 6}
+{"label": "T1000_C1792_n4_Xbf16_Fbf16|cs_b", "B": 6, "G": 1, "in_cap": 12, "out_cap": 12, "WG": 6, "RB": 6, "inflight_groups": 6}
+{"label": "T1000_C1792_n4_Xbf16_Fbf16|cs_b2", "B": 6, "G": 2, "in_cap": 12, "out_cap": 12, "WG": 6, "RB": 6, "inflight_groups": 3}
+{"label": "T1000_C1792_n4_Xbf16_Fbf16|cs_b4", "B": 6, "G": 4, "in_cap": 12, "out_cap": 12, "WG": 8, "RB": 4, "inflight_groups": 1}
+{"label": "T1000_C7168_n4_Xbf16_Fbf16|baseline"}
+{"label": "T1000_C7168_n4_Xbf16_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "RB": 1, "inflight_groups": 8}
+{"label": "T1000_C7168_n4_Xbf16_Fbf16|cs_b", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 8}
+{"label": "T1000_C7168_n4_Xbf16_Fbf16|cs_b2", "B": 8, "G": 2, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 4}
+{"label": "T1000_C7168_n4_Xbf16_Fbf16|cs_b4", "B": 8, "G": 4, "in_cap": 16, "out_cap": 16, "WG": 8, "RB": 8, "inflight_groups": 2}
+{"label": "T32_C32_n4_Xbf16_Fbf16|baseline"}
+{"label": "T32_C32_n4_Xbf16_Fbf16|g1", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T32_C32_n4_Xbf16_Fbf16|cs_b", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T32_C32_n4_Xbf16_Fbf16|cs_b2", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T32_C32_n4_Xbf16_Fbf16|cs_b4", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T17_C128_n4_Xfp32_Ffp32|baseline"}
+{"label": "T17_C128_n4_Xfp32_Ffp32|g1", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T17_C128_n4_Xfp32_Ffp32|cs_b", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T17_C128_n4_Xfp32_Ffp32|cs_b2", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T17_C128_n4_Xfp32_Ffp32|cs_b4", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T640_C1792_n1_Xbf16_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n1_Xbf16_Fbf16|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n1_Xbf16_Fbf16|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n1_Xbf16_Fbf16|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T640_C1792_n2_Xbf16_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n2_Xbf16_Fbf16|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n3_Xfp32_Ffp32|baseline"}
+{"label": "T640_C1792_n3_Xfp32_Ffp32|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n3_Xfp32_Ffp32|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n3_Xfp32_Ffp32|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n3_Xfp32_Ffp32|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T640_C1792_n5_Xbf16_Fbf16|baseline"}
+{"label": "T640_C1792_n5_Xbf16_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "RB": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n5_Xbf16_Fbf16|cs_b", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 4}
+{"label": "T640_C1792_n5_Xbf16_Fbf16|cs_b2", "B": 4, "G": 2, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 2}
+{"label": "T640_C1792_n5_Xbf16_Fbf16|cs_b4", "B": 4, "G": 4, "in_cap": 8, "out_cap": 8, "WG": 4, "RB": 4, "inflight_groups": 1}
+{"label": "T320_C7168_n2_Xbf16_Fbf16|g1", "B": 7, "G": 1, "in_cap": 14, "out_cap": 14, "WG": 1, "RB": 1, "inflight_groups": 7}
+{"label": "T320_C7168_n2_Xbf16_Fbf16|cs_b", "B": 7, "G": 1, "in_cap": 14, "out_cap": 14, "WG": 7, "RB": 7, "inflight_groups": 7}
+{"label": "T96_C800_n4_Xbf16_Fbf16|baseline"}
+{"label": "T96_C800_n4_Xbf16_Fbf16|g1", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T96_C800_n4_Xbf16_Fbf16|cs_b", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T96_C800_n4_Xbf16_Fbf16|cs_b2", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T96_C800_n4_Xbf16_Fbf16|cs_b4", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T130_C1344_n5_Xfp32_Fbf16|baseline"}
+{"label": "T130_C1344_n5_Xfp32_Fbf16|g1", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T130_C1344_n5_Xfp32_Fbf16|cs_b", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T130_C1344_n5_Xfp32_Fbf16|cs_b2", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}
+{"label": "T130_C1344_n5_Xfp32_Fbf16|cs_b4", "B": 1, "G": 1, "in_cap": 2, "out_cap": 2, "WG": 1, "RB": 1, "inflight_groups": 1}

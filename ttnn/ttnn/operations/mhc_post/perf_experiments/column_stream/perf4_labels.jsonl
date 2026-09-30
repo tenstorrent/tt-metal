@@ -1,0 +1,9 @@
+{"label": "T640_C7168_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "inflight_groups": 8}
+{"label": "T640_C7168_n4_Xbf16_Fbf16|g1_nopoll", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "inflight_groups": 8}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|baseline"}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "inflight_groups": 4}
+{"label": "T640_C1792_n4_Xbf16_Fbf16|g1_nopoll", "B": 4, "G": 1, "in_cap": 8, "out_cap": 8, "WG": 1, "inflight_groups": 4}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|baseline"}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "inflight_groups": 8}
+{"label": "T1280_C4096_n4_Xbf16_Fbf16|g1_nopoll", "B": 8, "G": 1, "in_cap": 16, "out_cap": 16, "WG": 1, "inflight_groups": 8}

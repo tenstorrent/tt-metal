@@ -1,0 +1,15 @@
+{"shape": "T1000_C7168_xf32_fbf16", "mode": "full", "variant": "orig", "pid": 124894}
+{"shape": "T1000_C7168_xf32_fbf16", "mode": "full", "variant": "h_base", "pid": 124894}
+{"shape": "T1000_C7168_xf32_fbf16", "mode": "full", "variant": "hF_n0_hf1_inc", "pid": 124894}
+{"shape": "T1000_C7168_fp32", "mode": "full", "variant": "orig", "pid": 124894}
+{"shape": "T1000_C7168_fp32", "mode": "full", "variant": "h_base", "pid": 124894}
+{"shape": "T1000_C7168_fp32", "mode": "full", "variant": "hF_n0_hf1_inc", "pid": 124894}
+{"shape": "T640_C7168_xf32_fbf16", "mode": "full", "variant": "orig", "pid": 124894}
+{"shape": "T640_C7168_xf32_fbf16", "mode": "full", "variant": "h_base", "pid": 124894}
+{"shape": "T640_C7168_xf32_fbf16", "mode": "full", "variant": "hF_n0_hf1_inc", "pid": 124894}
+{"shape": "T640_C7168_fp32", "mode": "full", "variant": "orig", "pid": 124894}
+{"shape": "T640_C7168_fp32", "mode": "full", "variant": "h_base", "pid": 124894}
+{"shape": "T640_C7168_fp32", "mode": "full", "variant": "hF_n0_hf1_inc", "pid": 124894}
+{"shape": "T1280_C4096_fp32", "mode": "full", "variant": "orig", "pid": 124894}
+{"shape": "T1280_C4096_fp32", "mode": "full", "variant": "h_base", "pid": 124894}
+{"shape": "T1280_C4096_fp32", "mode": "full", "variant": "hF_n0_hf1_inc", "pid": 124894}

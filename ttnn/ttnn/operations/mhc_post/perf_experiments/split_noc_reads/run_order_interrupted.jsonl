@@ -1,0 +1,16 @@
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "hX1_n0_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "h_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "hX1_n0_hf1", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "dmfloor", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "h_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1126066}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1128021}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1128732}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1128732}
+{"shape": "T1280_C4096_bf16", "mode": "full", "variant": "hX1_n0_hf1_inc", "pid": 1128732}

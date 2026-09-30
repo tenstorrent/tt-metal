@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mhc_post — load_coefficients (dataflow only; run by the writer-role DM kernel (BRISC) of mhc_post_dm.cpp, the
-// single producer of cb_coef_raw / cb_coef_bcast).
+// mhc_post — load_coefficients (dataflow only; included by whichever DM kernel the host's COEF_EXPANDER knob
+// names — the reader or the writer. Exactly one of them runs it, so cb_coef_raw / cb_coef_bcast keep a single
+// producer).
 //
 // Per segment (one token-tile row r): read the raw post / comb tiles of row r into cb_coef_raw (private
 // scratch of the expanding kernel), then expand them into n * P half-packed column-broadcast fp32 tiles in
@@ -10,10 +11,6 @@
 // post(rho, j), term 1+i = comb(rho, i*n + j)), pushing each output stream's P tiles as soon as they are
 // written: compute's stream-j wait needs only streams <= j, so it mixes stream j while later streams are
 // still being expanded. Values are copied bit-for-bit (fp32 words).
-//
-// The load is a RESUMABLE JOB (start() then one step() per half-tile term), so the event loop of the kernel that
-// runs it can interleave the expansion with its other duties (output writes, read help) and a pending request
-// waits at most one term, not a whole set.
 
 #pragma once
 
@@ -70,13 +67,8 @@ struct CoefExpander {
 
     CoefExpander(const Accessor& post, const Accessor& comb) : post_acc(post), comb_acc(comb) {}
 
-    uint32_t bcast_base = 0;
-    uint32_t job_j = 0, job_t = 0;
-    bool job_active = false;
-
-    bool active() const { return job_active; }
-
-    // Reserve cb_coef_raw and issue the raw post / comb reads of token row `row` (no barrier).
+    // Reserve cb_coef_raw and issue the raw post / comb reads of token row `row` (no barrier: the caller
+    // folds them into whatever barrier comes next).
     void issue_raw_reads(uint32_t row) {
         cb_reserve_back(cb_coef_raw, num_raw_tiles);
         raw_post_addr = get_write_ptr(cb_coef_raw);
@@ -85,33 +77,31 @@ struct CoefExpander {
         noc_async_read(comb_acc.get_noc_addr(row * comb_tiles_per_row), raw_comb_addr, coef_page_bytes);
     }
 
-    // Open the job for token row `row`: raw reads + their own barrier, then the cb_coef_bcast window.
-    void start(uint32_t row) {
-        issue_raw_reads(row);
-        noc_async_read_barrier();
+    // The raw reads have landed (a read barrier ran after issue_raw_reads): expand, pushing per stream.
+    void expand() {
         cb_push_back(cb_coef_raw, num_raw_tiles);  // private scratch: push / wait / pop are bookkeeping
         cb_wait_front(cb_coef_raw, num_raw_tiles);
         cb_reserve_back(cb_coef_bcast, num_coef_tiles);
-        bcast_base = get_write_ptr(cb_coef_bcast);
-        job_j = job_t = 0;
-        job_active = true;
+        const uint32_t bcast_base = get_write_ptr(cb_coef_bcast);
+        for (uint32_t j = 0; j < n; ++j) {
+#ifndef MHC_SKIP_EXPAND  // perf-experiment ablation: keep the CB handshake, drop the L1 stores
+            for (uint32_t t = 0; t <= n; ++t) {
+                const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
+                const uint32_t raw_col = t == 0 ? j : (t - 1) * n + j;
+                const uint32_t tile = j * coef_tiles_per_stream + coef_tile_in_stream(t);
+                expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, coef_half(t));
+            }
+#endif
+            cb_push_back(cb_coef_bcast, coef_tiles_per_stream);
+        }
+        cb_pop_front(cb_coef_raw, num_raw_tiles);
     }
 
-    // Expand one term (half-tile) of the open job; pushes stream j's P tiles after its last term.
-    void step() {
-        const uint32_t t = job_t;
-        const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
-        const uint32_t raw_col = t == 0 ? job_j : (t - 1) * n + job_j;
-        const uint32_t tile = job_j * coef_tiles_per_stream + coef_tile_in_stream(t);
-        expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, coef_half(t));
-        if (++job_t > n) {
-            cb_push_back(cb_coef_bcast, coef_tiles_per_stream);
-            job_t = 0;
-            if (++job_j == n) {
-                cb_pop_front(cb_coef_raw, num_raw_tiles);
-                job_active = false;
-            }
-        }
+    // Standalone load (no data barrier to share): raw reads, their own barrier, expansion.
+    void load(uint32_t row) {
+        issue_raw_reads(row);
+        noc_async_read_barrier();
+        expand();
     }
 };
 
