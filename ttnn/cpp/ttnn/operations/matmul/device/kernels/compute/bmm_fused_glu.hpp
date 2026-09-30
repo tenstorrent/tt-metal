@@ -74,6 +74,11 @@ FORCE_INLINE void mul_binary_tile_init_pack() {
 FORCE_INLINE void glu_init_pack() {
     mul_binary_tile_init_pack();
     silu_tile_init_pack();
+#ifdef GLU_FUSED_SFPU
+    // calculate_swiglu clamps |gate| with SFPSWAP against Prgm2 (LREG14) = 87.5f. silu_init programs Prgm2 only when
+    // SILU_BF16_IMPL is 2 or 3 (the default is 0), so set it here; same value silu_init used to write.
+    PACK(sfpi::vConstFloatPrgm2 = 87.5f);
+#endif
 }
 
 template <uint32_t num_tiles>

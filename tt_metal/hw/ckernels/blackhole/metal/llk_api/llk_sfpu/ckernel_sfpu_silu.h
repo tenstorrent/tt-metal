@@ -24,9 +24,12 @@ namespace ckernel::sfpu {
 // 2 and 3 are bit-identical to each other. For x < -86 they return about x * 4.5e-38 (0 in 0/1); a Prgm2 bound of
 // 87.5f instead of 86.0f keeps |x| <= 86 unchanged and returns 0 there. The fp32-dest arm is unchanged in all four;
 // silu_init programs Prgm2 for 1/2/3 only, which the fp32 arm does not read.
+// Default 0: every bf16-dest silu_tile / ttnn.silu runs the legacy sfpi sequence. 1/2/3 are opt-in
+// (-DSILU_BF16_IMPL=n). The fused SwiGLU (calculate_swiglu below) does NOT depend on this macro; it needs Prgm2
+// = 87.5f, which its caller's init programs itself (matmul bmm_fused_glu.hpp glu_init_pack).
 // ---------------------------------------------------------------------------------------------------------------
 #ifndef SILU_BF16_IMPL
-#define SILU_BF16_IMPL 3
+#define SILU_BF16_IMPL 0
 #endif
 
 namespace silu_detail {
@@ -221,6 +224,8 @@ inline void calculate_silu_bf16_p5_pipe() {
 // SWIGLU_UP_ROWS Dest rows after the gate tile, i.e. tile idx+1) and rounded once. Stored over the gate tile.
 // LREG0 is free between the r MAD and the next ARECIP, so u lives there. No 0*x fix (0*inf/NaN differ from the
 // two-pass path; finite inputs give the same value, sign of zero may differ).
+// Init contract: Prgm1 = log2(e) (LREG13, sigmoid_init) and Prgm2 = 87.5f (LREG14, the |x| clamp bound); silu_init
+// programs Prgm2 only for SILU_BF16_IMPL 2/3, so the caller must (bmm_fused_glu.hpp glu_init_pack does).
 constexpr std::uint32_t SWIGLU_UP_ROWS = 64;
 template <int ITERATIONS>
 inline void calculate_swiglu_bf16_p5_pipe() {
