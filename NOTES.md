@@ -92,3 +92,9 @@ Broker power-cycled blx03 (job 918), all 32 chips back, fabric check 921 passed,
 Detached driver ~/fasth3/t27/tmp/drive27d.sh on blx03: thread job 922, then process job, one at a time.
 Log ~/fasth3/t27/tmp/drive27d.log ends DRIVE27D_DONE; job logs tmp/job_thread_d.log, tmp/job_process_d.log.
 Next: same greps and md5 check as attempt 4 on those two logs/outputs; then cleanup (see attempt 7) and the #20 follow-up.
+
+## 2026-09-30 21:25 (attempt 10, result)
+blx03 jobs 922 (thread export) and 923 (process export), 1080p/145f, 4x8, traced, seed 0, warm gens #2/#3:
+thread E2E_WALL_S 6.798 / 6.811, export 0.3s; process 6.788 / 6.832, export 0.3s. No measurable difference.
+Video packet md5 (gen#3) identical: dda0f464ce438075f4d7d520d801fc37 for both. Job 610 baseline (6.66s) was on
+g15blx02, so not directly comparable. blx03 cache and ~/fasth3/t27 removed. #20 follow-up not started.
