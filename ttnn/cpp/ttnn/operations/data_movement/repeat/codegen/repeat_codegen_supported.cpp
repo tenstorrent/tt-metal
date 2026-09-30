@@ -112,12 +112,13 @@ struct UngeneralizedDemotion {
 constexpr TensorMemoryLayout kInterleaved = TensorMemoryLayout::INTERLEAVED;
 constexpr TensorMemoryLayout kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
 constexpr TensorMemoryLayout kWidth = TensorMemoryLayout::WIDTH_SHARDED;
-const std::array<UngeneralizedDemotion, 15> kUngeneralizedDemotions = {{
+const std::array<UngeneralizedDemotion, 16> kUngeneralizedDemotions = {{
     // No mechanism identified; each entry is one measured case. Replace with a predicate once the cause
     // of the loss is known.
     {{1, 2, 4, 4}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 6, 12}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 8, 16}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 10, 20}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 12, 24}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 14, 28}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 16, 32}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
