@@ -1201,19 +1201,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return merged_tokens, merged_log_probs
         return merged_output
 
-    def _try_lane_parallel_prefill(self, kwargs, full_page_tables):
-        """Route a lane-step prefill group through prefill_forward_lanes.
+    def _try_lane_parallel_prefill(self, kwargs, full_page_tables, raw_page_tables_per_layer=None, enable_trace=True):
+        """Split a merged prefill step into lane-parallel groups.
 
-        The lane coordinator's merged prefill step carries up to one request
-        per lane, so a full-group call can prefill all of them in ONE chunk
-        walk (metal-measured 3.4-3.9x). Eligibility is narrow: one request on
-        EVERY lane (a partial group would need scratch rows whose last tile
-        cannot match and whose KV writes would land in a resident ring block),
-        equal padded width (guaranteed: one tokens tensor), a shared last
-        32-token tile, no cached prefixes, host-sampled prefill, and not
-        a warmup call. Returns the per-request host-logits list in call order,
-        or None to fall back to the serial path. Opt-in via
-        GEMMA4_LANE_PREFILL_ROUTER=1.
+        The scheduler merges every waiting prefill into one step, so this call
+        can carry any batch size. Requests bucket by owner lane (slot //
+        lane_slots, FIFO in call order); round r takes each lane's r-th
+        request, and every round that covers ALL lanes with one shared last
+        32-token tile prefills in ONE chunk walk via prefill_forward_lanes
+        (metal-measured 3.4-3.9x). Leftover requests recurse through
+        prefill_forward with subset kwargs and run serially. Partial groups
+        cannot run lane-parallel: the tail slice offset is device-replicated,
+        and scratch rows would write KV through ring block 0 of an absent
+        lane's column -- a resident user's block.
+
+        Returns the call's full [batch, 1, vocab] host logits (the serial
+        path's contract), or None to fall back entirely (no full round,
+        warmup, device sampling, cached prefixes, or multimodal kwargs).
+        Opt-in via GEMMA4_LANE_PREFILL_ROUTER=1.
         """
         if os.environ.get("GEMMA4_LANE_PREFILL_ROUTER", "0").lower() not in ("1", "true", "yes"):
             return None
@@ -1230,67 +1235,104 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         if kwargs.get("sampling_params") is not None:
             return None
+        if any(k in kwargs for k in ("pixel_values", "images", "image_embeds")):
+            return None
         start_pos = kwargs.get("start_pos")
         if start_pos is not None and any(int(p) > 0 for p in torch.as_tensor(start_pos).reshape(-1)):
             return None
         B = int(tokens.shape[0])
         lanes = mesh_cfg.lanes
         lane_slots = int(getattr(model, "lane_slots", 0) or 32)
-        if B != lanes:
-            return None
-        plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
-        if len({(p - 1) // 32 for p in plens}) != 1:
-            return None
-        lane_of = [int(s) // lane_slots for s in slots]
-        if sorted(lane_of) != list(range(lanes)):
+        if B < lanes:
             return None
         if not full_page_tables:
             return None
         g_idxs = [i for i, lt in enumerate(model.hf_config.layer_types) if lt == "full_attention"]
         if not g_idxs or full_page_tables[g_idxs[0]] is None:
             return None
+        if any(pt is None or isinstance(pt, ttnn.Tensor) for pt in full_page_tables):
+            return None
+
+        plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
+        lane_of = [int(s) // lane_slots for s in slots]
+        buckets = [[q for q in range(B) if lane_of[q] == ln] for ln in range(lanes)]
+        groups = []
+        r = 0
+        while all(len(b) > r for b in buckets):
+            group = [buckets[ln][r] for ln in range(lanes)]
+            if len({(plens[q] - 1) // 32 for q in group}) != 1:
+                break
+            groups.append(group)
+            r += 1
+        if not groups:
+            return None
+        routed = {q for g in groups for q in g}
+        remainder = [q for q in range(B) if q not in routed]
 
         S = int(tokens.shape[-1])
-        toks4 = torch.zeros(lanes, S, dtype=tokens.dtype)
-        plens4 = [1] * lanes
         gpt = full_page_tables[g_idxs[0]]
         gpt = gpt if gpt.dim() > 1 else gpt.unsqueeze(0)
-        tables4 = torch.zeros(lanes, 1, int(gpt.shape[-1]), dtype=torch.int32)
-        lane_to_req = {}
-        for req, s in enumerate(slots):
-            ln = lane_of[req]
-            lane_to_req[ln] = req
-            toks4[ln] = tokens[req]
-            plens4[ln] = plens[req]
-            # Plugin per-layer tables arrive in LOCAL prefill order (row i =
-            # request i), not slot-indexed (see the debt #1 scatter below).
-            tables4[ln, 0] = gpt[req].to(torch.int32)
-
-        # Per-layer tables: the wrapper's remapped rows (ring-slot map aware),
-        # one row per lane.
-        per_layer = []
-        for pt in full_page_tables:
-            if pt is None or isinstance(pt, ttnn.Tensor):
-                per_layer.append(None)
-                continue
-            pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
-            rows = torch.zeros(lanes, int(pt2.shape[-1]), dtype=torch.int32)
-            for ln, req in lane_to_req.items():
-                rows[ln] = pt2[req].to(torch.int32)
-            per_layer.append(rows)
-        if any(p is None for p in per_layer):
-            return None
-        model._active_page_tables_per_layer = per_layer
-
+        out = torch.zeros(B, 1, model.vocab_size)
         logger.info(
-            "Gemma4 vLLM: lane-parallel prefill router — {} requests, lanes {}, seq {}",
+            "Gemma4 vLLM: lane-parallel prefill router -- {} requests, {} full group(s), {} serial, seq {}",
             B,
-            sorted(lane_to_req),
+            len(groups),
+            len(remainder),
             S,
         )
-        out_rows = self.prefill_forward_lanes(toks4, tables4, kwargs.get("kv_cache"), plens4, slot_ids=None)
-        # Match the serial path's per-request shape ([..., idx, :vocab] -> [1, 1, V]).
-        return [out_rows[lane_of[req]].reshape(1, 1, -1) for req in range(B)]
+        for group in groups:
+            toks4 = torch.zeros(lanes, S, dtype=tokens.dtype)
+            plens4 = [1] * lanes
+            tables4 = torch.zeros(lanes, 1, int(gpt.shape[-1]), dtype=torch.int32)
+            for ln, q in enumerate(group):
+                toks4[ln] = tokens[q]
+                plens4[ln] = plens[q]
+                # Plugin per-layer tables arrive in LOCAL prefill order (row
+                # i = request i), not slot-indexed (the debt #1 lesson).
+                tables4[ln, 0] = gpt[q].to(torch.int32)
+            per_layer = []
+            for pt in full_page_tables:
+                pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
+                rows = torch.zeros(lanes, int(pt2.shape[-1]), dtype=torch.int32)
+                for ln, q in enumerate(group):
+                    rows[ln] = pt2[q].to(torch.int32)
+                per_layer.append(rows)
+            model._active_page_tables_per_layer = per_layer
+            out_rows = self.prefill_forward_lanes(toks4, tables4, kwargs.get("kv_cache"), plens4, slot_ids=None)
+            for ln, q in enumerate(group):
+                out[q] = out_rows[ln].reshape(1, -1)[:, : model.vocab_size]
+        if hasattr(model, "_active_page_tables_per_layer"):
+            del model._active_page_tables_per_layer
+
+        if remainder:
+            sub_kwargs = dict(kwargs)
+            sub_kwargs["tokens"] = tokens[remainder]
+            sub_kwargs["prompt_lens"] = [plens[q] for q in remainder]
+            sub_kwargs["empty_slots"] = [slots[q] for q in remainder]
+            sub_kwargs["enable_trace"] = enable_trace
+            if start_pos is not None:
+                sp = torch.as_tensor(start_pos).reshape(-1)
+                sub_kwargs["start_pos"] = [int(sp[q]) for q in remainder]
+            pt_kw = kwargs.get("page_table")
+            if isinstance(pt_kw, torch.Tensor) and pt_kw.dim() >= 2 and pt_kw.shape[0] >= B:
+                sub_kwargs["page_table"] = pt_kw[remainder]
+            sub_pts = None
+            if raw_page_tables_per_layer is not None:
+                sub_pts = []
+                for pt in raw_page_tables_per_layer:
+                    if isinstance(pt, torch.Tensor) and pt.dim() >= 2 and pt.shape[0] >= B:
+                        sub_pts.append(pt[remainder])
+                    else:
+                        sub_pts.append(pt)
+            logger.info(
+                "Gemma4 vLLM: lane router serial remainder -- {} request(s) on lanes {}",
+                len(remainder),
+                sorted({lane_of[q] for q in remainder}),
+            )
+            sub_out = self.prefill_forward(page_tables_per_layer=sub_pts, **sub_kwargs)
+            for pos, q in enumerate(remainder):
+                out[q] = sub_out[pos]
+        return out
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens")
@@ -1369,7 +1411,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Lane-parallel prefill router (opt-in): a lane-step group prefills all
         # its lanes in one chunk walk instead of serially. Falls back to the
         # serial path on any ineligibility.
-        routed = self._try_lane_parallel_prefill(kwargs, full_page_tables)
+        routed = self._try_lane_parallel_prefill(
+            kwargs, full_page_tables, raw_page_tables_per_layer=page_tables_per_layer, enable_trace=enable_trace
+        )
         if routed is not None:
             dt = time.perf_counter() - t0
             logger.info(
