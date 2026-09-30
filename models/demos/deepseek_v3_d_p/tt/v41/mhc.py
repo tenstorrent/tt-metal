@@ -109,6 +109,9 @@ _CB_IN, _CB_COEF, _CB_CSRC, _CB_H, _CB_OUT = 0, 1, 2, 3, 16
 _FP32_TILE_BYTES = 32 * 32 * 4
 _BF16_TILE_BYTES = 32 * 32 * 2
 _MAX_BLOCK_UNITS = 6  # units per block (a divisor of the stream width in tiles); + 2 must fit the 8 fp32 DST tiles
+# blocks buffered per stream / sublayer / output CB. Measured (traced, 1 chip, production hc_post 2560 x 4x1280, bf16
+# h): 2 -> 373 us, 3 -> 341, 4 -> 327, 5 and 6 -> 329 (collapse 173 us at every depth); 4 uses ~0.85 MB of L1.
+_MIX_DEPTH = 4
 
 
 def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=ttnn.float32) -> ttnn.Tensor:
@@ -227,13 +230,13 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=t
         ),
     ]
     cbs = [
-        cb(_CB_IN, 2 * block * n),
+        cb(_CB_IN, _MIX_DEPTH * block * n),
         cb(_CB_COEF, 2 * outputs * k_terms),
         cb(_CB_CSRC, len(coef_srcs)),
-        cb(_CB_OUT, 2 * block * outputs, dtype),
+        cb(_CB_OUT, _MIX_DEPTH * block * outputs, dtype),
     ]
     if x is not None:
-        cbs.append(cb(_CB_H, 2 * block, x.dtype))
+        cbs.append(cb(_CB_H, _MIX_DEPTH * block, x.dtype))
     return ttnn.generic_op(tensors + [out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
 

@@ -9,7 +9,9 @@
 // and, with HAS_X, the extra input x at (r, c) (cb_x, x's own tile format). Whenever r changes the reader reads
 // tile row r of the (up to two) coefficient tensors and builds J * K column-broadcast tiles (tile j * K + k holds
 // the coefficient of term k of output j in every column of its row), consumed by the compute kernel until the
-// next row.
+// next row. Faces 1 and 3 of such a tile repeat faces 0 and 2 (the same rows): the reader stores faces 0 and 2 and
+// copies them with local NOC writes (the stores are the reader's largest cost after the stream reads: building all
+// four faces by stores took 70 us of 424 us per hc_post call at the production shape).
 //
 // compile_time_args = [cb_in, cb_coef, cb_csrc, CT, N, HAS_X, J, NUM_CSRC, BLOCK, cb_x, table[J * K] (src << 8 | col),
 //                      TensorAccessorArgs(streams), (x), (coef src 0), (coef src 1)...]
@@ -97,15 +99,20 @@ void kernel_main() {
                     const uint32_t off = (tr & 15u) * 16;
                     const uint32_t v = s[face * FACE_U32 + off];
                     tt_l1_ptr uint32_t* d0 = d + face * FACE_U32 + off;
-                    tt_l1_ptr uint32_t* d1 = d0 + FACE_U32;
 #pragma GCC unroll 16
                     for (uint32_t k = 0; k < 16; ++k) {
                         d0[k] = v;
-                        d1[k] = v;
                     }
                 }
             }
-            asm volatile("" ::: "memory");  // the plain stores above complete before the tiles are published
+            asm volatile("" ::: "memory");  // the plain stores above complete before the NOC copies read them
+            const uint32_t base = coef.get_write_ptr();
+            for (uint32_t t = 0; t < J * K; ++t) {
+                const uint32_t tile = base + t * TILE_U32 * 4;
+                noc_async_write(tile, get_noc_addr(tile + FACE_U32 * 4), FACE_U32 * 4);  // face 0 -> face 1
+                noc_async_write(tile + 2 * FACE_U32 * 4, get_noc_addr(tile + 3 * FACE_U32 * 4), FACE_U32 * 4);
+            }
+            noc_async_write_barrier();  // the tiles are complete before they are published
             coef.push_back(J * K);
         }
         in.reserve_back(units * N);
