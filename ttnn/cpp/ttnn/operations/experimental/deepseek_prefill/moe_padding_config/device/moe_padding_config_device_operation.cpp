@@ -114,6 +114,16 @@ MoePaddingConfigDeviceOperation::spec_return_value_t MoePaddingConfigDeviceOpera
     return tensor_args.config.tensor_spec();
 }
 
+MoePaddingConfigDeviceOperation::topology_return_value_t
+MoePaddingConfigDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: the returned handle IS the caller's config row, so it keeps the caller's declared distribution
+    // (sharded along the SP axis, replicated along TP). The generic output-topology inference would otherwise
+    // relabel it with the union of every input's placements, letting the actual_start/actual_end metadata
+    // tensors' labels leak onto the config; same contract as update_padded_kv_cache.
+    return {tensor_args.config.tensor_topology()};
+}
+
 MoePaddingConfigDeviceOperation::tensor_return_value_t MoePaddingConfigDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place: return a handle to the caller-owned config tensor.

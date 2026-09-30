@@ -160,6 +160,15 @@ InsertDeviceOperation::spec_return_value_t InsertDeviceOperation::compute_output
     return tensor_args.global_tensor.tensor_spec();
 }
 
+InsertDeviceOperation::topology_return_value_t InsertDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: the returned handle IS the caller's global_tensor, so it keeps the caller's declared
+    // distribution. The generic output-topology inference would otherwise relabel it with the union of
+    // every input's placements (local_tensor, start, counts, global_expert_idx_table), same contract as
+    // update_padded_kv_cache.
+    return {tensor_args.global_tensor.tensor_topology()};
+}
+
 InsertDeviceOperation::tensor_return_value_t InsertDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place: reuse global_tensor. No new DRAM allocation.
