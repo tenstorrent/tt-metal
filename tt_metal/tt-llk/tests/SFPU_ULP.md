@@ -184,7 +184,11 @@ Four verdicts:
 - **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
   describe, or disagreed with the golden about being finite where the op claims an
   answer (inf/NaN against a finite golden, or a finite answer to an infinite one). No budget buys that;
-  the row says why instead of leaving a hole the next emit would paper over.
+  the row says why instead of leaving a hole the next emit would paper over. On a
+  gateable output such a row must also be acknowledged, with its cause, in
+  `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` — and if the cause is a
+  tracked defect on a handful of inputs, it belongs in `_KNOWN_NONFINITE_LANES` instead,
+  so the rest of the cell keeps its gate.
 
 ### 5. Gate on it
 

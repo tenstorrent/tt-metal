@@ -249,8 +249,19 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
-        mathop, src, golden, result, in_fmt, out_fmt, dest_acc
+        mathop, src, golden, result, in_fmt, out_fmt, dest_acc, approx_mode=approx_mode
     )
+    if not ulp_sweep.EMIT:
+        # An excused lane that agrees again means the defect its issue tracks is gone
+        # from this cell; the entry has to go with it, or its lanes stay ungated.
+        stale = ulp_sweep.stale_excuses(
+            mathop, src, golden, result, in_fmt, out_fmt, approx_mode, dest_acc
+        )
+        assert not stale, (
+            f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
+            f"{', '.join(entry.issue for entry in stale)} names disagrees with the "
+            "golden any more; drop the entry so those lanes are gated again"
+        )
     # Subnormal outputs flushed on every format, fp16 included. The metric keeps fp16's
     # subnormal band by default, but the golden keeps IEEE subnormals the pack path
     # does not reproduce: an exact op read 512 steps on Float16_b->Float16 from that

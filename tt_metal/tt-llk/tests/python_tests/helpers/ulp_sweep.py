@@ -184,8 +184,16 @@ def _normal_input(
     1.18e-38, so the strided lanes in between scored ``f(x)`` against ``f(0)`` as op
     error (Floor's Float32 -> Float16 cell read 15360 steps, the distance to 1.0).
     Without *output_format* and *dest_acc*, only the stimuli format's cutoff applies.
+
+    Judged on the input as generated *and* as ``quantize_input_to_unpack_format`` hands
+    it to the golden. They differ on a block float: the sweep's one ``-0.0`` shares a
+    Bfp8_b block with the bf16 subnormals ``0x8001..0x800F``, the shared exponent is 0,
+    and the quantizer's forced hidden bit gives the golden ``-2**-127``; ``floor`` of
+    that is -1 against the 0 silicon sees. That one lane was 16,129 steps on every
+    Bfp8_b-input cell of Floor and Signbit, and why Ceil and Trunc read 0 there.
     """
     from helpers.data_format_inference import infer_unpack_out
+    from helpers.golden_generators import quantize_input_to_unpack_format
     from helpers.llk_params import DestAccumulation, format_dict
 
     cutoff = torch.finfo(format_dict[stimuli_format_for(input_format)]).smallest_normal
@@ -212,7 +220,25 @@ def _normal_input(
     # 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band then passed
     # this filter while looking, in any printout, like the smallest normal.
     magnitude = src.detach().to(torch.float32).abs()
-    return ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
+    survives = ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
+    # The block quantizer works on whole 16-lane blocks. A device sweep is a multiple of
+    # that; a host test may hand in a fragment, so pad it with zeros, which never raise
+    # a block's exponent, and drop the padding again.
+    flat = src.detach().flatten()
+    short = (-flat.numel()) % 16
+    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
+    quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    quantized_magnitude = quantized.detach().to(torch.float32).abs().reshape(src.shape)
+    quantized_subnormal = (quantized_magnitude < cutoff) & (quantized_magnitude != 0)
+    return survives & ~quantized_subnormal
+
+
+def flushed_inputs(
+    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
+    """Lanes whose input the unpack path flushes or saturates and the golden does not:
+    the complement of :func:`_normal_input`."""
+    return ~_normal_input(src, input_format, output_format, dest_acc)
 
 
 def measurable_mask(
@@ -272,7 +298,7 @@ def measurable_mask(
     return (
         both_measurable
         & ~nonfinite_mismatches(golden, result)
-        & ~flushed_inputs(src, input_format)
+        & normal_input
         & ~padding_lanes(src, input_format)
     )
 
@@ -280,9 +306,10 @@ def measurable_mask(
 #: The magnitude past which an op's argument reduction stops claiming a finite answer,
 #: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
 #: kernel reduces its argument belong here; anywhere else a non-finite answer against a
-#: finite golden is a failure over the whole format. Sin and Cos give up far outside
-#: [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1 -- and pi is the widest
-#: bound measured so far, so it is the claim until one is wider.
+#: finite golden is a failure over the whole format. Sin, Cos and Tan give up far
+#: outside [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1, `tan(-3e38)`
+#: NaN against -2.4 -- and pi is the widest bound measured so far, so it is the claim
+#: until one is wider.
 #:
 #: Keyed on the stimuli format because the claim is about what the format can reach.
 #: 2.6e28 is a bfloat16 value (and a Float32 one); float16 ends at 65504, and Sin and
@@ -300,7 +327,11 @@ def _claim_limits() -> Dict:
     if not _CLAIM_LIMIT:
         wide_formats = {DataFormat.Float16_b: math.pi, DataFormat.Float32: math.pi}
         _CLAIM_LIMIT.update(
-            {MathOperation.Sin: wide_formats, MathOperation.Cos: wide_formats}
+            {
+                MathOperation.Sin: wide_formats,
+                MathOperation.Cos: wide_formats,
+                MathOperation.Tan: wide_formats,
+            }
         )
     return _CLAIM_LIMIT
 
@@ -402,10 +433,10 @@ def _known_lanes() -> Dict:
     # #58607: on a 16-bit Float16 Dest these ops answer inf where the answer is one of
     # the four largest fp16 values, 65408..65504. The same inputs on a 32-bit Dest read
     # 1-2 steps, and Abs/Identity read 0 on the same cell, so it is neither the input
-    # nor the store alone.
+    # nor the store alone. A strided Float32 input reaches the same band (x=65479).
     top_of_fp16 = dict(
         issue="#58607",
-        inputs=(DataFormat.Float16,),
+        inputs=(DataFormat.Float16, DataFormat.Float32),
         output=DataFormat.Float16,
         dest=DestAccumulation.No,
         low=65408.0,
@@ -420,7 +451,42 @@ def _known_lanes() -> Dict:
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
             MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
+            MathOperation.Mish: (KnownNonfiniteLanes(**top_of_fp16),),
             MathOperation.Silu: (KnownNonfiniteLanes(**top_of_fp16),),
+            # The same band reached through the op: selu(x) = 1.0507 x, xielu(x) ~ x*x.
+            MathOperation.Selu: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "inputs": (DataFormat.Float16,),
+                        "low": 62272.0,
+                        "high": 62336.0,
+                        "why": "inf where 1.0507 x is 65440..65504, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            MathOperation.Xielu: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "inputs": (DataFormat.Float16,),
+                        "low": 255.5,
+                        "high": 255.625,
+                        "why": "inf where the answer is 65408 or 65472, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            MathOperation.UnaryPower: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 255.625,
+                        "high": 255.875,
+                        "magnitude": True,
+                        "why": "inf (NaN at |x|=255.875) where x*x is 65344..65472, on a 16-bit Dest",
+                    }
+                ),
+            ),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{
@@ -445,39 +511,21 @@ def _known_lanes() -> Dict:
                         "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
                     }
                 ),
-                KnownNonfiniteLanes(
-                    issue="#57215",
-                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
-                    output=DataFormat.Float16,
-                    dest=DestAccumulation.Yes,
-                    low=65024.0,
-                    high=66048.0,
-                    magnitude=True,
-                    why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
-                ),
             ),
-            MathOperation.SqrtCustom: (
+            # #57215: the Float16 store carries exactly 2**16 to inf (and every larger
+            # value to NaN). Approximate sqrt lands on 2**16 exactly where the answer
+            # rounds to 65504. The store's *clamp* of (65504, 2**16) to 65504 is the
+            # same issue but needs no entry: `nonfinite_failures` reads it as saturation.
+            MathOperation.Sqrt: (
                 KnownNonfiniteLanes(
                     issue="#57215",
-                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
-                    output=DataFormat.Float16,
-                    dest=DestAccumulation.Yes,
-                    low=4.26e9,
-                    high=4.33e9,
-                    why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
-                ),
-            ),
-            MathOperation.Reciprocal: (
-                KnownNonfiniteLanes(
-                    issue="#57215",
-                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
+                    inputs=(DataFormat.Float32,),
                     output=DataFormat.Float16,
                     approx=ApproximationMode.Yes,
                     dest=DestAccumulation.Yes,
-                    low=1.51e-5,
-                    high=1.54e-5,
-                    magnitude=True,
-                    why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
+                    low=4.2917e9,
+                    high=4.2918e9,
+                    why="inf where sqrt(x) rounds to 65504: the approximation lands on 2**16, the one value the store carries to inf",
                 ),
             ),
         }
@@ -523,8 +571,8 @@ def stale_excuses(
         result,
         input_format,
         output_format,
-        approx_mode,
-        dest_acc,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
         known_lanes=False,
     )
     return [
@@ -543,6 +591,8 @@ def nonfinite_failures(
     input_format: DataFormat,
     output_format: DataFormat,
     dest_acc=None,
+    approx_mode=None,
+    known_lanes: bool = True,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
     non-question: the two sides disagreeing about being non-finite where the output
@@ -617,7 +667,7 @@ def nonfinite_failures(
     )
     return (
         nonfinite_mismatches(golden, result)
-        & ~flushed_inputs(src, input_format)
+        & normal_input
         & ~excused
         & _claimed(op, src, input_format)
         & ~(
