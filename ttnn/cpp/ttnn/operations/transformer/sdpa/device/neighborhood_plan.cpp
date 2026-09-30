@@ -167,30 +167,9 @@ void validate_config(const NeighborhoodConfig& config) {
         require(config.query_chunk_bricks.by_axis[axis_index] > 0, "query_chunk_bricks must be non-zero on every axis");
     }
 
-    // A multi-brick chunk must be exactly one query group, so that every one of its tile rows
-    // shares a single context window. That is what lets the kernel store one mask tile per
-    // gather slot and broadcast it down the rows -- and it is the whole reason a bigger chunk
-    // is cheap rather than merely bigger: the gathered box stays the context window however
-    // many bricks the chunk holds.
-    //
-    // Violating it is silently wrong, not loud: the kernel would apply the first row's mask to
-    // every row, so queries would attend to a window that is not theirs and still return
-    // plausible video. Hence a hard check rather than a comment.
-    if (config.bricks_per_query_chunk() > 1) {
-        // DIFFVAE_NA_UNSAFE_CHUNK=1 turns this into a PERF PROBE and nothing else. The numbers it
-        // produces are WRONG in exactly the way described above -- every brick in the chunk gets
-        // the first brick's mask, so queries attend to windows that are not theirs -- but the
-        // TIMING is real, and it measures what amortising the gather across a multi-brick chunk
-        // would be worth at stride 1 (175 keys/query today). That is the case for building the
-        // per-brick mask that would make it correct. Never ship a frame rendered with this set.
-        const char* probe = std::getenv("DIFFVAE_NA_UNSAFE_CHUNK");
-        if (probe == nullptr || probe[0] != '1') {
-            require(
-                config.query_chunk_sites() == config.stride,
-                "a multi-brick query chunk must equal the stride exactly, so its bricks form one "
-                "query group sharing one context window");
-        }
-    }
+    // A multi-brick chunk wider than the stride holds bricks that do not share one context window.
+    // The program factory detects that and gives every brick its own mask block rather than
+    // broadcasting one mask down the chunk's rows, so no chunk shape is rejected here.
 
     const ShapeInSites resident = config.resident_extent();
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
