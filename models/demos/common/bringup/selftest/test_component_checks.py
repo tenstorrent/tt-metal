@@ -138,6 +138,14 @@ def test_index_checks():
     dup = want.clone()
     dup[:, 1] = dup[:, 2]
     assert "repeated" in " ".join(CC.index_fails(dup, want, 64, lim, 0.99)[1])
+    padded = want.clone()
+    padded[:, -4:] = -1  # a reference with its pads at the end of every row
+    valid_shuffled = padded.clone()
+    valid_shuffled[:, :-4] = valid_shuffled[:, :-4].flip(1)
+    assert not CC.index_fails(valid_shuffled, padded, 64, lim, 0.99)[1], "order within the valid part is free"
+    mid = padded.clone()
+    mid[:, [0, -1]] = mid[:, [-1, 0]]  # the same set, one pad moved to the front
+    assert CC.index_fails(mid, padded, 64, lim, 0.99)[1] == ["64 rows have a pad before a valid position"]
     fewer = want.clone()
     fewer[:, -1] = -1
     assert "number of valid" in " ".join(CC.index_fails(fewer, want, 64, lim, 0.99)[1])
