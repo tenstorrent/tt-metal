@@ -83,6 +83,7 @@ DB_SCHEMA = [
     # configuration
     Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
+    Column("bcast_dim", "string", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
