@@ -22,7 +22,7 @@
 
 `n` = `post.shape[-1]` (CT arg to all three kernels). There are no other user parameters.
 
-Public entry points (exact): `mhc_post(input_tensor, residual, post, comb, *, compute_kernel_config=None) -> ttnn.Tensor` and `default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor`, importable as `from ttnn.bringup.mhc_post import mhc_post, default_compute_kernel_config`. The package must also export `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS` (the golden harness imports them).
+Public entry points (exact): `mhc_post(input_tensor, residual, post, comb, *, compute_kernel_config=None) -> ttnn.Tensor` and `default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor`, importable as `from ttnn.bringup.mhc_post_ttnn import mhc_post, default_compute_kernel_config`. The package must also export `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS` (the golden harness imports them).
 
 ### Registry contract (names exactly as in `feature_spec.py` TARGET)
 

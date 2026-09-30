@@ -11,7 +11,7 @@ Overall the Phase 0 build is clean and matches the design. Every block knob (`bl
 |---|---------|-----|
 | 1 | **DRY:** `TILE_HW = 32` was declared twice (`mhc_post.py` and `mhc_post_program_descriptor.py`). The tagger, `C % 32` validation and all host tile arithmetic read the tile width, so the two copies could drift apart. | `mhc_post.py` now imports `TILE_HW` from the program descriptor, so it has a single definition. |
 | 2 | **DRY / mechanism cap as a literal:** `MAX_STREAMS = 5` restated the derived cap `n² ≤ TILE_HW` (the comb row must fit one raw tile row) as a separate literal. | `MAX_STREAMS = math.isqrt(TILE_HW)` (= 5), derived from the one tile-width constant. |
-| 3 | No precision-baseline test. | Added `ttnn/ttnn/bringup/mhc_post/tests/unit/test_mhc_post_precision_baseline.py` (see Precision Baseline). |
+| 3 | No precision-baseline test. | Added `ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_precision_baseline.py` (see Precision Baseline). |
 
 Checked and found correct (no change needed):
 

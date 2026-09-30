@@ -79,7 +79,7 @@ The blind verifier shows **0 supported_fail and 0 xpass_drift**, and SUPPORTED =
 - **Evidence:**
   - `.claude/references/numerical_stability_analysis_reference.md:34,42,178`.
   - `changelog.md` R2 diagnosis: "The FPU's in-tile (32-long) matmul dot product rounds its sum to ~11 bits below the largest product".
-  - Probes `ttnn/ttnn/bringup/mhc_pre/tests/unit/probes/probe_009–015.py`.
+  - Probes `ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/probes/probe_009–015.py`.
 - **Recommendation:** add to §2.1/§3.1 of the reference: "matmul_tiles' in-tile 32-term dot product is not fp32-exact (≈11 bits below the max product, RN), and fp32/tf32 operands keep ≈9 bits at HiFi4. For fp32-exact projections, use a hi/lo or exact-grid split (see mhc_pre R1/R2)." Then correct the `helpers.py` precision comment.
 
 **D3. Absent rule: a raw replacement for a helper inherits the helper's `cb_wait_front`** · confidence: med
