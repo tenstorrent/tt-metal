@@ -3897,6 +3897,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 padded_page_table[user, :] = page_table[i, :]
             return padded_page_table
         else:
+            # Scheduler rows can retain a previous request's block IDs beyond
+            # the current prompt. Padded prefill tokens must not write them.
+            owned_blocks = num_blocks_in_seq(prefill_len, block_size)
+            page_table = page_table[:, :owned_blocks]
             # Compatibility with VLLM warmup: prefill kernels run on the padded
             # prefill length (for example 32-token prompts become 128-token
             # kernels), so the page table must expose blocks for that padded
