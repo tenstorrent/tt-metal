@@ -335,8 +335,14 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
         .topology = ttnn::ccl::convert_2d_to_1d_topology(
             ttnn::ccl::get_usable_topology(input, args.topology, args.cluster_axis)),
         .axis_topology = ttnn::ccl::get_axis_topology(input, fabric_config, axis),
+        // The sender writer's Fabric2D multicast initialization routes axis 0 as S/N and axis 1 as E/W,
+        // so a straight axis in another orientation (e.g. axis 1 of a 4x2 view) must take the unicast path.
         .axis_is_straight =
-            !tt::tt_fabric::is_2d_fabric_config(fabric_config) || ttnn::ccl::is_axis_straight(*mesh_device, axis)};
+            !tt::tt_fabric::is_2d_fabric_config(fabric_config) ||
+            ttnn::ccl::is_axis_straight_along(
+                *mesh_device,
+                axis,
+                axis == 0 ? tt::tt_fabric::eth_chan_directions::SOUTH : tt::tt_fabric::eth_chan_directions::EAST)};
 
     auto drain_mapping = args.drain_virtual_cores.empty() && tt::tt_fabric::is_2d_fabric_config(fabric_config)
                              ? gather_drain_virtual_cores(input, args.sub_device_id)

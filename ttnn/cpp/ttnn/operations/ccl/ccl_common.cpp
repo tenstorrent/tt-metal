@@ -134,7 +134,12 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
-bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+// Does every hop along this mesh axis leave in one direction? A given direction must be that one;
+// without one, the first hop fixes it.
+static bool axis_hops_share_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    uint32_t axis,
+    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction) {
     const auto& mesh_view = mesh_device.get_view();
     const auto& mesh_shape = mesh_view.shape();
     if (mesh_shape[axis] < 2) {
@@ -142,7 +147,6 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
     }
 
     // Axis 0 runs down a column, axis 1 along a row.
-    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
     for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
         const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
                                      : mesh_view.get_fabric_node_ids_on_row(row_or_col);
@@ -155,6 +159,17 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
         }
     }
     return true;
+}
+
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    return axis_hops_share_direction(mesh_device, axis, std::nullopt);
+}
+
+bool is_axis_straight_along(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    uint32_t axis,
+    tt::tt_fabric::eth_chan_directions forward_direction) {
+    return axis_hops_share_direction(mesh_device, axis, forward_direction);
 }
 
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {

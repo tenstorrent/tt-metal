@@ -43,6 +43,13 @@ tt::tt_fabric::Topology get_usable_topology(
 // Is every hop along this mesh axis wired in same dir? Ex: a 1x8 view of a 2x4 board makes axis-1 turn corners.
 bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
 
+// Is every hop along this mesh axis, from lower to higher index, wired in forward_direction? Unlike
+// is_axis_straight, this also pins the physical orientation, for kernels that hard-code it.
+bool is_axis_straight_along(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    uint32_t axis,
+    tt::tt_fabric::eth_chan_directions forward_direction);
+
 // Is the link that would close this mesh axis into a ring wired? Always false for an axis of 2 or
 // fewer devices, which closes on the link it already uses.
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
