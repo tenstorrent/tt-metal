@@ -22,3 +22,20 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate result: every pcc_hidden_L* = 1.0000000 (max abs 9.6e-3 at L39), pcc_logits 1.0000000, top1_match 1.0000,
   text next-token acc 0.746. Full run 1 m 50 s.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.reference.check_hf --seq 2048`
+
+## PL.1 plan (run1, attempt 1 on the 4x2 mesh)
+- Wrote `plan.yaml`, `plan.md`, `components.yaml` for SP=4 (rows, axis 0) x TP=2 (columns, axis 1), the Kimi K2.7
+  layout of deepseek_v3_d_p. Chip (r, c): chunk rows [r S/4, (r+1) S/4) and hidden columns [1792c, 1792(c+1)); the 4 mHC
+  streams stay [S/4, 4 x 1792] fp32 per chip (split by row and column, as Kimi's TP-sharded hidden and hy4).
+- Attention: ttMLA's dense chunked path (ring_mla over axis 0, 16 heads per chip = Kimi's count, absorbed 576 / 512),
+  latent cache block-cyclic over rows with period = chunk, replicated over columns (dense ring_mla is not TP-dedup
+  wired). q_a / kv_a K-split + all_reduce axis 1, o_proj row-parallel + reduce_scatter axis 1.
+- Causal balance with a contiguous quarter per row: last chunk slowest / mean 1.036, whole s56320 run 1.068. Zigzag
+  not planned (chunked ring_mla asserts is_balanced False).
+- MoE: EP=8, one dispatch group of 4 chips per column (experts 32c + 8r .. +7), forks dispatch / combine /
+  offset_cumsum / unified_routed_expert_moe, reduce_scatter over axis 1 after combine. Experts bfp8 (bf16 fits too).
+- mHC: partial projection + one [S/4, 32] fp32 all_reduce axis 1; Sinkhorn via a new fork
+  `ttnn.bringup.mhc_split_sinkhorn` (Xing mode) or composed, because the stock kernel differs (known issue).
+- Gate: per-chip 9.63 of 27.20 GiB, 0 unplaced, 0 plan / component / ledger errors; plan_approved 0 until the owner
+  approves. tasks.yaml unchanged (F48 lets the attn_hc task write ttnn/ttnn/bringup).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
