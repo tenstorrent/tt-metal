@@ -205,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.device();
 
     // The argmax output (and the intermediate index DFB) is raw 4-byte index storage. Quasar validates
     // DFB data formats against the arch and rejects UInt32 (it supports Int32 / RawUInt32), so map the

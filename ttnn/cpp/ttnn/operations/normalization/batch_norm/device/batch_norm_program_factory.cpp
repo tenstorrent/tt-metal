@@ -189,7 +189,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     const auto& weight_tensor = tensor_args.weight;
     const auto& bias_tensor = tensor_args.bias;
 
-    tt::tt_metal::distributed::MeshDevice& device = input_tensor.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.device();
 
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();
