@@ -32,7 +32,8 @@ if TYPE_CHECKING:
 # to it. (Also reused as the flash-SDPA q/k chunk size, an independent perf-tiling knob.)
 SEQ_BUCKET_SIZE = 128
 # Largest SP shard whose fp32-accumulate ring SDPA program fits Wormhole's kernel-config buffer;
-# see `Qwen3VlAttention._ring_compute_kernel_config`.
+# see `Qwen3VlAttention._ring_compute_kernel_config`. This was the largest power of 2 that was
+# empirically observed to be okay with fp32_accumulate = True, but may change in the future.
 _RING_FP32_ACC_MAX_LOCAL_ROWS_WH = 512
 
 
@@ -673,17 +674,16 @@ class Qwen3VlAttention(Module):
         return cfg, worker_grid
 
     def _ring_compute_kernel_config(self, local_seq_len: int):
-        """fp32 destination accumulation, except where the ring SDPA program cannot fit on Wormhole.
+        """This helper turns off fp32_dest_acc_en from the kernel config when it wouldn't fit
+        on the kernel config buffer.
 
-        `fp32_dest_acc_en=True` selects the ring joint SDPA's legacy compute path, whose kernels are
-        larger than the streaming path's. On Wormhole the whole program (five kernel binaries plus
-        runtime-arg, CB and semaphore tables) must fit the 70656-byte Tensix kernel-config buffer, and
-        it does so only while the local shard is a single K chunk: at 128 and 512 rows it fits, at 1024
-        and above it lands at 72-73.5 KB for every chunking that fits L1 (probed 2026-09-29 at 128/256/512
-        q and k chunks, shards 1024-7168). Only ref2va reaches those shards -- a presentation with a
-        video reference pads to 8192 tokens, 1024 rows over SP=8. The bf16-accumulate streaming path
-        fits at every shard (3.2 ms at 1024 rows, 81.7 ms at 7168), so Wormhole takes it above
-        `_RING_FP32_ACC_MAX_LOCAL_ROWS_WH`; shorter shards, and every Blackhole shard, keep fp32.
+        By default we set `fp32_dest_acc_en=True` but that selects the ring joint SDPA's
+        legacy compute path, whose kernels are larger than the streaming path's. Some ring
+        SDPA configs on Wormhole are too big to fit on the kernel config buffer, so
+        we set it to false in that case so it can fit. TODO: Consider maybe not making
+        this a silent change/fallback for an edge case but require it at the beginning for WH.
+
+        Only tested for wormhole, TODO: unify for both wormhole and blackhole.
         """
         rows = -(-local_seq_len // 32) * 32
         if self._device.arch() == ttnn.device.Arch.WORMHOLE_B0 and rows > _RING_FP32_ACC_MAX_LOCAL_ROWS_WH:
