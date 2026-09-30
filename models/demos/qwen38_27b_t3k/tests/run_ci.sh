@@ -81,6 +81,9 @@ evaluate() {
     return "$status"
 }
 evaluate --prepare-only --server-capacity 16 --output-dir "$results/gpqa"
+# fabric_max_packet_payload_size_bytes is inert through the plugin, which passes
+# set_fabric_config only a config and a reliability mode. Kept so the value is declared in one
+# place for when the plugin carries a router config.
 tt_config='{"tt":{"fabric_config":"FABRIC_1D_RING","fabric_max_packet_payload_size_bytes":6144,"l1_small_size":24576,"sample_on_device_mode":"all","trace_mode":"decode_only","trace_region_size":134217728}}'
 for capacity in 1 8 16; do
     echo "Starting Qwen3.8 server capacity=$capacity"
