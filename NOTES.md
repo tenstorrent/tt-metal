@@ -25,3 +25,10 @@ Job ids/status: ~/fasth3/out/t40/jobs.txt ; both done when ~/fasth3/out/t40/DONE
 - e2e: gen#1 Encoder row (expect ~0.1-0.3s vs 1.91), E2E_WALL_S vs 8.761; still at 3s from gen#1 mp4,
   PSNR vs tt-project/baselines/t20/ltx_av_fast_1920x1088_1.mp4 (same prompt, same seed).
 - Clean up after: blx03 ~/fasth3/t40 worktree (git worktree remove), ~/fasth3/out/t40 mp4s once copied.
+
+## 2026-09-30 20:27 (attempt 1, wake 2)
+blx03 answers ping but refuses ssh (port 22 connection refused): it is most likely rebooting. The detached driver
+t40_drive.sh probably died with it. On the next wake: ssh in, check ~/fasth3/out/t40/{jobs.txt,DONE} and the
+broker status of the job ids there. If DONE is missing and t40_drive.sh is not running, check /var/tmp/fasth3
+still holds Gemma + caches, then relaunch the driver (setsid nohup bash ~/fasth3/t40/tmp/blx03/t40_drive.sh
+> ~/fasth3/out/t40/drive.log 2>&1 &), one device job at a time.
