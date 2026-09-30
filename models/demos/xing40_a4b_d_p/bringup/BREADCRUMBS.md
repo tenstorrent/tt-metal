@@ -240,3 +240,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   0.999962, vs cpu rel 0.0084, same accuracy.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py`
   (`XING_EXPERTS_MODE=loop` for the per-expert path).
+
+## C.moe.shared_expert implement (run1, attempt 1)
+- No new module: the shared expert is `tt/mlp.py:TtDenseMLP` built by `build_mlp(..., prefix="mlp.shared_experts.")`
+  (intermediate 1024 -> 512 per column; gate / up column-parallel, down row-parallel, bf16 weights, fp32 mid, HiFi4 +
+  fp32 dest, fp32 `reduce_scatter(dim 3, cluster_axis 1)` -> [S/4, 1792] column split). Same boundary as the dense mlp.
+- hooks: `_SHARED_EXPERT_STEPS = {"shared_expert"}` -> `_mlp_host_fn`; `DEVICE_STEPS["moe"]` now has shared_expert.
+- The reduce_scatter stays separate from the experts' one (swap-test boundary); fusing them (add partials first) is a
+  perf item.
+- Gate: pcc_shared_expert_L02 0.999999; vs cpu rel 6.4e-4 (limit 0.0046), ratio [0.99924, 0.99963]; vs golden 0.0018;
+  layer39 / mixed / small / big rel 7.7e-4 / 7.8e-4 / 6.8e-4 / 6.4e-4. (The precompile collect pass prints FAIL lines
+  with pcc 0; only the real pass counts.)
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_shared_expert.py`
