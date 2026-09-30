@@ -14,7 +14,7 @@ def get_expected_overhead():
         case ChipArchitecture.WORMHOLE:
             return 20
         case ChipArchitecture.BLACKHOLE:
-            return 30
+            return 22
         case _:
             raise ValueError("Unsupported chip architecture")
 
