@@ -1161,6 +1161,19 @@ def _golden_pcc(case, op_name):
     return min(floors)
 
 
+# Ops whose captured call faults on the Quasar device itself (LLK assert / hang), not fixable at the harness
+# level and not host-catchable, so run_case skips them pre-flight. Value = why. These are mainline ops the
+# model does NOT use on Quasar (it uses the quasar-experimental equivalents), so skipping them here does not
+# reduce coverage of the actual model path.
+_QUASAR_UNSUPPORTED_OPS = {
+    # Compute kernel calls compute_kernel_hw_startup twice (call-once violation, #52395) -> corrupts Quasar
+    # Tensix engine state -> LLK assert (Neo0TRISC2 line 94), every case/memory-config. The model uses the
+    # quasar rope_1d op, not this mainline rotary_embedding_llama.
+    "ttnn.experimental.rotary_embedding_llama": "mainline kernel double compute_kernel_hw_startup (#52395) "
+    "corrupts Quasar engine state (LLK assert); model uses quasar rope_1d",
+}
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1168,6 +1181,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+
+    # Some captured ops fault ON the Quasar device (LLK asserts / hangs), which are not host-catchable
+    # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
+    if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
+        pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
