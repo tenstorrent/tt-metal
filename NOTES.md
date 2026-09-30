@@ -56,3 +56,18 @@ Branch ttp/t41-... = t20 tip (1eadde3ce6c) + 63c8860f08e. Pushed.
   job (923, blx03_ab.sh) was running, and several other tasks are queued for blx03; driver retries every 2 min.
 - On wake: if drive.log has T41_DRIVE_DONE, check job status/run.log on blx03, then do "Next" 1-3.
   If the driver is gone without T41_DRIVE_DONE (reboot), relaunch it the same way.
+
+## Result 2026-09-30 21:40 (job 925, blx03, seed 0, eager): temporal band REJECTED
+- Device A/B, band W=2 vs dense: latent PCC 0.881 (rel_l2 0.49), audio latent PCC 0.984, video PSNR 24.9 dB
+  (Y), visible change (face identity and background differ at t=3s). Eager timings are not comparable
+  (mask emulation is slower than dense by design).
+- Q/K/V dump (21 dumps: layers 0,8,..,40,47 x steps 0-2, TP-rank-0 heads) shows S2 self-attn is NOT temporally local:
+  mass within +-W frames: W1 0.39, W2 0.51, W4 0.65, W6 0.75; per-layer output rel_l2 vs dense W2 0.43 mean
+  (max 0.96), W6 0.28 (max 0.70). Layers 8 and 16 are the least local.
+- Block top-k at kernel granularity (q192/k512 contiguous chunks, tmp/t41/analyze_blocks.py), mean/max rel_l2:
+  keep 25%: 0.36/1.14, keep 50%: 0.19/0.59, keep 75%: 0.09/0.27 (oracle); pooled-q.k selection is close
+  to oracle. Only late layers (40, 47) are sparse (keep 50% -> 0.03-0.11).
+- Verdict: no sparse pattern tested saves real S2 time without large per-layer error. Best case, top-k only on
+  late layers at keep 50%, saves ~0.08 s e2e (12/48 layers x 50% x 0.66 s), not worth a kernel change plus quality risk.
+- Artifacts: tt-project/baselines/t41/{dense_seed0.mp4,band2_seed0.mp4,still_3s_dense_left_band2_right.png,metrics.txt}.
+  Q/K/V dump kept on blx03 /var/tmp/fasth3/t41 (4.7 GB, root fs) for any follow-up; blx03 worktree removed.

@@ -1,0 +1,62 @@
+s0 l 0 mass d0..4 0.139 0.227 0.136 0.092 0.071 | W1: in 0.366 rel_l2 0.3878 W2: in 0.502 rel_l2 0.3398 W3: in 0.593 rel_l2 0.3130 W4: in 0.664 rel_l2 0.2876 W6: in 0.771 rel_l2 0.2348
+s0 l 8 mass d0..4 0.073 0.133 0.111 0.095 0.082 | W1: in 0.206 rel_l2 0.7775 W2: in 0.317 rel_l2 0.6974 W3: in 0.412 rel_l2 0.6332 W4: in 0.494 rel_l2 0.5730 W6: in 0.633 rel_l2 0.4570
+s0 l16 mass d0..4 0.162 0.205 0.120 0.078 0.061 | W1: in 0.368 rel_l2 1.0160 W2: in 0.487 rel_l2 0.9280 W3: in 0.565 rel_l2 0.8646 W4: in 0.627 rel_l2 0.8003 W6: in 0.724 rel_l2 0.6596
+s0 l24 mass d0..4 0.185 0.219 0.121 0.079 0.061 | W1: in 0.403 rel_l2 0.5003 W2: in 0.524 rel_l2 0.3822 W3: in 0.603 rel_l2 0.3190 W4: in 0.664 rel_l2 0.2781 W6: in 0.752 rel_l2 0.2243
+s0 l32 mass d0..4 0.122 0.156 0.113 0.093 0.083 | W1: in 0.278 rel_l2 0.4656 W2: in 0.392 rel_l2 0.3607 W3: in 0.485 rel_l2 0.2981 W4: in 0.568 rel_l2 0.2522 W6: in 0.701 rel_l2 0.1885
+s0 l40 mass d0..4 0.265 0.197 0.105 0.074 0.062 | W1: in 0.462 rel_l2 0.4238 W2: in 0.567 rel_l2 0.3274 W3: in 0.641 rel_l2 0.2750 W4: in 0.703 rel_l2 0.2283 W6: in 0.792 rel_l2 0.1750
+s0 l47 mass d0..4 0.211 0.312 0.143 0.084 0.053 | W1: in 0.523 rel_l2 0.1875 W2: in 0.666 rel_l2 0.1086 W3: in 0.750 rel_l2 0.0841 W4: in 0.804 rel_l2 0.0694 W6: in 0.871 rel_l2 0.0543
+s1 l 0 mass d0..4 0.133 0.218 0.129 0.088 0.072 | W1: in 0.351 rel_l2 0.2276 W2: in 0.481 rel_l2 0.1896 W3: in 0.568 rel_l2 0.1690 W4: in 0.640 rel_l2 0.1522 W6: in 0.751 rel_l2 0.1222
+s1 l 8 mass d0..4 0.076 0.133 0.109 0.092 0.078 | W1: in 0.208 rel_l2 0.9340 W2: in 0.318 rel_l2 0.8358 W3: in 0.410 rel_l2 0.7603 W4: in 0.487 rel_l2 0.6876 W6: in 0.618 rel_l2 0.5504
+s1 l16 mass d0..4 0.174 0.202 0.114 0.073 0.059 | W1: in 0.377 rel_l2 1.0394 W2: in 0.490 rel_l2 0.9590 W3: in 0.564 rel_l2 0.9005 W4: in 0.623 rel_l2 0.8380 W6: in 0.719 rel_l2 0.6990
+s1 l24 mass d0..4 0.207 0.221 0.116 0.075 0.060 | W1: in 0.428 rel_l2 0.4588 W2: in 0.543 rel_l2 0.3451 W3: in 0.619 rel_l2 0.2841 W4: in 0.679 rel_l2 0.2450 W6: in 0.768 rel_l2 0.1930
+s1 l32 mass d0..4 0.129 0.162 0.113 0.091 0.082 | W1: in 0.291 rel_l2 0.4587 W2: in 0.404 rel_l2 0.3539 W3: in 0.495 rel_l2 0.2913 W4: in 0.577 rel_l2 0.2441 W6: in 0.710 rel_l2 0.1819
+s1 l40 mass d0..4 0.317 0.197 0.101 0.069 0.055 | W1: in 0.515 rel_l2 0.3615 W2: in 0.616 rel_l2 0.2721 W3: in 0.686 rel_l2 0.2242 W4: in 0.741 rel_l2 0.1906 W6: in 0.819 rel_l2 0.1453
+s1 l47 mass d0..4 0.219 0.325 0.143 0.083 0.051 | W1: in 0.544 rel_l2 0.1693 W2: in 0.687 rel_l2 0.0924 W3: in 0.769 rel_l2 0.0707 W4: in 0.821 rel_l2 0.0581 W6: in 0.882 rel_l2 0.0454
+s2 l 0 mass d0..4 0.126 0.217 0.122 0.084 0.070 | W1: in 0.342 rel_l2 0.1737 W2: in 0.464 rel_l2 0.1332 W3: in 0.548 rel_l2 0.1130 W4: in 0.618 rel_l2 0.0982 W6: in 0.732 rel_l2 0.0759
+s2 l 8 mass d0..4 0.074 0.130 0.109 0.091 0.080 | W1: in 0.204 rel_l2 0.8908 W2: in 0.313 rel_l2 0.8089 W3: in 0.405 rel_l2 0.7379 W4: in 0.484 rel_l2 0.6704 W6: in 0.618 rel_l2 0.5398
+s2 l16 mass d0..4 0.174 0.204 0.115 0.072 0.057 | W1: in 0.378 rel_l2 1.0282 W2: in 0.493 rel_l2 0.9538 W3: in 0.565 rel_l2 0.8941 W4: in 0.622 rel_l2 0.8318 W6: in 0.717 rel_l2 0.6928
+s2 l24 mass d0..4 0.215 0.219 0.113 0.074 0.059 | W1: in 0.434 rel_l2 0.4389 W2: in 0.548 rel_l2 0.3320 W3: in 0.622 rel_l2 0.2739 W4: in 0.681 rel_l2 0.2376 W6: in 0.771 rel_l2 0.1862
+s2 l32 mass d0..4 0.130 0.162 0.110 0.089 0.078 | W1: in 0.293 rel_l2 0.4972 W2: in 0.403 rel_l2 0.3884 W3: in 0.492 rel_l2 0.3218 W4: in 0.569 rel_l2 0.2743 W6: in 0.699 rel_l2 0.2046
+s2 l40 mass d0..4 0.358 0.197 0.096 0.065 0.052 | W1: in 0.555 rel_l2 0.3301 W2: in 0.652 rel_l2 0.2473 W3: in 0.717 rel_l2 0.2038 W4: in 0.769 rel_l2 0.1736 W6: in 0.840 rel_l2 0.1352
+s2 l47 mass d0..4 0.255 0.341 0.139 0.077 0.045 | W1: in 0.596 rel_l2 0.1433 W2: in 0.735 rel_l2 0.0768 W3: in 0.812 rel_l2 0.0573 W4: in 0.857 rel_l2 0.0465 W6: in 0.907 rel_l2 0.0363
+
+mean over dumps:
+W1: rel_l2 mean 0.5195 max 1.0394  mass-in mean 0.387
+W2: rel_l2 mean 0.4349 max 0.9590  mass-in mean 0.505
+W3: rel_l2 mean 0.3852 max 0.9005  mass-in mean 0.587
+W4: rel_l2 mean 0.3446 max 0.8380  mass-in mean 0.652
+W6: rel_l2 mean 0.2763 max 0.6990  mass-in mean 0.752
+DONE
+s0 l 0 oracle0.25 0.306 oracle0.50 0.206 oracle0.75 0.099 pooled0.25 0.296 pooled0.50 0.205 pooled0.75 0.095
+s0 l 8 oracle0.25 0.848 oracle0.50 0.422 oracle0.75 0.209 pooled0.25 0.848 pooled0.50 0.417 pooled0.75 0.201
+s0 l16 oracle0.25 0.578 oracle0.50 0.337 oracle0.75 0.155 pooled0.25 0.563 pooled0.50 0.322 pooled0.75 0.151
+s0 l24 oracle0.25 0.319 oracle0.50 0.168 oracle0.75 0.077 pooled0.25 0.330 pooled0.50 0.180 pooled0.75 0.083
+s0 l32 oracle0.25 0.263 oracle0.50 0.145 oracle0.75 0.064 pooled0.25 0.298 pooled0.50 0.163 pooled0.75 0.082
+s0 l40 oracle0.25 0.183 oracle0.50 0.082 oracle0.75 0.032 pooled0.25 0.230 pooled0.50 0.108 pooled0.75 0.057
+s0 l47 oracle0.25 0.101 oracle0.50 0.052 oracle0.75 0.026 pooled0.25 0.102 pooled0.50 0.052 pooled0.75 0.027
+s1 l 0 oracle0.25 0.189 oracle0.50 0.115 oracle0.75 0.058 pooled0.25 0.188 pooled0.50 0.117 pooled0.75 0.057
+s1 l 8 oracle0.25 1.056 oracle0.50 0.565 oracle0.75 0.257 pooled0.25 1.063 pooled0.50 0.577 pooled0.75 0.258
+s1 l16 oracle0.25 0.544 oracle0.50 0.327 oracle0.75 0.151 pooled0.25 0.539 pooled0.50 0.331 pooled0.75 0.153
+s1 l24 oracle0.25 0.286 oracle0.50 0.154 oracle0.75 0.068 pooled0.25 0.323 pooled0.50 0.174 pooled0.75 0.077
+s1 l32 oracle0.25 0.256 oracle0.50 0.130 oracle0.75 0.057 pooled0.25 0.287 pooled0.50 0.152 pooled0.75 0.068
+s1 l40 oracle0.25 0.195 oracle0.50 0.080 oracle0.75 0.029 pooled0.25 0.287 pooled0.50 0.111 pooled0.75 0.047
+s1 l47 oracle0.25 0.074 oracle0.50 0.037 oracle0.75 0.021 pooled0.25 0.084 pooled0.50 0.038 pooled0.75 0.022
+s2 l 0 oracle0.25 0.149 oracle0.50 0.081 oracle0.75 0.038 pooled0.25 0.154 pooled0.50 0.081 pooled0.75 0.038
+s2 l 8 oracle0.25 0.901 oracle0.50 0.443 oracle0.75 0.187 pooled0.25 0.903 pooled0.50 0.456 pooled0.75 0.194
+s2 l16 oracle0.25 0.675 oracle0.50 0.379 oracle0.75 0.167 pooled0.25 0.670 pooled0.50 0.379 pooled0.75 0.166
+s2 l24 oracle0.25 0.271 oracle0.50 0.136 oracle0.75 0.059 pooled0.25 0.270 pooled0.50 0.141 pooled0.75 0.064
+s2 l32 oracle0.25 0.230 oracle0.50 0.111 oracle0.75 0.045 pooled0.25 0.263 pooled0.50 0.134 pooled0.75 0.064
+s2 l40 oracle0.25 0.149 oracle0.50 0.065 oracle0.75 0.025 pooled0.25 0.186 pooled0.50 0.082 pooled0.75 0.035
+s2 l47 oracle0.25 0.073 oracle0.50 0.034 oracle0.75 0.017 pooled0.25 0.105 pooled0.50 0.034 pooled0.75 0.017
+
+mean rel_l2 over dumps:
+oracle keep 0.25: mean 0.3641 max 1.1434
+oracle keep 0.50: mean 0.1938 max 0.5931
+oracle keep 0.75: mean 0.0876 max 0.2714
+pooled keep 0.25: mean 0.3804 max 1.1602
+pooled keep 0.50: mean 0.2025 max 0.6354
+pooled keep 0.75: mean 0.0932 max 0.2735
+DONE
+.video (4961280,) pcc 0.88079 rel_l2 0.4873
+.audio (19328,) pcc 0.98387 rel_l2 0.1745
+[Parsed_psnr_0 @ 0x590455217a00] PSNR y:24.879535 u:32.425830 v:34.885722 average:26.350873 min:23.933445 max:28.360006
