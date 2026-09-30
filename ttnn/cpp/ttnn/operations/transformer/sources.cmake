@@ -17,6 +17,9 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sdpa_device_operation.cpp
     sdpa/device/sdpa_perf_model.cpp
     sdpa/device/sdpa_program_factory.cpp
+    sdpa/device/neighborhood_plan.cpp
+    sdpa/device/neighborhood_sdpa_device_operation.cpp
+    sdpa/device/neighborhood_sdpa_program_factory.cpp
     sdpa/sdpa.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp
@@ -47,6 +50,7 @@ set(TTNN_OP_TRANSFORMER_NANOBIND_SRCS
     attention_softmax/attention_softmax_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
     sdpa/sdpa_nanobind.cpp
+    sdpa/neighborhood_sdpa_nanobind.cpp
     sdpa_decode/sdpa_decode_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     gated_delta_attn/gated_delta_attn_nanobind.cpp

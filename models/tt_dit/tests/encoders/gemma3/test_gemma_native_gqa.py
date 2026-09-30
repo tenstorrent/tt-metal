@@ -10,10 +10,10 @@ fp32 accumulation. This isolates repeat_interleave+SDPA on one chip; it is not
 an end-to-end encoder benchmark or proof of a pipeline latency improvement.
 
 Prepare/verify commands run on the host OUTSIDE the device reservation:
-  python -m models.tt_dit.tests.encoders.gemma.test_gemma_native_gqa --prepare /tmp/gqa-inputs
+  python -m models.tt_dit.tests.encoders.gemma3.test_gemma_native_gqa --prepare /tmp/gqa-inputs
   LTX_GEMMA_GQA_FIXTURES=/tmp/gqa-inputs LTX_GEMMA_GQA_RESULTS=/tmp/gqa-results \
     pytest <this-file> -k 'tp8 and leftpad' -s  # through the device broker
-  python -m models.tt_dit.tests.encoders.gemma.test_gemma_native_gqa \
+  python -m models.tt_dit.tests.encoders.gemma3.test_gemma_native_gqa \
     --verify /tmp/gqa-results --fixtures /tmp/gqa-inputs --case tp8-leftpad
 
 The pytest collection step deliberately emits GQA_CORRECTNESS_PENDING. Only the
@@ -175,8 +175,8 @@ def test_collect_gemma_native_gqa(mesh_device, heads, mask_mode):
         "source_sha256": {
             path: _sha256(Path(path))
             for path in (
-                "models/tt_dit/encoders/gemma/model_gemma.py",
-                "models/tt_dit/tests/encoders/gemma/test_gemma_native_gqa.py",
+                "models/tt_dit/encoders/gemma3/model_gemma.py",
+                "models/tt_dit/tests/encoders/gemma3/test_gemma_native_gqa.py",
             )
         },
         "tracked_diff_sha256": hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD"])).hexdigest(),

@@ -159,9 +159,7 @@ def test_pipeline_distilled(
     # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
     traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
-    # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
-    # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
-    # the fast scalar-AdaLN path. Resolved before create_pipeline so the bool can gate the build.
+    # Conditioning image (I2V). The pipeline decides image capability itself (RUN_I2V=0 opts out).
     image_path = os.environ.get("LTX_I2V_IMAGE")
     images = None
     if image_path:
@@ -170,10 +168,8 @@ def test_pipeline_distilled(
         strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
         images = [(image_path, 0, strength)]
 
-    pipeline = LTXDistilledPipeline.create_pipeline(
+    common = dict(
         mesh_device=mesh_device,
-        checkpoint_name=ckpt,
-        gemma_path=gemma,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
@@ -186,8 +182,23 @@ def test_pipeline_distilled(
         height=height,
         width=width,
         fps=fps,
-        image_conditioning=bool(image_path),
     )
+    # LTX_VERSION=2.5 runs the same protocol on the LTX-2.5 split checkpoints (Gemma-4); LTX25_DIFFVAE=1
+    # decodes with the DiffVAE in its 4x8 production configuration instead of the conv decoder.
+    if os.environ.get("LTX_VERSION") == "2.5":
+        from models.tt_dit.models.vae.diffvae_ltx import DiffVAEOptions
+        from models.tt_dit.pipelines.ltx.pipeline_ltx25_distilled import LTX25DistilledPipeline
+
+        diffvae = os.environ.get("LTX25_DIFFVAE", "0") == "1"
+        slab = int(os.environ.get("DIFFVAE_SLAB_FRAMES", "78"))
+        pipeline = LTX25DistilledPipeline.create_pipeline(
+            **common,
+            video_vae=os.environ.get("LTX25_VIDEO_VAE"),
+            diffusion_decoder=diffvae,
+            diffvae_options=DiffVAEOptions.production(slab_frames=slab or None) if diffvae else None,
+        )
+    else:
+        pipeline = LTXDistilledPipeline.create_pipeline(**common, checkpoint_name=ckpt, gemma_path=gemma)
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
@@ -393,15 +404,22 @@ def test_pipeline_distilled(
         # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
         # replay — its Stage 1/2 denoise times are the steady-state measurement.
         if traced:
+            # LTX_FRESH_PROMPTS=1: every replay gen encodes a prompt no earlier gen has seen, so the
+            # encoder is on the measured path and nothing is served from an embedding cache.
+            fresh = os.environ.get("LTX_FRESH_PROMPTS", "0") == "1"
+
+            def replay_prompt(gen: int) -> str:
+                return FRESH_LTX_PROMPTS[(gen - 1) % len(FRESH_LTX_PROMPTS)] if fresh else prompt
+
             logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=prompt, number=1, seed=seed)
-            check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1)
+            run(prompt=replay_prompt(1), number=1, seed=seed)
+            check_output_with_clip(replay_prompt(1), 1)
+            check_output_with_vbench(replay_prompt(1), 1)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
-                run(prompt=prompt, number=extra + 2, seed=seed)
+                run(prompt=replay_prompt(extra + 2), number=extra + 2, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
@@ -539,6 +557,17 @@ def _kf_gen_images(num_frames):
             return None
         out.append((p, num_frames - 1 if frame == "last" else frame, 1.0, 1.0))
     return out
+
+
+FRESH_LTX_PROMPTS = (
+    "A red paper boat drifts across a still pond at dusk, ripples spreading behind it. "
+    "The camera holds a low steady shot near the waterline as the light fades. "
+    "Audio: gentle water laps, distant crickets, soft evening air.",
+    "An old fisherman mends a net on a wooden pier at sunrise, gulls wheeling overhead. "
+    "The camera slowly dollies in on his weathered hands. Audio: waves against pilings, gull cries.",
+    "A barista pours steamed milk into a latte, drawing a leaf pattern, in a busy cafe. "
+    "Close-up, shallow depth of field. Audio: espresso machine hiss, low chatter, cups clinking.",
+)
 
 
 @pytest.mark.skipif(

@@ -62,7 +62,7 @@ def _sources():
 def _prepare_reference(path, prompts_path):
     # Existing reference implementation constructs only CPU torch/HF modules.
     # Its TTNN imports require a host installation but it never opens a device.
-    from models.tt_dit.tests.encoders.gemma.test_gemma_full import _encode_prompts_reference
+    from models.tt_dit.tests.encoders.gemma3.test_gemma_full import _encode_prompts_reference
 
     assert not path.exists(), f"refusing to overwrite {path}"
     ckpt, gemma, sources = _sources()
@@ -166,8 +166,8 @@ def test_collect_gemma_prompt_replay(mesh_device, device_params):
                 name: _sha(name)
                 for name in (
                     __file__,
-                    "models/tt_dit/encoders/gemma/model_gemma.py",
-                    "models/tt_dit/encoders/gemma/encoder_pair.py",
+                    "models/tt_dit/encoders/gemma3/model_gemma.py",
+                    "models/tt_dit/encoders/gemma3/encoder_pair.py",
                 )
             },
             "mesh": list(mesh_device.shape),

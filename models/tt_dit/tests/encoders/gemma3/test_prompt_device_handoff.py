@@ -90,11 +90,11 @@ def pytest_generate_tests(metafunc):
 )
 def test_prompt_device_handoff(mesh_device, device_params):
     import ttnn
-    from models.tt_dit.encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+    from models.tt_dit.encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
     from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
     from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
     from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
-    from models.tt_dit.tests.encoders.gemma.test_gemma_prompt_replay import _prompts, _sources
+    from models.tt_dit.tests.encoders.gemma3.test_gemma_prompt_replay import _prompts, _sources
     from models.tt_dit.utils.tensor import bf16_tensor
     from models.tt_dit.utils.tracing import Tracer, set_kernel_prewarm_capturing
 
@@ -125,9 +125,9 @@ def test_prompt_device_handoff(mesh_device, device_params):
     guard_checked = False
     source_paths = [
         __file__,
-        "models/tt_dit/tests/encoders/gemma/test_gemma_prompt_replay.py",
+        "models/tt_dit/tests/encoders/gemma3/test_gemma_prompt_replay.py",
         "models/tt_dit/utils/cache.py",
-        "models/tt_dit/encoders/gemma/encoder_pair.py",
+        "models/tt_dit/encoders/gemma3/encoder_pair.py",
         "models/tt_dit/pipelines/ltx/pipeline_ltx.py",
         "models/tt_dit/pipelines/ltx/pipeline_ltx_distilled.py",
         "models/tt_dit/utils/tracing.py",

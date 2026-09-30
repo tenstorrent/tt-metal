@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.tt_dit.tests.encoders.gemma.test_gemma_prompt_replay import _prompts, _sha, _sources
+from models.tt_dit.tests.encoders.gemma3.test_gemma_prompt_replay import _prompts, _sha, _sources
 
 
 def _tensor_sha(value):
@@ -37,7 +37,7 @@ def _interleave(value):
 
 
 def _prepare(directory, prompts_path):
-    from models.tt_dit.tests.encoders.gemma.test_gemma_full import _encode_prompts_reference
+    from models.tt_dit.tests.encoders.gemma3.test_gemma_full import _encode_prompts_reference
 
     prompts = _prompts(prompts_path)
     checkpoint, gemma, sources = _sources()
@@ -156,8 +156,8 @@ def pytest_generate_tests(metafunc):
 )
 def test_collect_connector_qk_stats(mesh_device, device_params):
     import ttnn
-    from models.tt_dit.encoders.gemma.embeddings_connector import ConnectorBlock, EmbeddingsConnector
-    from models.tt_dit.encoders.gemma.encoder_pair import _connector_state_dict, _read_connector_checkpoint
+    from models.tt_dit.encoders.gemma3.embeddings_connector import ConnectorBlock, EmbeddingsConnector
+    from models.tt_dit.encoders.gemma3.encoder_pair import _connector_state_dict, _read_connector_checkpoint
     from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils import cache
@@ -331,7 +331,7 @@ def test_collect_connector_qk_stats(mesh_device, device_params):
                 name: _sha(name)
                 for name in (
                     __file__,
-                    "models/tt_dit/encoders/gemma/embeddings_connector.py",
+                    "models/tt_dit/encoders/gemma3/embeddings_connector.py",
                     "models/tt_dit/layers/normalization.py",
                 )
             },

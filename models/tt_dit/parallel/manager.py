@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -35,6 +37,12 @@ class CCLManager:
         # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
         self._fused_norm_stats_buffer_cache = {}
+
+        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
+        self._strided_ag_mm_sem_cache = {}
+        self._strided_ag_mm_sem_idx = {}
+        # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
+        self._mm_progress_counters_buffer = None
 
         # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
         self._strided_ag_mm_sem_cache = {}
@@ -137,6 +145,18 @@ class CCLManager:
         if dim < 0:
             dim += len(shape)
         return dim
+
+    def ping_pong_buffer_report(self):
+        """Return ``(nbytes, description)`` per cached ping-pong shape, largest first.
+
+        ``nbytes`` counts every buffer under that key on one chip; the description names the
+        collective kind, the number of buffers and the shape.
+        """
+        rows = []
+        for key, buffers in self._ping_pong_buffer_cache.items():
+            nbytes = sum(b.volume() * b.element_size() for b in buffers)
+            rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
+        return sorted(rows, reverse=True)
 
     def get_rs_ping_pong_buffer(
         self,
@@ -886,7 +906,7 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
-        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+        return self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
 
     def reduce_scatter(
         self,
@@ -932,17 +952,27 @@ class CCLManager:
 
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:
-            return {
+            params = {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,
                 "num_buffers_per_channel": 2,
             }
         else:
-            return {
+            params = {
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "num_buffers_per_channel": 2,
             }
+        # Overridable per-knob: these are a tuned starting point, not a measured optimum for every
+        # shape on this mesh, and reaching them from a sweep otherwise needs a source edit.
+        for key, env in (
+            ("chunks_per_sync", "DIFFVAE_AG_CHUNKS"),
+            ("num_workers_per_link", "DIFFVAE_AG_WORKERS"),
+            ("num_buffers_per_channel", "DIFFVAE_AG_BUFS"),
+        ):
+            if os.environ.get(env):
+                params[key] = int(os.environ[env])
+        return params
 
     def get_rs_hyperparams(self, shape):
         return {

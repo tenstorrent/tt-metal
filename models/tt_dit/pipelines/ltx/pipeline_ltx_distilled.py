@@ -24,7 +24,7 @@ from ...models.transformers.ltx.transformer_ltx import (
     build_video_pad_mask,
 )
 from ...models.vae.vae_ltx import upsample_latent
-from ...utils import walltime
+from ...utils import timing_tree, walltime
 from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -160,6 +160,103 @@ def build_conditioning_tensors(conds, latent_frames, latent_h, latent_w, in_chan
 # corrupted latent. These are log warnings, not request rejections -- a false positive is
 # cheap, a missed corruption costs us the next occurrence.
 WHITENESS_WARN_THRESHOLD = 0.85
+
+# LTX-2.5+ distilled stage 1 uses ancestral Euler (eta=1, s_noise=1). Stage 2 stays deterministic —
+# its 3-step schedule is too short to clear freshly injected noise. Seed offset keeps the loop's
+# first randn distinct from the initial GaussianNoiser draw (same shape/dtype/seed would collide).
+ANCESTRAL_ETA = 1.0
+ANCESTRAL_S_NOISE = 1.0
+ANCESTRAL_NOISE_SEED_OFFSET = 10000
+
+
+def _euler_ancestral_step(
+    sample: torch.Tensor,
+    velocity: torch.Tensor,
+    sigma: float,
+    sigma_next: float,
+    noise: torch.Tensor | None,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> torch.Tensor:
+    """Rectified-flow ancestral Euler step (ltx_core ``EulerAncestralDiffusionStep``).
+
+    ``velocity`` is the flow-matching velocity; ``denoised = sample - sigma * velocity``.
+    Host float32 in/out; caller owns dtype cast. Kept for parity checks; the denoise loop
+    uses ``_euler_ancestral_step_tt`` on device.
+    """
+    x = sample.float()
+    vel = velocity.float()
+    denoised = x - sigma * vel
+    if sigma_next == 0.0:
+        return denoised
+    if eta > 0.0 and noise is None:
+        raise ValueError("ancestral Euler requires noise when eta > 0")
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    x_next = sigma_down_ratio * x + (1.0 - sigma_down_ratio) * denoised
+    if eta > 0.0:
+        alpha_next = 1.0 - sigma_next
+        alpha_down = 1.0 - sigma_down
+        renoise_coeff = sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2
+        renoise_coeff = max(0.0, renoise_coeff) ** 0.5
+        x_next = (alpha_next / alpha_down) * x_next + noise.float() * s_noise * renoise_coeff
+    return x_next
+
+
+def _ancestral_step_coeffs(
+    sigma: float,
+    sigma_next: float,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> tuple[float, float, float] | None:
+    """Return ``(sigma_down_ratio, alpha_scale, noise_scale)``, or ``None`` when σ_next==0 (x0 only)."""
+    if sigma_next == 0.0:
+        return None
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    alpha_next = 1.0 - sigma_next
+    alpha_down = 1.0 - sigma_down
+    renoise_coeff = max(0.0, sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2) ** 0.5
+    return sigma_down_ratio, alpha_next / alpha_down, s_noise * renoise_coeff
+
+
+def _euler_ancestral_step_tt(
+    tt_x: ttnn.Tensor,
+    tt_vel: ttnn.Tensor,
+    pad_mask: ttnn.Tensor,
+    sigma: float,
+    sigma_next: float,
+    tt_noise: ttnn.Tensor | None,
+) -> None:
+    """In-place ancestral Euler into ``tt_x`` (SP-sharded). Matches ``_euler_ancestral_step``."""
+    vel = ttnn.typecast(tt_vel, ttnn.bfloat16)
+    ttnn.multiply_(vel, pad_mask)
+    coeffs = _ancestral_step_coeffs(sigma, sigma_next)
+    if coeffs is None:
+        # x0 estimate: x - sigma * vel
+        x_next = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+    else:
+        sigma_down_ratio, alpha_scale, noise_scale = coeffs
+        denoised = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+        x_next = ttnn.add(
+            ttnn.multiply(tt_x, sigma_down_ratio),
+            ttnn.multiply(denoised, 1.0 - sigma_down_ratio),
+        )
+        ttnn.deallocate(denoised)
+        scaled = ttnn.multiply(x_next, alpha_scale)
+        ttnn.deallocate(x_next)
+        if tt_noise is not None and noise_scale != 0.0:
+            x_next = ttnn.add(scaled, ttnn.multiply(tt_noise, noise_scale))
+            ttnn.deallocate(scaled)
+        else:
+            x_next = scaled
+    ttnn.multiply_(x_next, pad_mask)
+    ttnn.copy(x_next, tt_x)
+    ttnn.deallocate(x_next)
 
 
 @dataclass
@@ -610,6 +707,9 @@ class LTXDistilledPipeline(LTXPipeline):
                 if self._traced:
                     logger.info("warmup audio decode (capture pass)")
                     self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=self.fps)
+            # Programs are now compiled
+            if self._vae_traced and self.vae_decoder is not None:
+                self.vae_decoder._vae_traced = True
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
@@ -943,6 +1043,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # path (generate) may set this.
         profile_drain: bool = False,
         device_prompts: bool = False,
+        ancestral: bool = False,
+        ancestral_noise_seed: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         _t_init = time.perf_counter()
@@ -1153,6 +1255,14 @@ class LTXDistilledPipeline(LTXPipeline):
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
         logger.info(f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms")
+        ancestral_gen = None
+        if ancestral:
+            noise_seed = (
+                ancestral_noise_seed if ancestral_noise_seed is not None else seed + ANCESTRAL_NOISE_SEED_OFFSET
+            )
+            ancestral_gen = torch.Generator().manual_seed(noise_seed)
+            logger.info(f"  ancestral Euler on-device (eta={ANCESTRAL_ETA}) noise_seed={noise_seed}")
+
         for step_idx in range(num_steps):
             _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
@@ -1228,14 +1338,42 @@ class LTXDistilledPipeline(LTXPipeline):
             # baked latent address holds across replays.
             dt = sigma_next - sigma
             trace_euler = (
-                self._trace_euler_tail and traced and not image_cond and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
+                not ancestral
+                and self._trace_euler_tail
+                and traced
+                and not image_cond
+                and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
             )
             if trace_euler:
                 producer = LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).get(trace_key)
                 # Recipe-only capture produces transient skipped-dispatch outputs:
                 # never retain them or create a tail owner before a real DiT trace.
                 trace_euler = producer is not None and producer.trace_captured
-            if trace_euler:
+            if ancestral:
+                # Noise is drawn on host (seeded RNG parity with upstream); the Euler math stays
+                # on-device so latents/velocities never round-trip. Video then audio from one
+                # generator (upstream euler_ancestral_denoising_loop order).
+                tt_noise_v = tt_noise_a = None
+                if sigma_next != 0.0:
+                    noise_v = torch.randn(1, 1, video_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    noise_a = torch.randn(1, 1, audio_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    if video_N > video_N_real:
+                        noise_v[:, :, video_N_real:, :] = 0.0
+                    if audio_N > audio_N_real:
+                        noise_a[:, :, audio_N_real:, :] = 0.0
+                    tt_noise_v = bf16_tensor(noise_v, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                    tt_noise_a = bf16_tensor(noise_a, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                _euler_ancestral_step_tt(
+                    state.tt_video_lat, v_out, state.tt_video_pad_mask, sigma, sigma_next, tt_noise_v
+                )
+                _euler_ancestral_step_tt(
+                    state.tt_audio_lat, a_out, state.tt_audio_pad_mask, sigma, sigma_next, tt_noise_a
+                )
+                if tt_noise_v is not None:
+                    ttnn.deallocate(tt_noise_v)
+                if tt_noise_a is not None:
+                    ttnn.deallocate(tt_noise_a)
+            elif trace_euler:
                 if state._euler_tail is None:
                     state._euler_tail = EulerTail(self.mesh_device)
                 state._euler_tail(
@@ -1964,12 +2102,20 @@ class LTXDistilledPipeline(LTXPipeline):
         # either way, so fidelity is unchanged; what moves is ~1.8 GB of bf16 planes per 6 s clip that no
         # longer cross PCIe (yuv420p is 1.5 B/px vs 6 B/px) and the host-side float->uint8 conversion.
         # LTX_YUV_EXPORT=0 restores the float readback + host conversion.
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "1") != "0"
+        # DiffVAE without device boundaries returns host pixels and takes the float path.
+        yuv_export = (
+            output_path is not None
+            and os.environ.get("LTX_YUV_EXPORT", "1") != "0"
+            and getattr(self.vae_decoder, "supports_yuv", True)
+        )
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         # The raw-frame dump reads RGB float, so it forces the float readback.
         dump_path = os.environ.get("LTX_DUMP_FRAMES", "").strip()
         yuv_export = yuv_export and not dump_path
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        # Roots recorded before this call belong to warm-up or an earlier gen; keep only what THIS
+        # decode records so the perf table's breakdown never describes a different pass.
+        roots_before = timing_tree.root_count()
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         if num_frames_out != num_frames:  # drop the tail-pad frame(s): (T,H*3/2,W) yuv planes or (B,3,F,H,W) float
@@ -1977,6 +2123,8 @@ class LTXDistilledPipeline(LTXPipeline):
         t_vae_decode = time.time() - t0
         _stats("video_pixels", video_pixels)
         timings.append(("VAE decode", t_vae_decode))
+        new_roots = timing_tree.roots()[roots_before:]
+        self.last_decode_tree = new_roots[-1] if new_roots else None
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
         # LTX_DUMP_FRAMES writes the exact (F,H,W,C) uint8 tensor the H.264 export would quantize.

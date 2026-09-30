@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import torch
 
-SOURCE = Path(__file__).resolve().parents[1] / "encoders/gemma/test_feature_mask_projection.py"
+SOURCE = Path(__file__).resolve().parents[1] / "encoders/gemma3/test_feature_mask_projection.py"
 spec = importlib.util.spec_from_file_location("feature_mask_evidence", SOURCE)
 harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)

@@ -1094,7 +1094,7 @@
     # TODO(#54503): allowlist the token and fix the connector call site, then drop the --ignore.
     pytest --timeout 10000 -rs --durations=0 \
       --ignore=models/tt_dit/tests/encoders/mistral3 \
-      --ignore=models/tt_dit/tests/encoders/gemma \
+      --ignore=models/tt_dit/tests/encoders/gemma3 \
       --ignore=models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py \
       models/tt_dit/tests/encoders/
   model: dit-encoders

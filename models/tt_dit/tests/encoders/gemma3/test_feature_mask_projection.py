@@ -23,11 +23,11 @@ import torch
 
 CASES = ("a", "b", "all_valid", "all_pad", "tile_boundary")
 SOURCE_FILES = (
-    "models/tt_dit/encoders/gemma/feature_extractor.py",
+    "models/tt_dit/encoders/gemma3/feature_extractor.py",
     "models/tt_dit/layers/linear.py",
     "models/tt_dit/layers/module.py",
     "models/tt_dit/utils/tracing.py",
-    "models/tt_dit/tests/encoders/gemma/test_feature_mask_projection.py",
+    "models/tt_dit/tests/encoders/gemma3/test_feature_mask_projection.py",
 )
 
 
@@ -251,7 +251,7 @@ def pytest_generate_tests(metafunc):
 )
 def test_collect_feature_mask_projection(mesh_device, device_params):
     import ttnn
-    from models.tt_dit.encoders.gemma.feature_extractor import GemmaFeatureExtractor
+    from models.tt_dit.encoders.gemma3.feature_extractor import GemmaFeatureExtractor
     from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils.tracing import Tracer, set_kernel_prewarm_capturing

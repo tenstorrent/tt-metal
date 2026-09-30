@@ -2,12 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
+import os
 
 import torch
 from loguru import logger
 
 import ttnn
+
+
+def _record_gate_pcc(pcc_found: float) -> None:
+    """Append this call's PCC to the DiffVAE gate ledger, when one is requested.
+
+    Enabled only when ``DIFFVAE_GATES_LEDGER`` points at a path; a no-op otherwise, so normal
+    test runs are untouched. Append-only JSONL (no read-modify-write race across parametrized
+    cases) keyed by pytest's own ``PYTEST_CURRENT_TEST``; the compare step takes the last record
+    per test. Recorded before any threshold raise, so a *failing* gate still logs its PCC.
+    """
+    ledger = os.environ.get("DIFFVAE_GATES_LEDGER")
+    if not ledger:
+        return
+    try:
+        with open(ledger, "a") as handle:
+            handle.write(
+                json.dumps({"test": os.environ.get("PYTEST_CURRENT_TEST", "?"), "pcc": float(pcc_found)}) + "\n"
+            )
+    except OSError:
+        pass
 
 
 def assert_quality(
@@ -18,7 +40,8 @@ def assert_quality(
     ccc: float | None = None,
     mse: float | None = None,
     relative_rmse: float | None = None,
-) -> None:
+) -> float:
+    """Assert output quality (PCC/CCC/RMSE) and return the measured PCC."""
     if math.prod(a.shape) != math.prod(b.shape):
         msg = f"incompatible shapes: {a.shape} != {b.shape}"
         raise ValueError(msg)
@@ -52,6 +75,8 @@ def assert_quality(
         f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} %"
     )
 
+    _record_gate_pcc(pcc_found)
+
     if pcc is not None and (math.isnan(pcc_found) or pcc_found < pcc):
         msg = f"PCC = {pcc_found * 100:.4f} % >= {pcc * 100:.4f} %"
         raise Exception(msg)  # noqa: TRY002
@@ -63,3 +88,5 @@ def assert_quality(
     if relative_rmse is not None and (math.isnan(relative_rmse_found) or relative_rmse_found > relative_rmse):
         msg = f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} % <= {relative_rmse * 100:.1f} %"
         raise Exception(msg)  # noqa: TRY002
+
+    return pcc_found
