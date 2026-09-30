@@ -21,7 +21,7 @@ generically, chosen by the kind of the step's output:
     index       an integer [rows, k] output whose rows are sets (top-k positions, pads -1 or 0xFFFFFFFF): order-free
                 overlap (mean >= the gate threshold, worst row >= component_index_row), the same valid count per row,
                 no repeats, and what the reference obeys: no position after its row (causal), every row selecting its
-                own position. The golden gate uses ``topk_overlap``, never positional match.
+                own position, pads only after the valid positions. The golden gate uses ``topk_overlap``, never positional match.
     int         anything else: exact match as before; an unknown kind, so the freeze sweep sends it to a review.
 
 Second inputs, each compared with the CPU step on the same inputs, for structural bugs the golden cannot show (rel
@@ -293,6 +293,9 @@ def index_fails(got, want, start: int, lim, thr: float, f=1.0) -> tuple[dict, li
         nc = int((vg & (g > pos)).sum().item())
         if nc:
             bad.append(f"{nc} positions after their query row (non-causal)")
+    tail = lambda v: bool((v.int().diff(dim=1) <= 0).all())  # noqa: E731 - valid entries first, pads only after
+    if tail(vw) and not tail(vg):  # a consumer may need it (Hy4: sparse_sdpa reads a row up to its first pad)
+        bad.append(f"{int((vg.int().diff(dim=1) > 0).any(1).sum().item())} rows have a pad before a valid position")
     if bool((w == pos).any(1).all()) and not bool((g == pos).any(1).all()):
         bad.append(f"{int((~(g == pos).any(1)).sum().item())} rows do not select their own position")
     rows = torch.tensor(
