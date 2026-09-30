@@ -751,8 +751,19 @@ def n_enabled(item):
 #        (QWEN36_F_MLP_GU_BF8=1), 13x10 grid, fp32 dest accumulation off; every other call keeps minimal_matmul.
 #        Needs the C++ fuse_swiglu program-config field (plan_0928/P3_GLU/glu.patch). Numerics change (K block 4
 #        vs 8: not bit-exact vs minimal_matmul; P3_GLU unit test PCC 0.99977 vs fp32, same as minimal_matmul).
-R5_FLAG_DEFAULTS = {"GLU": "0"}
+#   GLU_SP  (QWEN36_R5_GLU_SP, 0 = off | 1 = config c1 | 2 = config c2; default 0) The same fused-SwiGLU 2D-mcast
+#        ttnn.matmul for the gate|up call of a P300 SP die (11x10 grid, M == 1024): grid 11x8, per_core_M 4,
+#        per_core_N 36, in0_block_w 16, subblock 1x6, fuse_swiglu + glu_last_block + glu_sfpu_on_pack; c1 = out block
+#        4x6 (6 N blocks per core), c2 = out block 4x12 (3 N blocks). Same pair-interleaved [gate|up] weight (bf8 or
+#        bf4) and the same bf16 L1 output as minimal_matmul(fuse_swiglu, swiglu_pack), so the down-proj is unchanged.
+#        Not bit-exact vs minimal_matmul (K blocking, bf16 L1 partials, different SiLU). Microbenchmark (bf8):
+#        201 us (minimal_matmul) -> 175 us (c1) / 159 us (c2). Applies only to x [1, 1024, 2048] bf16 interleaved,
+#        weight [2048, 12288] bf8/bf4, fp32 dest accumulation off; every other call keeps minimal_matmul.
+R5_FLAG_DEFAULTS = {"GLU": "0", "GLU_SP": "0"}
 R5_GLU_T = 2048  # the swept chunk size (M = 64 tiles over 10 core rows at per_core_M 7)
+R5_GLU_SP_T = 1024  # the SP die span (M = 32 tiles over 8 of the 10 core rows at per_core_M 4)
+# GLU_SP value -> out_block_w (in0_block_w 16, out_block_h 4, out_subblock 1x6 in both)
+_R5_GLU_SP_OBW = {"1": 6, "2": 12}
 
 
 def act_bf8_resid():
@@ -862,6 +873,42 @@ def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
         fused_activation=None,
         fuse_batch=True,
         fuse_swiglu=True,
+    )
+
+
+def r5_glu_sp_progcfg(x, w_gate_up, grid, compute_kernel_config):
+    """R5 GLU_SP: the fused-SwiGLU 2D-mcast program config (c1 / c2) for the SP die's gate|up call, or None (flag off /
+    shape, dtype, grid or compute config outside the swept case) to keep the minimal_matmul fused-SwiGLU path."""
+    obw = _R5_GLU_SP_OBW.get(r5_value("GLU_SP"))
+    if obw is None or grid is None or _grid_xy(grid) != _P300_GRID:
+        return None
+    xs, ws = list(x.shape), list(w_gate_up.shape)
+    if len(xs) < 2 or xs[-2:] != [R5_GLU_SP_T, 2048] or any(d != 1 for d in xs[:-2]):
+        return None
+    if ws[-2:] != [2048, 12288] or any(d != 1 for d in ws[:-2]):
+        return None
+    if w_gate_up.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b) or x.dtype != ttnn.bfloat16:
+        return None
+    if x.memory_config().is_sharded():
+        return None
+    if getattr(compute_kernel_config, "fp32_dest_acc_en", True):
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(_P300_GRID[0], R5_GLU_SP_T // 32 // 4),
+        in0_block_w=16,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        out_block_h=4,
+        out_block_w=obw,
+        per_core_M=4,
+        per_core_N=36,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+        fuse_swiglu=True,
+        glu_last_block=True,
+        glu_sfpu_on_pack=True,
+        in0_single_buffer=False,
     )
 
 

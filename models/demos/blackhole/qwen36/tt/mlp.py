@@ -460,6 +460,10 @@ class Qwen36MLP:
                 # fused SwiGLU epilogue on the same pair-interleaved weight and output placement. None -> the
                 # minimal_matmul call below, unchanged (every other shape, and the flag off).
                 r5_pc = tpc.r5_glu_progcfg(x, w.w_gate_up, self._mm_grid, self.compute_kernel_config)
+                # R5 GLU_SP (QWEN36_R5_GLU_SP=1|2): the same 2D-mcast fused-SwiGLU matmul on the P300 SP die (11x10,
+                # T == 1024). Same call below, same bf16 L1 output as the minimal_matmul it replaces.
+                if r5_pc is None:
+                    r5_pc = tpc.r5_glu_sp_progcfg(x, w.w_gate_up, self._mm_grid, self.compute_kernel_config)
                 if r5_pc is not None:
                     hidden = ttnn.matmul(
                         x,
