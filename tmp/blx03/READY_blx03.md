@@ -8,6 +8,10 @@ Caches (all under ~/fasth3): DiT ~/fasth3/cache/dit-ltx25, kernels ~/fasth3/cach
 Weights: LTX-2.5 split files on /mnt/MLPerf (weka, shared with g15blx02); 2.3 monolith (VAE config) in ~/.cache/ltx-checkpoints.
 Outputs: ~/fasth3/out/ltx25_1080p_6s/<label>/{run.log,ltx_av_fast_*.mp4}
 
+Env: submit.sh passes `-e tmp/blx03/env.yaml` to the broker (venv, TT_METAL_HOME, kernel cache). Without it a caller
+that has no venv active (nohup/setsid drivers, plain ssh) gets rejected: "Python env not found at .../tt-metal/tt-metal/python_env".
+A worktree with its own env passes its own yaml (see ~/fasth3/t32/tmp/env.yaml).
+
 Rules: one project device job at a time (submit.sh refuses while a smarton job is running/queued), short jobs, never reset.
 
 From g15blx02 (one job, then wait for its final status before the next):
