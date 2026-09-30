@@ -1411,7 +1411,8 @@ class MiniMaxH3Pipeline:
         src = self._assembly_source_offsets(caps)
         s_local = rung // self.sp_factor
         local = torch.arange(rung, dtype=torch.int32) % s_local
-        bounds = {"static": (0, src["audio"]), "audio": (src["audio"], src["video"]), "video": (src["video"], 1 << 31)}
+        # int32 rows: the open upper bound must fit int32 (1 << 31 compared false for every row).
+        bounds = {"static": (0, src["audio"]), "audio": (src["audio"], src["video"]), "video": (src["video"], 2**31 - 1)}
         select = torch.zeros(rung, dtype=torch.int32)
         out = {}
         for kind, (name, (lo, hi)) in enumerate(bounds.items()):
