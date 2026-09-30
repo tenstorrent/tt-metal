@@ -1042,6 +1042,28 @@ class ROPE(TemplateParameter):
 
 
 @dataclass
+class TOPK_PERF(TemplateParameter):
+    """Knobs of the TopK pipeline perf kernel (sources/topk_perf.cpp): which network calls a tile-pair step issues
+    (full, sort, merge, rebuild, copy: the datacopy carrier alone, fuse: the fuse and stamp prologue alone), whether
+    the datacopies are dropped in MATH_ISOLATE, and whether the local sort skips its phases 0 to 4 on the first tile.
+    The field names are the perf report columns."""
+
+    topk_phase: str = "full"
+    topk_drop_copy: bool = False
+    topk_tile0_sorted: bool = False
+
+    PHASES = {"full": 0, "sort": 1, "merge": 2, "rebuild": 3, "copy": 4, "fuse": 5}
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int TOPK_PERF_PHASE = {self.PHASES[self.topk_phase]};",
+            f"constexpr bool TOPK_PERF_DROP_COPY = {str(self.topk_drop_copy).lower()};",
+            f"constexpr bool TOPK_PERF_TILE0_SORTED = {str(self.topk_tile0_sorted).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
