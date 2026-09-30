@@ -45,7 +45,8 @@ def iter_frames(path):
 
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
+        # A few threads decode 1080p faster than we score it; "AUTO" spawns one per core on a shared host.
+        stream.thread_type, stream.thread_count = "AUTO", 4
         for frame in container.decode(stream):
             yield frame.to_ndarray(format="rgb24")
 
@@ -63,9 +64,12 @@ def video_meta(path):
         }
 
 
-def psnr(ref, cand, data_range):
-    mse = float(np.mean((ref.astype(np.float64) - cand.astype(np.float64)) ** 2))
+def psnr_from_mse(mse, data_range):
     return PSNR_IDENTICAL if mse == 0 else 20 * math.log10(data_range) - 10 * math.log10(mse)
+
+
+def psnr(ref, cand, data_range):
+    return psnr_from_mse(float(np.mean((ref.astype(np.float64) - cand.astype(np.float64)) ** 2)), data_range)
 
 
 class Moments:
@@ -73,30 +77,38 @@ class Moments:
 
     def __init__(self):
         self.n = 0
-        self.sx = self.sy = self.sxx = self.syy = self.sxy = 0.0
+        self.sx = self.sy = self.sxx = self.syy = self.sxy = 0
 
     def add(self, x, y):
-        x, y = x.astype(np.float64).ravel(), y.astype(np.float64).ravel()
+        # Integer pixels accumulate exactly (Python ints); float @ would also fan out BLAS threads.
+        dtype = np.int64 if np.issubdtype(x.dtype, np.integer) and np.issubdtype(y.dtype, np.integer) else np.float64
+        x, y = x.astype(dtype).ravel(), y.astype(dtype).ravel()
         self.n += x.size
-        self.sx += x.sum()
-        self.sy += y.sum()
-        self.sxx += x @ x
-        self.syy += y @ y
-        self.sxy += x @ y
+        for name, value in (("sx", x.sum()), ("sy", y.sum()), ("sxx", np.dot(x, x)), ("syy", np.dot(y, y))):
+            setattr(self, name, getattr(self, name) + value.item())
+        self.sxy += np.dot(x, y).item()
 
     def pcc(self):
-        cov = self.sxy - self.sx * self.sy / self.n
-        vx = self.sxx - self.sx**2 / self.n
-        vy = self.syy - self.sy**2 / self.n
+        n = self.n
+        cov = n * self.sxy - self.sx * self.sy
+        vx = n * self.sxx - self.sx**2
+        vy = n * self.syy - self.sy**2
         if vx <= 0 or vy <= 0:
             return 1.0 if vx == vy and self.sx == self.sy else float("nan")
         return float(cov / math.sqrt(vx * vy))
 
 
 def pcc(ref, cand):
-    moments = Moments()
-    moments.add(ref, cand)
-    return moments.pcc()
+    if np.issubdtype(ref.dtype, np.integer) and np.issubdtype(cand.dtype, np.integer):
+        moments = Moments()
+        moments.add(ref, cand)
+        return moments.pcc()
+    # Centre first: raw moments of float tensors with a large mean lose the variance to cancellation.
+    x = np.asarray(ref, dtype=np.float64).ravel()
+    y = np.asarray(cand, dtype=np.float64).ravel()
+    x, y = x - x.mean(), y - y.mean()
+    den = math.sqrt(np.dot(x, x) * np.dot(y, y))
+    return float(np.dot(x, y) / den) if den > 0 else (1.0 if np.array_equal(x, y) else float("nan"))
 
 
 def frame_indices(count, spec):
@@ -118,26 +130,27 @@ def compare_videos(ref_path, cand_path, out_dir, *, name, stills):
     keep = set(frame_indices(ref_meta["frames"] or cand_meta["frames"], stills))
     moments = Moments()
     frame_psnr, frame_pcc = [], []
-    sq_err, count = 0.0, 0
+    sq_err, count = 0, 0
     for index, (ref, cand) in enumerate(zip(iter_frames(ref_path), iter_frames(cand_path))):
         if ref.shape != cand.shape:
             raise ValueError(f"Frame shape differs: ref {ref.shape} vs cand {cand.shape}")
-        frame_psnr.append(psnr(ref, cand, 255.0))
+        diff = (ref.astype(np.int64) - cand.astype(np.int64)).ravel()
+        frame_sq_err = np.dot(diff, diff).item()
+        frame_psnr.append(psnr_from_mse(frame_sq_err / diff.size, 255.0))
         frame_pcc.append(pcc(ref, cand))
         moments.add(ref, cand)
-        sq_err += float(np.sum((ref.astype(np.float64) - cand.astype(np.float64)) ** 2))
-        count += ref.size
+        sq_err += frame_sq_err
+        count += diff.size
         if index in keep:
-            diff = np.clip(np.abs(ref.astype(np.int16) - cand.astype(np.int16)) * 4, 0, 255).astype(np.uint8)
-            save_png(out_dir / f"{name}_cmp_f{index:03d}.png", np.concatenate([ref, cand, diff], axis=1))
+            heat = np.clip(np.abs(ref.astype(np.int16) - cand.astype(np.int16)) * 4, 0, 255).astype(np.uint8)
+            save_png(out_dir / f"{name}_cmp_f{index:03d}.png", np.concatenate([ref, cand, heat], axis=1))
     decoded = len(frame_psnr)
     # zip() stops at the shorter clip; a frame-count mismatch must not pass as parity.
     if decoded != (ref_meta["frames"] or decoded) or decoded != (cand_meta["frames"] or decoded):
         raise ValueError(f"Frame count differs: ref {ref_meta['frames']} vs cand {cand_meta['frames']}")
-    mse = sq_err / count
     return {
         "frames": decoded,
-        "psnr": PSNR_IDENTICAL if mse == 0 else 20 * math.log10(255.0) - 10 * math.log10(mse),
+        "psnr": psnr_from_mse(sq_err / count, 255.0),
         "psnr_min": min(frame_psnr),
         "psnr_min_frame": int(np.argmin(frame_psnr)),
         "psnr_mean": float(np.mean(frame_psnr)),
