@@ -440,7 +440,10 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
+    inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
+    inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
 )
