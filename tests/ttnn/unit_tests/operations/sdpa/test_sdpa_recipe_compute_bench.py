@@ -64,6 +64,10 @@ def build(device, inputs, variant, q_tiles, k_tiles, jobs, chunks):
     compute = descriptor.kernels[0]
     if variant == "legacy_exact":
         compute.defines = [(k, "0" if k == "EXP_APPROX_MODE" else v) for k, v in compute.defines]
+    # Perf research (not for merge): SDPA_KO="SDPA_KO_EXP,..." adds knockout defines to the compute kernel.
+    extra = [d for d in os.getenv("SDPA_KO", "").split(",") if d]
+    if extra:
+        compute.defines = list(compute.defines) + [(d, "1") for d in extra]
     fp32 = compute.config.fp32_dest_acc_en
     output = ttnn.allocate_tensor_on_device(
         inputs[0].shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
@@ -103,6 +107,9 @@ def build(device, inputs, variant, q_tiles, k_tiles, jobs, chunks):
 def test_sdpa_recipe_compute_throughput(device, q_chunk, k_chunk, variant, record_property):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
+    only = os.getenv("SDPA_BENCH_QK")
+    if only and f"{q_chunk}x{k_chunk}" not in only.split(","):
+        pytest.skip("geometry filtered")
     torch.manual_seed(0)
     host = [torch.randn(1, 1, rows, D).bfloat16() for rows in (q_chunk, k_chunk, k_chunk)]
     inputs = prepare([ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in host], variant)

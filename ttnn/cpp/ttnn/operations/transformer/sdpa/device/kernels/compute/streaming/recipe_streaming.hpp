@@ -351,6 +351,13 @@ void blocked_matmul_and_pack(
 }
 
 // Row maxima combine the current QK block with the previous online maximum.
+// Perf research knockouts (not for merge): each SDPA_KO_* define removes one piece of work; output is wrong.
+#ifdef SDPA_PERF_ZONES
+constexpr bool sdpa_perf_zones = true;
+#else
+constexpr bool sdpa_perf_zones = false;
+#endif
+
 template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride>
 void reduce_c_row_group(
     uint32_t out_cb,
@@ -370,6 +377,17 @@ void reduce_c_row_group(
 
     // scale_cb assumed ready (waited once at kernel init)
 
+#ifdef SDPA_KO_REDUCE
+    CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < group_size; i++) {
+        pack_tile<false>(i, out_cb);
+    }
+    tile_regs_release();
+    return;
+#endif
     tile_regs_acquire();
 
     if (do_eltwise_max) {
@@ -471,7 +489,9 @@ void sub_exp_block_bcast_cols(
     static_assert(score_batch == 1 || score_batch == 2 || score_batch == 4);
     CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
     if (global_col_base == 0) {
+#ifndef SDPA_KO_SUBL1
         sdpa_subtract_max_l1(inout_cb, max_cb, max_row_base, cols_in_row);
+#endif
     }
     cb_alias_read_ptr(7, inout_cb);
     configure_pack_width(inout_cb, score_batch);
@@ -559,6 +579,7 @@ void sub_exp_block_bcast_cols(
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
+#ifndef SDPA_KO_EXP
 #ifdef SDPA_RECIPE_FP32
         if (tiles_per_row * tiles_per_column == 4) {
             PACK((ckernel::sfpu::restore_sdpa_grid_macro_instructions()));
@@ -596,6 +617,7 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
+#endif
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     }
 
@@ -605,13 +627,15 @@ void sub_exp_block_bcast_cols(
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
         // reconfigure here when the caller guarantees the state.
+#ifndef SDPA_KO_PPACK
         if (skip_pack_configure) {
             pack_contiguous_rows_nocfg(
                 inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
-#ifndef SDPA_RECIPE_FP32
+#endif
+#if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK)
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
@@ -668,7 +692,9 @@ inline uint32_t sdpa_scan_identity_maxima(
         }
         identical &= ((difference | nonfinite) == 0);
     }
-
+#ifdef SDPA_KO_IDENT
+    identical = 1;
+#endif
     return identical;
 }
 #endif
@@ -1129,7 +1155,11 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
+#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT)
+    constexpr bool reduce_trigger = false &&
+#else
     constexpr bool reduce_trigger = reduce_trigger_supported && Sk_chunk_t % qkt_subblock_w == 0 &&
+#endif
                                     Sk_chunk_t / qkt_subblock_w > 1 && Sk_chunk_t % 2 == 0;
 #ifdef SDPA_RECIPE_FP32
     PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
@@ -1435,7 +1465,11 @@ static void sdpa_inner_loop_step(
             CircularBuffer(cur.max).wait_front(Sq_chunk_t);
             UNPACK({
                 scan_identity_row(Sq_chunk_t - 1);
+#ifdef SDPA_KO_IDENT
+                inplace_numerator = 1;
+#else
                 inplace_numerator = sdpa_early_identity;
+#endif
                 mailbox_write(ckernel::ThreadId::MathThreadId, inplace_numerator);
                 mailbox_write(ckernel::ThreadId::PackThreadId, inplace_numerator);
             })
@@ -1655,11 +1689,13 @@ static void sdpa_inner_loop_step(
                     denominator_init(rows);
                 }
                 tile_regs_acquire();
+#ifndef SDPA_KO_DENOM
                 for (uint32_t col = 0; col < active_Sk; ++col) {
                     UNPACK((llk_unpack_AB_matmul(
                         cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, rows, KT_stride)));
                     MATH((llk_math_matmul<denom_fidelity, MM_THROTTLE>(0, 1, rows)));
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < rows; ++j) {
@@ -2024,7 +2060,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
         const bool last_local = k_chunk == k_num_chunks - 1;
         const bool is_last = final_segment && last_local;
         sdpa_inner_loop_step<
-            false,
+            sdpa_perf_zones,
             Sq_chunk_t,
             Sk_chunk_t,
             DHt,
