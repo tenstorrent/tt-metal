@@ -21,9 +21,9 @@ the rules below are what a review must enforce.
   never compiled into `unit_tests_api`.
 - **Invariant without a test**: a new or changed invariant comment in a public Metal 2.0 header,
   or a new or changed validation check in `tt_metal/impl/metal2_host_api/program_spec.cpp`, must
-  have a matching test in `unit_tests/invariant_tests/<header>/` (local invariants) or
-  `unit_tests/invariant_tests/program_spec/` (structural invariants that read more than one
-  `ProgramSpec` field).
+  have a matching test in `unit_tests/invariant_tests/<header>/` (local invariants, including rules
+  that follow a name field to the object it names) or `unit_tests/invariant_tests/program_spec/`
+  (structural invariants: a name resolves, or a rule needs every struct that names an object).
 
 ## 🟡 IMPORTANT
 
