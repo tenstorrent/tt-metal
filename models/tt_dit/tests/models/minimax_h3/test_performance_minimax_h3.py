@@ -220,7 +220,7 @@ def test_ref2va_performance(mesh_device, reset_seeds, duration_s, ref_set):
 
     HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
     NUM_FRAMES = get_num_frames(duration_s)
-    references = ref2va_references()
+    references = ref2va_references(ref_set)
     if is_host():
         kinds = ", ".join(reference.kind for reference in references)
         logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames")

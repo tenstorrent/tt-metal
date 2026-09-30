@@ -2052,14 +2052,7 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
-        # if not self.coresident:
-        #     # The DiT weights are evicted when the VAE loads, but the DiT's collective buffers are not part
-        #     # of any stage: the CCL manager caches them by shape for the manager's lifetime. Release them here,
-        #     # otherwise wormhole OOMs. The next request re-allocates.
-        #     # TODO: figure out how to keep these allocations in memory.
-        #     self.ccl_manager.release_buffers()
-
-        with event_section(on_event, "vae"):
+        with self._track_cache_misses(on_event, "vae"):
             video = self._decode_video(
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
