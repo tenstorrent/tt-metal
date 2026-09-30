@@ -108,3 +108,1349 @@ tasks:
       ledger_tasks: '>= 1'
   paths:
   - models/demos/xing40_a4b_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/xing40_a4b_d_p/bringup/plan.yaml
+  - models/demos/xing40_a4b_d_p/bringup/plan.md
+  - models/demos/xing40_a4b_d_p/bringup/components.yaml
+  - models/demos/xing40_a4b_d_p/bringup/approvals.yaml
+  - models/demos/xing40_a4b_d_p/bringup/results/plan_memory.json
+  approval: plan
+- id: C.dense.attn_hc
+  title: dense attn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py
+    metrics:
+      pcc_attn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/xing40_a4b_d_p/tt
+  - models/demos/xing40_a4b_d_p/bringup/hooks.py
+  brief:
+    block_type: dense
+    step: attn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.dense.01
+  title: 'dense block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dense.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    layer: 0
+- id: C.dense.attn_collapse
+  title: dense attn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: attn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.dense.02
+  title: 'dense block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.dense.attn_collapse
+  - S.dense.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 0
+- id: C.dense.attn_norm
+  title: dense attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.dense.03
+  title: 'dense block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dense.attn_norm
+  - S.dense.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 0
+- id: C.dense.q_a
+  title: dense q_a (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_q_a.py
+    metrics:
+      pcc_q_a_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: q_a
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.dense.04
+  title: 'dense block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dense.q_a
+  - S.dense.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 0
+- id: C.dense.attention
+  title: dense attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+- id: S.dense.05
+  title: 'dense block with steps 1-5 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dense.attention
+  - S.dense.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_05_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_05_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    layer: 0
+- id: C.dense.attn_residual
+  title: dense attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.dense.06
+  title: 'dense block with steps 1-6 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dense.attn_residual
+  - S.dense.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_06_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_06_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    layer: 0
+- id: C.dense.ffn_hc
+  title: dense ffn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: ffn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.dense.07
+  title: 'dense block with steps 1-7 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dense.ffn_hc
+  - S.dense.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_07_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_07_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 0
+- id: C.dense.ffn_collapse
+  title: dense ffn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: ffn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.dense.08
+  title: 'dense block with steps 1-8 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.dense.ffn_collapse
+  - S.dense.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_08_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_08_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 0
+- id: C.dense.ffn_norm
+  title: dense ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.dense.09
+  title: 'dense block with steps 1-9 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dense.ffn_norm
+  - S.dense.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_09_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_09_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 0
+- id: C.dense.mlp
+  title: dense mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+- id: S.dense.10
+  title: 'dense block with steps 1-10 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.dense.mlp
+  - S.dense.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_10_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_10_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - mlp
+    layer: 0
+- id: C.dense.ffn_residual
+  title: dense ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.dense.11
+  title: 'dense block with steps 1-11 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dense.ffn_residual
+  - S.dense.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - mlp
+    - ffn_residual
+    layer: 0
+- id: C.moe.attn_hc
+  title: moe attn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py
+    metrics:
+      pcc_attn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: attn_hc
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.moe.01
+  title: 'moe block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.moe.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    layer: 2
+- id: C.moe.attn_collapse
+  title: moe attn_collapse (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: attn_collapse
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.moe.02
+  title: 'moe block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.moe.attn_collapse
+  - S.moe.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 2
+- id: C.moe.attn_norm
+  title: moe attn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_norm.py
+    metrics:
+      pcc_attn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: attn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+- id: S.moe.03
+  title: 'moe block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.moe.attn_norm
+  - S.moe.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 2
+- id: C.moe.q_a
+  title: moe q_a (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_q_a.py
+    metrics:
+      pcc_q_a_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: q_a
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.moe.04
+  title: 'moe block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.moe.q_a
+  - S.moe.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 2
+- id: C.moe.attention
+  title: moe attention (attention) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py
+    metrics:
+      pcc_attention_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: attention
+    kind: attention
+    layer: 2
+    stateful: true
+- id: S.moe.05
+  title: 'moe block with steps 1-5 on device (last: attention)'
+  step: implement
+  deps:
+  - C.moe.attention
+  - S.moe.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_05_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_05_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    layer: 2
+- id: C.moe.attn_residual
+  title: moe attn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_residual.py
+    metrics:
+      pcc_attn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: attn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.moe.06
+  title: 'moe block with steps 1-6 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.moe.attn_residual
+  - S.moe.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_06_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_06_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    layer: 2
+- id: C.moe.ffn_hc
+  title: moe ffn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: ffn_hc
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.moe.07
+  title: 'moe block with steps 1-7 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.moe.ffn_hc
+  - S.moe.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_07_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_07_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 2
+- id: C.moe.ffn_collapse
+  title: moe ffn_collapse (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: ffn_collapse
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.moe.08
+  title: 'moe block with steps 1-8 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.moe.ffn_collapse
+  - S.moe.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_08_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_08_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 2
+- id: C.moe.ffn_norm
+  title: moe ffn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: ffn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+- id: S.moe.09
+  title: 'moe block with steps 1-9 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.moe.ffn_norm
+  - S.moe.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_09_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_09_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 2
+- id: C.moe.router
+  title: moe router (router) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_router.py
+    metrics:
+      pcc_router_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: router
+    kind: router
+    layer: 2
+    stateful: false
+- id: S.moe.10
+  title: 'moe block with steps 1-10 on device (last: router)'
+  step: implement
+  deps:
+  - C.moe.router
+  - S.moe.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_10_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_10_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 2
+- id: C.moe.experts
+  title: moe experts (moe) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py
+    metrics:
+      pcc_experts_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: experts
+    kind: moe
+    layer: 2
+    stateful: false
+- id: S.moe.11
+  title: 'moe block with steps 1-11 on device (last: experts)'
+  step: implement
+  deps:
+  - C.moe.experts
+  - S.moe.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_11_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_11_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 2
+- id: C.moe.shared_expert
+  title: moe shared_expert (mlp) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_shared_expert.py
+    metrics:
+      pcc_shared_expert_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: shared_expert
+    kind: mlp
+    layer: 2
+    stateful: false
+- id: S.moe.12
+  title: 'moe block with steps 1-12 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.moe.shared_expert
+  - S.moe.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_12_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_12_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 2
+- id: C.moe.moe_add
+  title: moe moe_add (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_moe_add.py
+    metrics:
+      pcc_moe_add_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: moe_add
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.moe.13
+  title: 'moe block with steps 1-13 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.moe.moe_add
+  - S.moe.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_13_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_13_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 2
+- id: C.moe.ffn_residual
+  title: moe ffn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    step: ffn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.moe.14
+  title: 'moe block with steps 1-14 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.moe.ffn_residual
+  - S.moe.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 2
+- id: M.1
+  title: Assemble the all-device model (hidden state on the device from embedding to final norm)
+  step: assemble
+  deps:
+  - S.dense.11
+  - S.moe.14
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - M.1
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/xing40_a4b_d_p/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/xing40_a4b_d_p/bringup/opportunities.md
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - X.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/xing40_a4b_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
