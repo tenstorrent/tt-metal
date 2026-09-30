@@ -191,7 +191,10 @@ void kernel_main() {
 
     // initial state S [K, V] (once) — host always provides it (zeros if none). V-sliced
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
+#if !defined(GDN_FUSED_RECEIVER)
+    // T30 P2 (port of upstream #58626): the fused receiver reads S after its first credits (below).
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+#endif
 
 #if defined(GDN_MCAST_SENDER)
     Semaphore<> ready(SEM_READY);
@@ -373,6 +376,14 @@ void kernel_main() {
     for (; next < D && next < NC; next++) {
         issue(next);
     }
+    // T30 P2 (port of upstream #58626): initial state after the first credits are out and after a hold that keeps this
+    // 64 KB read out of the kickoff burst of chunk 0's input reads (S is first needed when chunk 0 arrives, a prep item
+    // later). Upstream passes the hold as a runtime arg; here it is a constant.
+    constexpr uint32_t kReceiverKickoffWaitCycles = 8100;  // sweep at the 1.35 GHz wall clock
+    if (kReceiverKickoffWaitCycles != 0) {
+        riscv_wait(kReceiverKickoffWaitCycles);
+    }
+    read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
     for (uint32_t c = 0; c < NC; c++) {
         {
             DeviceZoneScopedN("rx_wait_valid");

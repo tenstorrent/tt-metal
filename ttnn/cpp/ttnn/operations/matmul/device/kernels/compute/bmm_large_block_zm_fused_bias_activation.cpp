@@ -367,6 +367,20 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+#ifdef PACKER_L1_ACC
+                            // T36 deferred pop: free sub-block (in0_subblock, in1_subblock) of the previous K block's
+                            // partials here instead of after the whole previous block, so TRISC0 does not wait for the
+                            // packer to push every sub-block of block k before it unpacks block k+1.
+#if defined FUSE_BIAS or defined GLU_PASS
+                            if (block > 0) {
+#else
+                            // no-bias: base popped blocks 0..n-3 (block n-2 stays for the reload, block n-1 has none)
+                            if (block > 0 && block < num_blocks_inner_dim - 1) {
+#endif
+                                mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                                mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                            }
+#endif
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -494,26 +508,12 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
 #if defined FUSE_BIAS or defined GLU_PASS
-                    if (block < num_blocks_inner_dim - 1) {
-                        // Wait/pop in subblock-sized steps so the step size
-                        // matches the bias section's wait_front(out_subblock_num_tiles),
-                        // satisfying the CB API requirement that all wait_front
-                        // increments on a given CB are identical.
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_dfb.wait_front(out_subblock_num_tiles);
-                            mm_partials_dfb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
+                    // T36: block k's partials pops are deferred into block k+1's sub-block loop (see above).
                     // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_dfb.wait_front(out_subblock_num_tiles);
-                            mm_partials_dfb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
+                    // T36: pops of blocks 0..n-3 deferred into the next block's sub-block loop.
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
                     }  // reload when last iteration

@@ -47,8 +47,11 @@
 #   allocated once at model load (FUSE_BIAS; bit-identical to minimal_matmul); REPACK_TRACE = the
 #   exact-multiple traced prefill replays a captured trace of the GDN conv-history repack instead of
 #   the eager ops (same point in the flow; bit-exact; QWEN36_M2_REPACK_LATE=1 takes precedence).
-#   Runner defaults (2026-09-26, both passed the M3 bit-exact gates; differ from the code default 0):
-#   ZB=1, REPACK_TRACE=1. A/B e.g. QWEN36_M3_REPACK_TRACE=0 bash run_bench_e2e_p150.sh.
+#   Runner defaults: REPACK_TRACE=1 (2026-09-26, passed the M3 bit-exact gates; differs from the code
+#   default 0). ZB: the runner default is 0 since 2026-09-30 (drops the zero bias on the 2D-mcast
+#   MLP-down and GDN in-proj matmuls; -0.5 ms TTFT; numerics change accepted under the coherence
+#   gate; QWEN36_M3_ZB=1 restores the bit-exact-with-minimal_matmul path; it was 1 from 2026-09-26).
+#   A/B e.g. QWEN36_M3_REPACK_TRACE=0 bash run_bench_e2e_p150.sh.
 # The C2 item flag QWEN36_C2_SGRN also survives the reset (tt/tp_common.py C2_FLAG_DEFAULTS; unset = code
 #   default 0 = the current path; values 0|1; single device, unmasked T == 2048 GDN chunks with QWEN36_M1_S4=1):
 #   SGRN = the 5 GDN post-scan glue ops (z slice, typecast, per-head rms_norm, nlp_concat_heads, SILU gate
@@ -272,7 +275,7 @@ for item in $M2_ITEMS; do
   M2_VALS[$item]="$val"
 done
 M3_ITEMS="ZB REPACK_TRACE"
-declare -A M3_DEFAULTS=([ZB]=1 [REPACK_TRACE]=1)  # runner defaults (tp_common.M3_FLAG_DEFAULTS are all 0)
+declare -A M3_DEFAULTS=([ZB]=0 [REPACK_TRACE]=1)  # runner defaults (tp_common.M3_FLAG_DEFAULTS are all 0)
 declare -A M3_VALS
 for item in $M3_ITEMS; do
   var="QWEN36_M3_$item"
