@@ -212,7 +212,8 @@ ProgramDescriptor create_program_descriptor(
     const Tensor& post,
     const Tensor& comb,
     const Tensor& output,
-    const ComputeConfigDescriptor& compute_config) {
+    const ComputeConfigDescriptor& compute_config,
+    bool comb_transposed) {
     auto* device = input.device();
 
     const int64_t n = post.logical_shape()[-1];
@@ -371,6 +372,12 @@ ProgramDescriptor create_program_descriptor(
             .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = noc_mode}));
     desc.kernels.push_back(make_kernel("mhc_post_compute.cpp", all_cores, compute_ct, compute_rt, compute_cfg));
+    if (!comb_transposed) {
+        // Only the coefficient expansion (DM kernels) reads comb's layout; the default adds no define (parity).
+        for (uint32_t k : {READER_KERNEL, WRITER_KERNEL}) {
+            desc.kernels[k].defines.emplace_back("MHC_POST_COMB_DIRECT", "1");
+        }
+    }
     for (uint32_t sem : {SEM_RD_GO, SEM_RD_DONE}) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
@@ -386,7 +393,8 @@ ProgramDescriptor MhcPostProgramFactory::create_descriptor(
         tensor_args.post,
         tensor_args.comb,
         output,
-        operation_attributes.compute_config);
+        operation_attributes.compute_config,
+        operation_attributes.comb_transposed);
 }
 
 void MhcPostProgramFactory::override_runtime_arguments(

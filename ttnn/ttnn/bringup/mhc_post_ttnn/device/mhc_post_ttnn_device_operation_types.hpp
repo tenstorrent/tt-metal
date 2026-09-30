@@ -17,6 +17,9 @@ namespace ttnn::operations::bringup::mhc_post_ttnn {
 // fp32_dest_acc_en and math_approx_mode from it, as mhc_post_program_descriptor.py does.
 struct MhcPostParams {
     tt::tt_metal::ComputeConfigDescriptor compute_config;
+    // true (default): X'_j = post_j F + sum_i comb[i*n + j] X_i (comb^T, the op's original math).
+    // false: X'_j = post_j F + sum_i comb[j*n + i] X_i (comb as stored; kernel define MHC_POST_COMB_DIRECT).
+    bool comb_transposed = true;
 };
 
 struct MhcPostInputs {

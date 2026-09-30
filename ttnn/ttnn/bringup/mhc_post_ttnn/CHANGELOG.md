@@ -31,3 +31,19 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 4. Model cases (bringup-fork-tests, task O.1): `tests/cases.py` (1 glm53_flash_d_p call(s), captured with
    GLM_MHC_IMPL=fused on the s56320 rung), `tests/reference.py` (float64 torch semantics), `tests/test_mhc_post_ttnn.py`
    (random per-chip inputs on the 2x2 mesh, PCC + rel L2 per output; limits from the measured error with margin).
+5. Opt-in `comb_transposed=False` (default True keeps the op's comb^T math, bit-identical program: no define added).
+   - What: `X'_j = post_j F + sum_i comb[j*n + i] X_i` (comb applied as stored, row-major comb[j][i] for output j).
+     Only the coefficient expansion changes: `kernels/mhc_post_coef_expand.hpp` reads raw column `j*n + (t-1)`
+     under the kernel define `MHC_POST_COMB_DIRECT` (added to both DM kernels by the program factory when the option
+     is off). `MhcPostParams::comb_transposed` is in the program hash; `mhc_post` / the prim / the program descriptor
+     / the nanobind (`comb_transposed=True` kw-only, also on `_mhc_post_ttnn_program_descriptor`) carry it. The
+     Python builder (parity reference) has no such option; the parity suite only builds the default.
+   - Why: Xing4.0's mHC residual is `post * y + comb @ x` (`xing40_a4b_d_p/reference/xing_ref.py:hc_residual`), not
+     GLM's comb^T. Replaces the 20-op addcmul chain (90 ms per 5120-token chunk each for attn / ffn residual).
+   - Files: kernels/mhc_post_coef_expand.hpp, kernels/mhc_post_common.hpp (comment), device/*_types.hpp,
+     device/mhc_post_ttnn_device_operation.{hpp,cpp}, device/mhc_post_ttnn_program_factory.{hpp,cpp},
+     mhc_post_ttnn.{hpp,cpp}, mhc_post_ttnn_nanobind.cpp; tests: cases.py (xing40 case, comb_transposed False),
+     reference.py (comb_transposed), test_mhc_post_ttnn.py (passes the option; checks the comb and comb^T
+     references differ; the mesh fixture opens the case mesh matching the box's device count, since a 2x2 submesh of
+     a 4x2 box fails the 2D fabric handshake).
+   - Needed by: xing40_a4b_d_p P.2 (tt/residual.py, XING_RESIDUAL_MIX=fused, the default).
