@@ -25,7 +25,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::program_specs {
