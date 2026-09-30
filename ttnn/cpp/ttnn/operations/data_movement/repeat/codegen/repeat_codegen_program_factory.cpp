@@ -218,12 +218,12 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     // An outer-axis TILE repeat into L1 reads each source tile once and writes all of its copies,
     // instead of re-reading the source once per output page. The writes go through a TensorAccessor
     // by global page id, which validation guarantees is the interleaved page grid for a sharded output.
-    // HEIGHT_SHARDED and BLOCK_SHARDED outputs stay on the sequenced reader/writer pair: that route has
-    // the dedicated writer, and its core cap was tuned for those placements.
+    // BLOCK_SHARDED stays on the sequenced pair, whose writer's core cap was tuned for that placement.
     const auto out_layout = output.memory_config().memory_layout();
     const bool direct_outer_tile =
         !is_row_major && operation_attributes.rep_dim < kFirstTileAxis && dst_buffer->buffer_type() == BufferType::L1 &&
-        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED);
+        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         out_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     if (direct_outer_tile) {
         const uint32_t tile_bytes = tt::tile_size(cb_data_format);
         const uint32_t total_in_pages = operation_attributes.total_out_pages / operation_attributes.num_repeats;
