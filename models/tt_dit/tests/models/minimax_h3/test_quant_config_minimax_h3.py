@@ -199,6 +199,35 @@ def test_only_the_arithmetic_preset_hands_the_attention_an_override():
         assert overrides == expected, name
 
 
+def test_a_pinned_block_gets_the_default_arithmetic_back_too():
+    """`for_block` on a pinned block must undo the precision policy, not only the dtypes.
+
+    A pinned block exists to buy accuracy back with 385 MB. LoFi on a bfloat8_b tile is bounded by
+    the tile's own 8-bit mantissa; on a bf16 weight it is a real loss, so leaving the reduced
+    fidelity in place on a block that was just widened to bf16 would spend the memory and keep most
+    of the error it was spent on.
+    """
+    from dataclasses import replace as _replace
+
+    profile = _replace(
+        MiniMaxH3QuantProfile.bf8_weights_bf8_out(),
+        bf16_blocks=(0, -1),
+        mm_math_fidelity=ttnn.MathFidelity.LoFi,
+        mm_fp32_dest_acc_en=False,
+    )
+    pinned = profile.for_block(0, LAYERS)
+    assert pinned.qkv_dtype is ttnn.bfloat16
+    assert pinned.mm_math_fidelity is None and pinned.mm_fp32_dest_acc_en is None
+    assert pinned.compute_kernel_kwargs() == {}
+    # An unpinned block keeps the whole policy, arithmetic included.
+    plain = profile.for_block(25, LAYERS)
+    assert plain.qkv_dtype is ttnn.bfloat8_b
+    assert plain.compute_kernel_kwargs() == {
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "fp32_dest_acc_en": False,
+    }
+
+
 @pytest.mark.parametrize("pinned, expect_bf16", [((-1,), 49), ((0,), 0), ((0, -1), None)])
 def test_pinned_blocks_resolve_to_bf16_and_nothing_else_does(pinned, expect_bf16):
     profile = MiniMaxH3QuantProfile.bf8_weights(bf16_blocks=pinned)

@@ -119,6 +119,12 @@ class MiniMaxH3QuantProfile:
             ff_dtype=ttnn.bfloat16,
             activation_dtype=None,
             pin_output_bf16=False,
+            # The arithmetic too. A pinned block exists to buy accuracy back, and LoFi on a bf16
+            # weight is a real loss (unlike on bfloat8_b, where the tile's 8-bit mantissa is already
+            # the bound), so leaving the reduced fidelity in place would spend the 385 MB and keep
+            # most of the error it was spent on.
+            mm_math_fidelity=None,
+            mm_fp32_dest_acc_en=None,
         )
 
     def attention_kwargs(self) -> dict:
@@ -229,9 +235,14 @@ class MiniMaxH3QuantProfile:
 
         LoFi is the bigger win and is deliberately NOT offered: at full depth on the real checkpoint
         it scores video PCC 0.9892 against the 0.99 bar every quantized row here holds (audio
-        0.9721, which passes its 0.95). It misses by 0.0008 and the bar was not moved. The obvious
-        next thing to try is LoFi with ``bf16_blocks=(0, -1)``, the escape hatch this class already
-        documents, which costs 770 MB of DRAM and a re-quantized cache; it has not been measured.
+        0.9721, which passes its 0.95). It misses by 0.0008 and the bar was not moved.
+
+        ``bf16_blocks=(0, -1)`` -- the escape hatch this class documents, 770 MB of DRAM and a
+        re-quantized cache to take the first and last block out of the reduced regime entirely --
+        was measured on top of LoFi and made it WORSE, not better: video PCC 0.9858 against plain
+        LoFi's 0.9892. So the error LoFi adds is not concentrated in the ends, and pinning two of
+        fifty blocks is not the lever for it. Both rows are in stage 06's results.json; neither
+        preset is shipped, so neither has a PCC row of its own here.
         """
         return replace(
             MiniMaxH3QuantProfile.bf8_weights_bf8_out(),
