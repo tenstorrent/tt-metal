@@ -1,0 +1,89 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "activations (planner estimate)",
+   "gb": 7.0
+  },
+  {
+   "group": "routed experts",
+   "gb": 3.5859375
+  },
+  {
+   "group": "embedding",
+   "gb": 1.181640625
+  },
+  {
+   "group": "KDA attention (TP=2)",
+   "gb": 0.5170302391052246
+  },
+  {
+   "group": "extra: constant tables, dispatch tables, misc",
+   "gb": 0.3
+  },
+  {
+   "group": "lm_head (vocab-sharded)",
+   "gb": 0.29541015625
+  },
+  {
+   "group": "DSA attention (replicated)",
+   "gb": 0.21875381469726562
+  },
+  {
+   "group": "dense MLP (TP=4)",
+   "gb": 0.2109375
+  },
+  {
+   "group": "extra: KDA state double buffer and contract state copy",
+   "gb": 0.15
+  },
+  {
+   "group": "state: MLA latent (after kv_a_layernorm) layers [3]",
+   "gb": 0.0537109375
+  },
+  {
+   "group": "shared expert (TP=4)",
+   "gb": 0.0234375
+  },
+  {
+   "group": "mHC",
+   "gb": 0.014649443328380585
+  },
+  {
+   "group": "DSA indexer",
+   "gb": 0.01391744613647461
+  },
+  {
+   "group": "router",
+   "gb": 0.008791208267211914
+  },
+  {
+   "group": "state: KDA recurrent state (128 x 128 per head) layers 0-2,4",
+   "gb": 0.0078125
+  },
+  {
+   "group": "state: indexer pooled keys (1 row per 4 tokens) layers [3]",
+   "gb": 0.00335693359375
+  },
+  {
+   "group": "state: KDA conv tail (3 rows x q|k|v 3 x 128 per head) layers 0-2,4",
+   "gb": 0.000274658203125
+  },
+  {
+   "group": "norms and scalars",
+   "gb": 8.392333984375e-05
+  }
+ ],
+ "total_gb": 13.585744385421275,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 76108,
+ "mesh": [
+  2,
+  2
+ ],
+ "seq": 56320,
+ "users": 1
+}

@@ -4,6 +4,7 @@
 """The derived-op test pass (task O.1): captured ttnn.bringup calls vs the forks' test cases."""
 
 import json
+import subprocess
 
 import pytest
 
@@ -172,3 +173,53 @@ def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
         "ttnn/ttnn/bringup/INDEX.md",
         "ttnn/ttnn/bringup/new_fork/op.cpp",
     ]
+
+
+def test_gate_commit_carries_new_fork_files_and_knowledge(fx):
+    """glm53 F49 (now F51), adapted to F48: in a repo with no commit yet, a fork the agent created (new files) and the
+    knowledge files are staged file by file and end up in the gate commit."""
+    from models.demos.common.bringup.core.gate import git_commit, stage_paths
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+
+    s = Spec.load(fx())
+    led = Ledger(s.bringup_dir)
+    led.results_dir.mkdir(parents=True, exist_ok=True)
+    (led.results_dir / "C.x.json").write_text("{}")
+    repo = s.repo
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    fork = repo / "ttnn/ttnn/bringup/sdpa"
+    (fork / "tests/unit").mkdir(parents=True)
+    (fork / "CHANGELOG.md").write_text("- option\n")
+    (fork / "tests/unit/test_new.py").write_text("def test_x():\n    pass\n")
+    know = repo / "models/demos/common/bringup/knowledge"
+    know.mkdir(parents=True)
+    (know / "known_issues.md").write_text("# Known issues\n")
+    (know / "repo_map.md").write_text("# Repo map\n")
+    got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
+    assert "ttnn/ttnn/bringup" not in got  # F48: changed files, never the whole directory
+    assert {
+        "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+        "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py",
+        "models/demos/common/bringup/knowledge/known_issues.md",
+        "models/demos/common/bringup/knowledge/repo_map.md",
+    } <= set(got)
+    assert git_commit(s, got, "gate", "")
+    tracked = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True).split()
+    assert "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py" in tracked
+    assert "ttnn/ttnn/bringup/sdpa/CHANGELOG.md" in tracked
+    assert "models/demos/common/bringup/knowledge/known_issues.md" in tracked
+
+
+def test_gate_commit_skips_shared_paths_that_do_not_exist(fx):
+    """glm53 F49 (now F51): with no fork or knowledge file present, nothing shared is staged."""
+    from models.demos.common.bringup.core.gate import stage_paths
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+
+    s = Spec.load(fx())
+    subprocess.run(["git", "init", "-q"], cwd=s.repo, check=True)
+    led = Ledger(s.bringup_dir)
+    got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
+    assert not [p for p in got if p.startswith(("ttnn/", "models/demos/common/"))]

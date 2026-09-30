@@ -1,0 +1,229 @@
+{
+ "metrics": {
+  "coef_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.9999348521232605
+  },
+  "coef_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.9987210631370544
+  },
+  "comb_col_sum_err_swap_attn_hc": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.0034618377685546875
+  },
+  "flipped_rows_swap_out_collapse_share": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0
+  },
+  "flipped_rows_swap_out_cpu": {
+   "t": "2026-09-29T14:23:57",
+   "value": 37
+  },
+  "flipped_rows_swap_out_golden": {
+   "t": "2026-09-29T14:23:45",
+   "value": 43
+  },
+  "flipped_rows_swap_out_norm_share": {
+   "t": "2026-09-29T14:24:23",
+   "value": 8
+  },
+  "max_abs_swap_attn_hc_comb": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.0078125
+  },
+  "max_abs_swap_attn_hc_post": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.001953125
+  },
+  "max_abs_swap_attn_hc_pre": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.006346642971038818
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T14:23:58",
+   "value": 1.000133752822876
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.9994010329246521
+  },
+  "norm_ratio_max_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T14:24:10",
+   "value": 1.0006279945373535
+  },
+  "norm_ratio_max_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T14:24:10",
+   "value": 1.0004000663757324
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.9998306035995483
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.9889911413192749
+  },
+  "norm_ratio_min_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.9990589022636414
+  },
+  "norm_ratio_min_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.9944515824317932
+  },
+  "pcc_swap_attn_hc": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.999993591221996
+  },
+  "pcc_swap_attn_in": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.9999935098992264
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.9999933388124858
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.9999960238011063
+  },
+  "pcc_swap_experts_out": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9998259310880312
+  },
+  "pcc_swap_ffn_hc": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.9999992173687544
+  },
+  "pcc_swap_ffn_in": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.999994017037827
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9999942463493686
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-29T14:23:43",
+   "value": 0.9999971659449653
+  },
+  "pcc_swap_mlp_out": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9998418662721461
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9999943024553898
+  },
+  "pcc_swap_router": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9994170156484784
+  },
+  "pcc_swap_shared_out": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9999776941423546
+  },
+  "rel_l2_same_routing_swap_out_collapse_share": {
+   "t": "2026-09-29T14:24:10",
+   "value": 5.001495537726441e-07
+  },
+  "rel_l2_same_routing_swap_out_cpu": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.0011975883971899748
+  },
+  "rel_l2_same_routing_swap_out_golden": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.0026230195071548223
+  },
+  "rel_l2_same_routing_swap_out_norm_share": {
+   "t": "2026-09-29T14:24:23",
+   "value": 0.00015604325744789094
+  },
+  "rel_l2_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.001658658031374216
+  },
+  "rel_l2_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.007135967258363962
+  },
+  "rel_l2_swap_attn_hc_comb": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.003099772846326232
+  },
+  "rel_l2_swap_attn_hc_post": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.004023618996143341
+  },
+  "rel_l2_swap_attn_hc_pre": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.004723271820694208
+  },
+  "rel_l2_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.0016761032165959477
+  },
+  "rel_l2_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.0038622571155428886
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.0035032392479479313
+  },
+  "row_norm_ratio_max_swap_out_collapse_share": {
+   "t": "2026-09-29T14:24:10",
+   "value": 1.0000079870224
+  },
+  "row_norm_ratio_max_swap_out_cpu": {
+   "t": "2026-09-29T14:23:58",
+   "value": 1.0034453868865967
+  },
+  "row_norm_ratio_max_swap_out_golden": {
+   "t": "2026-09-29T14:23:45",
+   "value": 1.0033961534500122
+  },
+  "row_norm_ratio_max_swap_out_norm_share": {
+   "t": "2026-09-29T14:24:23",
+   "value": 1.000366449356079
+  },
+  "row_norm_ratio_min_swap_out_collapse_share": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.9999915361404419
+  },
+  "row_norm_ratio_min_swap_out_cpu": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.9929755330085754
+  },
+  "row_norm_ratio_min_swap_out_golden": {
+   "t": "2026-09-29T14:23:45",
+   "value": 0.9925333261489868
+  },
+  "row_norm_ratio_min_swap_out_norm_share": {
+   "t": "2026-09-29T14:24:23",
+   "value": 0.9994962215423584
+  },
+  "row_rel_l2_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.0017429764848202467
+  },
+  "row_rel_l2_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.01144920289516449
+  },
+  "row_rel_l2_max_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.0018892395310103893
+  },
+  "row_rel_l2_max_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T14:24:10",
+   "value": 0.007007446605712175
+  },
+  "worst_col_rel_l2_swap_attn_hc": {
+   "t": "2026-09-29T14:23:58",
+   "value": 0.02453300729393959
+  }
+ },
+ "task": "S.kda_moe.03"
+}

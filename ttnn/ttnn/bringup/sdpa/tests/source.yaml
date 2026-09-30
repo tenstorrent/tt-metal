@@ -14,10 +14,18 @@
 # Baseline 118 tests: 107 passed, 11 skipped, 0 failed on both the original and the fork, no gaps. The skips are the
 # tests' own (nh=8 q128/k128 "Can cause OOM if profiling is enabled", q192 cases whose s is not a multiple of 192).
 # Recording took about 11 minutes, one entry at a time; a check (fork only, warm) about 3 minutes.
+# sparse_sdpa entries (the last two, added with high_precision for glm53_flash_d_p): 92 tests, all passed on both.
+# Recorded with --entry 5 --entry 6 (about 1.5 minutes). Whole baseline: 210 tests, 199 passed, 11 skipped.
 upstream_sha: 99f7e834cea8bc42f0b478b9cc59a7b89f2f9c1a
 swap:
   ttnn.transformer.scaled_dot_product_attention: ttnn.bringup.scaled_dot_product_attention
   ttnn.transformer.chunked_scaled_dot_product_attention: ttnn.bringup.chunked_scaled_dot_product_attention
+  # sparse_sdpa (added with high_precision, glm53_flash_d_p C.dsa_moe.attention): the tests build their kv_format from
+  # the original enum and also check it by name, so the enum stays and is converted at the fork op.
+  ttnn.transformer.sparse_sdpa:
+    op: ttnn.bringup.sparse_sdpa
+    convert_enums:
+      ttnn.transformer.SparseKVFormat: ttnn.bringup.SparseKVFormat
 tests:
   - path: tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
     why: "the sanity-tier file: causal (and with the program cache), non-causal, non-causal with a random bias mask, sliding window, sliding-window streaming vs non-streaming parity, attention sink"
@@ -32,3 +40,8 @@ tests:
   - path: tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py
     k: "(test_sdpa_tt and dram_interleaved and bf16 and k128) or (test_sdpa_tt_with_program_cache and bf16) or test_sdpa_large_score_precision or test_sdpa_tt_small_chunks"
     why: "causal: head dims 64/128, 8/16/71 heads (MQA), batch 8, s 2048/8192, q chunks 128/256 (bf16, DRAM); program-cache reuse; large-score precision; small chunks"
+  - path: tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
+    why: "sparse_sdpa sanity tier (added with the high_precision option): bf16, fp8 and scaled-FP8 kv, multi query tiles, single and multi chunk PCC, the kv-length no-recompile cache, an oversized persistent cache, block-cyclic identity, an indexed cache, the output dtype and the refusals; high_precision off, as every upstream test"
+  - path: tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py
+    k: "not perf and not host_dispatch"
+    why: "sparse_sdpa nightly accuracy (added with high_precision): single/multi chunk PCC over valid-key patterns, multi-token, 32..128 heads and the aggressive block, fp8 kv and q, query sub-blocking (H 160/192), determinism; the perf and host-dispatch timing cases excluded"

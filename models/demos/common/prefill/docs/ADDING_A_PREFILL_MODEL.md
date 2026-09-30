@@ -180,7 +180,11 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
         layer k collide on one seq and all but one completion is dropped -- silently, since the
         router just sees a duplicate. If your model enumerates only its own slice, add
-        `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
+        `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through.
+
+        Exception: a hybrid stack (adapter `kv_slot_layer_ids`) whose adapter sets `acks_in_kv_slot_space = True`
+        passes the layer's KV-slot index (the address table's layer, 0..len(kv_slot_layer_ids) - 1) instead; the
+        runner maps it back to the global layer for the record (example: glm53_flash_d_p/tt/runners/adapter.py)."""
 ```
 
 ---

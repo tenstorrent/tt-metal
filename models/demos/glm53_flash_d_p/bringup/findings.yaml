@@ -1,0 +1,64 @@
+findings:
+- id: kda-actual-end-padding
+  task: C.*
+  kind: API
+  title: KDA layers must pass actual_end (main's padded-chunk fix, cherry-picked); keep KDA state in an address-stable store
+  detail: >-
+    The branch now has main's #57070 (skip padded KDA prefill recurrence with a runtime end bound) and #58049 (bind
+    actual_end only when given), cherry-picked as 158a510b062 and 926ca262f00. Pass actual_end (device UINT32 scalar,
+    exclusive global valid end, 32-aligned) into every KDA layer, as TtK3KdaAttention.forward does
+    (models/demos/deepseek_v3_d_p/tt/kimi_k3/attention.py: metadata[1:3] under trace, device scalars from
+    ctx.actual_start/actual_end eagerly, validate_kda_bounds on the host). Without it the padded tail of the last
+    chunk (K.1 ends it 32 tokens early and pads with 0xFFFFFFFF) folds into kda_recurrent and kda_conv. With SP=2 on
+    axis 0 the padded tail sits on the second row; the fix skips padded chunks and groups per rank while keeping CCL
+    participation. Always pass actual_start too: main's prepare_chunk_recurrence binds q as "actual_start" when it is
+    absent, and #55670's aliased-parameter check rejects that (TT_FATAL "TensorArgument 'actual_start' must reference
+    a MeshTensor reachable from tensor_args"); 14 op tests in tests/ttnn/nightly/unit_tests/operations/experimental/kda
+    fail this way on clean main 98134127a7b too (CI never ran them after the merge). Keep the states like Kimi-K3's
+    tt/kimi_k3/kda_state.py KdaStateCache (address-stable, ttnn.copy write-back, reset the slot when actual_start == 0,
+    never inside a trace). The K.1 hook contract_state_pcc can rebuild the TP/SP shards with
+    models/demos/deepseek_v3_d_p/tests/kda/utils.py reconstruct_state_at_sp_rank / reconstruct_convolution_at_sp_rank.
+    Clamp the 0xFFFFFFFF pad token id before the embedding lookup.
+- id: attn-hc-per-column-bias-layer4
+  task: S.kda_moe.02
+  kind: ACCURACY
+  title: Device attn_hc (tt/mhc.py) at layer 4 biases pre/post per column on every token; the part checks pass it
+  detail: >-
+    Probe (tt-probe, not kept), device attn_hc vs the fp32 CPU attn_hc of the
+    golden layer-4 `in`: per-column median ratio pre [0.9951, 1.0019, 1.0013, 0.9945], post [1.0183, 1.0040, 1.0160,
+    1.0358]; median equals mean, so the error is a fixed per-column offset, not noise. Pre row sums are 0.9965x
+    (median). Most likely the fp32 matmul's reduced-mantissa path shifts each logit by a fixed amount before the
+    sigmoid (weights and consts are already fp32); a fixed logit shift is a relative error on saturated (small) post
+    entries. Not proven. The swap-01 part checks (rel <= 0.01, worst column 0.05) pass because large, accurate entries
+    dominate each column's norm. Effect so far: attn_collapse vs golden ratio [0.9890, 0.9994] (limit 0.985); block out
+    vs the CPU block 33 flips, same-routing [0.9929, 1.0032]. Worth fixing if later kda_moe swaps run out of margin.
+- id: contract-state-hook-outside-paths
+  task: K.1
+  kind: INFRA
+  title: K.1 needs hooks.contract_state_pcc (spec state.fixed), but bringup/hooks.py is outside the contract step's paths
+  detail: >-
+    Implemented as models/demos/glm53_flash_d_p/tt/runners/adapter.py:contract_state_pcc. hooks.py needs one line,
+    `from models.demos.glm53_flash_d_p.tt.runners.adapter import contract_state_pcc  # noqa: F401`, for the gate to
+    count it. Without it K.1 records contract_checks_failed 1 (the missing hook) and nothing else fails. With it
+    (checked in a tt-probe that registers the function and runs run_contract_test): 0 failures, KDA recurrent min
+    0.99920 / conv min 0.99998 vs the golden snapshot at 4064 (the golden states at 4064 and 4096 differ: recurrent
+    PCC 0.80..0.94, conv 0.16..0.27, so the padded tail is really skipped).
+    Resolved in the run1 contract step: bringup/hooks.py is now in the contract paths and forwards to the adapter's
+    contract_state_pcc; the gate passes.
+- id: x3-timeline-profiler-buffer
+  task: X.3
+  kind: INFRA
+  title: X.3 timeline_ok is 0 because the device profiler buffer (1000 programs per RISC) overflows in the unsynced timeline run
+  detail: >-
+    The timeline run in testing/profile.py op_profile (profiler.enable(timeline=True)) reads the device profiler once,
+    after the whole chunk. GLM-5.3's 5-layer chunk launches 1319 programs per chip (op mode). The DRAM profiler
+    buffer holds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs per RISC (default 1000, bufferEndIndex 12000 words),
+    so busy cores drop markers ("Profiler DRAM buffers were full") and the timeline sees only 1281 programs per chip.
+    align_timeline then refuses the alignment. Every accuracy and perf metric passes (pcc_layer min 0.99954,
+    pcc_state_min 0.98247, prefill_ms_full 4501, op_rows 869, pos_chunk 5120). Checked: the same test_profile with
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 gives timeline_ok 1 (device timeline 423.7 ms = kernels 422.9 +
+    gaps 0.7, host dispatch 43.4 ms, host wall 430.8 ms). The fix is in the framework, outside a fix step's paths:
+    add TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT (e.g. 3000, or sized from the op-mode count) to the X.3 profile env
+    (plan/ledger_gen.py) or to profiler.PROFILER_ENV / test_profile before the mesh opens. The model's modules and
+    the ttnn.bringup forks cannot fix it; cutting ~320 programs per chip from the forward pass only to fit the buffer
+    would not be a real fix.

@@ -599,3 +599,82 @@ limits, finiteness, "not a CPU bridge", and downstream / block-out rel limits.
   `[S.x] swap test frozen without review (F49)`, unless `agents.swap_review: all | [block types]` names it; a failed
   unreviewed freeze starts the test role with the failure. Component tasks keep their test agent.
 - `dev/f49_mutation_proof.py` / `.md`: the proof (below). Selftests: test_swap_checks.py.
+
+Merged from dnijemcevic/glm53_prefill on 2026-09-30; renumbered F48-F52 -> F50-F54; their commit messages keep the
+old numbers. (The selftest counts in F50-F54 are the glm53 branch's own, 197 -> 218, before the merge.)
+
+## F50 (2026-09-28): mixed per-layer state (GLM-5.3 intake)
+GLM-5.3-Flash has sparse-MLA layers (latent cache + pooled indexer keys, growing along the sequence) and KDA layers
+(recurrent state [heads, 128, 128] + conv tail, fixed size). The framework assumed one list of state names for every
+layer and stored only the final state, which every "prefix at chunk start" consumer sliced to `start`: exact for a
+KV cache, wrong for a recurrence (the final state already includes the chunk under test).
+- Spec: `state.by_block_type: {bt: [names]}` (names per layer type; default `state.tensors` for all) and
+  `state.fixed: [names]`; `Spec.state_names(layer)`, `Spec.state_fixed`; validation (known block types, all covered,
+  names in `state.tensors`).
+- Golden: per-layer names; fixed tensors also stored before every dumped chunk as `kv_cache/layer_{i}_at_{p}`, and on
+  the serving-contract rung after `seq - contract_tail_pad` tokens (the last chunk rerun, cut short, from a copy of
+  the state before it). `metadata.json` adds `state_by_layer`, `state_fixed`, `state_snapshots`.
+  `Golden.state(i, at=p)`: growing tensors are the final ones (consumer slices), fixed ones the snapshot at p (error
+  if there is none).
+- Consumers pass `at=start`: component and swap contexts (harness), the ladder's golden prefix, the profile. The
+  profile reloads the prefix before every run when the spec has fixed state (a recurrence advances on each rerun).
+  check_reference takes the replay prefix from the state before the last chunk, not from the final state.
+- Contract: acks expected per slab layer when the adapter has `kv_slot_layer_ids` (hybrids; the engine already acks
+  that way); fixed state needs `hooks.contract_state_pcc(...)` against the tail snapshot, else the contract fails.
+  Engine-side migration of fixed state (a table kind without a position axis) is not done: K.1 of such a model.
+- Memory: state entries take `per_token: false` (fixed size, no seq factor), `seq_stride` (pooled rows),
+  `seq_divisor` (sequence split over chips); fixed entries are checked only against their own `kv_heads`.
+- Dashboard: any `pcc_state_<name>_L<i>` is per-layer.
+- Device-model contract (harness docstring): `layer(i, h, 0, state)` starts a new sequence, so a fixed state resets.
+- Selftests: 197 -> 212 (test_mixed_state.py adds 15; the fixture gains `fixture.recurrent_layers`, a linear
+  recurrence with an HF twin). 14 of the 15 fail on the pre-F50 code.
+
+## F51 (2026-09-29): gate commits carry the shared paths agents may change (GLM-5.3 run)
+superseded by F48 (this branch); code not taken, see merge commit
+
+- Symptom: GLM-5.3 C.dsa_moe.attention extended the ttnn.bringup sdpa fork (`high_precision` for sparse_sdpa: C++,
+  CHANGELOG, INDEX, source.yaml/baseline, a new unit test) and its gate passed, but the gate commit 3ef3d142602 held
+  only the model files; the fork edits stayed uncommitted in the working tree. Earlier gates had left agents'
+  known_issues.md / repo_map.md entries uncommitted the same way.
+- Cause: `orchestrator.allowed_paths` lets every step write `ttnn/ttnn/bringup` (BRINGUP_OPS) and the knowledge files
+  (common_paths), but `core/gate.py:stage_paths` never listed them, so `git_commit` (explicit paths) skipped them.
+- Fix: stage_paths appends `ttnn/ttnn/bringup` and the two knowledge files when they exist. `git add -A -- <dir>` also
+  picks up new files under the fork (the new unit test).
+- Selftests 212 -> 214 (test_fork_cases: the shared paths are staged and committed, including an untracked test
+  file; missing shared paths are skipped). The first fails on the pre-F51 gate.py.
+- Recovered by hand for GLM: the sdpa fork change and the knowledge entries committed after C.dsa_moe.attention
+  (supervision.md).
+
+## F52 (2026-09-29): state.json keeps only the gated metrics of a test that records many (GLM-5.3 run)
+
+- Symptom: the S.kda_moe.10 gate passed but its commit failed: the repo's pre-commit `check-large-files` refused
+  `models/demos/glm53_flash_d_p/bringup/state.json (506 KB) exceeds the 500 KB limit`; the orchestrator exited 1.
+- Cause: run_gate copied every recorded metric into state.json. GLM's swap tests record 300-400 informational
+  metrics each (per-step coefficients vs CPU and golden), so after ~60 of 96 tasks state.json passed 500 KB.
+- Fix: `gate.state_metrics`: up to STATE_METRICS_MAX (64) metrics are all kept; above that, only the ones the task's
+  thresholds match. results/<task>.json still holds every metric (the dashboard trails, prior view and profile read
+  those); state.json metrics feed only the ladder row detail and runs.compare deltas, which use gated metrics.
+- Selftests 214 -> 216 (test_core: many metrics -> gated only, results keep all; few metrics -> all kept). The first
+  fails on the pre-F52 gate.py. The GLM state.json was migrated in place with the same rule (518 KB -> see commit).
+
+## F53 (2026-09-29): the contract step may change the model's hooks.py (GLM-5.3 run)
+
+- Symptom: GLM K.1 failed twice on "fixed-size state ['kda_recurrent', 'kda_conv'] unchecked: hooks.contract_state_pcc is
+  missing". The agent had written the read-back in tt/runners/adapter.py, but K.1's allowed paths (task paths
+  [tt] + prefill engine + forks + knowledge) left bringup/hooks.py read-only, so it could not register the hook; it
+  rightly refused to monkeypatch the hooks module at run time.
+- Cause: F50 made the contract gate require a `contract_state_pcc` hook for spec state.fixed, but the contract role's
+  allowed paths and the gate's stage_paths never included the model's hooks.py.
+- Fix: allowed_paths adds `<bringup>/hooks.py` for the contract step; stage_paths commits it for that step.
+- Selftests 216 -> 217 (test_orchestrator: the contract step may change and commits hooks.py). Fails on the pre-F53 code.
+
+## F54 (2026-09-29): profile gates size the device profiler for large models (GLM-5.3 run)
+
+- Symptom: GLM X.3 failed only `timeline_ok = 0`: "device programs per chip 1281 != op-mode counts 1319 (profiler
+  buffer too small?)"; the log said "Profiler DRAM buffers were full, markers were dropped".
+- Cause: the pipelined timeline reads the device profiler once per chunk; TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
+  defaults to 1000 programs per core, and a 5-layer GLM chunk launches 1319 per chip (MiMo: 611).
+- Fix: ledger_gen.PROFILE_ENV adds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 (the X.3 fix agent confirmed 3000
+  gives timeline_ok 1: 423.7 ms device timeline, 0.7 ms gaps). GLM's tasks.yaml profile commands (X.1, P.1, X.3)
+  patched the same way.
+- Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F54 ledger_gen).

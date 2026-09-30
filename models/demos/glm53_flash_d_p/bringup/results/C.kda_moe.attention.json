@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "max_block_rel_l2_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.007664316333830357
+  },
+  "max_head_rel_l2_state_kda_recurrent_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.047036685049533844
+  },
+  "max_row_rel_l2_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.02858666330575943
+  },
+  "pcc_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.9999801782978285
+  },
+  "rel_l2_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.007332217879593372
+  },
+  "rel_l2_state_kda_conv_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.0016616082284599543
+  },
+  "rel_l2_state_kda_recurrent_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.016587141901254654
+  },
+  "row_norm_ratio_max_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 1.000100016593933
+  },
+  "row_norm_ratio_min_attention_L04": {
+   "t": "2026-09-29T14:38:05",
+   "value": 0.9887242317199707
+  }
+ },
+ "task": "C.kda_moe.attention"
+}

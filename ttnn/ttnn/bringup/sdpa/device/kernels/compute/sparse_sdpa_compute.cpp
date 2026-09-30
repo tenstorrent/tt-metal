@@ -288,7 +288,11 @@ void kernel_main() {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
 
                 // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                exp_packthread_tile_init<false>();  // exact exp; sub_exp applies the scale (see compute_streaming.hpp)
+#else
                 exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+#endif
 
                 // ===== Phase 1: Q@Kᵀ -> cb_qk_im band, mask, running row-max =====
                 {
@@ -416,6 +420,32 @@ void kernel_main() {
                             /*sbw=*/exp_sbw);
                     }
                     pack_to_unpack_sync();  // sub_exp PACK writes must be visible to the V-matmul UNPACK
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    // Row-sum partial from the packed bf16 probs (the ones PV multiplies), exact in the Float32
+                    // DEST and L1-accumulated into the Float32 sum_cur: sum_cur[r] = sum_kt probs[r, kt].
+                    qk_cb.wait_front((qg + 1) * qsb * KT_stride);
+                    copy_tile_to_dst_init_short(cb_qk_im);
+                    pack_reconfig_data_format(sum_cur.get_cb_id());
+                    configure_single_tile_pack(sum_cur.get_cb_id());
+                    for (uint32_t r = 0; r < qsb; ++r) {
+                        for (uint32_t kt0 = 0; kt0 < Skt; kt0 += dst_size) {
+                            const uint32_t n = (Skt - kt0 < dst_size) ? (Skt - kt0) : dst_size;
+                            tile_regs_acquire();
+                            for (uint32_t j = 0; j < n; ++j) {
+                                copy_tile(cb_qk_im, (row_base + r) * KT_stride + kt0 + j, j);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t j = 0; j < n; ++j) {
+                                PACK((llk_pack_reconfig_l1_acc(kt0 + j > 0 ? 1 : 0)));
+                                pack_tile<true>(j, sum_cur.get_cb_id(), row_base + r);
+                            }
+                            tile_regs_release();
+                        }
+                    }
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_data_format(cb_qk_im);
+#endif
                 }
 
                 // ===== Phase 2: probs@V -> out_cur band =====
@@ -425,6 +455,9 @@ void kernel_main() {
                     // probs (cb_qk_im) into srcB (operands swap); set srcA=cb_k_in, srcB=cb_qk_im.
                     reconfig_data_format(cb_k_in, cb_qk_im);
                     mm_no_mop_init_short(cb_qk_im, cb_k_in, /*transpose=*/false, 1, qsb, Skt);
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    pack_reconfig_data_format(out_cur.get_cb_id());  // Float32 running out
+#endif
                     configure_row_pack_width(out_cur.get_cb_id(), 1);
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/scaled_kv ? vDHt : DHt, /*out_num_cols=*/vDHt>(
@@ -445,6 +478,9 @@ void kernel_main() {
                                                           // after the group loop) so SALAD's L1-accumulate (!is_first)
                                                           // reads them; normalize reads post-push_back, so covered
                     reconfig_data_format_srca(cb_qk_im);  // PV left srcA in cb_k_in's format; restore bf16
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    pack_reconfig_data_format(cb_qk_im);  // back to the bf16 pack state
+#endif
                 }
 
                 // ===== SALAD flash combine (skip on the first chunk) =====
@@ -458,6 +494,10 @@ void kernel_main() {
                     corr_cb.push_back(qsb);
                     // cur.out += prev.out*corr ; cur.sum += prev.sum*corr (L1-acc). salad packs width=dst_size,
                     // so restore Default packer geometry first (the per-chunk tilize left it in Tilize layout).
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    reconfig_data_format(out_prev.get_cb_id(), cb_corr);
+                    pack_reconfig_data_format(out_cur.get_cb_id());
+#endif
                     PACK((
                         llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_cur.get_cb_id(), dst_size)));
                     pack_reconfig_l1_acc(1);
@@ -472,6 +512,10 @@ void kernel_main() {
                         /*sum_q_subblock=*/qg,
                         /*write_q_subblock=*/qg);
                     pack_reconfig_l1_acc(0);
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    reconfig_data_format(cb_qk_im, cb_qk_im);  // back to the bf16 unpack / pack state
+                    pack_reconfig_data_format(cb_qk_im);
+#endif
                     corr_cb.pop_front(qsb);
                     out_prev.pop_front(qsb * vDHt);  // this band's prev.out consumed into cur
                 }
