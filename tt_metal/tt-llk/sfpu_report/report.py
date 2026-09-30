@@ -208,15 +208,28 @@ def _max_grew(old, new):
     return new > old and (old < 16 or new > old * 1.01)
 
 
+def _acc_reasons(rec):
+    """Which parts of an accuracy row regressed: ``max``, ``lanes``, ``nonfinite``.
+
+    The report puts the ⚠️ on exactly these cells, so a flagged row says why.
+    """
+    b, h = rec["base"], rec["head"]
+    if b.get("metric") == "exact":
+        return {"wrong"} if _exact_regressed(rec) else set()
+    reasons = set()
+    if _max_grew(b["max"], h["max"]):
+        reasons.add("max")
+    if (rec["worse"] - rec["better"]) / max(h["lanes"], 1) >= NOTABLE_LANE_SHARE:
+        reasons.add("lanes")
+    if h["nonfinite"] > b["nonfinite"]:
+        reasons.add("nonfinite")
+    return reasons
+
+
 def _acc_regressed(rec):
     """Worse overall: a real rise in the max, clearly more lanes worse than better, or
     new non-finite results."""
-    b, h = rec["base"], rec["head"]
-    if b.get("metric") == "exact":
-        return _exact_regressed(rec)
-    lanes = max(h["lanes"], 1)
-    net_worse = (rec["worse"] - rec["better"]) / lanes >= NOTABLE_LANE_SHARE
-    return _max_grew(b["max"], h["max"]) or net_worse or h["nonfinite"] > b["nonfinite"]
+    return bool(_acc_reasons(rec))
 
 
 #: Changed lanes below this share of the measured lanes, with the same max error, are
@@ -242,14 +255,15 @@ def _acc_notable(rec):
 
 def _acc_cells(rec):
     b, h = rec["base"], rec["head"]
-    flag = "⚠️ " if _acc_regressed(rec) else ""
+    why = _acc_reasons(rec)
+    warn = lambda part: "⚠️ " if part in why else ""  # noqa: E731
     return (
         _num(b["max"]),
-        f"{flag}{_bold_if_better(h['max'], b['max'])}",
+        f"{warn('max')}{_bold_if_better(h['max'], b['max'])}",
         f"{_num(b['mean'], 3)} → {_num(h['mean'], 3)}",
         f"{b['le1']:.2%} → {h['le1']:.2%}",
-        f"{_num(rec['worse'])} / {_num(rec['better'])}",
-        f"{b['nonfinite']} → {h['nonfinite']}",
+        f"{warn('lanes')}{_num(rec['worse'])} / {_num(rec['better'])}",
+        f"{b['nonfinite']} → {warn('nonfinite')}{h['nonfinite']}",
     )
 
 
@@ -312,7 +326,10 @@ def accuracy_section(summaries):
         "Unary ops: every finite input of the format (fp32: every 65,536th value). Binary ops: "
         "random operand pairs from the op's functional-test domain, the same draw on both sides. "
         "Lanes a step count cannot describe (NaN, subnormal input, padding) are left out here and "
-        "covered by the edge cases below. `worse / better` counts lanes whose error changed.",
+        "covered by the edge cases below. `worse / better` counts lanes whose error changed. "
+        "⚠️ marks the cell that got worse: `max new` for a real rise in the max, "
+        "`worse / better` for at least 0.1% of the lanes net worse, `non-finite` for new "
+        "non-finite results.",
         "",
     ]
     shown_ulp = [r for r in groups[("ulp", False)] if _acc_notable(r[1])]
