@@ -514,7 +514,7 @@ class MiniMaxH3Transformer3DModel(Module):
         """`spec`: "all", a block-range list ("0-35,39,41,42"), or "auto[:threshold]" which reads the checkpoint's q/k
         norm gains and enables the mode where sqrt(d) * max|g_q| * max|g_k| <= threshold (default 70), using that
         bound as the constant offset. Explicit lists use the same bounds when the checkpoint is readable, else 0."""
-        if not spec:
+        if not spec or spec.strip().lower() in ("off", "none", "0"):
             return
         spec = spec.strip()
         bounds = self._fixed_softmax_bounds()

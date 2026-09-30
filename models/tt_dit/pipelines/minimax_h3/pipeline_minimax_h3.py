@@ -72,6 +72,8 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from models.common.utility_functions import is_blackhole
+
 from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ...models.transformers.minimax_h3.step_reuse import StepReusePlan
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -1190,6 +1192,10 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         apply_env_quant_config(self._transformer)
+        # Fixed-offset softmax on the blocks whose q/k gains bound the logits: faster and slightly closer to the fp32
+        # reference than the running-max kernel on Blackhole. MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=off restores it.
+        if os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS") is None and is_blackhole():
+            self._transformer._set_fixed_softmax_blocks("auto")
         return self._transformer
 
     @property
