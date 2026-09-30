@@ -59,6 +59,12 @@ void BindTensorParameterToKernel(
     });
 }
 
+// Gen1 data-movement placement for a kernel spec.
+exp::DataMovementHardwareConfig dm_config(DataMovementProcessor processor, NOC noc) {
+    return exp::DataMovementHardwareConfig{
+        .config_1xx = exp::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}};
+}
+
 // Default tensor: 1x32 BFLOAT16 ROW_MAJOR interleaved = 64 bytes = one page. The scratchpad matches.
 constexpr uint32_t kBufBytes = 64;
 constexpr uint32_t kWords = kBufBytes / sizeof(uint32_t);  // 16
@@ -107,7 +113,7 @@ Program build_writer(
         .source = kWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"pattern", "stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_1),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -141,7 +147,7 @@ Program build_reader(
         .source = kReaderKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -181,7 +187,7 @@ Program build_raw_writer(
         .source = kRawWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "pattern", "stall"}},
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_1),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -219,7 +225,7 @@ Program build_multi(
         .unique_id = exp::KernelSpecName{"multi"},
         .source = kMultiKernel,
         .num_threads = 1,
-        .hw_config = exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
