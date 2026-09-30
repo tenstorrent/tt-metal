@@ -86,10 +86,18 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     spec = knobs.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS")
     if spec:
         tt_model._set_fixed_softmax_blocks(spec)
-    if "MINIMAX_H3_BF8_WEIGHTS" in knobs and not getattr(tt_model, "_cpu_ref_bf8_applied", False):
+    # The bf8 typecast cannot be undone, so a config can only add linears to the set already cast; cast just those.
+    applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
+    wanted = {name for name in knobs.get("MINIMAX_H3_BF8_WEIGHTS", "").split(",") if name}
+    if wanted - applied:
+        os.environ["MINIMAX_H3_BF8_WEIGHTS"] = ",".join(sorted(wanted - applied))
         apply_env_quant_config(tt_model)
-        tt_model._cpu_ref_bf8_applied = True
-    weights = "bf8:" + os.environ.get("MINIMAX_H3_BF8_WEIGHTS", "") if getattr(tt_model, "_cpu_ref_bf8_applied", False) else "bf16"
+        os.environ["MINIMAX_H3_BF8_WEIGHTS"] = knobs["MINIMAX_H3_BF8_WEIGHTS"]
+        tt_model._cpu_ref_bf8_applied = applied | wanted
+    applied = getattr(tt_model, "_cpu_ref_bf8_applied", set())
+    weights = "bf8:" + ",".join(sorted(applied)) if applied else "bf16"
+    if hasattr(tt_model, "fused_heads"):
+        tt_model.fused_heads = knobs.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
     return " ".join(f"{k}={v}" for k, v in sorted(knobs.items())) + f" [weights {weights}]" if knobs else f"(tip) [weights {weights}]"
 
 
