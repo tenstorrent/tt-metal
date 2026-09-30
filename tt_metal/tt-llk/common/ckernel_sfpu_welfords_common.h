@@ -28,19 +28,37 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
+#ifdef WELFORD_SFPU_HAS_ARECIP
+/**
+ * @brief The number of Newton-Raphson steps the no-table reciprocal runs after the approximate
+ * reciprocal instruction. Each step doubles the correct bits of the estimate (about 7.5 bits from
+ * SFPARECIP, so two steps reach fp32); the third step is the rounding correction.
+ */
+constexpr std::uint32_t WELFORD_RECIP_NEWTON_STEPS = 3;
+#endif
+
 /**
  * @brief Loads the reciprocal of (idx + 1) into LREG7, using a lookup table if available.
  *
- * This function either loads a precomputed reciprocal value from the provided lookup table
- * (reciprocal_lut) into the LREG7 register, or, if the lookup table entry is not available,
- * computes the reciprocal at runtime as 1.0f/(idx + 1) and loads its bit representation
- * into the register.
+ * With a lookup table (reciprocal_size > 0) the precomputed value reciprocal_lut[idx] is loaded into
+ * LREG7 with two immediate loads. Without one (reciprocal_size == 0) and with WELFORD_SFPU_HAS_ARECIP
+ * (Blackhole) the reciprocal is computed on the SFPU: the count is loaded as an integer and converted to fp32 (exact below 2^24), seeded with
+ * the approximate reciprocal instruction and refined with WELFORD_RECIP_NEWTON_STEPS steps of two
+ * multiply-adds each (e = 1 - count * r, r = r + e * r), the count reloaded before each step so that
+ * only LREG6 and LREG7 are used. The math RISC has no floating-point unit, so the division it used to
+ * do here cost about 225 cycles per row against the 10 the SFPU needs for the row itself; the SFPU
+ * sequence costs about 16 cycles per row. The result is within one fp32 ulp of the correctly
+ * rounded reciprocal (the multiply-add keeps the product at fp32 plus four bits, so the last
+ * correction cannot always decide the rounding); tests/python_tests/test_sfpu_welford.py compares
+ * it with the host's fp32 division for every count up to 16384 and around 2^16 and 2^20.
+ * Without the macro the math RISC divides.
  *
- * @tparam reciprocal_size The number of entries in the reciprocal lookup table.
- * @param idx The (zero-based) index (in the reciprocal lookup table) of the value to load.
+ * @tparam reciprocal_size The number of entries in the reciprocal lookup table (0: no table).
+ * @param idx The (zero-based) index of the value to load: the reciprocal is 1 / (idx + 1).
  * @param reciprocal_lut Lookup table containing precomputed reciprocals packed as uint32_t.
  *
- * @note The reciprocal is written to ckernel::p_sfpu::LREG7.
+ * @note The reciprocal is written to ckernel::p_sfpu::LREG7. The no-table path also overwrites
+ * LREG6, which the row program writes before it reads.
  */
 template <std::size_t reciprocal_size>
 sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
@@ -53,11 +71,51 @@ sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<s
         return;
     }
 
+#ifdef WELFORD_SFPU_HAS_ARECIP
+    // No table: compute 1 / count on the SFPU, count = idx + 1.
+    const std::uint32_t count = idx + 1;
+    const auto load_count      = [count]()
+    {
+        // The count as a sign-magnitude integer (positive, so the plain binary value) in LREG7, then
+        // as fp32. One immediate load covers counts below 2^16; larger counts take both halves.
+        if (count < 0x10000)
+        {
+            TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, count);
+        }
+        else
+        {
+            TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, count >> 16);
+            TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, count & 0xFFFF);
+        }
+        TTI_SFPCAST(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    };
+
+    load_count();
+    // LREG6 = approximate 1 / count (about 7.5 correct bits).
+    TTI_SFPARECIP(0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
+    for (std::uint32_t step = 0; step < WELFORD_RECIP_NEWTON_STEPS; ++step)
+    {
+        // LREG7 = 1 - count * r (the multiply-add negates its first operand: SFPMAD_MOD1_NEGATE_VA)
+        TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
+        if (step + 1 < WELFORD_RECIP_NEWTON_STEPS)
+        {
+            // r = r + e * r, then the count again for the next step.
+            TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
+            load_count();
+        }
+        else
+        {
+            // The last step leaves the reciprocal where the row program reads it.
+            TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, 0);
+        }
+    }
+#else
     // Fallback to float division
     const float reciprocal = 1.0f / static_cast<float>(idx + 1);
     const FloatBits reciprocal_bits(reciprocal);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits.high16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits.low16);
+#endif
 }
 
 /*

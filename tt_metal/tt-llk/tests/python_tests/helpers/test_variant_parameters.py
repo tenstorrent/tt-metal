@@ -1835,6 +1835,7 @@ class EMA_ALPHA_BETA(TemplateParameter):
         ]
         return "\n".join(lines)
 
+
 @dataclass
 class EMA_INTERLEAVED_INIT(TemplateParameter):
     """Whether sfpu_ema_test.cpp issues an eltwise binary init between the datacopy and
@@ -1845,6 +1846,30 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};"
+
+
+@dataclass
+class WELFORD_RECIP_SIZE(TemplateParameter):
+    """Size of the reciprocal table the Welford kernel is given: N > 0 entries of 1 / (i + 1)
+    built on the math RISC before the tile loop (the layernorm form, whose table the host
+    builds), 0 for the no-table form in which the kernel computes the reciprocal per row (the
+    ttnn.var / ttnn.std form)."""
+
+    welford_recip_size: int = 256
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+
+
+@dataclass
+class WELFORD_RECIP_BASE(TemplateParameter):
+    """First index whose reciprocal sfpu_welford_recip_test.cpp computes: the run covers
+    1 / (idx + 1) for idx in [base, base + 32 * TILE_CNT)."""
+
+    welford_recip_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
 
 
 @dataclass
