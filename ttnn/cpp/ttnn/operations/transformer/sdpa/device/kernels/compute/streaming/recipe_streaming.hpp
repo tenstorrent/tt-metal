@@ -969,6 +969,7 @@ void salad_correct_fused(
     PACK((llk_pack_reconfig_l1_acc(1)));
     return;
 #endif
+#ifndef SDPA_KO_NUMFOLD
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -982,7 +983,12 @@ void salad_correct_fused(
         group_has_local,
         tiles_per_row,
         tiles_per_column);
+#endif
     PACK((ckernel::sfpu::init_sdpa_compensated_block_macros()));
+#ifdef SDPA_KO_SUMFOLD
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    return;
+#endif
 
     configure_single_tile_pack(sum_out_cb);
     PACK((ckernel::sfpu::init_sdpa_compensated_sum_replay()));
