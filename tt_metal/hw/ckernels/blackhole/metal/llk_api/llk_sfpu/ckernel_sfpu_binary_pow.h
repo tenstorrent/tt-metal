@@ -34,7 +34,7 @@ namespace sfpu {
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
- * - Overflow/underflow: Clamped to appropriate limits
+ * - Overflow: magnitude beyond the float32 range returns +/-inf; underflow clamps to 0
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
@@ -75,6 +75,26 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
 
+    // The symmetric overflow needs the same treatment. The result is 2**z_f32, so
+    // z_f32 >= 128 is already outside the float32 range (2**128 > FLT_MAX). Both steps
+    // that reach the result's exponent below - addexp(z_f32, 23) and
+    // setexp(.., 127U + zii) - write the 8-bit exponent FIELD, so they WRAP instead of
+    // saturating: at z_f32 = 3.2965e38 the biased exponent 254 + 23 = 277 wraps to 21,
+    // z_f32 becomes 2.388e-32, z_f32 + bias lands exactly on bias, and the result
+    // recombines to 1.0017247 - bf16 exactly 1.0 - where it should be +inf.
+    // Clamping to 128 is what keeps every intermediate in range (addexp then stays at
+    // 134 + 23, and z_f32 + bias at 255 * 2**23, inside int32), but the clamp alone
+    // cannot deliver +inf: setexp would write the field 255 over the non-zero mantissa
+    // the Horner step leaves behind (14447 at zif == 0), which is a NaN. So clamp here,
+    // and substitute the saturated result explicitly where zii names the overflow.
+    // A plain literal rather than a programmable constant: vConstFloatPrgm1 already
+    // holds low_threshold, vConstFloatPrgm2 would have to be programmed in
+    // sfpu_binary_pow_init (widening this kernel's constant-register contract for
+    // every caller), and the +inf substitution needs an immediate regardless.
+    const sfpi::vFloat high_threshold = 128.0f;
+    v_if(z_f32 > high_threshold) { z_f32 = high_threshold; }
+    v_endif;
+
     // The paper relies on the following formula (c.f. Sections 1 and 5):
     // z = (bias + x * log2(a)) * N_m; where:
     // N_m = 2**23
@@ -108,10 +128,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     d2 = d1 * d2;
     zif = _float_to_int32_positive_(d2 * d3);
 
-    // Restore exponent
-    zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
-
-    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
+    // Restore exponent. zii is kept live (the as<vInt>/as<vFloat> round trip it used to
+    // make was a pure reinterpret) because it is floor(z_f32), bounded at 128 by the
+    // clamp above: zii >= 128 is exactly the case 127U + zii cannot hold in the 8-bit
+    // exponent field, and setexp would leave a NaN there rather than +inf.
+    sfpi::vFloat y = sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii);
+    v_if(zii >= 128) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
