@@ -116,3 +116,11 @@
      which the double-rounded program fails; mixed per-channel formats; a check that the cases reach multi-row
      blocks and several chunks), `tests/unit/test_rms_norm_ttnn_fp32_stats.py` (no `cb_normalized` at fp32 DEST,
      precision limits tightened to 0.0021 / 0.0028).
+
+### Tests: hy4_preview_d_p cases
+- What: appended the three random-input cases for the calls hy4_preview_d_p makes (2x2 mesh, 2560 rows per chip,
+  widths 2048 / 512 / 6144, fp32 TILE input, fp32 ROW_MAJOR weight [1, 1, W/32, 32], HiFi4 + fp32 dest). The test
+  draws host values in the captured dtype (fp32 stays fp32; BFLOAT16 cases keep their bf16 inputs). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: hy4_preview_d_p O.1
+- Files: `tests/cases.py`, `tests/test_rms_norm_ttnn.py`

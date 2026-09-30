@@ -109,8 +109,9 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
         regions.append(reg)
     gidx = torch.cat(chip_experts).to(torch.int32)  # device d, local slot le -> global expert chip_experts[d][le]
 
-    # Random dispatched buffer, random everywhere (padding rows too).
-    x = torch.randn(n_dev * N, H, generator=g).to(torch.bfloat16)
+    # Random dispatched buffer, random everywhere (padding rows too). x_scale (default 1) widens it so a clamped
+    # activation's limit is reached (the projections are ~N(0, x_scale^2)).
+    x = (torch.randn(n_dev * N, H, generator=g) * c.get("x_scale", 1.0)).to(torch.bfloat16)
 
     # Weights ~ N(0, 1/fan_in) (gate / up times gate_up_scale when set), rounded to bfp8 on the host; the reference
     # uses the rounded values.

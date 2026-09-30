@@ -15,6 +15,23 @@ fork-call capture see it like any other op. Nothing here imports at ``import ttn
 PYTHON_OPS = {}
 
 
+def _stable_arg_reprs():
+    """Value reprs for the non-tensor handles that fork ops take, so the fork-call capture
+    (models/demos/common/bringup/testing/fork_capture.py records such arguments by str()) gives the same call signature
+    on every run. The default "<... object at 0x...>" changes from run to run (hy4_preview_d_p O.1: the global
+    semaphore pair of ring_indexer_score_dsa). Only the repr is set: the type is an opaque handle and its behaviour is
+    unchanged. The fork's own IndexerScoreProgramConfig binds its repr in C++ (indexer_score_nanobind.cpp)."""
+    import sys
+
+    core = sys.modules.get("ttnn._ttnn")
+    sem = getattr(getattr(core, "global_semaphore", None), "global_semaphore", None)
+    if sem is not None and sem.__repr__ is object.__repr__:
+        sem.__repr__ = lambda self: "global_semaphore"
+
+
+_stable_arg_reprs()
+
+
 def __getattr__(name):
     if name not in PYTHON_OPS:
         raise AttributeError(f"module 'ttnn.bringup' has no attribute {name!r}")
