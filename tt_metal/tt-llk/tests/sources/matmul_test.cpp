@@ -223,6 +223,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM         = params.RT_DIM;
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
+    // The RT x CT block is packed with one _llk_pack_block_ run (one pack program run per block); block-float outputs
+    // are not written back to back by one run and keep one _llk_pack_ per tile.
+    const bool block_pack = !IS_BFP_FORMAT(formats.pack_dst);
 
     {
         START_PERF_MEASURE("INIT")
@@ -241,6 +244,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                if (block_pack)
+                {
+                    // One run for the whole block: dest tiles 0.. onto the output ring from tile 0.
+                    _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, 0), CT_DIM * RT_DIM);
+                    continue;
+                }
                 for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
@@ -256,6 +265,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();
+                if (block_pack)
+                {
+                    // One run for the whole RT x CT block. Golden packs the real result buffer, perf the PERF_ADDRESS ring.
+                    const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]);
+                    if (LOOP_FACTOR == 1)
+                    {
+                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
+                    }
+                    _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, addr, CT_DIM * RT_DIM);
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    continue;
+                }
                 // Pack dest occupancy (RT×CT).
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
                 {
