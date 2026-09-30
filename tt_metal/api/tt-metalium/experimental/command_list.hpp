@@ -10,7 +10,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 
-// Experimental API; subject to change without notice.
+// Experimental and subject to change: this header carries no API-stability guarantee.
+
 namespace tt::tt_metal::experimental {
 
 using distributed::MeshCommandQueue;
@@ -19,12 +20,18 @@ using distributed::MeshWorkload;
 
 class CommandList;
 
-// Records MeshWorkloads for later replay. Only one active builder may exist per
-// MeshDevice.
+/**
+ * @brief Records MeshWorkloads for later replay.
+ * Only one active builder may exist per MeshDevice.
+ */
 class CommandListBuilder {
 public:
-    // Captures the active sub-device manager. add() and build() require it to
-    // be active.
+    /**
+     * @brief Captures the active sub-device manager.
+     * add() and build() require that manager to be active.
+     *
+     * @param device Mesh device to record workloads on.
+     */
     explicit CommandListBuilder(MeshDevice& device);
 
     CommandListBuilder(const CommandListBuilder&) = delete;
@@ -33,21 +40,37 @@ public:
     CommandListBuilder& operator=(CommandListBuilder&&) noexcept;
     ~CommandListBuilder();
 
-    // Records one workload without launching it. Compiles it and uploads any
-    // required kernel binaries through the current thread's command queue.
+    /**
+     * @brief Records one workload without launching it.
+     * Compiles the workload and uploads any required kernel binaries through the current thread's command queue.
+     *
+     * @param workload Workload to record.
+     */
     void add(MeshWorkload& workload);
 
-    // Builds an independent command list bound to cq. User allocations are not
-    // retained; replay uses the raw device addresses encoded in the recorded commands.
+    /**
+     * @brief Builds an independent command list bound to @p cq.
+     * User allocations are not retained. Replay uses the raw device addresses encoded in the recorded commands.
+     *
+     * @param cq Command queue the resulting list is bound to.
+     * @return Move-only handle to the recorded command list.
+     */
     CommandList build(MeshCommandQueue& cq) const;
 
+    /**
+     * @brief Mesh device this builder records on.
+     */
     MeshDevice& device() const;
 
-    // Clears all recorded workloads.
+    /**
+     * @brief Clears all recorded workloads.
+     */
     void clear();
 
-    // Releases the active-builder reservation and invalidates the builder. Repeated calls
-    // have no effect.
+    /**
+     * @brief Releases the active-builder reservation and invalidates the builder.
+     * Repeated calls have no effect.
+     */
     void deallocate();
 
 private:
@@ -55,8 +78,10 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Move-only handle to a replayable command list stored in device DRAM.
-// Destruction releases its device resources.
+/**
+ * @brief Move-only handle to a replayable command list stored in device DRAM.
+ * Destruction releases its device resources.
+ */
 class CommandList {
 public:
     CommandList(const CommandList&) = delete;
@@ -65,16 +90,28 @@ public:
     CommandList& operator=(CommandList&&) noexcept;
     ~CommandList();
 
-    // Replays on the command queue used by build(). The recorded sub-device
-    // manager must be active. If blocking, waits for completion.
+    /**
+     * @brief Replays on the command queue used by build().
+     * The recorded sub-device manager must be active.
+     *
+     * @param blocking If true, waits for completion.
+     */
     void replay(bool blocking) const;
 
+    /**
+     * @brief Mesh device this command list was built for.
+     */
     MeshDevice& device() const;
 
+    /**
+     * @brief Command-queue id this list is bound to.
+     */
     uint8_t cq_id() const;
 
-    // Releases device resources and invalidates the handle. Repeated calls
-    // have no effect.
+    /**
+     * @brief Releases device resources and invalidates the handle.
+     * Repeated calls have no effect.
+     */
     void deallocate();
 
 private:
@@ -84,8 +121,14 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Replays command_list on cq, which must match the device and queue used to
-// build it.
+/**
+ * @brief Replays @p command_list on @p cq.
+ * @p cq must match the device and queue used to build the list.
+ *
+ * @param cq Command queue to replay on.
+ * @param command_list Command list to replay.
+ * @param blocking If true, waits for completion.
+ */
 void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
 
 }  // namespace tt::tt_metal::experimental
