@@ -49,6 +49,7 @@ class QwenImage21TextEncoder:
             layout=layout,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None,
         )
 
     def checkpoint_state(self, filename: str, prefix: str):

@@ -1,7 +1,7 @@
 # Qwen-Image 2.1 experimental TTNN denoiser
 
 This directory implements a batch-one text-to-image pipeline for the pinned
-Qwen-Image 2.1 checkpoint on one Blackhole P150 card. Native mode runs the
+Qwen-Image 2.1 checkpoint on one Blackhole P150 card or an optional two-card tensor-parallel mesh. Native mode runs the
 Qwen3-VL prompt encoder, seeded Gaussian initial noise, all 32 diffusion
 transformer blocks, FlowMatch Euler updates, and VAE decoder on TT. Host CPU
 work includes tokenization, checkpoint loading, deterministic scheduler and
@@ -13,7 +13,8 @@ This remains an experimental implementation. Image dimensions must be positive
 multiples of 32 pixels and the configured schedule must contain at least two
 steps. Batch size one and text-only generation are supported. Prompt expansion,
 conditioning images, guidance, prefix KV caching, and VAE encoding are not
-implemented in the TT path. Weights are reloaded from host storage each step.
+implemented in the TT path. The default reloads block weights from host storage each step. Optional resident
+block weights prepare them once and retain them in device DRAM.
 
 The checkpoint is [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)
 at revision `790c92633540aa0cb11d9abf19eb46d861714758`, distributed under
@@ -195,3 +196,46 @@ unavailable, the paired first-step denoiser PCC regression, and metadata tests.
 The native smoke image was byte-identical to the workspace timing diagnostic.
 The complete 20-step native reference is reported separately; the smoke test
 does not establish a full-generation accuracy result.
+
+## Optional two-card tensor parallelism
+
+`validation.tt_full_denoise --tensor-parallel 2` uses a 1×2 mesh with 1D fabric.
+Provide two distinct, reserved PCI BDFs as a comma-separated `--device-bdf`
+argument. Each rank computes 16 of the 32 attention heads and 6,144 of the
+12,288 gated MLP channels. QKV and MLP input projections are column-sharded;
+attention and MLP output projections are row-sharded. Two sum collectives per
+block combine the partial residual branches. Hidden states, modulation,
+Qwen3-VL prompt encoding, initial latents, and VAE decoding are replicated.
+This splits DiT arithmetic; it does not distribute encoder or decoder work.
+
+`--resident-block-weights` independently prepares all 32 DiT blocks once and
+retains their weights in device DRAM. It is available with either one or two
+cards. Compare like-for-like residency settings when attributing speed changes
+to tensor parallelism; removing repeated host loading is a separate change.
+Encoder precision and denoiser math fidelity remain the existing settings.
+
+For hardware tests, defaults remain one card and streamed block weights. Set
+`QWEN_IMAGE21_TEST_TENSOR_PARALLEL=2`, configure `TT_VISIBLE_DEVICES` with the two
+reserved comma-separated PCI BDFs, and optionally set
+`QWEN_IMAGE21_TEST_RESIDENT_BLOCK_WEIGHTS=1`. Both `test_native_pipeline.py` and
+`test_denoiser.py` pass these settings directly to the runner without launching
+an OS command. The native test verifies execution configuration and provenance;
+the captured-input denoiser test retains its per-step velocity and latent PCC
+checks. Existing reports describe their original single-card runs unless they
+explicitly identify another configuration.
+
+## Unified two-card execution report
+
+The [two-card report](validation/reports/two_card_unified_20260930.md) combines
+completed native runs, weight-residency controls, phase/block timings and paired
+accuracy checks. On 2026-09-30 the warm two-card 384×256/20-step run took
+53.449 s, versus 58.340 s with one card and resident weights. Denoising totals
+were 3.990 s and 4.852 s. A first distributed VAE run took 100.195 s including
+cold compilation. Each listed case is one generation, not a service benchmark.
+The one-card caching change preserved all 20 latents and the decoder bitwise;
+TP2 had final-latent PCC 0.997789 and 6.643% relative RMS difference from TP1
+with identical native starting inputs. High PCC does not establish all-element
+absolute error below 0.01. The migrated two-card hardware suite passed 12 tests
+(one optional oracle case skipped), covering a native one-step/TT-VAE smoke
+and a matched-input first-step denoiser regression. Full 20-step generation
+was checked separately in the workspace runner.

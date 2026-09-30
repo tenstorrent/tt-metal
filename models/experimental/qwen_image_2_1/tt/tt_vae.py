@@ -53,10 +53,13 @@ class QwenImage21VAEDecoder:
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None,
         )
 
     def collect(self, value, height: int, width: int, channels: int):
-        return ttnn.to_torch(value).reshape(1, height, width, channels).permute(0, 3, 1, 2).unsqueeze(2).contiguous()
+        shards = ttnn.get_device_tensors(value)
+        host = ttnn.to_torch(shards[0]) if len(shards) > 1 else ttnn.to_torch(value)
+        return host.reshape(1, height, width, channels).permute(0, 3, 1, 2).unsqueeze(2).contiguous()
 
     def conv(self, x, name: str, height: int, width: int):
         weight = self.state[name + ".weight"]

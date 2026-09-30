@@ -25,8 +25,16 @@ def test_native_pipeline(tmp_path: Path, request: pytest.FixtureRequest):
     if not all(settings.values()):
         pytest.fail("configure DiT, encoder, and VAE checkpoint paths and TT_VISIBLE_DEVICES")
     bdf = settings["TT_VISIBLE_DEVICES"]
-    if re.fullmatch(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", bdf) is None:
-        pytest.fail("TT_VISIBLE_DEVICES must identify one reserved PCI BDF")
+    parallel = os.environ.get("QWEN_IMAGE21_TEST_TENSOR_PARALLEL", "1")
+    if parallel not in {"1", "2"}:
+        pytest.fail("QWEN_IMAGE21_TEST_TENSOR_PARALLEL must be 1 or 2")
+    bdfs = [value.strip() for value in bdf.split(",")]
+    if (
+        len(bdfs) != int(parallel)
+        or len(set(bdfs)) != len(bdfs)
+        or any(re.fullmatch(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", value) is None for value in bdfs)
+    ):
+        pytest.fail("TT_VISIBLE_DEVICES must identify one distinct reserved PCI BDF per tensor-parallel rank")
     if not request.config.pluginmanager.hasplugin("timeout"):
         pytest.fail("install pytest-timeout before running the hardware test")
     if os.environ.get("CUDA_VISIBLE_DEVICES") != "":
@@ -57,10 +65,17 @@ def test_native_pipeline(tmp_path: Path, request: pytest.FixtureRequest):
         "--seed",
         "42",
     ]
+    arguments.extend(("--tensor-parallel", parallel))
+    if os.environ.get("QWEN_IMAGE21_TEST_RESIDENT_BLOCK_WEIGHTS") == "1":
+        arguments.append("--resident-block-weights")
     steps = os.environ.get("QWEN_IMAGE21_TEST_STEPS", "1")
     if steps != "full":
         arguments.extend(("--max-steps", steps))
     main(arguments)
+    execution = json.loads((output / "execution.json").read_text())
+    assert execution["cards"] == int(parallel)
+    assert execution["device_bdfs"] == bdfs
+    assert execution["resident_block_weights"] == (os.environ.get("QWEN_IMAGE21_TEST_RESIDENT_BLOCK_WEIGHTS") == "1")
     provenance = json.loads((output / "inputs.json").read_text())
     progress = json.loads((output / "progress.json").read_text())
     assert provenance["injected_activations"] is False

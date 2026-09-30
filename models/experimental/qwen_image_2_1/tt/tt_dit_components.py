@@ -20,11 +20,13 @@ def to_device(tensor: torch.Tensor, device) -> ttnn.Tensor:
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
     )
 
 
 def to_host(tensor: ttnn.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
-    result = ttnn.to_torch(tensor)
+    shards = ttnn.get_device_tensors(tensor)
+    result = ttnn.to_torch(shards[0]) if len(shards) > 1 else ttnn.to_torch(tensor)
     if result.shape != shape:
         result = result[tuple(slice(0, dimension) for dimension in shape)]
     return result.contiguous()

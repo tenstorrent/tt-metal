@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Qwen Image 2.1 contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the complete Qwen Image 2.1 DiT denoising schedule on one TT card.
+"""Run the complete Qwen Image 2.1 DiT denoising schedule on one or two TT cards.
 
 Native mode computes prompt embeddings, seeded initial noise, denoising and
 VAE decode on TT, with request metadata built from checkpoint configuration.
@@ -90,7 +90,16 @@ def main(argv=None) -> None:
         action="store_true",
         help="synchronize module boundaries and save host-inclusive module wall times",
     )
+    parser.add_argument("--tensor-parallel", type=int, choices=(1, 2), default=1)
+    parser.add_argument(
+        "--resident-block-weights",
+        action="store_true",
+        help="prepare all DiT weights once and retain them in device DRAM",
+    )
     args = parser.parse_args(argv)
+    bdfs = args.device_bdf.split(",")
+    if len(bdfs) != args.tensor_parallel or len(set(bdfs)) != len(bdfs):
+        parser.error("provide one distinct comma-separated PCI BDF per tensor-parallel rank")
     if args.native:
         if not args.tt_encoder_checkpoint:
             parser.error("--native requires --tt-encoder-checkpoint")
@@ -204,6 +213,12 @@ def main(argv=None) -> None:
     )
     from models.experimental.qwen_image_2_1.tt.tt_scheduler import flow_euler_step
 
+    if args.tensor_parallel == 2:
+        from models.experimental.qwen_image_2_1.tt.tt_tp_block import (
+            prefill_block,
+            prepare_weights as prepare_block_weights,
+        )
+
     transformer = args.checkpoint / "transformer"
     mapping = json.loads((transformer / "diffusion_pytorch_model.safetensors.index.json").read_text())["weight_map"]
 
@@ -269,7 +284,13 @@ def main(argv=None) -> None:
 
     try:
         progress("starting")
-        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), physical_device_ids=[0], l1_small_size=32768)
+        if args.tensor_parallel == 2:
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(1, args.tensor_parallel),
+            physical_device_ids=list(range(args.tensor_parallel)),
+            l1_small_size=32768,
+        )
         padded = (sequence + 31) // 32 * 32
         padded_rope = torch.cat((rope, torch.ones(padded - sequence, rope.shape[1], dtype=rope.dtype)))
         cos, sin = rotary_caches(padded_rope, device)
@@ -326,6 +347,28 @@ def main(argv=None) -> None:
                 "cuda_available": torch.cuda.is_available(),
             },
         )
+        if args.tensor_parallel == 2:
+            replicas = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(latents_tt)]
+            if not all(torch.equal(replicas[0], x) for x in replicas[1:]):
+                raise AssertionError("native initial-noise replicas differ; TP ranks must start from identical latents")
+        resident = {}
+        if args.resident_block_weights:
+            progress("loading_weights")
+            with timed("resident_weight_preparation"):
+                for layer in range(32):
+                    state = load_block_weights(args.checkpoint, layer)
+                    resident[layer] = prepare_block_weights(state, device)
+                    del state
+        _write_json(
+            args.output_dir / "execution.json",
+            {
+                "cards": args.tensor_parallel,
+                "device_bdfs": bdfs,
+                "layout": "attention-head and MLP tensor parallel" if args.tensor_parallel == 2 else "single card",
+                "encoder_and_vae": "replicated across ranks" if args.tensor_parallel == 2 else "single card",
+                "resident_block_weights": args.resident_block_weights,
+            },
+        )
         progress("running")
         for step in range(count):
             step_started = time.monotonic()
@@ -344,15 +387,19 @@ def main(argv=None) -> None:
             block_errors = {}
             for layer in range(32):
                 with timed("dit_block", step, layer):
-                    state = load_block_weights(args.checkpoint, layer)
-                    weights = prepare_block_weights(state, device)
+                    if layer in resident:
+                        weights = resident[layer]
+                    else:
+                        state = load_block_weights(args.checkpoint, layer)
+                        weights = prepare_block_weights(state, device)
+                        del state
                     result = prefill_block(result, weights, selected, cos, sin, mask, sequence)
                 expected_path = cuda_step / f"transformer/transformer_blocks.{layer}.pt" if cuda_step else None
                 if not args.tt_noise and expected_path is not None and expected_path.is_file():
                     actual_block = to_host(result, (1, sequence, 4096))[:, -target_count:]
                     expected_block = _read(expected_path)[:, -target_count:]
                     block_errors[str(layer)] = _relative_rms(actual_block, expected_block)
-                del weights, state
+                del weights
             with timed("output_head", step):
                 selected_temb = select_timestep_embedding_device(temb, target_mask, device)
                 _, projection = output_head(result, selected_temb, output_weights)
