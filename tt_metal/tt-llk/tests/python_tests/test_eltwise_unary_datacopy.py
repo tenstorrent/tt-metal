@@ -38,6 +38,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TILIZE,
+    UNPACK_BLOCK,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -128,6 +129,23 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
 )
 
+# Block unpack (one _llk_unpack_A_block_ call per DEST block instead of one _llk_unpack_A_ per tile): the plain copy
+# only, at the shape whose DEST blocks are full (8 tiles at 16 bit, 4 at 32 bit). Shared with perf_eltwise_unary_datacopy.py.
+DATACOPY_BLOCK_SWEEP = dict(
+    formats=DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=[1, 2, 4],
+    tilize=Tilize.No,
+    input_dimensions=[[128, 256]],
+)
+DATACOPY_SUB_BYTE_BLOCK_SWEEP = dict(
+    formats=SUB_BYTE_DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=[4],
+    tilize=Tilize.No,
+    input_dimensions=[[128, 256]],
+)
+
 
 def _run_unary_datacopy_test(
     formats,
@@ -141,6 +159,7 @@ def _run_unary_datacopy_test(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
+    unpack_block: bool = False,
 ):
     """Shared body for the unary datacopy tests.
 
@@ -211,7 +230,8 @@ def _run_unary_datacopy_test(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
-        ],
+        ]
+        + ([UNPACK_BLOCK(True)] if unpack_block else []),
         "runtimes": [
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
@@ -280,4 +300,36 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
         tilize,
         input_dimensions,
         quantize_golden_input=True,
+    )
+
+
+@parametrize(**DATACOPY_BLOCK_SWEEP)
+def test_eltwise_unary_datacopy_block(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(
+        formats, dest_acc, num_faces, tilize, input_dimensions, unpack_block=True
+    )
+
+
+@parametrize(**DATACOPY_SUB_BYTE_BLOCK_SWEEP)
+def test_eltwise_unary_datacopy_sub_byte_bfp_block(
+    formats,
+    dest_acc,
+    num_faces,
+    tilize,
+    input_dimensions,
+):
+    _run_unary_datacopy_test(
+        formats,
+        dest_acc,
+        num_faces,
+        tilize,
+        input_dimensions,
+        quantize_golden_input=True,
+        unpack_block=True,
     )

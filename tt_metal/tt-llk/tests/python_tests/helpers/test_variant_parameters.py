@@ -744,6 +744,19 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class UNPACK_BLOCK(TemplateParameter):
+    """Unpack a DEST block (datacopy) or a block row (tilize) with one block call instead of one call per tile.
+
+    Emitted as a macro rather than a constexpr so a kernel can default it to 0 when a driver does not pass it.
+    """
+
+    unpack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define UNPACK_BLOCK {1 if self.unpack_block else 0}"
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 

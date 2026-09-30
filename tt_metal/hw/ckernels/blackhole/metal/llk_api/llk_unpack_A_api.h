@@ -16,6 +16,12 @@
  * LLK UNPACK A
  *************************************************************************/
 
+// True once llk_unpack_A_init_impl has programmed the plain SrcA datacopy MOP (BroadcastType::NONE, no dest
+// accumulate or reuse, no face transpose, no unpack to dest): _llk_unpack_A_init_ then also records the block body of
+// _llk_unpack_A_block_, and llk_unpack_A_block issues one block call instead of one call per tile. Every other init
+// of this unpacker path clears it.
+static bool llk_unpack_A_block_path_ready = false;
+
 // Unified core, shared by the CB-id API below and the LLKOperand API (experimental/). It takes
 // already-resolved scalar format/geometry + the runtime address; the per-source prologue (resolving
 // these from a CB id, or from an MemDescriptor) lives in the callers.
@@ -46,6 +52,10 @@ inline void llk_unpack_A_init_impl(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces()),
         StateDiscard<std::uint32_t>(transpose_of_faces),
         StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
+
+    llk_unpack_A_block_path_ready = (BType == BroadcastType::NONE) && !acc_to_dest &&
+                                    (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) && (transpose_of_faces == 0) &&
+                                    !ckernel::unpacker::should_unpack_to_dest(unpack_to_dest, src_format, dst_format);
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces, within_face_16x16_transpose, tensor_shape, src_format, dst_format);
@@ -144,6 +154,22 @@ inline void llk_unpack_A_block(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
+
+    // The plain SrcA path unpacks the block from one context acquire (the tiles of a CB are one page apart)
+    if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
+        if (llk_unpack_A_block_path_ready && ntiles > 0) {
+            WAYPOINT("UPAW");
+            _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                address,
+                ntiles,
+                offset_address,
+                unpack_src_format[operand_id],
+                unpack_dst_format[operand_id],
+                get_operand_num_faces(operand_id));
+            WAYPOINT("UPAD");
+            return;
+        }
+    }
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
