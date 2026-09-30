@@ -187,3 +187,18 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   shared expert (`mlp.shared_experts.`) reuse the module.
 - Gate: pcc_mlp_L00 = 0.999997, and all the auto checks pass (rel vs cpu 6.3e-4).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_mlp.py`
+
+## C.moe.attention test (run1, attempt 1)
+- Previous freeze sweep: noise1e-2 SLIPPED (rel 0.0100 < calibrated golden limit 0.0135 = 2 x bf16-model rel 0.0068).
+- The device module already at hand (the dense attention module, ring_mla fork, fp32 dest; moe attention is not in
+  DEVICE_STEPS yet, but device_component builds it) measured rel 0.0108 vs cpu at layer 2 (pcc 0.999942). That is
+  above the noise, so tightening the rel limit would fail a correct device.
+- Added an extra check: the error vs the CPU step outside the top K=1024 right singular vectors of the CPU output,
+  rel to the output norm, <= 0.006 on golden / chunk0 / layer39. Measured: device 0.0027 / 0.0027 / 0.0024, bf16
+  model 0.0021 / 0.0023 / 0.0020, noise 0.0085. Metrics `off_subspace_rel_attention_<case>_L02`. Under
+  BRINGUP_IMPL=mutations the test runs its own sweep (auto + extra): every mistake is caught, the controls pass.
+- Gotcha: cache the SVD basis on the Expect object; the precompile collect pass builds a different Expect in the same process.
+- The moe-attention implement step must stay close to the dense module's precision (off-subspace 0.0027, whole rel
+  0.0108 against a limit of 0.0135).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py`
+  (and `BRINGUP_IMPL=mutations|reference|stub` for the freeze checks).
