@@ -603,13 +603,36 @@ _CORPUS_UNARY = [
     GoldenSpec("heaviside", _heaviside, note="0/0.5/1; EXACT"),
     # -- fitted polynomial / series: the erf mechanism (a fit evaluated where it
     #    has no meaning, with a clamp turning garbage into a plausible constant).
-    GoldenSpec("digamma", _digamma, note="torch.digamma; kernel LUT fit on [0.01, 102]"),
-    GoldenSpec("digamma-fresh", _digamma, note="torch.digamma; fresh_cpp arm"),
-    GoldenSpec("lgamma", _lgamma, note="torch.lgamma; single-tile Stirling, x >= ~0.5"),
+    # The gamma family carries DOMAIN (0, inf): a pole sits on every non-positive
+    # integer, and above ~2^24 every float IS an integer, so the whole large
+    # negative axis is poles. The true value there is +-inf; torch returns a
+    # large finite number that is pure evaluation noise and disagrees with
+    # itself between fp32 and fp64 (trigamma(-1): 1.29e15 in fp32, 6.58e32 in
+    # fp64 -- the answer is +inf). No oracle speaks for that region, so it is
+    # declared out-of-domain instead of being graded.
+    GoldenSpec(
+        "digamma",
+        _digamma,
+        domain=(0.0, float("inf")),
+        note="torch.digamma; DOMAIN (0, inf) -- poles on the non-positive integers",
+    ),
+    GoldenSpec(
+        "digamma-fresh",
+        _digamma,
+        domain=(0.0, float("inf")),
+        note="torch.digamma; fresh_cpp arm; same pole structure",
+    ),
+    GoldenSpec(
+        "lgamma",
+        _lgamma,
+        domain=(0.0, float("inf")),
+        note="torch.lgamma; DOMAIN (0, inf) -- single-tile Stirling, x >= ~0.5",
+    ),
     GoldenSpec(
         "polygamma",
         _polygamma,
-        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x); trigamma",
+        domain=(0.0, float("inf")),
+        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x) trigamma; DOMAIN (0, inf)",
     ),
     GoldenSpec("i0", _i0, note="torch.special.i0; kernel poly valid |x| <= 3.75"),
     GoldenSpec("i1", _i1, note="torch.special.i1; kernel poly valid |x| <= 3.75"),

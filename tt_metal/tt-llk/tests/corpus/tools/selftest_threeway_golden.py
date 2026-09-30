@@ -173,6 +173,23 @@ def case_faithful():
         spec = tg.get_spec(op)
         hp = spec.math(tg.bf16_truncate(u))
         mine = tg.format_golden_f32_noacc(hp)
+        # For a spec with a MATHEMATICAL domain, faithfulness is asserted on the
+        # in-domain inputs only. Outside the domain neither oracle is computing
+        # the function: trigamma on the negative axis is all poles (every float
+        # past 2^24 is an integer), where the true value is +-inf and torch
+        # returns evaluation noise that disagrees with ITSELF between fp32 and
+        # fp64. Asserting parity there would be asserting that two wrong numbers
+        # match. The out-of-domain population is reported, never silently
+        # dropped, and the leg classifies those inputs out-of-domain anyway.
+        graded = np.ones(u.shape, dtype=bool)
+        ungraded_note = ""
+        if spec.domain is not None:
+            xs = tg.bf16_truncate(u)
+            classes = tg.unary_input_classes(xs, spec.domain)
+            graded = ~classes["out_of_domain_finite_normal"]
+            n_ungraded = int(np.count_nonzero(~graded))
+            if n_ungraded:
+                ungraded_note = f"; {n_ungraded}/1024 out-of-domain not graded"
         try:
             ref = _scalar_golden(mathop, u)
         except Exception as e:  # pragma: no cover
@@ -183,9 +200,14 @@ def case_faithful():
         # canonicalize -0.0 vs +0.0 (both are 'zero' to the tolerance/ULP path)
         mine_bits = np.where(mine_bits == 0x80000000, np.uint32(0), mine_bits)
         ref_bits = np.where(ref_bits == 0x80000000, np.uint32(0), ref_bits)
-        d = np.where(mine_bits != ref_bits)[0]
+        d = np.where((mine_bits != ref_bits) & graded)[0]
+        n_graded = int(np.count_nonzero(graded))
         if d.size == 0:
-            check(f"faithful[{op}]", True, "1024/1024 bit-identical to harness golden")
+            check(
+                f"faithful[{op}]",
+                True,
+                f"{n_graded}/{n_graded} bit-identical to harness golden{ungraded_note}",
+            )
             continue
         # Where they differ, the harness golden computes this op in the bf16 DST dtype
         # (torch.tensor(x, dtype=Float16_b)) while we deliberately use true fp32/fp64
@@ -202,8 +224,8 @@ def case_faithful():
         check(
             f"faithful[{op}]",
             bool(ok),
-            f"{d.size}/1024 differ ONLY at sub-tolerance bf16-vs-fp64 rounding "
-            f"(worst |Δ|={worst:.2e} <= {spec.atol}+{spec.rtol}|g|)",
+            f"{d.size}/{n_graded} differ ONLY at sub-tolerance bf16-vs-fp64 rounding "
+            f"(worst |Δ|={worst:.2e} <= {spec.atol}+{spec.rtol}|g|){ungraded_note}",
         )
 
 
