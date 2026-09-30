@@ -475,6 +475,13 @@ tasks:
     - attention
     - attn_residual
     layer: 0
+  frozen:
+    at: '2026-09-30T14:10:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_06_attn_residual.py: b2ecf6db8061463d8972990fa3c7a98e9865f1292cfbc41beea136999da4a436
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.dense.ffn_hc
   title: dense ffn_hc (op) on device, layer 0
   step: implement
