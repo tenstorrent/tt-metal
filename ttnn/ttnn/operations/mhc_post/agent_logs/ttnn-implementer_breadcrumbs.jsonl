@@ -5,3 +5,4 @@
 {"event":"friction","what":"none","ts":"2026-09-30T01:57:18+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-09-30T02:25:02+00:00"}
 {"event":"test_run","result":"pass","details":"R1 bf16: golden bf16 123/123, regression 12/12 incl depth_chain[bf16], unit 58/58; packer RNE confirmed; perf bf16 T640C7168 388us","ts":"2026-09-30T02:33:26+00:00"}
+{"event":"test_run","refinement":2,"result":"pass","perf_us":{"T640C7168bf16":[388.3,305.5],"T1280C4096bf16":[429.3,368],"T640C1792bf16":[158.6,132.4]},"diagnosis":"per-element fp32-u2d<->bf16-srcA switch dominated (ablation)","fix":"SyncFull DEST window + fused WeightedSum SFPU + half-packed coef tiles + reconfig trimming","bug_found":"sfpu face inc rebases on carry reg; need 2 incs face0->face2","ts":"2026-09-30T03:30:02+00:00"}

@@ -33,6 +33,11 @@ DEPTH_OUT = 2  # blocks in flight on cb_output_tiles
 COEF_DEPTH = 2  # token-row coefficient sets in flight on cb_coef_bcast
 L1_BUDGET_BYTES = 1 << 20  # CB budget per core
 MAX_BLOCK_COL_TILES = None  # optional cap on block_col_tiles (None = coarsest L1 fit); overlap perf lamp
+# DEST sync mode of the compute kernel (overrides the caller's dst_full_sync_en; an internal schedule
+# choice). SyncFull gives 8 fp32 DEST slots, enough for one output column's P coefficient tiles + n+1
+# data tiles at n = 4; the kernel derives its window layout from DEST_AUTO_LIMIT. False (SyncHalf, 4
+# slots) compiles only for n <= 2 (the kernel static_asserts the fit).
+DST_FULL_SYNC = True
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
 
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
@@ -79,9 +84,11 @@ def _max_segment_col_tiles(assignment, col_tiles_per_row) -> int:
     return longest
 
 
-def _block_col_tiles_fit(n, sublayer_tile_bytes, residual_tile_bytes, coef_tile_bytes, num_raw_tiles) -> int:
+def _block_col_tiles_fit(
+    n, sublayer_tile_bytes, residual_tile_bytes, coef_tile_bytes, num_coef_tiles, num_raw_tiles
+) -> int:
     """Closed form from l1_ledger.md: coarsest block that fits L1_BUDGET_BYTES."""
-    coef_bytes = COEF_DEPTH * (n + n * n) * coef_tile_bytes + num_raw_tiles * coef_tile_bytes
+    coef_bytes = COEF_DEPTH * num_coef_tiles * coef_tile_bytes + num_raw_tiles * coef_tile_bytes
     per_col = DEPTH_IN * (sublayer_tile_bytes + n * residual_tile_bytes) + DEPTH_OUT * n * residual_tile_bytes
     return (L1_BUDGET_BYTES - coef_bytes) // per_col
 
@@ -111,7 +118,8 @@ def create_program_descriptor(
     post_tiles_per_row = math.ceil(n / TILE_HW)
     comb_tiles_per_row = math.ceil(n * n / TILE_HW)
     num_raw_tiles = post_tiles_per_row + comb_tiles_per_row
-    num_coef_tiles = n + n * n
+    coef_tiles_per_stream = math.ceil((n + 1) / 2)  # two coefficient terms per tile (mhc_post_common.hpp)
+    num_coef_tiles = n * coef_tiles_per_stream
 
     sublayer_page = input_tensor.buffer_page_size()
     residual_page = residual.buffer_page_size()
@@ -123,7 +131,9 @@ def create_program_descriptor(
     # ---- work split + block size ----
     grid_size = device.compute_with_storage_grid_size()
     all_cores, assignment = _work_assignment(grid_size, total_units)
-    block_col_tiles_fit = _block_col_tiles_fit(n, sublayer_page, residual_page, coef_page, num_raw_tiles)
+    block_col_tiles_fit = _block_col_tiles_fit(
+        n, sublayer_page, residual_page, coef_page, num_coef_tiles, num_raw_tiles
+    )
     assert block_col_tiles_fit >= 1, "mhc_post: coefficient set + one column block does not fit L1_BUDGET_BYTES"
     block_col_tiles = min(block_col_tiles_fit, _max_segment_col_tiles(assignment, col_tiles_per_row))
     if MAX_BLOCK_COL_TILES is not None:
@@ -153,6 +163,7 @@ def create_program_descriptor(
         CB_RESIDUAL_TILES,
         CB_COEF_RAW,
         CB_COEF_BCAST,
+        coef_tiles_per_stream,
     ]
     for t in (input_tensor, residual, post, comb):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -170,6 +181,7 @@ def create_program_descriptor(
         CB_RESIDUAL_TILES,
         CB_COEF_BCAST,
         CB_OUTPUT_TILES,
+        coef_tiles_per_stream,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -197,7 +209,7 @@ def create_program_descriptor(
         fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
         math_approx_mode=compute_kernel_config.math_approx_mode,
     )
-    compute_cfg.dst_full_sync_en = compute_kernel_config.dst_full_sync_en
+    compute_cfg.dst_full_sync_en = DST_FULL_SYNC
     compute_cfg.unpack_to_dest_mode = unpack_modes
 
     reader = ttnn.KernelDescriptor(

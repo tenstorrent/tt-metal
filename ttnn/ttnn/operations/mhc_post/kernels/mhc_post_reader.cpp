@@ -5,9 +5,9 @@
 //
 // Per segment (one token-tile row of this core's unit range):
 //   load_coefficients — read the raw post / comb tiles of row r into cb_coef_raw (one barrier), then
-//                       expand them into n + n^2 column-broadcast fp32 tiles in cb_coef_bcast:
-//                         expanded[k](rho, gamma) = post(rho, k)          for k <  n
-//                         expanded[n + m](rho, gamma) = comb(rho, m)       for m <  n*n  (m = i*n + j)
+//                       expand them into n * P half-packed column-broadcast fp32 tiles in cb_coef_bcast
+//                       (layout: mhc_post_common.hpp — term t of stream j in half t%2 of tile j*P + t/2;
+//                       term 0 = post(rho, j), term 1+i = comb(rho, i*n + j)).
 //                       The expansion is scheduled inside the read-barrier shadow of the segment's first
 //                       data block (block reads issued, expansion done, then the barrier).
 //   load_block        — per block of block_col_tiles columns: B F tiles (slot c) and n*B X tiles
@@ -32,21 +32,16 @@ FORCE_INLINE uint32_t fp32_tile_elem_offset(uint32_t row, uint32_t col) {
     return (face * FACE_ELEMS + (row % FACE_HW) * FACE_HW + (col % FACE_HW)) * FP32_BYTES;
 }
 
-constexpr uint32_t FACE_BYTES = FACE_ELEMS * FP32_BYTES;
-
-// Column-broadcast expansion: every element (rho, gamma) of the tile at dst_tile_addr becomes raw(rho, col).
-// The RISC writes only the left faces (0 / 2: gamma < 16); the right faces (1 / 3) are identical and are
-// duplicated by two self-aimed 1 KB NoC reads (no barrier here — the caller's block read barrier covers them).
-FORCE_INLINE void expand_column(uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t tile_rows) {
+// Half-tile column-broadcast expansion: every element (rho, gamma) of half `half` (gamma in
+// [16*half, 16*half + 16)) of the tile at dst_tile_addr becomes raw(rho, col). See mhc_post_common.hpp.
+FORCE_INLINE void expand_half(
+    uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t half, uint32_t tile_rows) {
     for (uint32_t rho = 0; rho < tile_rows; ++rho) {
         const uint32_t bits =
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_tile_addr + fp32_tile_elem_offset(rho, col));
         dataflow_kernel_lib::fill_l1_range<FP32_BYTES>(
-            dst_tile_addr + fp32_tile_elem_offset(rho, 0), FACE_ROW_BYTES, bits);
+            dst_tile_addr + fp32_tile_elem_offset(rho, half * FACE_HW), FACE_ROW_BYTES, bits);
     }
-    // face 0 -> face 1, face 2 -> face 3
-    noc_async_read(get_noc_addr(dst_tile_addr), dst_tile_addr + FACE_BYTES, FACE_BYTES);
-    noc_async_read(get_noc_addr(dst_tile_addr + 2 * FACE_BYTES), dst_tile_addr + 3 * FACE_BYTES, FACE_BYTES);
 }
 
 }  // namespace
@@ -66,12 +61,13 @@ void kernel_main() {
     constexpr uint32_t cb_residual_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t cb_coef_raw = get_compile_time_arg_val(11);
     constexpr uint32_t cb_coef_bcast = get_compile_time_arg_val(12);
-    constexpr auto sublayer_args = TensorAccessorArgs<13>();
+    constexpr uint32_t coef_tiles_per_stream = get_compile_time_arg_val(13);  // P = ceil((n+1)/2)
+    constexpr auto sublayer_args = TensorAccessorArgs<14>();
     constexpr auto residual_args = TensorAccessorArgs<sublayer_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t num_coef_tiles = n + n * n;
+    constexpr uint32_t num_coef_tiles = n * coef_tiles_per_stream;
     constexpr uint32_t num_raw_tiles = post_tiles_per_row + comb_tiles_per_row;
     constexpr uint32_t residual_row_tiles = n * col_tiles_per_row;
     constexpr uint32_t residual_block_tiles = n * block_col_tiles;
@@ -136,15 +132,18 @@ void kernel_main() {
                 // ---- load_coefficients, part 2: expansion in the first block's read-barrier shadow ----
                 cb_reserve_back(cb_coef_bcast, num_coef_tiles);
                 const uint32_t bcast_base = get_write_ptr(cb_coef_bcast);
-                for (uint32_t k = 0; k < n; ++k) {
-                    expand_column(raw_post_addr, k, bcast_base + k * coef_page_bytes, tile_rows);
-                }
-                for (uint32_t m = 0; m < n * n; ++m) {
-                    expand_column(raw_comb_addr, m, bcast_base + (n + m) * coef_page_bytes, tile_rows);
+                for (uint32_t j = 0; j < n; ++j) {
+                    for (uint32_t t = 0; t <= n; ++t) {
+                        const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
+                        const uint32_t raw_col = t == 0 ? j : (t - 1) * n + j;
+                        const uint32_t tile = j * coef_tiles_per_stream + mhc_post::coef_tile_in_stream(t);
+                        expand_half(
+                            raw_addr, raw_col, bcast_base + tile * coef_page_bytes, mhc_post::coef_half(t), tile_rows);
+                    }
                 }
             }
 
-            noc_async_read_barrier();  // data block + (first block) the face-duplication reads
+            noc_async_read_barrier();  // data block
             if (block_idx == 0) {
                 cb_push_back(cb_coef_bcast, num_coef_tiles);
                 cb_pop_front(cb_coef_raw, num_raw_tiles);

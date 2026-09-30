@@ -56,4 +56,14 @@ inline uint32_t block_valid_col_tiles(uint32_t seg_col_tiles, uint32_t block_col
     return left < block_col_tiles ? left : block_col_tiles;
 }
 
+// ---- Expanded coefficient layout (cb_coef_bcast; reader writes it, compute reads it) ----
+// Output stream j has n+1 terms: t = 0 is post_j, t = 1+i is comb[i][j] (comb applied transposed).
+// Two terms share one fp32 tile: term t occupies HALF (t % 2) of tile j*P + t/2, with
+// P = coef_tiles_per_stream = ceil((n+1)/2) (host CT arg). Half 0 = faces 0/2 (tile columns 0-15), half 1 =
+// faces 1/3 (columns 16-31); every element of tile row rho in a half holds the coefficient of token row rho.
+// A half carries everything a data face needs (the coefficient is constant along columns), so the SFPU
+// reads data faces 2h and 2h+1 against coefficient face 2h + (t % 2).
+constexpr uint32_t coef_tile_in_stream(uint32_t t) { return t / 2; }
+constexpr uint32_t coef_half(uint32_t t) { return t % 2; }
+
 }  // namespace mhc_post

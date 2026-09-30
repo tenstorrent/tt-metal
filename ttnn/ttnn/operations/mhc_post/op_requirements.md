@@ -52,7 +52,7 @@
 
 **Outcome**: no kernel change: SUPPORTED widened, and the packer's fp32 → bf16 rounding is RNE (bias ≤ 1.3e-5 rel; 122-wrap drift passes). The golden bf16 slice is 123/123 (75 test_op + 48 loose), and `test_depth_chain[bf16]` passes. Device time on 110 cores (bf16 / fp32): T640 C7168 388.0 / 537.6 µs, T640 C1792 151.0 / 186.6 µs, T1280 C4096 435.3 / 628.1 µs. Compute is now the bound, which is Refinement 2's job.
 
-### [ ] Refinement 2 — Speed up the compute-bound SFPU mix on the perf-flagged bf16 profiles
+### [x] Refinement 2 — Speed up the compute-bound SFPU mix on the perf-flagged bf16 profiles
 
 **Type**: perf
 
@@ -73,6 +73,16 @@
 - The mixed bf16-F / fp32-X chain reconfigures the unpacker per element; the new schedule should not regress it.
 
 **Done when**: measured device-ns on T640 C7168 bf16 (and T1280 C4096 bf16) improves toward `target_ns`, with every bf16 golden and regression cell still green (signed-bias gate and 122-wrap drift included) and bitwise determinism intact. There must be no device-ns regression across the config-spanning guard set: one representative per distinct path, i.e. {fp32/fp32, bf16/bf16, bf16 F / fp32 X} × {tile_aligned, h_non_aligned} × {small C (1792), large C (7168)}.
+
+**Outcome**:
+- **Measured** (device-ns, 110 cores):
+  - T640 C7168 bf16: 388 → 306 µs.
+  - T1280 C4096 bf16: 429 → 368 µs.
+  - Every guard-set cell is faster (2–19%, fp32 and mixed included).
+  - Precision, the 122-wrap drift and determinism are unchanged.
+- **Bottleneck:** it was the per-element fp32-unpack-to-DEST ↔ bf16-srcA switch. There is now one fused `WeightedSum` SFPU pass per output tile, in a SyncFull DEST window with half-packed coefficient tiles. Compute's excess over the DM floor (224 µs with compute stubbed) fell from ~155 to ~80 µs. What remains is the serialized per-output-tile window: 3 coefficient unpack-to-DEST copies + 5 data copies + SFPU + pack, with no pack overlap under SyncFull.
+- **Next:** find a coefficient form that survives DEST release, or a denser coefficient layout that allows K > 1 columns per window. Not attempted: every pack release ZEROACCs all of DEST, and at n=4 the SFPU lane geometry needs half a tile per coefficient.
+- **DM floor vs target** (224 vs 202 µs) is Refinement 3's scope.
 
 ### [ ] Refinement 3 — Reader / writer overlap and coefficient-expansion cost on the perf-flagged bf16 profiles
 
