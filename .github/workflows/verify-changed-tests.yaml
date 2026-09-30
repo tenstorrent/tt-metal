@@ -103,6 +103,16 @@ env:
     fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
+  # Pipelines that run their legs under the watcher do it through setup-job's
+  # enable-watcher input, which also sets TT_METAL_WATCHER_DISABLE_ETH=1 (and NOINLINE,
+  # APPEND). A leg cmd that only exports TT_METAL_WATCHER=N relies on that: with the
+  # watcher on the ETH cores the fabric erisc router no longer fits its text region
+  # ("section .data LMA overlaps section .text LMA"), idle_erisc overflows on N300 and
+  # ACTIVE_ETH kernels exceed the kernel config buffer on QB2. The gate passes the same
+  # input for legs from these yamls; the list mirrors which *-impl.yaml files pass
+  # enable-watcher: true.
+  WATCHER_YAMLS: >-
+    models_unit_tests.yaml
 
 jobs:
   scope:
@@ -320,6 +330,7 @@ jobs:
             ${{ (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.wheel-artifact-name)
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
+          enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
           auto-triage: false
 
       - name: ⬇️ Download packages artifact
