@@ -451,6 +451,24 @@ void reduce_c_row_group(
 #endif
     tile_regs_acquire();
 
+#ifdef SDPA_PA
+    if (do_eltwise_max) {
+        // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
+        // the reduce's seeding copy transposes within faces for the reduce's dest layout.
+        CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
+        copy_tile_to_dst_init_short(prev_cb);
+        for (uint32_t i = 0; i < group_size; i++) {
+            copy_tile(prev_cb, row_start + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < group_size; i++) {
+            pack_tile<false>(i, out_cb);
+        }
+        tile_regs_release();
+        return;
+    }
+#endif
     if (do_eltwise_max) {
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
 #ifdef SDPA_RECIPE_FP32
@@ -460,16 +478,6 @@ void reduce_c_row_group(
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
-#ifdef SDPA_PA
-        // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce.
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < group_size; i++) {
-            pack_tile<false>(i, out_cb);
-        }
-        tile_regs_release();
-        return;
-#endif
     }
 
     // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
