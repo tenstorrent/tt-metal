@@ -121,38 +121,48 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
     return y;
 }
 
+// The edge handling of the accurate reciprocal body for one vector: the predicated statements of the RECIPROCAL
+// branch of _calculate_sqrt_body_, unchanged per lane. half_y is computed inside the region because only the enabled
+// lanes read it. An edit to the edge handling of _calculate_sqrt_body_ belongs here as well.
+template <bool FAST_APPROX>
+sfpi_inline void _sqrt_accurate_reciprocal_edge_(
+    const sfpi::vFloat x, sfpi::vFloat& y, const sfpi::vFloat one_minus_xyy, const sfpi::vInt infinity_minus_x_bits) {
+    // If x != inf and x has a non-zero magnitude.
+    v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
+        sfpi::vFloat half_y = sfpi::addexp(y, -1);
+        y = one_minus_xyy * half_y + y;
+        if constexpr (!FAST_APPROX) {
+            // This region already excludes +/-0 and +inf, so a bare sign test is enough.
+            v_if(x < 0.0f) {
+                y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
+            }
+            v_endif;
+        }
+    }
+    // Otherwise x = +/-0 gives +/-inf (the subtraction carries x's sign), x = inf gives 0.
+    v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
+    v_endif;
+}
+
 // The second refinement step of the accurate body (algorithm SQRT_23-bits) and its edge handling for one vector: the
-// statements of the accurate branch of _calculate_sqrt_body_ from the second `xy = x * y` onward, in their order. The
-// two values only the enabled lanes read (half_y, half_xy) are computed inside their predicated regions so that a
-// second vector's estimate can stay in the register file meanwhile; per lane nothing changes. An edit to the edge
-// handling of _calculate_sqrt_body_ belongs here as well.
+// statements of the accurate branch of _calculate_sqrt_body_ from the second `xy = x * y` onward. The integer
+// statements (the infinity constant, the bit difference) are placed between the dependent float steps so that the
+// multiply, the multiply-add and their readers are never issued back to back; per lane nothing changes.
 template <bool RECIPROCAL, bool FAST_APPROX>
 sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi::vFloat y) {
-    sfpi::vFloat xy = x * y;
-    sfpi::vFloat negative_y = -y;
-    sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
     sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
     sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
+    sfpi::vFloat xy = x * y;
 
     if constexpr (RECIPROCAL) {
         sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
         sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
-        // If x != inf and x has a non-zero magnitude.
-        v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
-            sfpi::vFloat half_y = sfpi::addexp(y, -1);
-            y = one_minus_xyy * half_y + y;
-            if constexpr (!FAST_APPROX) {
-                // This region already excludes +/-0 and +inf, so a bare sign test is enough.
-                v_if(x < 0.0f) {
-                    y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
-                }
-                v_endif;
-            }
-        }
-        // Otherwise x = +/-0 gives +/-inf (the subtraction carries x's sign), x = inf gives 0.
-        v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
-        v_endif;
+        sfpi::vFloat negative_y = -y;
+        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
+        _sqrt_accurate_reciprocal_edge_<FAST_APPROX>(x, y, one_minus_xyy, infinity_minus_x_bits);
     } else {
+        sfpi::vFloat negative_y = -y;
+        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
         // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
         // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
         // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
@@ -176,45 +186,76 @@ sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi:
     return y;
 }
 
+// The seed and the first refinement step of the accurate body for two vectors, issued in lockstep: every step of one
+// vector is followed by the same step of the other, so a step's result is never read by the very next instruction.
+sfpi_inline void _sqrt_accurate_first_step_x2_(
+    const sfpi::vFloat x0, const sfpi::vFloat x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
+    sfpi::vInt i0 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x0) >> 1);
+    sfpi::vInt i1 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x1) >> 1);
+    y0 = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i0);
+    y1 = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i1);
+
+    // Algorithm SQRT_23-bits, with modifications for reciprocal: the first step.
+    sfpi::vFloat xy0 = x0 * y0;
+    sfpi::vFloat xy1 = x1 * y1;
+    sfpi::vFloat negative_y0 = -y0;
+    sfpi::vFloat negative_y1 = -y1;
+    sfpi::vFloat c0 = negative_y0 * xy0;
+    sfpi::vFloat c1 = negative_y1 * xy1;
+    sfpi::vFloat t0 = sfpi::vConstFloatPrgm2 + c0;
+    sfpi::vFloat t1 = sfpi::vConstFloatPrgm2 + c1;
+    t0 = sfpi::vConstFloatPrgm1 + c0 * t0;
+    t1 = sfpi::vConstFloatPrgm1 + c1 * t1;
+    y0 = y0 * t0;
+    y1 = y1 * t1;
+}
+
 // The accurate body for two vectors at once. Its refinement is a chain in which every multiply-add reads the result
 // of the one before it, and with one vector per body the pipeline latency of each dependent step is paid: 6.3 idle
 // cycles per vector against 1.3 for the approximate body (201 against 41 cycles per tile of 32 vectors on
-// Blackhole). Here the seed and the first refinement step of the two vectors are issued in lockstep, one step of x1
-// between two steps of x0, so a step of one vector fills the latency of the other's; the second step and the edge
-// handling, which own the lane condition, follow one vector at a time. The register file holds eight vectors: the
-// lockstep keeps at most six of them (the two estimates and the step's terms), so the operand is read from DEST
-// again for the second step (load_x0 and load_x1 return it; the barrier keeps the compiler from holding the first
-// read instead) rather than kept live. Per lane the operations and their order are exactly those of
-// _calculate_sqrt_body_<false, RECIPROCAL, FAST_APPROX>, so the results are bit-identical to the one-vector form.
+// Blackhole). Here the two chains are issued so that no instruction reads the result of the one issued just before
+// it. Per lane the operations and their order are exactly those of _calculate_sqrt_body_<false, RECIPROCAL,
+// FAST_APPROX>, so the results are bit-identical to the one-vector form. The register file holds eight vectors:
+// for the reciprocal both operands stay live and the terms of the two second steps are interleaved before the two
+// edge regions (which own the lane condition) run one after the other; for the square root the terms of both second
+// steps do not fit next to the operands, so the operand is read from DEST again for the second step (load_x0 and
+// load_x1 return it; the barrier keeps the compiler from holding the first read instead) and the second steps run one
+// vector at a time.
 template <bool RECIPROCAL, bool FAST_APPROX, class LoadX0, class LoadX1>
 sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
-    {
+    if constexpr (RECIPROCAL) {
         const sfpi::vFloat x0 = load_x0();
         const sfpi::vFloat x1 = load_x1();
-        sfpi::vInt i0 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x0) >> 1);
-        sfpi::vInt i1 = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x1) >> 1);
-        y0 = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i0);
-        y1 = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i1);
+        _sqrt_accurate_first_step_x2_(x0, x1, y0, y1);
 
-        // Algorithm SQRT_23-bits, with modifications for reciprocal: the first step.
         sfpi::vFloat xy0 = x0 * y0;
         sfpi::vFloat xy1 = x1 * y1;
         sfpi::vFloat negative_y0 = -y0;
+        sfpi::vFloat one_minus_xyy0 = 1.0f + (negative_y0 * xy0);
         sfpi::vFloat negative_y1 = -y1;
-        sfpi::vFloat c0 = negative_y0 * xy0;
-        sfpi::vFloat c1 = negative_y1 * xy1;
-        sfpi::vFloat t0 = sfpi::vConstFloatPrgm2 + c0;
-        sfpi::vFloat t1 = sfpi::vConstFloatPrgm2 + c1;
-        t0 = sfpi::vConstFloatPrgm1 + c0 * t0;
-        t1 = sfpi::vConstFloatPrgm1 + c1 * t1;
-        y0 = y0 * t0;
-        y1 = y1 * t1;
-    }
+        sfpi::vFloat one_minus_xyy1 = 1.0f + (negative_y1 * xy1);
 
-    asm volatile("" ::: "memory");
-    y0 = _sqrt_accurate_second_step_<RECIPROCAL, FAST_APPROX>(load_x0(), y0);
-    asm volatile("" ::: "memory");
-    y1 = _sqrt_accurate_second_step_<RECIPROCAL, FAST_APPROX>(load_x1(), y1);
+        {
+            sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
+            sfpi::vInt infinity_minus_x0_bits = sfpi::as<sfpi::vInt>(infinity) - sfpi::as<sfpi::vInt>(x0);
+            _sqrt_accurate_reciprocal_edge_<FAST_APPROX>(x0, y0, one_minus_xyy0, infinity_minus_x0_bits);
+        }
+        {
+            sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
+            sfpi::vInt infinity_minus_x1_bits = sfpi::as<sfpi::vInt>(infinity) - sfpi::as<sfpi::vInt>(x1);
+            _sqrt_accurate_reciprocal_edge_<FAST_APPROX>(x1, y1, one_minus_xyy1, infinity_minus_x1_bits);
+        }
+    } else {
+        {
+            const sfpi::vFloat x0 = load_x0();
+            const sfpi::vFloat x1 = load_x1();
+            _sqrt_accurate_first_step_x2_(x0, x1, y0, y1);
+        }
+        asm volatile("" ::: "memory");
+        y0 = _sqrt_accurate_second_step_<false, FAST_APPROX>(load_x0(), y0);
+        asm volatile("" ::: "memory");
+        y1 = _sqrt_accurate_second_step_<false, FAST_APPROX>(load_x1(), y1);
+    }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool RECIPROCAL, bool FAST_APPROX>
