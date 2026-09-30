@@ -1,7 +1,9 @@
 # Bit-identity of the two ops behind the chunked bs32 QKV path (tt/qkv_chunks.py), at bs32 ISL 512 shapes:
-# 1. the row-split fused add+RMSNorm writing its normalised output as two half-batch tensors vs one tensor;
-# 2. the fused heads op (v3) run per half batch into full-batch Q / K / V at a batch offset vs one full-batch call.
-# Usage: TT_VISIBLE_DEVICES=<chip> test_qkv_chunks.py
+# 1. the row-split fused add+RMSNorm writing its normalised output as N batch-chunk tensors vs one tensor;
+# 2. the fused heads op (v3) run per batch chunk into full-batch Q / K / V at a batch offset vs one full-batch call.
+# Usage: TT_VISIBLE_DEVICES=<chip> test_qkv_chunks.py [N=2 | 4]
+import sys
+
 import torch
 
 import ttnn
@@ -18,7 +20,7 @@ NH, NKV, DH, EPS = 32, 8, 128, 1e-6
 L1, DR = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
 
 
-def add_norm_split(D):
+def add_norm_split(D, N):
     M = B * S
     consts = make_add_norm_constants(torch.rand(W) + 0.5, EPS, D)
     a = ttnn.from_torch(
@@ -32,14 +34,16 @@ def add_norm_split(D):
     ref_s, ref_n = ttnn.to_torch(s1), ttnn.to_torch(n1)
     ttnn.deallocate(s1)
     ttnn.deallocate(n1)
-    half = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M // 2, W]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, D, L1)]
-    half.append(ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M // 2, W]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, D, L1))
-    s2, (h0, h1) = fused_add_rmsnorm_split(a, b, *consts, **kw, out_tensor=tuple(half))
-    got_n = torch.cat([ttnn.to_torch(h0), ttnn.to_torch(h1)], dim=2)
+    parts = tuple(
+        ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M // N, W]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, D, L1)
+        for _ in range(N)
+    )
+    s2, got = fused_add_rmsnorm_split(a, b, *consts, **kw, out_tensor=parts)
+    got_n = torch.cat([ttnn.to_torch(h) for h in got], dim=2)
     return torch.equal(ttnn.to_torch(s2), ref_s) and torch.equal(got_n, ref_n)
 
 
-def heads_chunks(D):
+def heads_chunks(D, N):
     GQ, GK, SC, EP = make_norm_constants(torch.rand(DH) + 0.5, torch.rand(DH) + 0.5, EPS, D)
     ang = torch.rand(1, 1, S, DH) * 6.28
     mk = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=D, memory_config=L1)
@@ -55,12 +59,12 @@ def heads_chunks(D):
     full = tuple(
         ttnn.allocate_tensor_on_device(ttnn.Shape(list(r.shape)), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, D, DR) for r in ref
     )
-    for c in range(2):
+    for c in range(N):
         xh = ttnn.from_torch(
-            xt[c * B // 2 : (c + 1) * B // 2], dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=D, memory_config=L1
+            xt[c * B // N : (c + 1) * B // N], dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=D, memory_config=L1
         )
         hop.nlp_create_qkv_heads_norm_headsplit(
-            xh, GQ, GK, SC, EP, **kw, out_tensors=full, batch_offset=c * B // 2, use_v3=True
+            xh, GQ, GK, SC, EP, **kw, out_tensors=full, batch_offset=c * B // N, use_v3=True
         )
         ttnn.deallocate(xh)
     return all(torch.equal(ttnn.to_torch(g), r) for g, r in zip(full, ref))
@@ -68,10 +72,13 @@ def heads_chunks(D):
 
 def main():
     torch.manual_seed(0)
+    N = int(sys.argv[1]) if len(sys.argv) > 1 else 2
     D = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
-        print(f"RES add+norm split output bit-identical: {add_norm_split(D)}", flush=True)
-        print(f"RES heads op in half-batch chunks (v3) vs full batch (v1) bit-identical: {heads_chunks(D)}", flush=True)
+        print(f"RES add+norm split output in {N} parts bit-identical: {add_norm_split(D, N)}", flush=True)
+        print(
+            f"RES heads op in {N} batch chunks (v3) vs full batch (v1) bit-identical: {heads_chunks(D, N)}", flush=True
+        )
     finally:
         ttnn.close_device(D)
 
