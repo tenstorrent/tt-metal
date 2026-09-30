@@ -8,7 +8,7 @@ Full adds background_consistency, temporal_flickering, dynamic_degree, overall_c
 prompt; read from seedN_timings.json or --prompt). Videos are re-encoded to --short-side first
 (0 = native); VBench's CLIP/DINO/MUSIQ inputs are 224-512 px anyway, only AMT/RAFT see more pixels.
 --frame-stride K (default 4) scores every Kth frame for the two per-frame-mean dims, and DINO for
-subject_consistency runs batched (same score); --stock turns both off.
+subject_consistency and AMT for motion_smoothness run batched (same scores); --stock turns all off.
 Scores at different --short-side / --frame-stride values are not comparable; compare at one setting.
 """
 
@@ -104,6 +104,40 @@ def batch_subject_consistency(batch: int = 32):
     sc.subject_consistency = subject_consistency
 
 
+def batch_motion_smoothness(batch: int = 8):
+    """Stock VBench interpolates one AMT frame pair per forward; the same pairs, batched."""
+    import numpy as np
+    import torch
+    import vbench.motion_smoothness as ms
+
+    def motion_score(self, video_path):
+        frames = self.fp.get_frames(video_path)
+        inputs = [ms.img2tensor(f).to(self.device) for f in self.fp.extract_frame(frames, start_from=0)]
+        inputs = ms.check_dim_and_resize(inputs)
+        h, w = inputs[0].shape[-2:]
+        scale = (
+            self.anchor_resolution / (h * w) * np.sqrt((self.vram_avail - self.anchor_memory_bias) / self.anchor_memory)
+        )
+        scale = 1 / np.floor(1 / np.sqrt(min(scale, 1)) * 16) * 16
+        padder = ms.InputPadder(inputs[0].shape, int(16 / scale))
+        inputs = padder.pad(*inputs)
+        for _ in range(int(self.niters)):
+            preds = []
+            for j in range(0, len(inputs) - 1, batch):
+                a = torch.cat(inputs[j : j + batch][: len(inputs) - 1 - j])
+                b = torch.cat(inputs[j + 1 : j + 1 + batch])
+                with torch.no_grad():
+                    preds += self.model(a, b, self.embt, scale_factor=scale, eval=True)["imgt_pred"].split(1)
+            outputs = [inputs[0]]
+            for pred, nxt in zip(preds, inputs[1:]):
+                outputs += [pred, nxt]
+            inputs = outputs
+        outputs = [ms.tensor2img(out) for out in padder.unpad(*outputs)]
+        return (255.0 - self.vfi_score(frames, outputs)) / 255.0
+
+    ms.MotionSmoothness.motion_score = motion_score
+
+
 def prompt_for(video: Path, override: str | None) -> str:
     if override:
         return override
@@ -142,6 +176,7 @@ def main():
         args.frame_stride = 1
     else:
         batch_subject_consistency()
+        batch_motion_smoothness()
     if args.frame_stride > 1:
         subsample(args.frame_stride)
 
