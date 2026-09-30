@@ -23,7 +23,13 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tests.test_factory import model_path
-from models.demos.blackhole.qwen36.tests.test_sp_prefill import _e2e_tokenizer, _real_prompt_tokens, _sp_set_fabric
+from models.demos.blackhole.qwen36.tests.test_sp_prefill import (
+    _e2e_tokenizer,
+    _real_prompt_tokens,
+    _sp_log_ring,
+    _sp_set_fabric,
+    _sp_worker_l1_kwargs,
+)
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 from models.demos.blackhole.qwen36.tt.sp_handoff import gdn_conv_full_to_tp_host
@@ -121,7 +127,9 @@ def test_sp_e2e_tp4():
         mesh_shape=ttnn.MeshShape(1, 4),
         trace_region_size=int(os.environ.get("E2E_TRACE_MB", "384")) << 20,
         l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
+        **_sp_worker_l1_kwargs(),
     )
+    _sp_log_ring(mesh)
     subs = mesh.create_submeshes(ttnn.MeshShape(1, 1))
     sw = MeshSwitch(mesh, subs, side="parent")
     sp = ho = None

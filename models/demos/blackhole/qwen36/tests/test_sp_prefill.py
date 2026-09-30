@@ -91,6 +91,30 @@ def _sp_trace_region_size():
     return (256 if _sp_impl_name() == "sc" else 64) * 1024 * 1024
 
 
+def _sp_worker_l1_kwargs():
+    """QWEN36_SP_WORKER_L1_SIZE env var: worker_l1_size (bytes) for every SP (1,4) mesh open. Unset / "0" ->
+    the framework default (nothing passed; 1461248 B on Blackhole). worker_l1_size sets where the
+    allocator's L1 starts (worker_l1_unreserved_start = 1536 KiB - worker_l1_size), so a SMALLER value
+    grows the dispatch kernel-config ring buffer ([MEM_MAP_END=40960, unreserved_start); default 69 KiB)
+    by the same amount and takes that much L1 away from the allocator. See _sp_log_ring."""
+    raw = os.environ.get("QWEN36_SP_WORKER_L1_SIZE")
+    if raw is None or raw.strip() in ("", "0"):
+        return {}
+    return {"worker_l1_size": int(raw)}
+
+
+def _sp_log_ring(mesh):
+    """Log the allocator's L1 base (= worker_l1_unreserved_start) and the kernel-config ring it implies."""
+    try:
+        base = ttnn._ttnn.reports.get_device_info(mesh).address_at_first_l1_cb_buffer
+        logger.info(
+            f"[sp] L1 allocator base={base} -> dispatch kernel-config ring={base - 40960} B "
+            f"(QWEN36_SP_WORKER_L1_SIZE={os.environ.get('QWEN36_SP_WORKER_L1_SIZE')!r})"
+        )
+    except Exception as e:  # diagnostics only
+        logger.warning(f"[sp] could not read the L1 allocator base: {e}")
+
+
 def _sp_impl_cls():
     """QWEN36_SP_IMPL env var: "sc" -> SPPrefillSC (tt/sp_prefill_sc.py: each die runs the single-chip
     model classes); unset / "tp" (default) -> SPPrefill (the TP-path classes at tp=1), unchanged. Used by
@@ -223,7 +247,9 @@ def sp_mesh():
         mesh_shape=ttnn.MeshShape(1, 4),
         trace_region_size=_sp_trace_region_size(),
         l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
+        **_sp_worker_l1_kwargs(),
     )
+    _sp_log_ring(mesh)
     try:
         yield mesh
     finally:
@@ -389,6 +415,7 @@ def test_sp_prefill_matches_tp4(T):
         mesh_shape=ttnn.MeshShape(1, 4),
         trace_region_size=_sp_trace_region_size(),
         l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
+        **_sp_worker_l1_kwargs(),
     )
     try:
         sp = _sp_impl_cls()(mesh2, n_spans=4, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
@@ -625,7 +652,9 @@ def test_sp_prefill_then_tp_decode_b_sp_export():
         mesh_shape=ttnn.MeshShape(1, 4),
         trace_region_size=_sp_trace_region_size(),
         l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
+        **_sp_worker_l1_kwargs(),
     )
+    _sp_log_ring(mesh)
     sp = None
     try:
         sp = _sp_impl_cls()(
