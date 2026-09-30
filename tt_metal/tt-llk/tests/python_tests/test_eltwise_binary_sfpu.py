@@ -1992,6 +1992,14 @@ def _tt_poly_declared_softsign_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_tanhshrink_bw(x):
+    def _declared_derivative(x):
+        tanh = np.tanh
+        return np.broadcast_to(np.asarray(tanh(x) ** 2, dtype=np.float64), x.shape)
+
+    return _declared_derivative(x)
+
+
 @pytest.mark.memory_layout("debug")
 @pytest.mark.parametrize(
     "op,mask_only,declared_reference,boundaries",
@@ -2007,6 +2015,7 @@ def _tt_poly_declared_softsign_bw(x):
         ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
         ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
         ("softsign_bw", False, _tt_poly_declared_softsign_bw, ()),
+        ("tanhshrink_bw", False, _tt_poly_declared_tanhshrink_bw, ()),
     ],
 )
 def test_tt_poly_generated_backward_bf16_llk(
