@@ -1121,24 +1121,46 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-#if defined(SDPA_PA) && !(SDPA_PA_DBG & 64)
-            reconfig_data_format(cur_sum_cb, col_identity_cb);
+#ifdef SDPA_PA
+            // The matmul unpack path does not read Float32 into a 16-bit dest: round the accumulated
+            // denominator to BF16 through dest into the spare CB 12 (the unused ping-pong bank) first.
+            constexpr uint32_t pa_sum_bf16_cb = 12;
+            CircularBuffer(cur_sum_cb).wait_front(sdpa_sum_stride);
+            reconfig_data_format_srca(cur_sum_cb);
+            copy_init(cur_sum_cb);
+            CircularBuffer(pa_sum_bf16_cb).reserve_back(1);
+            tile_regs_acquire();
+            copy_tile(cur_sum_cb, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(pa_sum_bf16_cb);
+            configure_single_tile_pack(pa_sum_bf16_cb);
+            pack_tile(0, pa_sum_bf16_cb);
+            tile_regs_release();
+            CircularBuffer(pa_sum_bf16_cb).push_back(1);
+            reconfig_data_format_srca(pa_sum_bf16_cb);
+            configure_single_tile_pack(scratch_cb);
+            const uint32_t norm_sum_cb = pa_sum_bf16_cb;
+#else
+            const uint32_t norm_sum_cb = cur_sum_cb;
 #endif
-            matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            matmul_block_init(norm_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.
             sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
 
             CircularBuffer(col_identity_cb).wait_front(N);
-            CircularBuffer(cur_sum_cb).wait_front(sdpa_sum_stride);
+            CircularBuffer(norm_sum_cb).wait_front(1);
 
             CircularBuffer(scratch_cb).reserve_back(1);
             tile_regs_acquire();
-            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            matmul_block(norm_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+#ifndef SDPA_PA
             if constexpr (sdpa_sum_stride == 2) {
                 matmul_block(cur_sum_cb, col_identity_cb, 1, 0, 0, 0, N, 1, N);
             }
+#endif
 
             recip_tile_init();
             MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
@@ -1149,6 +1171,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_release();
             CircularBuffer(scratch_cb).push_back(1);
 
+#ifdef SDPA_PA
+            CircularBuffer(norm_sum_cb).pop_front(1);
+#endif
             CircularBuffer(cur_sum_cb).pop_front(sdpa_sum_stride);
         }
 
