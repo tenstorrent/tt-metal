@@ -82,5 +82,5 @@ def to_torch(tt_tensor: ttnn.Tensor, expected_shape: tuple[int, ...]) -> torch.T
 def assert_pcc(reference: torch.Tensor, candidate: torch.Tensor, threshold: float) -> None:
     passing, pcc_message = comp_pcc(reference, candidate, threshold)
     allclose, allclose_message = comp_allclose(reference, candidate)
-    logger.info(f"PCC {pcc_message} (threshold {threshold})")
+    logger.info(f"PCC {pcc_message} (threshold {threshold}); {allclose_message}")
     assert passing, f"PCC check failed: {pcc_message}; {allclose_message}; allclose={allclose}"
