@@ -963,7 +963,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["QUANT_SCALE_RT_ARGS_IDX"] = "4";
     }
 
-    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
+    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits (isclose) or, for a
+    // per-tensor quantization, the zero point and the scale bits; the two never share a program.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
         compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
