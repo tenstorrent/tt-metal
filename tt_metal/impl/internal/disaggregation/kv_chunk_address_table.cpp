@@ -4,6 +4,8 @@
 
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
 
+#include "impl/dispatch/host_device_transfer.hpp"
+
 #include <algorithm>
 #include <cstring>
 
@@ -345,8 +347,8 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
         config_id);
 
     std::vector<uint8_t> buf(loc.size_bytes);
-    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-        resolve_device(dg.fabric_node_ids.front()),
+    tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+        *resolve_device(dg.fabric_node_ids.front()),
         static_cast<int>(addr_channel(loc.noc_addr)),
         addr_local(loc.noc_addr),
         std::span<uint8_t>(buf));
