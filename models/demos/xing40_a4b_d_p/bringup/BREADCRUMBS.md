@@ -252,3 +252,14 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   layer39 / mixed / small / big rel 7.7e-4 / 7.8e-4 / 6.8e-4 / 6.4e-4. (The precompile collect pass prints FAIL lines
   with pcc 0; only the real pass counts.)
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_shared_expert.py`
+
+## C.moe.moe_add implement (run1, attempt 1)
+- New `tt/moe_add.py:TtMoeAdd` + `build_moe_add(cfg)`, from glm53_flash_d_p's TtMoeAdd, but fp32 output (default
+  `out_dtype=ttnn.float32`): `ttnn.add(experts_out, shared_out)` on column-split [1, 1, S/4, 1792] fp32, DRAM. No CCL,
+  no weights.
+- hooks: `_MOE_ADD_STEPS = {"moe_add"}` -> `_moe_add_host_fn` (both inputs column-split fp32 in, column-split out);
+  `DEVICE_STEPS["moe"]` now has moe_add, so the hybrid device_model runs it.
+- Gate: pcc_moe_add_L02 0.999997; vs cpu rel 0 (exact fp32 add); vs golden rel 0.0022 (limit 0.0057); layer39 /
+  mixed / small / big rel 0. (Precompile collect pass prints FAIL lines with rel 1; only the real pass counts.)
+- Next (perf): the experts' and shared expert's reduce_scatters could be fused by adding partials before one RS.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_moe_add.py`

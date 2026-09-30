@@ -27,7 +27,7 @@ def reference(spec, layers=None, dtype=None):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm", "mlp"},
-    "moe": {"router", "experts", "shared_expert"},
+    "moe": {"router", "experts", "shared_expert", "moe_add"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -57,6 +57,9 @@ _ROUTER_STEPS = {"router"}
 # Routed experts (tt/experts.py:TtExperts): row-split ffn_norm [S, H] bf16 + the router's (idx, wts) -> dispatch /
 # combine over axis 0 (dispatch groups = columns) -> reduce_scatter axis 1 -> column-split experts_out [S, H] fp32.
 _EXPERTS_STEPS = {"experts"}
+# moe_add (tt/moe_add.py:TtMoeAdd): experts_out + shared_out, both column-split [S, H] fp32 -> column-split mlp_out
+# fp32. Local, no CCL.
+_MOE_ADD_STEPS = {"moe_add"}
 
 
 def _max_rows(spec):
@@ -217,6 +220,25 @@ def _mlp_host_fn(mesh, module):
     return fn
 
 
+def _moe_add_host_fn(mesh, module):
+    """fn(ctx, experts_out_host [S, H], shared_out_host [S, H]) -> mlp_out host [S, H] fp32 (harness boundary: both
+    column-split fp32 in, as TtExperts / TtDenseMLP return them; column-split out)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_device, col_split_to_host
+
+    def fn(ctx, a, b):
+        ad = col_split_to_device(mesh, a, dtype=ttnn.float32)
+        bd = col_split_to_device(mesh, b, dtype=ttnn.float32)
+        od = module(ad, bd)
+        out = col_split_to_host(mesh, od).float()
+        for t in (ad, bd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _router_host_fn(mesh, module):
     """fn(ctx, ffn_norm_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: row-split bf16 in,
     replicated over axis 1, as ffn_norm's device output; the row-split dense matrix read back from column 0)."""
@@ -351,6 +373,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.experts import build_experts
 
         return _experts_host_fn(mesh, build_experts(mesh, loader, cfg, layer, _max_chunk(spec)))
+    if step in _MOE_ADD_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.moe_add import build_moe_add
+
+        return _moe_add_host_fn(mesh, build_moe_add(cfg))
     if step in _QA_STEPS:
         from models.demos.xing40_a4b_d_p.tt.q_a import build_q_a
 
