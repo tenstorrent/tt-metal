@@ -122,6 +122,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_ported_unary_op_
     {"i1", {{"SFPU_OP_CHAIN_0", "i1_tile_init(); i1_tile(0);"}}},
     {"identity", {{"SFPU_OP_CHAIN_0", "identity_tile_init(); identity_tile(0);"}}},
     {"hardmish", {{"SFPU_OP_CHAIN_0", "hardmish_tile_init(); hardmish_tile(0);"}}},
+    {"mish", {{"SFPU_OP_CHAIN_0", "mish_tile_init<SFPU_OP_APPROX>(); mish_tile<SFPU_OP_APPROX>(0);"}}},
     {"isinf", {{"SFPU_OP_CHAIN_0", "isinf_tile_init(); isinf_tile(0);"}}},
     {"isposinf", {{"SFPU_OP_CHAIN_0", "isposinf_tile_init(); isposinf_tile(0);"}}},
     {"isneginf", {{"SFPU_OP_CHAIN_0", "isneginf_tile_init(); isneginf_tile(0);"}}},
@@ -246,6 +247,9 @@ std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
     }
     if (op_name == "hardmish") {
         return x * std::clamp(0.5f * x + 1.0f, 0.0f, 1.0f);
+    }
+    if (op_name == "mish") {
+        return static_cast<float>(d * std::tanh(std::log1p(std::exp(d))));
     }
     if (op_name == "isinf") {
         return std::isinf(x) ? 1.0f : 0.0f;
@@ -395,6 +399,10 @@ vector<uint32_t> generate_packed_ported_sfpu_input(
     }
     if (op_name == "cbrt") {
         return uniform(-8.0f, 8.0f);
+    }
+    if (op_name == "mish") {
+        // Both branches (x < 0, x >= 0) and the x >= 8 saturation.
+        return uniform(-10.0f, 10.0f);
     }
     if (op_name == "rpow" || op_name == "exp2" || op_name == "hardsigmoid" || op_name == "softsign" ||
         op_name == "tanh_derivative" || op_name == "i0" || op_name == "i1") {
@@ -1767,6 +1775,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_UNARY_OP"] = "1";
     if (sfpu_util::is_quasar_ported_unary_test_op(test_config.sfpu_op)) {
         sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
+        // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
+        // declared only on the math TRISC, so name the fixture's mode as a literal, as ttnn does.
+        sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
     }
     sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";

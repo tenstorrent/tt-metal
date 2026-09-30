@@ -23,6 +23,7 @@
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/identity.h"
 #include "api/compute/eltwise_unary/hardmish.h"
+#include "api/compute/eltwise_unary/mish.h"
 #include "api/compute/eltwise_unary/isinf_isnan.h"
 #include "api/compute/eltwise_unary/lgamma.h"
 #include "api/compute/eltwise_unary/digamma.h"
