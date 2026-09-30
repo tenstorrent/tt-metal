@@ -322,33 +322,41 @@
     {
       "audio_shift": 3.0,
       "clip": 0.3417772054672241,
+      "clip_samples": [
+        0.3417772054672241,
+        0.3417772054672241
+      ],
       "content_checks_ok": true,
       "dit_quant_profile": "bf8_weights_bf8_out",
-      "e2e_s": 178.7,
-      "group": "c_768p_nfe4",
+      "e2e_s": 180.2,
+      "e2e_samples_s": [
+        178.7,
+        180.2
+      ],
+      "group": "r_768p_nfe4_repeat",
       "height": 768,
       "lora_strength": 1.0,
-      "name": "c_768p_nfe4_1344x768x124",
+      "name": "r_768p_nfe4_repeat_1344x768x124",
       "nfe": 4,
       "num_frames": 124,
       "ok": true,
       "peak_dram_gib": 21.92,
       "phases_s": {
-        "audio": 2.001,
-        "denoising": 139.215,
+        "audio": 2.0,
+        "denoising": 140.819,
         "encoder": 0.002,
-        "vae": 29.369
+        "vae": 29.139
       },
       "profile": "p150",
       "step_s": [
-        34.798,
-        34.774,
-        34.784
+        35.199,
+        35.168,
+        35.185
       ],
       "steps": 5,
       "turbo_file": "minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors",
       "video_shift": 6.0,
-      "warmup_wall_s": 181.4,
+      "warmup_wall_s": 180.3,
       "width": 1344
     },
     {
@@ -586,8 +594,8 @@
   ],
   "p150": {
     "audio_shift": 3.0,
-    "choice_reason": "within budget",
-    "clip": 0.3417772054672241,
+    "choice_reason": "within budget; NFE 8 kept (CLIP 0.3552 vs 0.2970, +0.0582 >= 0.01)",
+    "clip": 0.35524487495422363,
     "dit_dtype_policy": {
       "activation_dtype": null,
       "bf16_blocks": [],
@@ -599,7 +607,7 @@
       "why": "the only alternative measured (bf4_ff) is not faster and costs CLIP; see rejected[]"
     },
     "dit_quant_profile": "bf8_weights_bf8_out",
-    "e2e_s": 178.7,
+    "e2e_s": 147.7,
     "frames_max": {
       "1344x768": 124,
       "768x448": 124,
@@ -607,19 +615,19 @@
     },
     "height": 768,
     "lora_strength": 1.0,
-    "nfe": 4,
-    "num_frames": 124,
-    "peak_dram_gib": 21.92,
+    "nfe": 8,
+    "num_frames": 73,
+    "peak_dram_gib": 22.34,
     "phases_s": {
-      "audio": 2.001,
-      "denoising": 139.215,
+      "audio": 1.171,
+      "denoising": 121.186,
       "encoder": 0.002,
-      "vae": 29.369
+      "vae": 17.339
     },
     "short_edge_max": 768,
-    "steps": 5,
+    "steps": 9,
     "text_encoder": "host",
-    "turbo_file": "minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors",
+    "turbo_file": "minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
     "video_shift": 6.0,
     "width": 1344,
     "within_budget": true
