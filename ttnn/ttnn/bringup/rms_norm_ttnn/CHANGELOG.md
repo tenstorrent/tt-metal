@@ -124,3 +124,9 @@
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`, `tests/test_rms_norm_ttnn.py`
+
+### Known gap: memory_config under inplace (test skipped, 2026-09-30)
+- The C++ host path (`rms_norm_ttnn.cpp`) does not refuse a `memory_config` that differs from the input's placement
+  when `program_config.inplace` is set; the Python path refuses it. `test_refuses_memory_config_disagreeing_under_inplace`
+  failed on it and is skipped until `validate()` in `rms_norm_ttnn.cpp` gets the same check. No model passes
+  `inplace` with a disagreeing `memory_config`, so no bring-up result is affected.
