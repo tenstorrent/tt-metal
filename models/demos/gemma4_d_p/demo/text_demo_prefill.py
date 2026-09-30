@@ -372,7 +372,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     """
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
-    from models.demos.gemma4_d_p.tt.ccl import ccl_partition_rows
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
@@ -464,7 +463,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
         def forward(chunk_start):
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
-            embeds = ccl_partition_rows(embeds, mesh_config)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)

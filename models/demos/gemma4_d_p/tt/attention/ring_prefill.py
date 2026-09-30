@@ -185,22 +185,23 @@ def global_ring_prefill_attention(
     num_layers=1,
 ):
     """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
-    program_config, gather_seq, ccl_args = _ring_prefill_setup(
-        tt_q,
-        mesh_config,
-        ccl_manager,
-        prefill_metadata,
-        GLOBAL_HEAD_DIM,
-        max_seq_len,
-        None,
-        program_config,
-        layer_idx,
-        num_layers,
-    )
+    mesh_device = mesh_config.device
+    if program_config is None:
+        q_chunk, k_chunk, k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=False)
+        program_config = ring_prefill_program_config(
+            mesh_device, ccl_manager, GLOBAL_HEAD_DIM, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
+        )
+    # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
+    # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
+    cp = mesh_config.cp_degree
+    gather_seq = ring_cache_seq_len(max_seq_len, cp) * cp
     # The fused gather's bank-owned schedule needs an interleaved output; the packed cache itself is ND-sharded.
     buffer_kv = ccl_manager.get_ring_gather_buffer(
         "ring_kv", num_local_kv_heads, gather_seq, GLOBAL_PACKED_DIM, cache_kv.dtype, ttnn.DRAM_MEMORY_CONFIG
     )
+    # ring_mla rather than ring_joint_scaled_dot_product_attention: only ring_mla reads K and V out of one packed
+    # tensor (MLA-style latent V; here Gemma4's [K | V] rows). Both call the same device op,
+    # ttnn::prim::ring_joint_scaled_dot_product_attention.
     out, _ = ttnn.transformer.ring_mla(
         tt_q,
         cache_kv,
@@ -210,7 +211,19 @@ def global_ring_prefill_attention(
         program_config=program_config,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
-        **ccl_args,
+        dim=2,
+        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        num_links=ccl_manager.num_links,
+        cluster_axis=mesh_config.cp_axis,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+        ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
+        use_column_major_ccl=True,
+        is_balanced=False,
+        slot_id=prefill_metadata.slot_idx,
+        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
     )
     return out
 
@@ -320,112 +333,6 @@ def sliding_ring_prefill_attention(
     num_layers=1,
     slot_idx=0,
 ):
-    """Attend sliding layers using separate K and V ring caches."""
-    return _ring_prefill_attention(
-        tt_q=tt_q,
-        cache_k=cache_k,
-        cache_v=cache_v,
-        mesh_config=mesh_config,
-        ccl_manager=ccl_manager,
-        prefill_metadata=prefill_metadata,
-        num_local_kv_heads=num_local_kv_heads,
-        head_dim=head_dim,
-        max_seq_len=max_seq_len,
-        logical_n=logical_n,
-        kv_actual_global=kv_actual_global,
-        sliding_window_size=sliding_window_size,
-        scale=scale,
-        compute_kernel_config=compute_kernel_config,
-        program_config=program_config,
-        layer_idx=layer_idx,
-        num_layers=num_layers,
-        slot_idx=slot_idx,
-        gather_buffer_key=gather_buffer_key,
-    )
-
-
-def _ring_prefill_setup(
-    tt_q,
-    mesh_config,
-    ccl_manager,
-    prefill_metadata,
-    head_dim,
-    max_seq_len,
-    sliding_window_size,
-    program_config,
-    layer_idx,
-    num_layers,
-):
-    """Program config, gather length and CCL arguments shared by the global and sliding ring calls."""
-    mesh_device = mesh_config.device
-    if program_config is None:
-        _q_chunk, _k_chunk, _k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
-        program_config = ring_prefill_program_config(
-            mesh_device,
-            ccl_manager,
-            head_dim,
-            q_chunk_size=_q_chunk,
-            k_chunk_size=_k_chunk,
-            max_k_splits=_k_splits,
-        )
-    cp = mesh_config.cp_degree
-    cache_seq = ring_cache_seq_len(max_seq_len, cp)
-
-    # Buffer size depends on the mode, and the two requirements are opposites.
-    #
-    # Dense (no window): ring_joint gathers the entire per-device shard, so the buffer
-    # must span the FULL cache capacity — not logical_n, which survives a 2-chunk run
-    # and then fails "gather dim 2 too small".
-    #
-    # Sliding: only the predecessor halo is exchanged, and the op *requires* a compact
-    # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
-    # "requires a compact halo buffer". Size it to the halo, which is the window
-    # rounded up to whole k chunks.
-    if sliding_window_size:
-        k_chunk = program_config.k_chunk_size
-        halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-        gather_seq = max(halo_tokens, TILE_HEIGHT)
-    else:
-        gather_seq = cache_seq * cp
-    ccl_args = dict(
-        dim=2,
-        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
-        num_links=ccl_manager.num_links,
-        cluster_axis=mesh_config.cp_axis,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
-        ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
-        use_column_major_ccl=True,
-        is_balanced=False,
-        slot_id=prefill_metadata.slot_idx,
-        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
-        kv_cache_num_layers=num_layers,
-        kv_cache_layer_idx=layer_idx,
-    )
-    return program_config, gather_seq, ccl_args
-
-
-def _ring_prefill_attention(
-    tt_q,
-    cache_k,
-    cache_v,
-    mesh_config,
-    ccl_manager,
-    prefill_metadata,
-    num_local_kv_heads,
-    head_dim,
-    max_seq_len,
-    logical_n,
-    kv_actual_global,
-    sliding_window_size=None,
-    scale=1.0,
-    compute_kernel_config=None,
-    program_config=None,
-    layer_idx=0,
-    num_layers=1,
-    slot_idx=0,
-    gather_buffer_key=None,
-):
     """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
@@ -435,18 +342,18 @@ def _ring_prefill_attention(
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
     """
-    program_config, gather_seq, ccl_args = _ring_prefill_setup(
-        tt_q,
-        mesh_config,
-        ccl_manager,
-        prefill_metadata,
-        head_dim,
-        max_seq_len,
-        sliding_window_size,
-        program_config,
-        layer_idx,
-        num_layers,
-    )
+    mesh_device = mesh_config.device
+    if program_config is None:
+        q_chunk, k_chunk, k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=True)
+        program_config = ring_prefill_program_config(
+            mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
+        )
+    # Only the predecessor halo is exchanged, and the op requires a compact buffer (gathered rows < cache_seq *
+    # ring): a full-capacity one fails "requires a compact halo buffer". The halo is the window rounded up to whole
+    # k chunks.
+    k_chunk = program_config.k_chunk_size
+    halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
+    gather_seq = max(halo_tokens, TILE_HEIGHT)
     buffer_k = ccl_manager.get_ring_gather_buffer(
         (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
@@ -468,8 +375,20 @@ def _ring_prefill_attention(
         program_config=program_config,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        num_links=ccl_manager.num_links,
+        cluster_axis=mesh_config.cp_axis,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+        ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
+        use_column_major_ccl=True,
         is_causal=True,
+        is_balanced=False,
+        slot_id=prefill_metadata.slot_idx,
+        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
         sliding_window_size=sliding_window_size,
-        **ccl_args,
     )
     return out
