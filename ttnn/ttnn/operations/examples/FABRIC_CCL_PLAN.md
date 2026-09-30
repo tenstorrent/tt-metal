@@ -107,3 +107,88 @@ The guide is written alongside the examples; each rule gets filled in once its e
    cross-architecture numbers?
 3. **Router config.** The 14 KiB payload changes the whole fabric instance. Should it be a variant in
    every example, or only in `fabric_packet_size`?
+
+## Enabling op code gen to write CCLs
+
+### Where we are
+
+Three fabric examples are built, measured and in `master.md`: `fabric_link_ceiling` (one core, one link, 48.5
+GB/s per link direction on a Blackhole QuietBox), `fabric_gather_pair` (2-chip DRAM → DRAM gather), and
+`fabric_all_gather` (a general line / ring / snake / dual-Hamiltonian-cycle all-gather on every fabric config).
+On the QuietBox, `fabric_all_gather` beats `high_bw_all_gather` by 1.17–1.28× on every FABRIC_2D variant (72 MiB
+bf16, 2 links) and 1.32× on a FABRIC_1D ring. It supports TILE and ROW_MAJOR, any dtype, preallocated output with
+a fence between calls, sub-devices and caller-owned semaphores. Its test reports link utilization against the
+busiest-hop bound. The Blaze Galaxy CI job that ran `high_bw_all_gather` now runs it (`fabric_all_gather_perf`).
+
+The only CCL that code gen has written so far is `high_bw_all_reduce`. Its self-reflection
+(`ttnn/ttnn/operations/high_bw_all_reduce/self_reflection.md`) shows three gaps:
+
+1. **No fabric knowledge.** The design sent a fused write + atomic-inc on every packet, which cost the first
+   1.8×. No reference or skill states a fabric rule, and `/perf-ceiling-dm` has no fabric ceiling, so the
+   perf phase had nothing to aim at.
+2. **Everything hand-rolled.** The kernel library has no fabric helpers, so connection setup, routing, header
+   handling and signalling were all written from scratch.
+3. **Blind coverage.** A 2×2 box only forms groups of G = 2, so the middle-of-the-line path never ran even
+   though `SUPPORTED` claims the axis. The fabric is also dead after a passing `--dev` run.
+
+### Plan
+
+**1. Agent-facing fabric CCL reference** (small effort, biggest immediate win). A `references/*.md` file in
+`tt_ops_code_gen`, loaded by the planner and implementer, plus a fabric section in `/perf-ceiling-dm`. Each rule
+carries its measured number and points at the example that proves it:
+
+- One port core per (link, direction), placed directly below its Ethernet core (probe the connection on
+  device; map translated coordinates through the harvesting masks). Adjacent placement drops two links from
+  48.5 to 40.6 / 30.5 GB/s.
+- Send full packets (14336 B payload on 1D and TORUS_XY; 8704 B helps plain 2D by ~3% and hurts TORUS_XY by
+  18%). Never flush per packet.
+- Put the arrival increment on every 8th chunk, not every packet: an increment on every packet halves the
+  rate. A relay waits for `chunk / 8 + 1` increments.
+- Store-and-forward through the neighbour's output with arrival counters; the relay costs nothing in steady
+  state (a 4-chip line runs at the 2-chip rate).
+- Chunks are runs of pages that sit consecutively in one DRAM bank, visited round-robin; one copy core per
+  link does the local copy.
+- Balance even rings: split the shard opposite each chip between the two directions (+24–27% at G = 4; only
+  ~3% at G = 32).
+- On a 2D torus, a whole-mesh gather should use two edge-disjoint Hamiltonian cycles, so every chip uses all
+  four neighbours (the busiest hop halves).
+- Fence between calls: each sender tells its peer "you may write into my output" and waits for the same
+  before sending; cost not measurable. Count host-side what can be counted host-side (on-device counting
+  walks cost ~10 µs per call).
+- Which config does what: 1D is fastest for one-hop traffic; TORUS_XY is the best 2D variant (~12% above the
+  others); plain FABRIC_2D can still close a ring when the box is physically a cycle.
+- Link peak per machine: QuietBox 48.5 GB/s per link direction; Galaxy ≥ 26.9 (from `high_bw_all_gather`'s own
+  8-rank gate). Bound: time ≥ busiest-hop bytes / (links × link rate).
+- Measured headroom to expect: a 1-link line reaches 98–99% of a link at 16–64 MiB; with 2 links each link
+  drops to 80–90%; 2-link rings on 2D configs reach 70–79%.
+
+**2. Building blocks extracted from `fabric_all_gather`** (medium effort), so agents compose instead of
+rediscover:
+
+- Kernel side: a fabric port sender (header ring, every-8th-chunk increment, ready fence, 1D/2D one-hop
+  routing), a relay reader that waits on the arrival counter, and the bank-run chunk walk.
+- Host side: Ethernet-core probing and harvesting-aware port placement, the ring / line / snake /
+  dual-cycle planner with balanced schedules, semaphore setup (internal or caller-owned), and `link_load` for
+  the bound.
+
+**3. Harness fixes** (medium effort):
+
+- Correctness for G ≥ 3 and torus / Galaxy topologies under tt-emule (shown bit-exact on an emulated 32-chip
+  Galaxy; recipe in the `fabric_all_gather` README).
+- Record group size and mesh shape as an observed facet, so `SUPPORTED` claims say where they were verified.
+- Reset the fabric after `--dev` runs that opened one.
+- The perf step reports link utilization against the bound, as `test_fabric_all_gather.py` does, so the
+  perf tournament knows how much headroom is left.
+
+**4. A new CCL eval to prove it worked.** Code gen writes an all-gather from scratch with the reference loaded
+and the building blocks available. It is scored against `high_bw_all_gather` and `fabric_all_gather` on the
+QuietBox matrix, then on the Galaxy job. Reduce-scatter comes next: the same building blocks plus a compute
+stage.
+
+### Decisions
+
+- **Where the rules live.** Proposed: agent-facing reference in `tt_ops_code_gen/references/` first; the
+  human guide (the "Writing fast CCL kernels" section above) is generated from it.
+- **How far the helpers go.** Proposed: an examples-local kernel header and Python module first, upstreamed to
+  the kernel library once the API has settled.
+- **Which op for the eval.** Proposed: all-gather first, because it has two strong baselines to score against.
