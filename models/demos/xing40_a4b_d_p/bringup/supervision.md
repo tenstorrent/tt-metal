@@ -135,3 +135,17 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   ms. The agent skipped part (2) (mhc_pre) on effort; the brief's "if (2) cannot pass, keep (1)" was too soft. Owner
   wants both: added P.2b (mhc_pre Xing mode: reduced-row entry, no pre eps, clamp 30, Xing Sinkhorn order; only a
   measured frozen-test failure may stop it; hc < 25 ms each). P.3 now depends on P.2b. Resumed.
+
+## 20:15-21:20 (from the 21:20 hand-off, context compacted)
+- 20:15-21:15 P.2b PASS dea3610b9fc: new entries ttnn.bringup.mhc_pre_xing / mhc_pre_xing_pack (own kernels; the
+  existing mhc_pre program untouched), Xing math from xing_ref.hc_weights, XING_HC_IMPL=fused default (composed =
+  old path); fork regression green (unit 48, golden 215, glm53 cases 10; fixture opens the box's mesh). Accepted.
+- mhc-bringup-ops branch fully brought in (7 commits incl. the GLM fused-by-default 917e1747647); GLM content identical
+  to the branch, mhc_post differs only by P.2's comb_transposed option.
+- SDPA exp investigation: the softmax exp is always the fast approx (no knob); SDPAProgramConfig.exp_approx_mode only
+  drives the online-softmax correction exp (True = fp32-accurate); (B) uses a bf16-truncated scale (small, untracked).
+  XING_MLA_EXP_APPROX switch added (default off); end to end within noise.
+- Owner ssh key added to ~/.ssh/authorized_keys on this box at the owner's request (21:10).
+
+- 22:15 P.3: my brief asked for a per-op before/after (BRINGUP_PROFILE_OPS=1); the agent ran op mode over all 40 layers (~1 min per layer), the agent's task limit killed it at 22:08 and the agent sat polling its log. Owner: unacceptable, only e2e + the changed section matter. Stopped agent + orchestrator (WIP kept: XING_EXPERTS_FIDELITY hifi2 default; overseer removed its hifi3 entry). Framework fix 2f64c73fb7d: op mode on representative layers only (whole model refused, selftest), perf role brief + SKILL.md + P.* briefs: e2e + section before/after from the plain profile. P.3 rerun from its gate (measures the WIP).
+- Owner (22:00): cherry-pick the 6 newer F56 commits (origin/dnijemcevic/f56-component-checks a8f208fe443..2d36f827ca3) after X.3, before O.1.
