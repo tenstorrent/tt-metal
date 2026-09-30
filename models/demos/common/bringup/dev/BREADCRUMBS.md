@@ -673,3 +673,100 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
   gives timeline_ok 1: 423.7 ms device timeline, 0.7 ms gaps). GLM's tasks.yaml profile commands (X.1, P.1, X.3)
   patched the same way.
 - Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F52 ledger_gen).
+- Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F54 ledger_gen).
+
+## F56 (2026-09-30): component tests check themselves by output kind; freeze sweep; optional review skip
+Branch `dnijemcevic/f56-component-checks` (from `dnijemcevic/ernie45_prefill` at 9996fb84734). Owner goal: drop most
+of the component-test reviews (Hy4 run1: 42 reviews, ~4 h of agent time) without letting through any mistake a
+reviewed test catches. The skip is built but OFF by default (`agents.component_review: all`) until the owner says OK.
+Everything below is done and proven; a cherry-pick needs no rerun of the proofs (`dev/f56_mutation_proof.md`, device
+numbers below). To reproduce: `python models/demos/common/bringup/dev/f56_mutation_proof.py` (CPU, ~35 min with two
+processes) and `dev/f56_device_check.py` (device, ~10 min).
+
+**What changed**
+- `testing/component_checks.py` (new) + `testing/component.py`: `run_component_test(..., checks=None | "auto")`.
+  `None` is exactly the old behaviour (every existing frozen test unchanged). `"auto"`: the golden gate as before
+  (index outputs compared order-free, `topk_overlap`), plus checks vs the CPU step on the same inputs and vs the
+  golden, chosen by output kind:
+  - float: finite, rel L2, worst row rel L2 (0.03), every row's norm ratio (1 +- 0.015), median row norm ratio
+    (1 +- 0.004: a systematic scale). The rel limit follows the step's precision: the CPU step run with every
+    input-derived fp32 intermediate rounded to bf16 (constants such as weights and RoPE tables stay exact) has rel
+    error e; limit = 2 e (3.5 e for Step.kind in `tests.low_precision_kinds`, default [moe]: bfp8 experts), within
+    [0.003, 0.015], never below 1.2 e; vs the golden + the fp32 step's own error vs the bf16 golden. The fixed limits
+    are also never below 1.2 x what the precision model reaches.
+  - selection (>= 75 % zeros, dense router weights): same nonzero count per row, no negative weight, mean selection
+    overlap >= 0.995, rel L2 on rows with the same selection <= 0.005, their row sums within 0.4 %.
+  - index (integer rows that are sets, pads -1 / 0xFFFFFFFF): order-free overlap (mean >= thr, worst row >= 0.95),
+    same valid count per row, no repeats, causal and own-position when the reference is.
+  - int (anything else): match as before, and the sweep sends it to a review.
+  Second inputs (vs the CPU step on the same inputs; rel >= 0.03, fixed limits x 1.5, no bias limit: they are for
+  structural bugs, errors >= 0.1): `chunk0` (stateful steps), `layer<N>` (the farthest other golden layer), `mixed`
+  (rows and columns of every float input permuted, seeded: removes layer 0's equal iHC streams and near-1 pre gates,
+  under which a stream-order bug moves nothing on any real input), `small` (float inputs scaled by a power of 2 to
+  RMS 1e-3: a norm epsilon), `big` (x 2: a clamp). A model hook `swap_context` (F49) fills both contexts if present.
+  All limits are spec-overridable: `thresholds.component_*` (COMPONENT_DEFAULTS).
+- Freeze sweep `BRINGUP_IMPL=mutations` (CPU, one process): the reference passes; every standard mistake of
+  testing/mutate.py that applies to the output, applied on the golden and on every second input, fails; the bf16
+  controls pass. It also lists, per float input, whether a 1.02 x scale of it is seen (informational: a norm is
+  scale-free). `core/runs.py: freeze_task(..., mutations=True)` requires it (the test's rc; the sweep records no pcc).
+- `testing/templates.py`: component template `CHECKS = "auto"`. `orchestrator.py`: a component task freezes without
+  the test role when `agents.component_review` (all | none | [block types]; default `COMPONENT_REVIEW_DEFAULT =
+  "all"`) leaves its block type out AND the sweep passes; a failed sweep starts the test role with the sweep's log.
+- `core/metrics.py`: the temp file is per process (two proof processes on the adhoc task collided on it).
+- Selftests: `selftest/test_component_checks.py` (47 + 1 skip); all selftests 297 passed, 1 skipped.
+
+**Design decisions and dead ends (do not redo)**
+- A fixed rel limit cannot work: noise1e-2 (rel 0.010) sits between the Hy4 device norms (0.002-0.003) and the
+  bfp8 experts (0.008). The bf16 precision model was checked against all 39 recorded Hy4 device component results:
+  device / model error 0.29-1.74 (bf16 steps), 2.09 (bfp8 experts); every device result is inside its golden limit
+  with >= 2 x headroom (tightest: experts 0.0080 vs 0.0158, dense ffn_residual 0.0044 vs 0.0094).
+- The first precision model rounded every fp32 op output; it rounded RoPE positions too (bf16 positions above 256
+  are coarse), so chunk 0 attention showed e = 0.44. It now rounds only values derived from the step's inputs
+  (taint by tensor identity). It also restores the reference object's attributes after its run: Hy4 caches its RoPE
+  table on the reference, and a table cached in bf16 mode made the plain reference miss its own output by 7.8 %.
+- An "input contribution" absolute limit (error vs min_i ||cpu - cpu(input i = 0)||) was dropped: with limits tied
+  to the precision model it was never tighter, and a 2 % error in an addend that is 10-20 % of a residual stream is
+  at the output's bf16 rounding for any test (the reviewed tests have the same bound).
+- The generic "scale each input and weight by 1.02, flag blind parts" check of the plan is reporting only, for
+  inputs: weights are not reachable generically (`ref.w[layer]` is Hy4's own), and for float outputs "slipped" and
+  "below the limit" are the same thing. The second inputs do the work instead (they close every known blind spot).
+- Second inputs with calibrated (tight) limits false-alarmed on the device: Hy4 attention L1 with every float input
+  x 1e-3 has rel 0.009 and a median norm ratio of -0.75 % (the reviewed test scaled only attn_norm); permuted
+  inputs rel 0.0055. Hence the loose second-input limits.
+- `layer<N>`: the nearest layer (1) could not show a layer-0 stream swap (rel 0.004); the farthest (5) neither
+  (1e-5: all pre gates ~1). `mixed` shows it (rel 0.67).
+- A step whose bf16 precision is too coarse to see 1 % noise fails its sweep and goes to review (the fixture's tiny
+  attention). That is intended.
+
+**Proofs**
+- CPU mistake proof on 11 hand-reviewed Hy4 component tests (one per output kind + every known hard case), the 7
+  float kinds or idxshift, hard cases (eps, streamswap, addend1.02, noclamp, nobias, post_half), controls
+  (reference, bf16, top-k shuffle) and the sweep: `dev/f56_mutation_proof.md` (summary below).
+- Device check (`dev/f56_device_check.py`, Hy4 on the p150b 2x2, 2026-09-30): 6 passed, no false alarms:
+
+  | step (layer) | kind | vs CPU (limit) | vs golden (limit) | second inputs (worst) |
+  |---|---|---|---|---|
+  | attn_norm (0) | float | 0.0017 (0.0059) | 0.0017 (0.0076) | small 0.0019 |
+  | attn_residual (0) | float | 0 (0.0045) | 0.0027 (0.0072) | 0 |
+  | indexer (0) | index | overlap 0.9972, worst row 0.991 | 0.9971 | chunk0 1.0, layer5 0.9989 |
+  | attention (1) | float | 0.0064 (0.0111) | 0.0066 (0.0128) | big 0.0121, small 0.0092 (0.03) |
+  | router (1) | selection | overlap 0.9998, rel 6e-5 | overlap 0.9982, rel 0.0017 | mixed 0.9998 |
+  | experts (1), bfp8 | float | 0.0077 (0.0134) | 0.0080 (0.0157) | mixed 0.0107 (0.03) |
+- CPU proof result (`dev/f56_mutation_proof.md`, 2026-09-30, 29 min of runs, final code): 11 reviewed Hy4 component
+  tests (attention, attn_hc, attn_hc_pre, attn_norm, attn_residual, indexer, q_a of dense_full; router, experts,
+  moe_combine of moe_full; topk_shared of moe_shared), 106 rows.
+  - Mistakes 73: reviewed catches 73, new (`checks="auto"`) 73, old template 38. Caught by reviewed but not by new: 0.
+  - Controls 22 (reference, bf16, top-k with the valid positions shuffled): new passes 22/22.
+  - Freeze sweeps: 11/11 pass, i.e. all 11 would freeze without a review.
+  - Hard cases, each caught by new and by reviewed, missed by old (except nobias): attn_norm eps 1e-6 (by the small
+    and layer5 inputs), q_a eps 1e-5 (small), attn_hc_pre stream swap at layer 0 (mixed only), attn_hc post gates
+    halved, attn_residual / moe_combine addend x 1.02, experts without the SwiGLU clamp (golden and big), router
+    without its correction bias.
+  - The 3 errors are the old template on topk_shared (it raises without the shared top-k: why that test needed its
+    review); the new path gets the top-k through `swap_context` (the proof supplies it, as for F49).
+  - Found by the proof and fixed before this result: the reviewed topk_shared test requires pads after the valid
+    positions (the consumer, sparse_sdpa, reads a row up to its first pad); the index checks now require it when the
+    reference has it (commit "Top-k checks: pads stay after ..."); device indexer re-checked: passes.
+- Not proven: the other 31 reviewed Hy4 component tests (same steps on other layers or block types), other models,
+  weight-only bugs a step's output cannot show on any input. Owner decision pending: switch the default to "none"
+  (or keep the review for the first block type of a new model and skip it for block types that repeat the steps).

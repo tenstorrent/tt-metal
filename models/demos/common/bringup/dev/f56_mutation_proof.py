@@ -150,9 +150,10 @@ def hard_cases(step: str) -> dict:
 
 
 def shuffle_rows(t):
+    """Each row's valid positions in a random order, pads kept at the end: a correct unsorted device top-k."""
     g = torch.Generator().manual_seed(0)
-    perm = torch.argsort(torch.rand(t.shape, generator=g), dim=-1)
-    return torch.gather(t, -1, perm)
+    key = torch.rand(t.shape, generator=g) + (t < 0).float() * 2  # pads sort last
+    return torch.gather(t, -1, torch.argsort(key, dim=-1))
 
 
 @contextlib.contextmanager
