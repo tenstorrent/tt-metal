@@ -1,39 +1,16 @@
-# t10 next steps (written 2026-09-30)
-Build: tmp/build.log, ends with BUILD_EXIT=<code>. First try died on a half-downloaded .cpmcache/nlohmann_json (log in tmp/build_fail1.log).
-Broker caps jobs at 600s (reservation_cap hook). Use kernel prewarm, once per build:
-  tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh -e tmp/ltx25_env.yaml -w $PWD -t 600 -- bash tmp/run25.sh dv145
-Then submit each as its own broker job (timeout 600):
-  bash tmp/run25.sh dv145_c211 DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1
-  bash tmp/run25.sh dv153 NUM_FRAMES=153 FPS=25
-  bash tmp/run25.sh conv145 LTX25_DIFFVAE=0
-Outputs: tt-project/baselines/ltx25_1080p_6s/<label>/{run.log,*.mp4}. Gen #1 is the traced steady-state replay with a fresh prompt.
-Caches are on /var/tmp (root fs; /tmp is wiped at boot): /var/tmp/t10-tt-metal-cache, /var/tmp/t10-dit-cache-ltx25. Delete both when the task ends.
-The first run fills the DiT cache and may run past 600s. If so, rerun: the second run loads from cache.
-Attempt 2 (2026-09-30): build done (BUILD_EXIT=0). Launched prewarm+dv145 detached; log tmp/prewarm_dv145.log, broker capture job 580.
-Next: once tmp/prewarm_dv145.log shows RUN_EXIT[dv145], read baselines/ltx25_1080p_6s/dv145/run.log, then submit dv145_c211, dv153, conv145 one at a time.
-Attempt 2 result: dv145 run (job 580) got through gen+decode in 330s, then crashed in ping_pong_buffer_report (list entries, DIFFVAE_MEM_LOG path). Fixed in e15bb15e1ab.
-Resubmitted dv145 as broker job 596 (log /var/log/tt-device-broker/2026-09-30_132151_596.log). Kernel + DiT caches now warm.
-Next: read baselines/ltx25_1080p_6s/dv145/run.log (per-stage times, [dram] lines, export time), then submit dv145_c211, dv153, conv145 one at a time via tt_device_job_run_bg (env tmp/ltx25_env.yaml, timeout 600).
-Attempt 2b (2026-09-30): job 596 timed out at the 600s cap (pytest-timeout 580s) during the warmup gen's stage 2, before gen #1.
-Root cause: all 10 DiT weight_load entries report CACHE MISS ("TT_DIT_CACHE_DIR unset or blocking key changed") although TT_DIT_CACHE_DIR=/tmp/t10-dit-cache-ltx25 is set and holds 72G.
-The cache dirs were rewritten 13:22-13:29 during job 596, so the cache key changes between runs (job 580 wrote, 596 missed). Load+convert ~7.5 min, text-encode ~1.5 min.
-Next: find why the key differs run to run (grep "blocking key" / cache key builder in models/tt_dit/utils/cache*.py; compare the key file written by 580 vs 596), fix, then rerun dv145.
-Task t26 (2026-09-30): the DiT cache key is NOT unstable. Job 580 was the prewarm kernel-capture pass
-(TT_METAL_KERNEL_CAPTURE_ONLY), which by design never writes the weight cache; 596 was the first real
-write. Paths/keys are identical in both logs. All 10 caches under /tmp/t10-dit-cache-ltx25 now carry a
-manifest that matches the tensorbins (checked offline). Commit f2ddefed262 makes each miss name its real
-reason (capture pass / absent / rejected) instead of "blocking key changed".
-Baselines: detached driver tmp/drive26.sh (log tmp/drive26.log, ends DRIVE_DONE) submits dv145 (job 605),
-then dv145_c211, dv153, conv145 one after another. It stops after dv145 if the transformer still misses.
-Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log for per-stage times (LTX_TIME_STAGES),
-the walltime ledger (expect 10 HITs), the mp4 path; grab a still with ffmpeg; build the table.
-Task t26 attempt 2 (2026-09-30): job 605 (dv145) timed out again, every DiT cache "absent". Real cause: the box
-rebooted at 13:51 (also 12:19, 07:17) and tmpfiles 'D /tmp' empties /tmp at boot, wiping both caches.
-Moved both caches to /var/tmp (same fs, survives reboot); tmp/ltx25_env.yaml and tmp/run25.sh updated.
-605 re-published all 10 DiT caches before timing out, so the DiT cache is warm. Commit 3f159a235a5 adds a
-"/tmp is wiped at every boot" hint to the miss reason (unit tests: 13 passed, 3 skipped).
-Driver: tmp/drive26b.sh (log tmp/drive26b.log, ends DRIVE_DONE; prewarm log tmp/prewarm26b.log, capture job 633).
-It runs kernel prewarm + dv145, then dv145_c211, dv153, conv145. A reboot kills it: if tmp/drive26b.log lacks
-DRIVE_DONE and no drive26b.sh process exists, check which run.logs passed and resubmit the rest.
-Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log (LTX_TIME_STAGES lines, walltime ledger,
-expect 10 CACHE HITs), mp4 in the same dir; still with ffmpeg -ss 3 -frames:v 1; build the table.
+# t32 notes: ring-joint SDPA chunk re-sweep + V2A split-K
+
+- Branch base: t10 (e7295c8cfd8) + cherry-pick of t14's block trace harness (57497b94bd5).
+  Sweep test: 65bc398d0a4 `test_ltx_ring_sdpa_chunk_sweep` in models/tt_dit/tests/models/ltx/test_transformer_ltx.py.
+- Worktree links (gitignored): build, build_Release -> ../t10/build_Release, runtime -> ../t10/runtime,
+  ttnn/ttnn/_ttnn.so -> t10's. Env: tmp/env.yaml (TT_METAL_CACHE=/var/tmp/t32-tt-metal-cache, on /, not /home).
+- Shipped configs (4x8, attention_ltx.py): self S1 (96,256), S2 (192,512); V2A cross q=32, k=512 (fallback k).
+- Driver: `nohup bash tmp/drive.sh > tmp/drive.log` = prewarm_and_submit per stage (600 s cap, hook-enforced).
+  Stage-3 job IDs for stage_1 / stage_2 are the "Job N queued" lines after "stage 3/3" in tmp/drive.log.
+- On resume: for each stage job ID: `tt-device-mcp logs -n 100000 <ID> | grep SWEEP`.
+  Lines: `SWEEP <stage> self q= k= us= bitexact|maxabs rel_l2`, `SWEEP <stage> v2a q=32 k= ...`,
+  `SWEEP <stage> v2a_splitk us= ...` (first config of each group is the shipped one = "ref").
+- Next: pick best self/cross chunks per stage; if a win > noise, update ring_sdpa_chunk_by_n /
+  cross k in attention_ltx.py, confirm with block A/B (test_ltx_transformer_block_trace_perf 8k) and an e2e run.
+  If split-K clearly beats the ring cross at acceptable rel_l2, wire it behind a flag in attention_ltx.py.
+- t22 (general denoise) works on noise prefetch / prompt handoff: no overlap with SDPA.
