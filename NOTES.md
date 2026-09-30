@@ -30,3 +30,12 @@
 - Next: when the pause lifts, run tmp/READY_32.md jobs one at a time (1 = S2 split-K first).
   If split-K wins: move _v2a_split_k into attention_ltx.py behind LTX_V2A_SPLIT_K (key_bias/row_zeros must be
   built before trace capture), then block A/B + e2e.
+
+## 2026-09-30 18:37, sweep moved to blx03 (g15blx02 still paused)
+- blx03 worktree: ~/fasth3/t32 (git worktree of blx03's ~/fasth3/tt-metal clone at 35a6d41811e). Links build_Release,
+  runtime, ttnn/ttnn/_ttnn.so to ~/fasth3/tt-metal (t36 build; no host C++ difference vs this branch).
+  tmp/ there holds sweep.sh, blx03_sweep.sh, env.yaml (untracked; copies in this worktree's tmp/).
+  JIT cache: blx03 ~/fasth3/cache/t32-tt-metal-cache (delete when done).
+- Driver (g15blx02): tmp/drive32.sh, log tmp/drive32.log. Job 865 = S2 split-K; then S1 split-K, S1 self, S2 self,
+  one at a time, stops on first failure; ends with DRIVE32_DONE. Job IDs are the JOB[...] lines.
+- Read results: `ssh g14blx03 'tt-device-mcp logs -n 100000 <ID>' | grep SWEEP | sed 's/.*SWEEP/SWEEP/'`.
