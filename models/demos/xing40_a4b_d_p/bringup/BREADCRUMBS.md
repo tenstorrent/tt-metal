@@ -39,3 +39,41 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: per-chip 9.63 of 27.20 GiB, 0 unplaced, 0 plan / component / ledger errors; plan_approved 0 until the owner
   approves. tasks.yaml unchanged (F48 lets the attn_hc task write ttnn/ttnn/bringup).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
+
+## C.dense.attn_hc test (run1, attempt 1)
+- The unreviewed freeze failed: the auto sweep let noise1e-2 through (limit 0.0148 set by the bf16-everywhere model,
+  whose bf16 comb logits give comb rel 0.0077). Reviewed the test: kept checks="auto" (PCC gate, second inputs
+  layer39 / mixed / small / big) and added extra checks on the golden input: rel L2 per part vs the CPU step
+  (pre 0.006, post 0.03, comb 0.012) and vs the golden (+ the fp32 step's own error), comb column sums within 0.01 of 1,
+  ranges pre (0, 1], post [0, 2], comb [0, 1] (slack 1e-3).
+- Measured on the golden (2048 rows): tf32 / bf16 projection operands give part rel <= 0.0009 (device on the fp32 plan);
+  bf16 everywhere 0.0024 / 0.0118 / 0.0077; noise1e-2 0.0114 / 0.092 / 0.007 with colsum 0.022 and post min -0.011.
+  20 Sinkhorn iterations do not converge: comb rows sum to 1 +- 0.11, columns to 1 exactly. 19 iterations
+  (comb rel 0.0064), the clamp, the row-max subtraction and hc_eps are not visible on this golden.
+- BRINGUP_IMPL=mutations now runs the auto sweep (printed, it still shows noise SLIPPED) and then the test's own sweep:
+  all 7 float mistakes caught by auto or extra checks, reference / bf16 controls pass. reference PASS, stub FAIL.
+  Device mode fails with NotImplementedError until the implement step.
+- Re-run: `BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py`
+  (also `stub`, `mutations`); the gate is the same command without BRINGUP_IMPL.
+
+## C.dense.attn_hc implement (run1, attempt 1)
+- Wrote `tt/layout.py` (SP=4 x TP=2 stream layout: chip (r, c) holds rows [r S/4, ..) and hidden columns
+  [1792 c, ..) of each stream, stream-major [1, 1, S/4, 4 x 1792] fp32; host helpers at the harness boundary only) and
+  `tt/mhc.py:TtHcWeights` / `build_hc` (attn_hc and ffn_hc, any layer). Hooks: `device_component` (attn_hc, ffn_hc),
+  `DEVICE_STEPS = {"dense": {"attn_hc"}}`, `HybridDeviceModel` (CPU reference + the device steps) as `device_model`.
+- Projection as in hy4 TtHcGates: fn^T permuted to chip-major and split over axis 1, partial mixes (cols 0-23) plus
+  the partial sum of squares (col 24) in one [S/4, 32] fp32 tile row, one `ttnn.all_reduce(cluster_axis=1)`, then
+  rsqrt(ss / 14336 + 1e-6), x scale + base on [1, 32] row constants, sigmoid x (1, 2).
+- Sinkhorn composed, not forked (the brief allows either): comb logits sliced to [S/4, 16] (a slice, since a
+  selector matmul would round logits to tf32, 0.015 abs at 30), `ttnn.clamp(-30, 30)`, row max = `ttnn.maximum` of
+  the logits and 3 within-row rotation matmuls (tf32-rounded max; it only shifts exp and cancels in the first row
+  normalisation), `ttnn.exp`, then 20 x (row, column) as `ttnn.divide(m, ttnn.linear(m, RB|CB, bias=eps))`.
+  All matmuls HiFi4 + fp32 dest. No host work in the forward; all constants built at load.
+- Ops per call: ~110 (80 in the Sinkhorn loop). Folding the eps into the linear's bias saved 40 ops at a small cost
+  (comb rel vs cpu 0.00066 -> 0.00087, worst column sum 0.00095 -> 0.00164). The fused fork
+  (`ttnn.bringup.mhc_split_sinkhorn` with a Xing mode) is still the way to cut this, left for a perf step. Note that the
+  stock kernel's elementwise ops run on the FPU from fp32 CBs (no UnpackToDestFp32), so a fork should check its own
+  precision against these numbers.
+- Gate: pcc_attn_hc_L00 0.999998; part rel vs cpu pre 0.00015 / post 0.00065 / comb 0.00087 (limits 0.006 / 0.03 /
+  0.012); comb column sums 0.00164 (<= 0.01); auto second inputs (layer39, mixed, small, big) rel <= 0.00087.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py`
