@@ -4,9 +4,10 @@
 
 """fl2va wall-clock baseline at an explicit canvas and clip length, with per-seed reference artifacts.
 
-Env: BASE_SECONDS (10), BASE_HEIGHT/BASE_WIDTH (1088/1920), BASE_STEPS (50), BASE_WARM_STEPS (2),
+Env: BASE_SECONDS (10), BASE_HEIGHT/BASE_WIDTH (768/1344), BASE_UPSCALE ("1920x1080"; "" = none), BASE_STEPS (50), BASE_WARM_STEPS (2),
 BASE_SEEDS ("0"), BASE_FIRST / BASE_LAST (keyframe paths; BASE_LAST optional), BASE_PROMPT,
-BASE_VSA_SPARSITY (unset = dense), BASE_OUT (artifact root). Each seed writes mp4, latents, stills and a
+BASE_VSA_SPARSITY (unset = dense), BASE_OUT (artifact root), BASE_LOAD_ONLY=1 (build the pipeline, filling
+TT_DIT_CACHE_DIR, and stop). Each seed writes mp4, latents, stills and a
 timings json as soon as it finishes, so a job cut short by the broker keeps what completed.
 """
 
@@ -18,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 from PIL import Image
 
@@ -34,12 +36,24 @@ DEFAULT_PROMPT = (
 )
 
 
+def upscale_frames(video: torch.Tensor, width: int, height: int, chunk: int = 16) -> np.ndarray:
+    """`(1, 3, F, h, w)` [0, 1] -> `(F, height, width, 3)` uint8, bicubic, chunked to bound host memory."""
+    frames = video[0].permute(1, 0, 2, 3).float()
+    out = np.empty((frames.shape[0], height, width, 3), dtype=np.uint8)
+    for start in range(0, frames.shape[0], chunk):
+        up = F.interpolate(frames[start : start + chunk], size=(height, width), mode="bicubic", align_corners=False)
+        out[start : start + chunk] = up.clamp(0, 1).mul(255).round().to(torch.uint8).permute(0, 2, 3, 1).numpy()
+    return out
+
+
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
 def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
     seconds = float(os.environ.get("BASE_SECONDS", "10"))
-    height = int(os.environ.get("BASE_HEIGHT", "1088"))
-    width = int(os.environ.get("BASE_WIDTH", "1920"))
+    height = int(os.environ.get("BASE_HEIGHT", "768"))
+    width = int(os.environ.get("BASE_WIDTH", "1344"))
+    upscale = os.environ.get("BASE_UPSCALE", "1920x1080")
+    up_size = tuple(int(v) for v in upscale.split("x")) if upscale else None
     steps = int(os.environ.get("BASE_STEPS", "50"))
     warm_steps = int(os.environ.get("BASE_WARM_STEPS", "2"))
     seeds = [int(s) for s in os.environ.get("BASE_SEEDS", "0").split(",")]
@@ -65,6 +79,8 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, vsa_config=vsa_config)
     gen_kwargs = dict(image=first, last_image=last, num_frames=num_frames, height=height, width=width)
     logger.info(f"BASELINE {tag}: pipeline built in {time.time() - t0:.1f}s")
+    if os.environ.get("BASE_LOAD_ONLY") == "1":
+        return
 
     # Programs are keyed on the padded length, not the step count, so a short warmup at the real
     # shape and keyframes compiles the same set a 50-step call runs.
@@ -78,9 +94,15 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
         output = pipeline(prompt, seed=seed, num_inference_steps=steps, **gen_kwargs)
-        wall = time.time() - t0
+        gen_wall = time.time() - t0
         assert pipeline.last_padded_len == warm_padded_len
         rows = list(pipeline.last_timings)
+        up_frames = None
+        if up_size is not None:
+            t0 = time.time()
+            up_frames = upscale_frames(output.video, *up_size)
+            rows.append((f"Upscale {upscale} (host bicubic)", time.time() - t0))
+        wall = gen_wall + (rows[-1][1] if up_size is not None else 0.0)
         total = sum(s for _, s in rows)
         denoise = dict(rows).get("Denoise", 0.0)
         record = dict(
@@ -101,6 +123,8 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
             prompt=prompt,
             rows=rows,
             total_compute_s=total,
+            upscale=upscale or None,
+            generate_wall_s=gen_wall,
             call_wall_s=wall,
             denoise_per_forward_s=denoise / max(steps - 1, 1),
             warmup_rows=cold_rows,
@@ -115,4 +139,9 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
         torch.save(pipeline.last_latents, out_dir / f"{stem}_latents.pt")
         # Lossless every-16th-frame subset for PSNR; the mp4 is lossy and a full uint8 clip is ~1.5 GB.
         np.save(out_dir / f"{stem}_frames_u8_every16.npy", frames[::16])
+        if up_frames is not None:
+            up_stem = f"{stem}_{upscale}"
+            write_artifacts(up_frames, output.audio.float().cpu().numpy(), output.sampling_rate, out_dir, stem=up_stem)
+            for label, index in (("first", 0), ("mid", len(up_frames) // 2), ("last", len(up_frames) - 1)):
+                Image.fromarray(up_frames[index]).save(out_dir / f"{up_stem}_{label}.png")
         (out_dir / f"{stem}_timings.json").write_text(json.dumps(record, indent=2))
