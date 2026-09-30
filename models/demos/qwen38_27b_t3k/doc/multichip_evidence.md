@@ -27,7 +27,7 @@ platform-derived; each was a real hardware difference, not a bug.
 
 | quantity | QB2 TP=4 | T3K TP=8 | why it moves |
 | --- | --- | --- | --- |
-| fabric packet payload | 8192 B | 7616 B | Wormhole ceiling is 7 Bfp8_b tiles, Blackhole's is 14 |
+| fabric packet payload | 8192 B | 6144 B | Three whole 2048 B pages, not the 7616 B ceiling |
 | head / embedding shard | `vocab/4`, `hidden/4` | `/TP` | slice ran past the per-device tensor |
 | sharded layernorm grid | `(10, 4)` | `(8, 5)` | `CoreCoord(9, ...)` does not exist on 8x8 |
 | DRAM readers per bank | 2-3 | 1 | `num_workers_per_dram_bank > 1` is Blackhole-only |
@@ -41,6 +41,25 @@ platform-derived; each was a real hardware difference, not a bug.
 `down_cores` and `prefill_1d_down_k` are the same underlying fact reached by two paths, so
 `tests/unit/test_policy_blocking.py` now checks every K block size and DRAM core count against
 every role's K on both widths rather than relying on inspection.
+
+### Fabric packet payload
+
+The packet size is chosen by how many whole CCL pages it carries, not by the link ceiling.
+`ccl_common.cpp` takes `min(hw_max / page, 4) * page`, so a 2048 B bfloat16 page gives 8192 B
+on Blackhole and 6144 B on Wormhole; the QB2 value of 8192 was that arch's ideal rather than a
+number to clamp against, which is what an earlier revision of this tree did. A 1088 B bfloat8_b
+page gives 4352 B on both, which is already ttnn's default, so it is the prefill collective's
+bfloat16 page that the setting has to serve.
+
+This was wrong in the released configuration and is now corrected in three places that had
+disagreed: `fabric_payload_bytes()` derives it, `tests/run_ci.sh` sets it, and the serving spec
+sets `fabric_max_packet_payload_size_bytes`. The spec previously set none, so the nine-hour
+serving run took the 4352 B default and the runtime said so:
+`Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet
+size to maximize throughput.` Every serving number recorded here therefore predates the fix.
+
+The gain is unmeasured. It is confined to the prefill collective, since the decode collective
+moves bfloat8_b and was already at its ideal, so it should move TTFT and not decode throughput.
 
 ## Context contract
 
