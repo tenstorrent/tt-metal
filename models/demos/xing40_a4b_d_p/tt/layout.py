@@ -85,3 +85,10 @@ def row_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tenso
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=_mapper(mesh, (2, None)),
     )
+
+
+def col_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
+    """A tensor split by rows over axis 0 and by hidden columns over axis 1 ([1, 1, S/4, H/2] per chip) -> host
+    [S, H]."""
+    full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
+    return full.reshape(-1, full.shape[-1])

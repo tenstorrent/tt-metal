@@ -27,11 +27,13 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc"},
+    "dense": {"attn_hc", "attn_collapse"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
 _HC_STEPS = {"attn_hc", "ffn_hc"}
+# mHC collapse steps (tt/collapse.py:TtHcCollapse): (streams, hc) -> [S, H], no weights.
+_COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
 
 
 def _loader(spec):
@@ -67,7 +69,29 @@ def _hc_host_fn(mesh, module, hidden):
     return fn
 
 
+def _collapse_host_fn(mesh, module, hidden):
+    """fn(ctx, streams_host [S * 4, H], hc_host [S, 24]) -> host [S, H] fp32 (harness boundary)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_host, row_split_to_device, streams_to_device
+
+    def fn(ctx, x, hc):
+        xd = streams_to_device(mesh, x, hidden)
+        hd = row_split_to_device(mesh, hc)
+        od = module(xd, hd)
+        out = col_split_to_host(mesh, od).float()
+        for t in (xd, hd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
+    if step in _COLLAPSE_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.collapse import build_collapse
+
+        return _collapse_host_fn(mesh, build_collapse(cfg), cfg.hidden_size)
     if step in _HC_STEPS:
         from models.demos.xing40_a4b_d_p.tt.mhc import build_hc
 
