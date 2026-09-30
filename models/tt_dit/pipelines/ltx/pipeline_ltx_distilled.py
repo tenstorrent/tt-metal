@@ -943,6 +943,24 @@ class LTXDistilledPipeline(LTXPipeline):
                     True,
                 )
 
+    def _stage_prompts(self, v_embeds, a_embeds, traced: bool, device_prompts: bool, reuse_prompt: bool):
+        if device_prompts:
+            assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
+            assert self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        if reuse_prompt:
+            assert traced and self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        prompt_v = self._prepare_prompt(v_embeds)
+        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
+        if traced:
+            self._prompt_v.update(prompt_v, traced)
+            self._prompt_a.update(prompt_a, traced)
+            return self._prompt_v.value, self._prompt_a.value
+        return prompt_v, prompt_a
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -970,6 +988,9 @@ class LTXDistilledPipeline(LTXPipeline):
         # path (generate) may set this.
         profile_drain: bool = False,
         device_prompts: bool = False,
+        # The persistent prompt buffers already hold v_embeds/a_embeds (a traced stage of the same
+        # generate() wrote them); skip the re-upload.
+        reuse_prompt: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         _t_init = time.perf_counter()
@@ -1084,19 +1105,7 @@ class LTXDistilledPipeline(LTXPipeline):
         )
 
         _t_marks.append(("statics", time.perf_counter()))
-        if device_prompts:
-            assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
-            assert self._prompt_v.value is not None and self._prompt_a.value is not None
-            prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
-        else:
-            prompt_v = self._prepare_prompt(v_embeds)
-            prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-            # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
-            # fragmenting DRAM for the downstream VAE decode.
-            if traced:
-                self._prompt_v.update(prompt_v, traced)
-                self._prompt_a.update(prompt_a, traced)
-                prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+        prompt_v, prompt_a = self._stage_prompts(v_embeds, a_embeds, traced, device_prompts, reuse_prompt)
 
         _t_marks.append(("prompt", time.perf_counter()))
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
@@ -1871,6 +1880,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # Reference gens keep the host round-trip: their combined (target+reference) rows are sliced on the
         # host and the device transition models the target grid only.
         device_resident = self._device_resident(images) and not has_ref
+        s1_traced = self._traced and "s1" not in eager_stages
+        s2_traced = self._traced and "s2" not in eager_stages
         s1_video, s1_audio = self._denoise_no_guidance(
             v_embeds,
             a_embeds,
@@ -1882,7 +1893,7 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=s1_image_conds,
             ref_latent=ref_latent_s1,
             ref_strength=ref_strength,
-            traced=self._traced and "s1" not in eager_stages,
+            traced=s1_traced,
             trace_key=s1_trace_key,
             profile_drain=True,
             return_device_video=device_resident,
@@ -1948,10 +1959,11 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent_device=upsampled_dev,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             device_prompts=self._device_prompt_handoff,
+            reuse_prompt=s1_traced and s2_traced and os.environ.get("LTX_S2_PROMPT_REUSE", "1") == "1",
             image_conds=full_image_conds,
             ref_latent=ref_latent_full,
             ref_strength=ref_strength,
-            traced=self._traced and "s2" not in eager_stages,
+            traced=s2_traced,
             trace_key=s2_trace_key,
             profile_drain=True,
         )
