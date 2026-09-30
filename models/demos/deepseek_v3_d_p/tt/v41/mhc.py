@@ -10,7 +10,9 @@ FFN collapses with the ``pre`` split before attention, and the block hands the `
 to the next block. After the last block the model collapses with that last ``pre``; there is no head mix.
 
 Streams are ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 (per chip: its hidden slice of every stream);
-``pre_mix`` is ``[1, 1, S/sp, hc_mult]`` fp32.
+``pre_mix`` is ``[1, 1, S/sp, hc_mult]`` fp32. The sublayers run in bf16: the collapse accumulates in fp32 and
+packs its output to bf16 (``Block.hc_pre``'s ``y.to(x.dtype)``), and hc_post takes the bf16 sublayer output as
+an exact fp32 term, so no typecast op runs around a sublayer.
 """
 
 import struct
@@ -52,8 +54,8 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
 class _V41Site(TtMHCWrap):
     """``TtMHCWrap`` with its split projection, collapse and hc_post as one fused op each (one pass over the streams).
 
-    collapse and hc_post are bit-identical to the composite path; the projection accumulates the same fp32 matmul
-    and an fp32 sum of squares, and TP-sums both in one all-reduce."""
+    collapse and hc_post are bit-identical to the composite path (with its typecasts to and from the bf16 sublayer);
+    the projection accumulates the same fp32 matmul and an fp32 sum of squares, and TP-sums both in one all-reduce."""
 
     def __init__(self, device, cfg, fn, base, scale, **kwargs):
         # fn_T gets zero columns up to the tile width: the fused projection puts mean(x^2) + eps in column mix_hc
@@ -66,8 +68,8 @@ class _V41Site(TtMHCWrap):
         tp_sum = self._tp_sum if self.tp_factor > 1 else None
         return fused_rms_project(x, self.fn_T, self.mix_hc, self.norm_eps, self.tp_factor, tp_sum)
 
-    def collapse(self, x, pre):
-        return fused_collapse(x, pre, self.n)
+    def collapse(self, x, pre, dtype=SUBLAYER_DTYPE):
+        return fused_collapse(x, pre, self.n, dtype)
 
     def hc_post(self, x, residual, post, comb):
         return fused_hc_post(x, residual, post, comb, self.n)
@@ -83,48 +85,46 @@ class TtV41HyperConnections(LightweightModule):
         self.attn_site = _V41Site(mesh_device, cfg, *hc_attn, tp_axis=1, topology=topology)
         self.ffn_site = _V41Site(mesh_device, cfg, *hc_ffn, tp_axis=1, topology=topology)
 
-    @staticmethod
-    def _sublayer(fn, h):
-        """Run a bf16 sublayer on the fp32 collapsed stream."""
-        out = fn(ttnn.typecast(h, SUBLAYER_DTYPE))
-        return ttnn.typecast(out, ttnn.float32)
-
     def forward(self, x, pre_mix, attention, ffn):
         """(streams, incoming pre_mix) -> (streams, pre_mix for the next block).
 
         ``attention`` and ``ffn`` map a collapsed ``[1, 1, S/sp, hidden/tp]`` bf16 stream to the same shape;
         the norms are theirs."""
         attn_pre, attn_post, attn_comb = self.attn_site.split(x)
-        h = self._sublayer(attention, self.attn_site.collapse(x, pre_mix))
+        h = attention(self.attn_site.collapse(x, pre_mix))
         x = self.attn_site.hc_post(h, x, attn_post, attn_comb)
 
         ffn_pre, ffn_post, ffn_comb = self.ffn_site.split(x)
-        h = self._sublayer(ffn, self.ffn_site.collapse(x, attn_pre))
+        h = ffn(self.ffn_site.collapse(x, attn_pre))
         x = self.ffn_site.hc_post(h, x, ffn_post, ffn_comb)
         return x, ffn_pre
 
     def final_collapse(self, x, pre_mix):
         """After the last block: collapse the streams with its FFN ``pre`` -> ``[1, 1, S/sp, hidden/tp]`` fp32."""
-        return self.ffn_site.collapse(x, pre_mix)
+        return self.ffn_site.collapse(x, pre_mix, ttnn.float32)
 
 
 _KERNEL_DIR = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
-_CB_IN, _CB_COEF, _CB_CSRC, _CB_OUT = 0, 1, 2, 16
+_CB_IN, _CB_COEF, _CB_CSRC, _CB_H, _CB_OUT = 0, 1, 2, 3, 16
 _FP32_TILE_BYTES = 32 * 32 * 4
+_BF16_TILE_BYTES = 32 * 32 * 2
 _MAX_BLOCK_UNITS = 6  # units per block (a divisor of the stream width in tiles); + 2 must fit the 8 fp32 DST tiles
 
 
-def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None) -> ttnn.Tensor:
+def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=ttnn.float32) -> ttnn.Tensor:
     """One fused op: ``out_j = sum_k coef[j][k] * in_k`` per token, fp32, ``in = [x?] + streams 0..n-1``.
 
-    ``streams`` [1, 1, T, n*C] fp32, ``x`` optional [1, 1, T, C] fp32, ``coef_srcs`` one or two [1, 1, T, <=32]
-    fp32 tensors and ``table[j][k] = (src, col)``: term k of output j is weighted by column ``col`` of
-    ``coef_srcs[src]``. Returns [1, 1, T, outputs*C] fp32 (output j at columns [j*C, (j+1)*C)). The terms of each
-    output are accumulated in order k = 0, 1, ... as one multiply and then addcmuls, like ``tt_mhc._mix``."""
+    ``streams`` [1, 1, T, n*C] fp32, ``x`` optional [1, 1, T, C] fp32 or bf16 (exact in fp32), ``coef_srcs`` one or
+    two [1, 1, T, <=32] fp32 tensors and ``table[j][k] = (src, col)``: term k of output j is weighted by column
+    ``col`` of ``coef_srcs[src]``. Returns [1, 1, T, outputs*C] ``dtype`` (fp32, or bf16: the fp32 result rounded
+    to nearest-even, as ``ttnn.typecast``; output j at columns [j*C, (j+1)*C)). The terms of each output are accumulated in fp32 in order
+    k = 0, 1, ... as one multiply and then addcmuls, like ``tt_mhc._mix``."""
     tensors = [streams] + ([x] if x is not None else []) + list(coef_srcs)
     for t in tensors:
-        assert t.dtype == ttnn.float32 and t.layout == ttnn.TILE_LAYOUT, (t.dtype, t.layout)
+        allowed = (ttnn.float32, ttnn.bfloat16) if t is x else (ttnn.float32,)
+        assert t.dtype in allowed and t.layout == ttnn.TILE_LAYOUT, (t.dtype, t.layout)
         assert not t.memory_config().is_sharded(), "the mHC mix takes interleaved tensors"
+    assert dtype in (ttnn.float32, ttnn.bfloat16), dtype
     tokens, width = streams.shape[-2], streams.shape[-1]
     assert tokens % 32 == 0 and width % (32 * n) == 0, (tokens, width, n)
     ct = width // n // 32
@@ -137,7 +137,7 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None) -> ttnn
     device = streams.device()
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, tokens, outputs * (width // n)]),
-        ttnn.float32,
+        dtype,
         ttnn.TILE_LAYOUT,
         device,
         streams.memory_config(),
@@ -169,22 +169,39 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None) -> ttnn
         compute_args[cx][cy] = [start, count]
         start += count
 
-    def cb(index: int, tiles: int) -> ttnn.CBDescriptor:
-        page = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.float32, page_size=_FP32_TILE_BYTES)
-        return ttnn.CBDescriptor(total_size=tiles * _FP32_TILE_BYTES, core_ranges=cores, format_descriptors=[page])
+    def cb(index: int, tiles: int, fmt=ttnn.float32) -> ttnn.CBDescriptor:
+        size = _FP32_TILE_BYTES if fmt == ttnn.float32 else _BF16_TILE_BYTES
+        page = ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)
+        return ttnn.CBDescriptor(total_size=tiles * size, core_ranges=cores, format_descriptors=[page])
 
     accessor = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False
     )
     modes = [ttnn.UnpackToDestMode.Default] * 64
+    # fp32 operands unpack straight to DST; a bf16 x goes through SrcA (exact: bf16 fits its 19-bit datums)
     modes[_CB_IN] = modes[_CB_COEF] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    x_fp32 = x is None or x.dtype == ttnn.float32
+    if x_fp32:
+        modes[_CB_H] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_config.unpack_to_dest_mode = modes
+    cb_x = _CB_H if x is not None else _CB_IN  # without x the kernels' x handle aliases the streams' CB, unused
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/mhc_mix_reader.cpp",
             core_ranges=cores,
-            compile_time_args=[_CB_IN, _CB_COEF, _CB_CSRC, ct, n, int(x is not None), outputs, len(coef_srcs), block]
+            compile_time_args=[
+                _CB_IN,
+                _CB_COEF,
+                _CB_CSRC,
+                ct,
+                n,
+                int(x is not None),
+                outputs,
+                len(coef_srcs),
+                block,
+                cb_x,
+            ]
             + codes
             + accessor(streams)
             + accessor(xt)
@@ -203,27 +220,32 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None) -> ttnn
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/mhc_mix_compute.cpp",
             core_ranges=cores,
-            compile_time_args=[_CB_IN, _CB_COEF, _CB_OUT, ct, k_terms, outputs, block],
+            compile_time_args=[_CB_IN, _CB_COEF, _CB_OUT, ct, n, outputs, block, int(x is not None), cb_x, int(x_fp32)]
+            + [int(dtype == ttnn.bfloat16)],
             runtime_args=compute_args,
             config=compute_config,
         ),
     ]
     cbs = [
-        cb(_CB_IN, 2 * block * k_terms),
+        cb(_CB_IN, 2 * block * n),
         cb(_CB_COEF, 2 * outputs * k_terms),
         cb(_CB_CSRC, len(coef_srcs)),
-        cb(_CB_OUT, 2 * block * outputs),
+        cb(_CB_OUT, 2 * block * outputs, dtype),
     ]
+    if x is not None:
+        cbs.append(cb(_CB_H, 2 * block, x.dtype))
     return ttnn.generic_op(tensors + [out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
 
-def fused_collapse(x, pre, n: int) -> ttnn.Tensor:
-    """``sum_i pre_i * x_i``: [1, 1, T, n*C] fp32 streams, [1, 1, T, n] fp32 ``pre`` -> [1, 1, T, C] fp32."""
-    return _stream_mix(x, n, [pre], [[(0, i) for i in range(n)]], outputs=1)
+def fused_collapse(x, pre, n: int, dtype=ttnn.float32) -> ttnn.Tensor:
+    """``sum_i pre_i * x_i``: [1, 1, T, n*C] fp32 streams, [1, 1, T, n] fp32 ``pre`` -> [1, 1, T, C] ``dtype``
+    (accumulated in fp32; bf16 rounds the fp32 sum once, as a typecast of the fp32 collapse)."""
+    return _stream_mix(x, n, [pre], [[(0, i) for i in range(n)]], outputs=1, dtype=dtype)
 
 
 def fused_hc_post(h, residual, post, comb, n: int) -> ttnn.Tensor:
-    """``new_j = post_j * h + sum_i comb[i, j] * residual_i`` -> [1, 1, T, n*C] fp32 (``TtMHCWrap.hc_post``)."""
+    """``new_j = post_j * h + sum_i comb[i, j] * residual_i`` -> [1, 1, T, n*C] fp32 (``TtMHCWrap.hc_post``); ``h``
+    fp32 or bf16 (the bf16 sublayer output, taken exactly)."""
     table = [[(0, j)] + [(1, i * n + j) for i in range(n)] for j in range(n)]
     return _stream_mix(residual, n, [post, comb], table, outputs=n, x=h)
 

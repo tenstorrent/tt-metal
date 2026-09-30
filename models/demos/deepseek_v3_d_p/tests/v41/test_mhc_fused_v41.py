@@ -6,7 +6,9 @@
 
 The fused ops run the composite path's SFPU multiply / addcmul sequence in the same order, so they must be
 bit-identical to ``tt_mhc._mix`` / ``TtMHCWrap.hc_post``; the fp64 comparison guards against both being wrong
-the same way. ``test_mhc_fused_traced_time`` logs the traced per-call time at the production per-chip shape
+the same way. The block's bf16 sublayer interface (bead 8y7.9.9) is checked against the typecasts it replaces:
+the bf16 collapse equals the fp32 collapse typecast to bf16, and hc_post of a bf16 ``h`` equals hc_post of that
+``h`` typecast to fp32, bit for bit. ``test_mhc_fused_traced_time`` logs the traced per-call time at the production per-chip shape
 (chunk 5120 on 2x4: 2560 tokens, hidden slice 1280) against the DRAM bound as ``V41_MHC_PERF`` JSON lines.
 """
 
@@ -104,17 +106,56 @@ def _traced_us(device, fn):
     return us
 
 
-@pytest.mark.parametrize("impl", ["fused", "composite"])
+def _fused_bf16(op, d):
+    """The block's bf16 sublayer interface: collapse -> bf16, hc_post of a bf16 ``h``."""
+    if op == "collapse":
+        return fused_collapse(d["x"], d["pre"], N, ttnn.bfloat16)
+    return fused_hc_post(d["h_bf16"], d["x"], d["post"], d["comb"], N)
+
+
+def _typecast_bf16(op, d):
+    """What the bf16 interface replaces: the fp32 fused op with a typecast on the sublayer side."""
+    if op == "collapse":
+        return ttnn.typecast(fused_collapse(d["x"], d["pre"], N), ttnn.bfloat16)
+    return fused_hc_post(ttnn.typecast(d["h_bf16"], ttnn.float32), d["x"], d["post"], d["comb"], N)
+
+
+def _with_bf16_h(device, d, t):
+    d["h_bf16"] = ttnn.from_torch(
+        t["h"].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    return d
+
+
+@pytest.mark.parametrize("shape", list(SHAPES))
+@pytest.mark.parametrize("op", ["collapse", "hc_post"])
+def test_mhc_fused_bf16_sublayer_io(device, op, shape):
+    tokens, hidden = SHAPES[shape]
+    t = _inputs(tokens, hidden)
+    d = _with_bf16_h(device, {k: _upload(device, v) for k, v in t.items()}, t)
+    out = [_fused_bf16(op, d) for _ in range(2)]
+    assert out[0].dtype == (ttnn.bfloat16 if op == "collapse" else ttnn.float32), out[0].dtype
+    got = [ttnn.to_torch(o) for o in out]
+    want = ttnn.to_torch(_typecast_bf16(op, d))
+    assert torch.equal(got[0], got[1]), "fused mHC op is not deterministic"
+    mismatch = (got[0] != want).sum().item()
+    logger.info(f"{op} {shape} bf16 sublayer io: elements != typecast path {mismatch}")
+    assert mismatch == 0, f"{mismatch} elements differ from the typecast path"
+
+
+@pytest.mark.parametrize("impl", ["fused", "composite", "fused_bf16", "typecast_bf16"])
 @pytest.mark.parametrize("op", ["collapse", "hc_post"])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
 def test_mhc_fused_traced_time(device, op, impl):
     tokens, hidden = SHAPES["production"]
-    d = {k: _upload(device, v) for k, v in _inputs(tokens, hidden).items()}
-    fn = (lambda: _fused(op, d)) if impl == "fused" else (lambda: _composite(op, d))
-    us = _traced_us(device, fn)
+    t = _inputs(tokens, hidden)
+    d = _with_bf16_h(device, {k: _upload(device, v) for k, v in t.items()}, t)
+    impls = {"fused": _fused, "composite": _composite, "fused_bf16": _fused_bf16, "typecast_bf16": _typecast_bf16}
+    us = _traced_us(device, lambda: impls[impl](op, d))
     stream_bytes = 4 * tokens * N * hidden
+    sub = 0.5 if impl.endswith("bf16") else 1.0  # the sublayer-side tensor (collapse output / h) in bf16
     # collapse: read the streams, write one stream; hc_post: read the streams + h, write the streams
-    moved = stream_bytes * (1 + 1 / N) if op == "collapse" else stream_bytes * (2 + 1 / N)
+    moved = stream_bytes * (1 + sub / N) if op == "collapse" else stream_bytes * (2 + sub / N)
     bound_us = moved / (DRAM_GBPS * 1e3)
     record = {
         "op": op,

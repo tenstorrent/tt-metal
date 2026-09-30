@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Writer of the fused V4.1 mHC stream mix (mhc_mix_compute.cpp): the J output tiles of unit (r, c) go to
-// (r, j * CT + c) of the [T, J * C] output.
+// (r, j * CT + c) of the [T, J * C] output (fp32 or bf16: the page size is cb_out's).
 //
 // compile_time_args = [cb_out, CT, J, BLOCK, TensorAccessorArgs(out)...]  (BLOCK units per write flush)
 // runtime args      = [out_addr, unit_start, unit_count]

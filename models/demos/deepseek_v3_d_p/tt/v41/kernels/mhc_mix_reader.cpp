@@ -5,13 +5,13 @@
 // Reader of the fused V4.1 mHC stream mix (mhc_mix_compute.cpp):  out_j = sum_k coef[j][k] (.) in_k, with one
 // fp32 coefficient per token (tile row) and term.
 //
-// A work unit is one (tile row r, stream tile column c). Its K input tiles are, in order: the optional extra
-// input x at (r, c) (HAS_X), then stream i at (r, i * CT + c) for i < N. Whenever r changes the reader reads
+// A work unit is one (tile row r, stream tile column c). Its inputs are stream i at (r, i * CT + c) for i < N (cb_in)
+// and, with HAS_X, the extra input x at (r, c) (cb_x, x's own tile format). Whenever r changes the reader reads
 // tile row r of the (up to two) coefficient tensors and builds J * K column-broadcast tiles (tile j * K + k holds
 // the coefficient of term k of output j in every column of its row), consumed by the compute kernel until the
 // next row.
 //
-// compile_time_args = [cb_in, cb_coef, cb_csrc, CT, N, HAS_X, J, NUM_CSRC, BLOCK, table[J * K] (src << 8 | col),
+// compile_time_args = [cb_in, cb_coef, cb_csrc, CT, N, HAS_X, J, NUM_CSRC, BLOCK, cb_x, table[J * K] (src << 8 | col),
 //                      TensorAccessorArgs(streams), (x), (coef src 0), (coef src 1)...]
 // runtime args      = [streams_addr, x_addr, csrc0_addr, csrc1_addr, unit_start, unit_count]
 
@@ -39,8 +39,9 @@ void kernel_main() {
     constexpr uint32_t J = get_compile_time_arg_val(6);
     constexpr uint32_t NUM_CSRC = get_compile_time_arg_val(7);
     constexpr uint32_t BLOCK = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_x = get_compile_time_arg_val(9);
     constexpr uint32_t K = N + HAS_X;
-    constexpr uint32_t TABLE = 9;
+    constexpr uint32_t TABLE = 10;
     constexpr auto streams_args = TensorAccessorArgs<TABLE + J * K>();
     constexpr auto x_args = TensorAccessorArgs<streams_args.next_compile_time_args_offset()>();
     constexpr auto c0_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -59,7 +60,9 @@ void kernel_main() {
     DataflowBuffer in(cb_in);
     DataflowBuffer coef(cb_coef);
     DataflowBuffer csrc(cb_csrc);
+    DataflowBuffer xin(cb_x);
     const uint32_t page = get_local_cb_interface(cb_in).fifo_page_size;  // fp32 tile
+    const uint32_t x_page = get_local_cb_interface(cb_x).fifo_page_size;
     constexpr uint32_t TILE_U32 = 32 * 32;
     constexpr uint32_t FACE_U32 = 16 * 16;
 
@@ -105,11 +108,13 @@ void kernel_main() {
             asm volatile("" ::: "memory");  // the plain stores above complete before the tiles are published
             coef.push_back(J * K);
         }
-        in.reserve_back(units * K);
+        in.reserve_back(units * N);
+        if constexpr (HAS_X) {
+            xin.reserve_back(units);
+        }
         for (uint32_t b = 0; b < units; ++b) {
-            const uint32_t base = b * K * page;
             if constexpr (HAS_X) {
-                noc.async_read(xs, in, page, {.page_id = r * CT + c + b}, {.offset_bytes = base});
+                noc.async_read(xs, xin, x_page, {.page_id = r * CT + c + b}, {.offset_bytes = b * x_page});
             }
             for (uint32_t i = 0; i < N; ++i) {
                 noc.async_read(
@@ -117,11 +122,14 @@ void kernel_main() {
                     in,
                     page,
                     {.page_id = r * (N * CT) + i * CT + c + b},
-                    {.offset_bytes = base + (HAS_X + i) * page});
+                    {.offset_bytes = (b * N + i) * page});
             }
         }
         noc.async_read_barrier();
-        in.push_back(units * K);
+        in.push_back(units * N);
+        if constexpr (HAS_X) {
+            xin.push_back(units);
+        }
         u += units;
     }
 }
