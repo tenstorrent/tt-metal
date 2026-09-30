@@ -335,7 +335,6 @@ def test_v41_moe_placement_text_ab(mesh_device, device_params):
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     shape, chips = tuple(mesh_device.shape), mesh_device.get_num_devices()
-    dispatch_group_size = shape[0]  # a dispatch group is a mesh column (ExpertMapping)
     logger.info(f"device ids (mesh row-major): {mesh_device.get_device_ids()}")
     with timing_events.phase("oracle", key="text_ab"):
         start = time.perf_counter()
@@ -382,9 +381,7 @@ def test_v41_moe_placement_text_ab(mesh_device, device_params):
                 order = _order(moe)
                 pairs = _chip_loads(run["indices"], order, chips)
                 counts = torch.bincount(run["indices"].long().flatten(), minlength=C.NUM_ROUTED_EXPERTS).double()
-                modelled = expert_placement.chip_costs(
-                    counts.numpy(), _chip_of(order, chips).numpy(), dispatch_group_size, chips
-                )[0]
+                modelled = expert_placement.chip_costs(counts.numpy(), _chip_of(order, chips).numpy(), chips)[0]
                 routing[name] = {
                     "final": run["final"],
                     "chip_pairs": pairs,

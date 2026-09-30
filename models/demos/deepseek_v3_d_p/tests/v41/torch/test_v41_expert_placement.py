@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU tests of the V4.1 routed-expert placement (tt/v41/expert_placement.py, bead 8y7.9.8): the placement
+"""CPU tests of the V4.1 routed-expert placement (tt/v41/expert_placement.py, beads 8y7.9.8, 8y7.9.12): the placement
 method on hand-checkable loads, the placement of the checkpoint layers, relabelling invariance of the MoE, and
 the weight-cache key."""
 
@@ -23,16 +23,14 @@ PROFILED = (0, 2, 3, 20, 21, 24)
 def test_chip_cost_model():
     # 2 chips, expert 1 without tokens: chip 0 = 1 active expert, 10 pairs; chip 1 = 2 active, 6 pairs
     counts, chip = np.array([[10.0, 0.0, 4.0, 2.0]]), np.array([0, 0, 1, 1])
-    a, p, s = P.ACTIVE_EXPERT_US, P.PAIR_US, P.SENT_PAIR_US
-    # each chip its own dispatch group: it sends its own pairs
-    np.testing.assert_allclose(P.chip_costs(counts, chip, 1, 2), [[a + 10 * p + 10 * s, 2 * a + 6 * p + 6 * s]])
-    # one group of 2 chips: each sends half of the group's 16 pairs
-    np.testing.assert_allclose(P.chip_costs(counts, chip, 2, 2), [[a + 10 * p + 8 * s, 2 * a + 6 * p + 8 * s]])
+    a, p = P.ACTIVE_EXPERT_US, P.PAIR_US
+    np.testing.assert_allclose(P.chip_costs(counts, chip, 2), [[a + 10 * p, 2 * a + 6 * p]])
+    np.testing.assert_allclose(P.chip_costs(counts * 2, chip, 2), [[a + 20 * p, 2 * a + 12 * p]])  # pairs scale
 
 
 def test_active_experts_are_spread():
     # 4 experts with one pair each and 4 without: every chip reads the weights of 2 active experts
-    chip = P.place(np.array([[1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]]), 1, 2)
+    chip = P.place(np.array([[1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]]), 2)
     assert sorted(chip[:4]) == [0, 0, 1, 1] and sorted(chip) == [0] * 4 + [1] * 4, chip
 
 
@@ -40,7 +38,7 @@ def test_placement_balances_every_prompt():
     # two prompts with opposite hot experts (0 in the first, 1 in the second) and two warm ones: only the hot
     # pair on one chip balances both prompts (per prompt 1 + 2 active experts, 6000 + 6000 pairs); any other pairing
     # puts 9000 pairs on one chip
-    chip = P.place(np.array([[6000.0, 0.0, 3000.0, 3000.0], [0.0, 6000.0, 3000.0, 3000.0]]), 1, 2)
+    chip = P.place(np.array([[6000.0, 0.0, 3000.0, 3000.0], [0.0, 6000.0, 3000.0, 3000.0]]), 2)
     assert chip[0] == chip[1] != chip[2] == chip[3], chip
 
 
@@ -57,8 +55,18 @@ def test_checkpoint_layer_placement(layer):
     counts = P.profile_counts(layer)
     chip = np.empty(EXPERTS, dtype=int)
     chip[list(order)] = np.arange(EXPERTS) // per_chip
-    worst = lambda assign: P.chip_costs(counts, assign, MESH[0], CHIPS).max(1).mean()
+    worst = lambda assign: P.chip_costs(counts, assign, CHIPS).max(1).mean()
     assert worst(chip) < worst(np.arange(EXPERTS) // per_chip)
+
+
+def test_profile_rows_scale_to_the_chunk():
+    # every profile row is scaled from its own token count (a prompt shorter than the long row keeps all its tokens)
+    profile = P.load_profile()
+    rows, raw = profile["rows"], np.asarray(profile["counts"]["21"], dtype=np.float64)
+    assert raw.shape[0] == len(rows) and {r["tokens"] for r in rows} >= {2048, 5120}
+    k = next(i for i, r in enumerate(rows) if r["tokens"] == 2048)
+    np.testing.assert_allclose(P.profile_counts(21)[k], raw[k] * 2.5)
+    np.testing.assert_allclose(P.profile_counts(21).sum(1), P.CHUNK_TOKENS * 6)  # 6 routed experts per token
 
 
 def test_checkpoint_order_without_profile():
