@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/experimental/quasar/binary/binary.hpp"
@@ -478,6 +479,12 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // binary_ng packs the scalar in the input dtype, so a fractional divisor would be truncated for INT32.
+    TT_FATAL(
+        !(input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar) &&
+          std::get<float>(scalar) != std::trunc(std::get<float>(scalar))),
+        "remainder: INT32 input with a fractional scalar {} is not supported",
+        std::get<float>(scalar));
     // The unary SFPU fast path takes none of these arguments and does not support INT32.
     if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
         post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
@@ -567,6 +574,11 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
  *   by running reshape.
  */
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        input_a.logical_shape().rank() >= 1 && input_b.logical_shape().rank() >= 1,
+        "outer: inputs must be at least 1D, but got shapes {} and {}",
+        input_a.logical_shape(),
+        input_b.logical_shape());
     // The checks and reshapes below index dims 0..3; view lower-rank inputs (e.g. 1-D vectors) as 4-D.
     const ttnn::Shape s_a = input_a.logical_shape().to_rank(4);
     const ttnn::Shape s_b = input_b.logical_shape().to_rank(4);

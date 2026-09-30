@@ -43,6 +43,19 @@ def test_outer_low_rank(device, shape_a, shape_b):
     assert_with_pcc(golden, ttnn.to_torch(out).float().reshape(golden.shape), 0.99)
 
 
+def test_outer_rejects_scalar_input(device, expect_error):
+    a = _to_device(torch.tensor(2.0, dtype=torch.bfloat16), device)
+    b = _to_device(torch.randn(64, dtype=torch.bfloat16), device)
+    with expect_error(RuntimeError, "inputs must be at least 1D"):
+        ttnn.experimental.quasar.outer(a, b)
+
+
+def test_remainder_int32_rejects_fractional_scalar(device, expect_error):
+    x = _to_device(torch.randint(-50, 50, (1, 1, 32, 32), dtype=torch.int32), device, dtype=ttnn.int32)
+    with expect_error(RuntimeError, "INT32 input with a fractional scalar"):
+        ttnn.experimental.quasar.remainder(x, 1.5)
+
+
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.experimental.quasar.add], ids=["ttnn", "quasar"])
 def test_output_tensor_with_extra_leading_dim_is_rejected(device, op, expect_error):
     a = _to_device(torch.randn(32, 32, dtype=torch.bfloat16), device)
