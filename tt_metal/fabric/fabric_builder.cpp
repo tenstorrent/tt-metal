@@ -289,7 +289,10 @@ void FabricBuilder::create_kernels() {
 }
 
 void FabricBuilder::build_and_publish_manifest_chip() {
-    manifest::Chip chip{.z_port_role = z_role_of(chip_facts_.per_direction_capabilities)};
+    manifest::Chip chip{
+        .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
+        .master_router_chan = master_router_chan_,
+    };
     chip.routers.reserve(routers_.size());
 
     for (const auto& [eth_chan, router_builder] : routers_) {

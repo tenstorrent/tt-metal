@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <llrt/hal.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "fabric_fixture.hpp"
@@ -161,7 +162,8 @@ using Fabric2DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
 // The manifest has exactly the top-level blocks the writer emits, and the write left no temporary file.
 void check_top_level(const json& manifest, const std::filesystem::path& manifest_path, FabricConfig fabric_config) {
     EXPECT_EQ(
-        keys_of(manifest), (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "meshes"}));
+        keys_of(manifest),
+        (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "archs", "meshes"}));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
 
@@ -205,6 +207,45 @@ void check_top_level(const json& manifest, const std::filesystem::path& manifest
     for (const auto& entry : std::filesystem::directory_iterator(manifest_path.parent_path())) {
         EXPECT_EQ(entry.path().string().find(".tmp."), std::string::npos) << entry.path();
     }
+}
+
+// The run's architecture has the fixed router areas, taken from the HAL, and is the only one listed.
+void check_archs(const json& manifest) {
+    using tt::tt_metal::HalL1MemAddrType;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& archs = manifest.at("archs");
+    const auto arch_key = manifest.at("run").at("arch").get<std::string>();
+    EXPECT_EQ(keys_of(archs), (std::set<std::string>{arch_key}));
+    const auto& arch = archs.at(arch_key);
+
+    const auto expect_hal_region = [&](const char* name, HalL1MemAddrType type) {
+        SCOPED_TRACE(name);
+        const auto& region = arch.at(name);
+        EXPECT_EQ(region.at("address"), hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, type));
+        EXPECT_EQ(region.at("size"), hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, type));
+    };
+    std::set<std::string> keys = {"heartbeat", "unreserved", "fabric_telemetry", "routing_table", "go_msg", "launch"};
+    expect_hal_region("unreserved", HalL1MemAddrType::UNRESERVED);
+    EXPECT_FALSE(arch.at("unreserved").contains("schema"));
+    expect_hal_region("fabric_telemetry", HalL1MemAddrType::FABRIC_TELEMETRY);
+    expect_hal_region("routing_table", HalL1MemAddrType::ROUTING_TABLE);
+    expect_hal_region("go_msg", HalL1MemAddrType::GO_MSG);
+    expect_hal_region("launch", HalL1MemAddrType::LAUNCH);
+    if (hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) != 0) {
+        keys.insert("eth_fw_mailbox");
+        expect_hal_region("eth_fw_mailbox", HalL1MemAddrType::ETH_FW_MAILBOX);
+    }
+    EXPECT_EQ(keys_of(arch), keys);
+
+    const auto& heartbeat = arch.at("heartbeat");
+    EXPECT_EQ(
+        heartbeat.at("address"),
+        hal.get_arch() == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
+                                              : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE);
+    EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
+    EXPECT_EQ(heartbeat.at("magic"), FABRIC_KERNEL_HEARTBEAT_MAGIC);
+    EXPECT_EQ(heartbeat.at("magic_mask"), FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK);
+    EXPECT_EQ(heartbeat.at("period_iters"), FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS);
 }
 
 // Every mesh in the mesh graph appears under its M key, with its shape and express setting.
@@ -330,6 +371,7 @@ void check_chips(const json& manifest) {
                 EXPECT_TRUE(chip.at("physical_chip_id").is_null());
                 EXPECT_TRUE(chip.at("asic_id").is_null());
                 EXPECT_FALSE(chip.contains("z_port_role"));
+                EXPECT_FALSE(chip.contains("local_sync"));
                 EXPECT_FALSE(chip.contains("routers"));
                 continue;
             }
@@ -342,6 +384,24 @@ void check_chips(const json& manifest) {
                                            ? builder_context().get_manifest_chip(*physical_chip_id).z_port_role
                                            : ZPortRole::NONE;
             EXPECT_EQ(chip.at("z_port_role"), lower_enum_name(expected_role));
+
+            // The master is the router on the channel the builder chose, and every router checks in with it.
+            const auto& routers = chip.at("routers");
+            if (routers.empty()) {
+                EXPECT_TRUE(chip.at("local_sync").is_null());
+                continue;
+            }
+            const auto master_chan = builder_context().get_fabric_master_router_chan(*physical_chip_id);
+            EXPECT_EQ(builder_context().get_manifest_chip(*physical_chip_id).master_router_chan, master_chan);
+            const auto& local_sync = chip.at("local_sync");
+            EXPECT_EQ(keys_of(local_sync), (std::set<std::string>{"master", "num_routers"}));
+            EXPECT_EQ(local_sync.at("num_routers"), routers.size());
+            const auto master_key = local_sync.at("master").get<std::string>();
+            const auto chip_path = fmt::format("{}/{}/", mesh_key(mesh_id), chip_key(fabric_chip_id));
+            ASSERT_TRUE(master_key.starts_with(chip_path)) << master_key;
+            const auto router_key_part = master_key.substr(chip_path.size());
+            ASSERT_TRUE(routers.contains(router_key_part)) << master_key;
+            EXPECT_EQ(routers.at(router_key_part).at("identity").at("eth_chan"), master_chan);
         }
         EXPECT_EQ(keys_of(chips), expected_keys);
     }
@@ -953,6 +1013,9 @@ TEST(ManifestNames, Spellings) {
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
 TEST_F(Fabric2DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
+
+TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
+TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, Meshes) { check_meshes(manifest_); }
 TEST_F(Fabric2DManifestFixture, Meshes) { check_meshes(manifest_); }
