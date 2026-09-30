@@ -374,3 +374,18 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   now opens the whole box when its 2x2 case mesh does not match (2x2 on 4x2 fails the fabric handshake).
 - Re-run: gate command of the brief; fork: `scripts/run_safe_pytest.sh --run-all
   ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py`; baseline: `XING_HC_IMPL=composed` with the profile.
+
+## P.3 perf (run1, attempt 1): routed experts at HiFi2 (owner pick) — FAILS accuracy, stopped
+- The fork `ttnn.bringup.unified_routed_expert_moe` already honours compute_kernel_config.math_fidelity with
+  `high_precision=True`, so there is no fork change. The switch is in `tt/experts.py`: `XING_EXPERTS_FIDELITY` =
+  hifi4 (default) | hifi2. The profile records it as `settings.experts_fidelity` (hooks.py `settings`).
+- Frozen `test_c_moe_experts.py` at HiFi2 (layer 2) fails:
+  - `FAIL auto_experts_L02_vs_cpu: rel=0.0167674 row=0.0253368 ratio_min=0.977155 ratio_max=0.994691 bias=-0.0136182 rel_limit=0.0136675 (rel 0.01677 > 0.01367; row norm ratio [0.97716, 0.99469] outside 1 +- 0.0150; median row norm ratio off by -0.01362 (limit 0.0040))`
+  - `FAIL auto_experts_L02_vs_golden: rel=0.0169449 row=0.0267309 ratio_min=0.975406 ratio_max=0.994536 bias=-0.0134388 rel_limit=0.0161675 (rel 0.01694 > 0.01617; row norm ratio [0.97541, 0.99454] outside 1 +- 0.0150; median row norm ratio off by -0.01344 (limit 0.0040))`
+  - `FAIL auto_experts_L02_small: rel=0.0162137 row=0.0285502 ratio_min=0.973308 ratio_max=0.993443 bias=-0.0134467 rel_limit=0.03 (row norm ratio [0.97331, 0.99344] outside 1 +- 0.0225)`
+  - pcc_experts_L02 0.99995 passes. HiFi4 baseline (C.moe.experts): bias ~0, ratios [0.995, 1.008].
+- Cause: HiFi2 truncates operand mantissas, which gives a systematic ~-1.4% norm bias through the chained
+  gate/up -> down matmuls (known issues 26; new proposed bullet).
+- Not profiled (accuracy failed). The default is back on HiFi4, so the tree runs the previous path; HiFi2 stays
+  opt-in for the owner.
+- Re-run: `PYTHONPATH=$PWD XING_EXPERTS_FIDELITY=hifi2 scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py`
