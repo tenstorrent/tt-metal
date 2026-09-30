@@ -84,34 +84,42 @@ def perf_section(summaries):
                     ((s["arch"], row["op"], i, o, row["approx"], row["dest_acc"]), row)
                 )
     header = lines[-2:]
-    main, rest = [], []
+    lines = lines[:-2]
+    moved, rest = [], []
     for key, row, cells in _merge_approx(rows, _perf_cells):
-        # The main table: every row that moved, plus each op's bf16 rows so the
-        # op's cost is always visible. The rest (the other format pairs of an
-        # unchanged op) folds away.
-        moved = any(
-            row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement")
-            for rt in ("MATH_ISOLATE", "L1_TO_L1")
-        )
-        primary = key[2] == key[3] == "Float16_b"
-        (main if moved or primary else rest).append(
-            _row_prefix(key) + "| " + " | ".join(cells) + " |"
-        )
-    lines += main
-    if not rows:
-        lines.append("| – | no op was measured | | | | | | | | | |")
+        line = _row_prefix(key) + "| " + " | ".join(cells) + " |"
+        (moved if _perf_moved(row) else rest).append((_perf_regressed(row), line))
+    if moved:
+        # Regressions first: they are what a reviewer is looking for.
+        lines += header + [l for _, l in sorted(moved, key=lambda m: not m[0])]
+    elif rows:
+        lines.append(f"No variant moved beyond the thresholds ({len(rest)} measured).")
+    else:
+        lines.append("No op was measured.")
+    if moved and rest:
+        lines += [""]
     if rest:
         lines += [
-            "",
-            f"<details><summary>{len(rest)} more format combination(s), none beyond the thresholds</summary>",
+            f"<details><summary>{len(rest)} variant(s) within the thresholds</summary>",
             "",
             *header,
-            *rest,
+            *[l for _, l in rest],
             "",
             "</details>",
         ]
     lines += ["", _loadmacro_note(summaries), ""]
     return lines
+
+
+def _perf_regressed(row):
+    return any(row.get(rt, {}).get("regression") for rt in ("MATH_ISOLATE", "L1_TO_L1"))
+
+
+def _perf_moved(row):
+    return any(
+        row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement")
+        for rt in ("MATH_ISOLATE", "L1_TO_L1")
+    )
 
 
 def _perf_cells(row):
@@ -193,13 +201,42 @@ def _merge_approx(rows, cells):
     )
 
 
+def _max_grew(old, new):
+    """A higher max error that means something: any growth of a small max, or more
+    than 1% of a large one (a max of hundreds of millions of steps moving by 50 is the
+    same broken range, not a new regression)."""
+    return new > old and (old < 16 or new > old * 1.01)
+
+
 def _acc_regressed(rec):
-    """Worse overall: a higher max, more lanes worse than better, or new non-finite."""
+    """Worse overall: a real rise in the max, clearly more lanes worse than better, or
+    new non-finite results."""
     b, h = rec["base"], rec["head"]
+    if b.get("metric") == "exact":
+        return _exact_regressed(rec)
+    lanes = max(h["lanes"], 1)
+    net_worse = (rec["worse"] - rec["better"]) / lanes >= NOTABLE_LANE_SHARE
+    return _max_grew(b["max"], h["max"]) or net_worse or h["nonfinite"] > b["nonfinite"]
+
+
+#: Changed lanes below this share of the measured lanes, with the same max error, are
+#: noise to a reviewer: the row folds away.
+NOTABLE_LANE_SHARE = 0.001
+
+
+def _acc_notable(rec):
+    b, h = rec["base"], rec["head"]
+    if rec.get("bit_identical"):
+        return False
+    if _acc_regressed(rec):
+        return True
+    if b.get("metric") == "exact":
+        return h["wrong"] != b["wrong"]
+    moved = (rec["worse"] + rec["better"]) / max(h["lanes"], 1)
     return (
-        h["max"] > b["max"]
-        or rec["worse"] > rec["better"]
-        or h["nonfinite"] > b["nonfinite"]
+        h["max"] != b["max"]
+        or h["nonfinite"] != b["nonfinite"]
+        or moved >= NOTABLE_LANE_SHARE
     )
 
 
@@ -221,9 +258,14 @@ def _row_prefix(key):
     return f"| {_ARCH[arch]} | {op} | {_fmt_pair(f'{i}->{o}')} | {dest} | {approx} "
 
 
+def _exact_regressed(rec):
+    b, h = rec["base"], rec["head"]
+    return h["wrong"] > b["wrong"]
+
+
 def _exact_cells(rec):
     b, h = rec["base"], rec["head"]
-    flag = "⚠️ " if h["wrong"] > b["wrong"] or rec["worse"] > rec["better"] else ""
+    flag = "⚠️ " if _exact_regressed(rec) else ""
     return (
         _num(h["lanes"]),
         _num(b["wrong"]),
@@ -273,32 +315,41 @@ def accuracy_section(summaries):
         "covered by the edge cases below. `worse / better` counts lanes whose error changed.",
         "",
     ]
-    changed_ulp, same_ulp = groups[("ulp", False)], groups[("ulp", True)]
-    changed_exact, same_exact = groups[("exact", False)], groups[("exact", True)]
-    if changed_ulp:
-        lines += _table(changed_ulp, ulp_head, _acc_cells)
-    if changed_exact:
+    shown_ulp = [r for r in groups[("ulp", False)] if _acc_notable(r[1])]
+    shown_exact = [r for r in groups[("exact", False)] if _acc_notable(r[1])]
+    folded_ulp = groups[("ulp", True)] + [
+        r for r in groups[("ulp", False)] if not _acc_notable(r[1])
+    ]
+    folded_exact = groups[("exact", True)] + [
+        r for r in groups[("exact", False)] if not _acc_notable(r[1])
+    ]
+    regressed_first = lambda rows: sorted(
+        rows, key=lambda r: not _acc_regressed(r[1])
+    )  # noqa: E731
+    if shown_ulp:
+        lines += _table(regressed_first(shown_ulp), ulp_head, _acc_cells)
+    if shown_exact:
         lines += [
             "",
             "Comparisons and integer ops have no ULP: a lane is right or wrong.",
             "",
-            *_table(changed_exact, exact_head, _exact_cells),
+            *_table(regressed_first(shown_exact), exact_head, _exact_cells),
         ]
-    if not changed_ulp and not changed_exact:
+    if not shown_ulp and not shown_exact:
         lines.append(
-            "The PR does not change any result: every measured variant returns the same bits on both sides."
+            "No accuracy change worth a row: max error and lane counts are unchanged."
         )
-    same = len(same_ulp) + len(same_exact)
-    if same:
+    folded = len(folded_ulp) + len(folded_exact)
+    if folded:
         lines += [
             "",
-            f"<details><summary>{same} variant(s) return bit-identical results on both sides</summary>",
+            f"<details><summary>{folded} variant(s) unchanged, or changed in a handful of lanes only</summary>",
             "",
         ]
-        if same_ulp:
-            lines += _table(same_ulp, ulp_head, _acc_cells)
-        if same_exact:
-            lines += ["", *_table(same_exact, exact_head, _exact_cells)]
+        if folded_ulp:
+            lines += _table(folded_ulp, ulp_head, _acc_cells)
+        if folded_exact:
+            lines += ["", *_table(folded_exact, exact_head, _exact_cells)]
         lines += ["", "</details>"]
     return lines + [""]
 
@@ -417,6 +468,136 @@ def cross_arch_section(summaries):
     return ["### Wormhole vs Blackhole", "", text, ""]
 
 
+def findings(summaries):
+    """Every ⚠️ of the report, one line each: the top of the comment, and ``--check``.
+
+    Returns dicts with ``kind`` (perf / accuracy / edge), ``arch``, ``op``, ``fmt`` (the
+    input format, for a narrowed re-run) and ``text``.
+    """
+    grouped = {}
+
+    def add(kind, arch, op, fmt, where, what, approx):
+        # ``where`` starts with the format pair; rows that differ only in it (or in
+        # approx) and read the same are one finding.
+        pair, _, rest = where.partition(" ")
+        key = (kind, arch, op, rest, what)
+        entry = grouped.setdefault(key, {"approx": set(), "pairs": [], "fmts": []})
+        entry["approx"].add(approx)
+        if pair not in entry["pairs"]:
+            entry["pairs"].append(pair)
+        if fmt not in entry["fmts"]:
+            entry["fmts"].append(fmt)
+
+    for s in summaries:
+        for family, by_schedule in s["perf"].items():
+            default = {
+                (r["op"], r["formats"], r["dest_acc"], r["approx"]): r
+                for r in by_schedule.get("loadmacro", [])
+            }
+            for schedule, rows in by_schedule.items():
+                for row in rows:
+                    if not _perf_regressed(row):
+                        continue
+                    twin = default.get(
+                        (row["op"], row["formats"], row["dest_acc"], row["approx"])
+                    )
+                    if (
+                        schedule != "loadmacro"
+                        and twin is not None
+                        and (
+                            _perf_regressed(twin)
+                            or twin.get("text_head") == row.get("text_head")
+                        )
+                    ):
+                        continue  # the same code, or already listed for the default build
+                    m, l1 = row.get("MATH_ISOLATE", {}), row.get("L1_TO_L1", {})
+                    label, cell = ("math", m) if m.get("regression") else ("L1→L1", l1)
+                    sched = "" if schedule == "loadmacro" else ", SFPLOADMACRO disabled"
+                    where = (
+                        f"{_fmt_pair(row['formats'])} dest_acc={row['dest_acc']}{sched}"
+                    )
+                    what = (
+                        f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
+                        f"({_speedup(cell['base'], cell['head']).strip('*')})"
+                    )
+                    add(
+                        "perf",
+                        s["arch"],
+                        row["op"],
+                        row["formats"].split("->")[0],
+                        where,
+                        what,
+                        row["approx"],
+                    )
+        for rec in s["accuracy"]:
+            op, i, o, approx, dest = rec["key"]
+            where = f"{_fmt_pair(f'{i}->{o}')} dest_acc={dest}"
+            if "base" in rec and _acc_regressed(rec):
+                b, h = rec["base"], rec["head"]
+                if b.get("metric") == "exact":
+                    what = f"wrong lanes {_num(b['wrong'])} → {_num(h['wrong'])}"
+                else:
+                    what = f"max ULP {_num(b['max'])} → {_num(h['max'])}"
+                    if rec["worse"] > rec["better"]:
+                        what += f", {_num(rec['worse'])} lanes worse / {_num(rec['better'])} better"
+                    if h["nonfinite"] > b["nonfinite"]:
+                        what += f", non-finite {b['nonfinite']} → {h['nonfinite']}"
+                add("accuracy", s["arch"], op, i, where, what, approx)
+            sp = rec.get("specials")
+            if sp:
+                severe = [
+                    c for c in sp["changed"] if _kind(c["old"]) != _kind(c["new"])
+                ]
+                if severe:
+                    c = severe[0]
+                    what = f"`f{_val(c['input']) if isinstance(c['input'], (list, tuple)) else '(' + _val(c['input']) + ')'}`: `{_val(c['old'])}` → `{_val(c['new'])}`"
+                    if len(severe) > 1:
+                        what += f" (+{len(severe) - 1} more special input(s))"
+                    add("edge", s["arch"], op, i, where, what, approx)
+                if sp["nan_propagates"]["base"] and not sp["nan_propagates"]["head"]:
+                    add(
+                        "edge",
+                        s["arch"],
+                        op,
+                        i,
+                        where,
+                        "a NaN input no longer returns NaN",
+                        approx,
+                    )
+    out = []
+    order = {"perf": 0, "accuracy": 1, "edge": 2}
+    for (kind, arch, op, rest, what), e in sorted(
+        grouped.items(), key=lambda kv: (order[kv[0][0]], kv[0][1:])
+    ):
+        approx = "/".join(sorted(e["approx"], reverse=True))
+        out.append(
+            {
+                "kind": kind,
+                "arch": arch,
+                "op": op,
+                "fmt": ",".join(e["fmts"]),
+                "text": f"{kind}: {_ARCH[arch]} `{op}` {'/'.join(e['pairs'])} {rest} approx={approx}: {what}",
+            }
+        )
+    return out
+
+
+def glance_section(summaries):
+    found = findings(summaries)
+    if not found:
+        return [
+            "**No regressions.** Nothing is slower beyond the thresholds, and no accuracy or "
+            "edge-case result got worse. Details below.",
+            "",
+        ]
+    return [
+        f"**⚠️ {len(found)} regression(s)**",
+        "",
+        *[f"- {f['text']}" for f in found[:20]],
+        "",
+    ]
+
+
 def header(summaries):
     s = summaries[0]
     archs = ", ".join(f"{_ARCH[x['arch']]} ({x['host_board']})" for x in summaries)
@@ -446,7 +627,7 @@ def header(summaries):
         lines.append(
             f"**Changed but not measured:** {', '.join(f'`{o}`' for o in ops['not_covered'])}."
         )
-    lines += ["", AI_SUMMARY_MARKER, ""]
+    lines += [""]
     return lines
 
 
@@ -467,14 +648,47 @@ def notes_section(summaries):
 
 def footer(summaries):
     s = summaries[0]
+    head, base, tool = s["head_sha"], s["base_sha"], s["tool_sha"]
+    mode = " --mode rebase" if s["mode"] == "rebase" else ""
+    ops = ",".join(s["ops"]["measured"])
+    pr = s.get("pr_number")
+    fetch = f"+refs/pull/{pr}/head:refs/remotes/origin/pr/{pr}" if pr else head
     lines = [
         "<details><summary>Reproduce</summary>",
         "",
-        "```",
-        *s.get("commands", []),
+        "On a machine with the card, in a tt-metal checkout, in the tt-llk test venv "
+        "(`tt_metal/tt-llk/tests/setup_external_testing_env.sh`). The tool runs from the "
+        "revision below; the PR only supplies device code. `--check` exits 1 when the result "
+        "has a ⚠️, so the same command is the test that fails today and passes once fixed.",
+        "",
+        "```bash",
+        f"git fetch origin {tool} {fetch} {base}",
+        f"git checkout --detach {tool}",
+        "cd tt_metal/tt-llk",
+    ]
+    for x in summaries:
+        cli = f"python3 sfpu_report/cli.py --arch {x['arch']} --head {head} --base {base}{mode} run"
+        lines += [
+            "",
+            f"# the whole report, {_ARCH[x['arch']]}",
+            f"{cli} --ops {ops or '<op>'} --check",
+        ]
+        per_op = {}
+        for f in findings([x]):
+            fmts = per_op.setdefault(f["op"], [])
+            fmts += [m for m in f["fmt"].split(",") if m not in fmts]
+        if per_op:
+            lines.append(f"# only what regressed, {_ARCH[x['arch']]}")
+            lines += [
+                f"{cli} --ops {op} --formats {','.join(fmts)} --check"
+                for op, fmts in list(per_op.items())[:10]
+            ]
+    lines += [
         "```",
         "",
-        f"Tool `{s['tool_sha'][:10]}`, mode `{s['mode']}`. Runs: {', '.join(x.get('run_url') or x['host'] for x in summaries)}.",
+        f"Tool `{tool[:10]}`, mode `{s['mode']}`. Runs: "
+        + ", ".join(x.get("run_url") or x["host"] for x in summaries)
+        + ".",
         "",
         "</details>",
     ]
@@ -484,6 +698,8 @@ def footer(summaries):
 def render(summaries):
     summaries = sorted(summaries, key=lambda s: s["arch"] != "wormhole")
     parts = header(summaries)
+    parts += glance_section(summaries)
+    parts += [AI_SUMMARY_MARKER, ""]
     parts += perf_section(summaries)
     parts += accuracy_section(summaries)
     parts += edge_section(summaries)
