@@ -3,6 +3,9 @@
 This folder holds the tests for the Metal 2.0 Host API. Please categorize your test by the folder
 structure below. For more information, please check out the README in each nested folder.
 
+Note that nested folder often have a defined organization,
+please read the folder READMEs and respect their organization.
+
 ## Test categories
 
 The folder is mostly organized by these 3 test categories:

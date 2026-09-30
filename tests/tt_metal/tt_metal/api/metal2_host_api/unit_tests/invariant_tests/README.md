@@ -1,57 +1,55 @@
 # Invariant tests
 
-Each test builds a ProgramSpec, calls `MakeProgramFromSpec` on a mock device, and checks that the spec is rejected
-with a specific error message or accepted. Together they pin the invariants listed in each directory's README (see
-"Listed invariants" below).
+The tests in this folder check that `MakeProgramFromSpec` accepts valid `ProgramSpec`s and rejects invalid ones. An
+invalid `ProgramSpec` is one that violates one of its invariants. Each subfolder's README lists the invariants it
+tests.
 
-## Where an invariant is tested
+## Folder organization
 
-An invariant is **local** to the smallest struct that holds every field it reads (hardware generation may be an extra
-input), and is tested in the directory named after that struct's header. For example, "a DFB accessor name is a
-valid C++ identifier" reads only a `DFBBinding`, so it is tested in `kernel_spec/`.
+Each subfolder corresponds to one Metal 2.0 Host API header. Its tests check the local invariants of the structs in
+that header, and its README lists those invariants. Structural invariants are tested in `program_spec/`. Keeping each
+check next to the struct it constrains makes the checks easier to find and verify.
 
-A name field is a pointer: a binding's `*_spec_name` or `tensor_parameter_name`, `WorkUnitSpec::kernels`, and
-`DataflowBufferSpec::borrowed_from`. A struct may follow the names it holds, so a rule that reads the object a name
-points to is still local. For example, "every DFB a compute kernel binds sets `data_format_metadata`" follows
-`dfb_spec_name`, so it is local to `KernelSpec` and tested in `kernel_spec/`. Rules on `*AdvancedOptions` fields are an
-exception and do not follow names.
+## Kinds of invariants
 
-A rule that no struct below `ProgramSpec` can state is **structural**. It either checks that a name resolves, for
-example "every `DFBBinding::dfb_spec_name` names a declared DataflowBufferSpec", or needs every struct that names an
-object, for example "every DataflowBufferSpec is bound by some kernel". Structural invariants are listed at the top of
-`ProgramSpec` in `program_spec/README.md` and tested in `program_spec/`.
+An invariant is **local** if it can be checked using the given struct (and the structs it contains) alone.
+For example, "a DFB must have a non-zero entry size" can be checked by soley looking at the `DataflowBufferSpec` struct.
+A field that names another object behaves like a pointer, invariants dependening on these indirections are still considered local.
+For example, "the Tensor referred by `DataflowBufferSpec::borrowed_from` by name must be in L1" is a local invariant of
+`DataflowBufferSpec`.
 
-| Directory | Header | Covers |
-|---|---|---|
-| `kernel_spec/` | `kernel_spec.hpp` | KernelSpec: threads, bindings and the DFBs they name, argument schema, hw_config |
-| `data_movement_hardware_config/` | `data_movement_hardware_config.hpp` | DataMovementHardwareConfig |
-| `dataflow_buffer_spec/` | `dataflow_buffer_spec.hpp` | DataflowBufferSpec, including the TensorParameter `borrowed_from` names |
-| `scratchpad_spec/` | `scratchpad_spec.hpp` | ScratchpadSpec |
-| `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` | PrefetcherPipeParameter geometry |
-| `advanced_options/` | `advanced_options.hpp` | KernelAdvancedOptions, DFBAdvancedOptions, SemaphoreAdvancedOptions |
-| `program_spec/` | `program_spec.hpp` | WorkUnitSpec and the kernels it names, per-field ProgramSpec rules, all structural invariants |
+A **structural** invariant can only be checked at the top level: `ProgramSpec`.
+For example,
+"every `DFBBinding::dfb_spec_name` names a declared `DataflowBufferSpec`"
+can only be checked when the full view of memory resource and kernel specs are available.
+It is inevitable that these invariants exist but we should keep them to a minimum.
 
-Headers without a directory:
+| Directory | Header |
+|---|---|
+| `kernel_spec/` | `kernel_spec.hpp` |
+| `data_movement_hardware_config/` | `data_movement_hardware_config.hpp` |
+| `compute_hardware_config/` | `compute_hardware_config.hpp` |
+| `dataflow_buffer_spec/` | `dataflow_buffer_spec.hpp` |
+| `scratchpad_spec/` | `scratchpad_spec.hpp` |
+| `semaphore_spec/` | `semaphore_spec.hpp` |
+| `tensor_parameter/` | `tensor_parameter.hpp` |
+| `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` |
+| `advanced_options/` | `advanced_options.hpp` |
+| `program_spec/` | `program_spec.hpp` |
 
-- `semaphore_spec.hpp`: its one local invariant (non-empty `target_nodes`, listed below) is untested. Semaphore binding
-  and option rules are in `kernel_spec/`, `advanced_options/` and `program_spec/`.
-- `compute_hardware_config.hpp`: no invariant of its own. The `unpack_modes` rules need the kernel's DFB bindings, so
-  they are in `kernel_spec/hardware_config.cpp`.
-- `tensor_parameter.hpp`: no invariant.
-- `program_run_args.hpp`: tested in `../program_run_args/`, whose README lists its invariant.
+Note that `program_run_args.hpp` does not describe any constructs within the ProgramSpec,
+thus it is not included in this directory.
 
-## Listed invariants
+## Listing invariants
 
-The public headers under `tt_metal/api/tt-metalium/experimental/metal2_host_api/` do not carry invariant comments.
-Instead, each directory README has a "Listed invariants" section: its header's structs as declared, with every field,
-and with the invariant comments in place of the header's documentation. A field with no comment has no listed
-invariant.
+Each sub-directory README has a "Listed invariants" section that reflects the invariant of it's header.
+The section includes: The definition of constructs within the respective headers with their invariant marked as comments.
 
 Keep a listing in step with its header: when a struct gains, loses or renames a field, update the listing; when a new
 check is added to `tt_metal/impl/metal2_host_api/program_spec.cpp`, list the rule on the struct that owns it and add a
 test. The `*AdvancedOptions` structs have no listing yet.
 
-`SemaphoreSpec` (`semaphore_spec.hpp`), which has no directory:
+### Example: `SemaphoreSpec` in `semaphore_spec.hpp`
 
 ```cpp
 struct SemaphoreSpec {
@@ -64,14 +62,3 @@ struct SemaphoreSpec {
     SemaphoreAdvancedOptions advanced_options;
 };
 ```
-
-## Writing an invariant test
-
-- Start from a minimal valid spec (`test_helpers/test_helpers.hpp`), break exactly one rule, and assert on the error text with
-  `::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(...))`.
-- When the boundary is not obvious, pair the rejection with an acceptance test at the boundary, as
-  `MaxComputeThreadsSucceeds` does for `ComputeKernelExceedingMaxThreadsFails`.
-- Use the fixture for the architecture the rule depends on: `ProgramSpecTestQuasar` (Quasar, Gen2),
-  `ProgramSpecTestGen1` (Wormhole B0, Gen1), `ProgramSpecTestBlackhole` (Blackhole, Gen1), or
-  `PrefetcherPipeSpecTestQuasar` / `PrefetcherPipeSpecTestGen1` for PrefetcherPipe rules.
-- If the rule is new, add it to the directory's Listed invariants.
