@@ -1,0 +1,17 @@
+# #37 S2 prompt reuse A/B on blx03 — NOTES
+
+Deviation from spec (judgment call): no t22 checkout on blx03. The blx03 tree ~/fasth3/tt-metal (t36, 16ba9a383d)
+already contains 5d993cd2f7c, has a build and warm caches, so the A/B runs there via tmp/blx03/run25.sh.
+No new build or cache. Conv decoder (LTX25_DIFFVAE=0, the main decode path) keeps each job ~3 min.
+
+Driver: blx03:~/fasth3/t37/drive37.sh (copy in tmp/t37/), detached, log drive37.log, job ids in ~/fasth3/t37/jobs.
+It waits for no other smarton broker job, submits s2reuse0 (LTX_S2_PROMPT_REUSE=0), waits, then s2reuse1,
+then runs compare37.sh -> ~/fasth3/t37/compare.txt and writes ~/fasth3/t37/DONE.
+Outputs: blx03:~/fasth3/out/t37/{s2reuse0,s2reuse1}/ (run.log, mp4 per gen, lat.gen*.pt), still s2reuse1_gen1_t3s.png.
+
+Pass: mp4 md5 and S2 latents equal per gen, and S2 (denoise init "prompt" ms + STEP_MS, table "Stage 2 denoise")
+faster with reuse=1. gen#0 is the capture gen; compare replays gen#1/gen#2 for timing.
+
+Next step on resume: ssh g14blx03 cat ~/fasth3/t37/compare.txt; copy the still + one mp4 back to tmp/t37/;
+if not identical set LTX_S2_PROMPT_REUSE default to 0 on the t22 branch and push; then rm -rf blx03:~/fasth3/out/t37
+(keep nothing there) and ~/fasth3/t37.
