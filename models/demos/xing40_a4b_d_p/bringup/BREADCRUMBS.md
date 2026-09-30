@@ -202,3 +202,18 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   0.0108 against a limit of 0.0135).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py`
   (and `BRINGUP_IMPL=mutations|reference|stub` for the freeze checks).
+
+## C.moe.router implement (run1, attempt 1)
+- New `tt/router.py:TtRouter` + `build_router(mesh, loader, cfg, layer, max_rows)`, from glm53_flash_d_p's TtRouter:
+  fp32 `ttnn.linear` (gate.weight^T [3584, 64] fp32 replicated, HiFi4 + fp32 dest) -> sigmoid -> add (bias recentred
+  by its mean at load) -> `ttnn.topk` k=4 (fp32 keys, sorted) -> gather unbiased scores -> sum, (+1e-20) x (1/2.0) ->
+  div. Returns (dense [1, 1, S/4, 64] fp32 ROW_MAJOR, idx uint16 [S/4, 4], weights fp32 [S/4, 4]) per chip, row split,
+  replicated over axis 1. No CCL.
+- Gotcha: `ttnn.scatter` rejects fp32 TILE, so the dense matrix is scattered in ROW_MAJOR (fp32 zeros built RM at
+  load for max_rows, idx / weights to_layout RM per chunk). `dense_dtype=ttnn.bfloat16` gives the GLM-style TILE path.
+- max_rows = max chunk over ladder + target / mesh rows (8192 / 4 = 2048), `hooks._max_rows`.
+- hooks: `_ROUTER_STEPS = {"router"}`, `_router_host_fn` (row-split bf16 ffn_norm in, as ffn_norm's device output;
+  dense read back from column 0). `DEVICE_STEPS["moe"] = {"router"}`, so the hybrid device_model runs it.
+- Gate: pcc_router_L02 0.999496; vs cpu overlap 0.99939, matched 0.99756, rel 1.2e-4; vs golden overlap 0.99841,
+  rel 0.0018; layer39 / mixed overlap 0.99963 / 0.99976.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_router.py`
