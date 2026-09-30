@@ -187,10 +187,20 @@ function cardSpec(S) {
     return cards;
   }
   const m = S.metric || {};
-  cards.push({k: (m.name || "metric"), v: m.current, unit: " " + (m.unit || "ms"), sub: "current",
+  // WHAT THE METRIC COVERS. The optimized metric is read off a profiled SLICE (the ledger records its
+  // depth and how it was timed), while the stage cards beside it are full-pipeline times -- so say so,
+  // and show the end-to-end number the commit gate actually judges wins on right next to it.
+  const sc = m.scope || {};
+  const scopeTxt = (sc.depth != null || sc.mode)
+    ? "sampled slice" + (sc.depth != null ? " · depth " + sc.depth : "") + (sc.mode ? " · " + sc.mode + " per-op device time" : "") + " · not end-to-end"
+    : "current";
+  cards.push({k: (m.name || "metric"), v: m.current, unit: " " + (m.unit || "ms"), sub: scopeTxt,
               d: deltaTxt(m.current, m.baseline, m.direction || "min")});
   cards.push({k: "baseline", v: m.baseline, unit: " " + (m.unit || "ms"), sub: "",
               d: m.target != null ? "target " + fmtMs(m.target) : ""});
+  if (S.fullpipe_ms != null)
+    cards.push({k: "end-to-end", v: S.fullpipe_ms, unit: " ms", sub: "all layers · what wins are judged on",
+                d: deltaTxt(S.fullpipe_ms, S.fullpipe_baseline_ms, "min")});
   (S.stages || []).slice(0, 3).forEach(s =>
     cards.push({k: s.name, v: s.ms, unit: " ms", sub: s.path || "", d: deltaTxt(s.ms, s.baseline_ms, "min")}));
   return cards;

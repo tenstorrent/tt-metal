@@ -212,12 +212,34 @@ def _metric_now(metric, ledger: dict):
     from models.experimental.perf_automation.cc_optimize import measurements as _m
 
     rows = [r for r in (ledger or {}).get(_m.KIND_EAGER) or [] if isinstance(r.get("value_ms"), (int, float))]
-    before = next((r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_BEFORE), None)
+    first = next((r for r in rows if r.get("phase") == _m.PHASE_BEFORE), None)
+    before = first["value_ms"] if first else None
     afters = [r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_AFTER]
     base = metric.get("baseline")
-    if afters and isinstance(base, (int, float)) and before is not None and abs(before - base) < 1e-6:
-        return {**metric, "current": afters[-1]}
-    return metric
+    if not (isinstance(base, (int, float)) and before is not None and abs(before - base) < 1e-6):
+        return metric
+    # WHAT THIS NUMBER COVERS, as the ledger recorded it: the profiled slice (its depth) and how it was
+    # timed, so the page can say it is not the end-to-end time. Summing a depth-limited per-op profile
+    # gives a number far below the full-pipeline stage times beside it, and read as "end to end" it
+    # looked like a contradiction (5258 ms device time next to 24537 ms for one stage alone).
+    out = {**metric, "scope": {"depth": first.get("depth"), "mode": first.get("mode")}}
+    if afters:
+        out["current"] = afters[-1]
+    return out
+
+
+def _fullpipe_baseline(ledger: dict):
+    """The end-to-end (all layers) reading the run started from, as the ledger pinned it, or None."""
+    from models.experimental.perf_automation.cc_optimize import measurements as _m
+
+    return next(
+        (
+            r["value_ms"]
+            for r in (ledger or {}).get(_m.KIND_FULLPIPE) or []
+            if r.get("phase") == _m.PHASE_BEFORE and isinstance(r.get("value_ms"), (int, float))
+        ),
+        None,
+    )
 
 
 def _load_attempts(dirs: list, slug: str | None) -> list:
@@ -625,6 +647,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
         "headroom": headroom,
         "throughput": throughput,
         "fullpipe_ms": (fullpipe or {}).get("full_pipeline_ms"),
+        "fullpipe_baseline_ms": _fullpipe_baseline(ledger),
         "attempts": attempts,
         "opportunities": opportunities,
         "hitl_proposal": proposal if isinstance(proposal, dict) else None,

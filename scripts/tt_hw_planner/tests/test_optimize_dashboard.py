@@ -476,3 +476,19 @@ def test_a_stage_history_line_moves_only_on_kept_attempts():
     body = PAGE_HTML[i : PAGE_HTML.index("\nfunction ", i + 1)]
     assert 'a.status === "kept" && (runMin == null || v < runMin)' in body
     assert "v < runMin)) runMin = v" in body and 'bestLabel: "best kept"' in PAGE_HTML
+
+
+def test_the_metric_says_what_it_covers_and_the_end_to_end_sits_beside_it():
+    """A depth-limited per-op sum (5258 ms) beside full-pipeline stage times (24537 ms for one stage)
+    read as a contradiction; the card now names the slice and shows the end-to-end number too."""
+    from scripts.tt_hw_planner._optimize_dashboard_page import PAGE_HTML
+    from scripts.tt_hw_planner.optimize_dashboard import _fullpipe_baseline, _metric_now
+
+    metric = {"name": "m", "baseline": 100.0}
+    ledger = {
+        "eager_per_op": [{"phase": "before", "value_ms": 100.0, "depth": "2", "mode": "eager"}],
+        "fullpipe_e2e": [{"phase": "before", "value_ms": 900.0}, {"phase": "after", "value_ms": 500.0}],
+    }
+    assert _metric_now(metric, ledger)["scope"] == {"depth": "2", "mode": "eager"}
+    assert _fullpipe_baseline(ledger) == 900.0 and _fullpipe_baseline({}) is None
+    assert "not end-to-end" in PAGE_HTML and 'k: "end-to-end", v: S.fullpipe_ms' in PAGE_HTML
