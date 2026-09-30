@@ -4102,6 +4102,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             if isinstance(y, torch.Tensor)
             else torch.tensor(float(y))
         )
+        # The kernel's log operand is flushed to zero when it is a denormal (Blackhole: by the
+        # SFPSTORE of the Dest round trip, or by the biased-exponent == 0 test of
+        # _calculate_log_body_on_reg_), so log(denormal) = -inf. Model that flush; the sign of
+        # a denormal survives it (-denormal -> -0.0).
+        yf = torch.where(yf.abs() < torch.finfo(torch.float32).tiny, yf * 0.0, yf)
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
 

@@ -430,6 +430,31 @@ def _isclose_nan_stimuli_specs():
 
 
 def _eq_ne_stimuli_specs():
+def _xlogy_denormal_stimuli_specs():
+    # The log operand (in1) on the biased-exponent-0 lane, which the kernel maps to ln = -inf:
+    # +0, the smallest and the largest positive denormal, then FLT_MIN and 1.0 as finite
+    # controls, five lanes per period. in0 is the positive ramp, so the golden is -inf on lanes
+    # 0-2, in0 * ln(FLT_MIN) on lane 3 and 0 on lane 4. This pins the exexp(Biased) == 0 test of
+    # _calculate_log_body_on_reg_: an `in1 == 0.0F` test would return a finite in0 * ~-88 on
+    # lanes 1-2 (see its docstring), and _xlogy's golden flushes a denormal in1 to match the
+    # kernel. Only a 32-bit input into a 32-bit Dest carries a denormal to the SFPU; on the
+    # datacopy path a bf16 denormal is flushed before SFPLOAD.
+    lanes = torch.tensor(
+        [0x00000000, 0x00000001, 0x007FFFFF, 0x00800000, 0x3F800000],
+        dtype=torch.int32,
+    ).view(torch.float32)
+
+    def a_face(size, dtype, generator):
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)
+
+    def b_face(size, dtype, generator):
+        j, _ = _positions_and_ramp(size)
+        return lanes[(j % 5).long()].to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
     # Eq/Ne compare paired operands (a = tile0, b = tile1). Fill the two tiles so even p ->
     # identical (Eq 1), odd p -> differ by 1.0 (Eq 0), a clean ~50/50 mix.
     def a_face(size, dtype, generator):
@@ -941,6 +966,24 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     )
     if not specials_safe(
         formats.input_format, formats.output_format, effective_dest_acc
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    mathop=[MathOperation.SfpuXlogy],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_xlogy_denormal(formats, dest_acc, mathop):
+    # xlogy(x, denormal) = x * ln(denormal) = -inf, because the kernel flushes its log operand
+    # (see _xlogy_denormal_stimuli_specs). Float32 into a 32-bit Dest is the only pipeline in
+    # this harness that delivers a denormal to the SFPU, and the flush is measured on Blackhole.
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "the denormal flush of the xlogy log operand is measured on Blackhole only"
+        )
+
+    spec_A, spec_B = _xlogy_denormal_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
     ):
         pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
 
