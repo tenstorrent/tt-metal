@@ -23,6 +23,7 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
@@ -490,6 +491,9 @@ public:
         std::vector<SlotCores> slots;
         // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
         experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
+        // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
+        // pipe's address can be reused by a new pipe, but its identity never is.
+        experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
     };
     void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
     const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
@@ -688,7 +692,7 @@ private:
     };
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
-    uint32_t max_cbs_;  // Architecture-specific max CBs
+    uint32_t max_dfbs_;  // Architecture-specific max DFBs
     uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;

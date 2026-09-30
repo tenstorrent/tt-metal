@@ -80,11 +80,14 @@ class MiniMaxH3Attention(Module):
 
     # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
     # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
-    # 4768 / 9216 / 13632 are 768P at 5s / 10s / 15s, packed and padded, divided by SP=8.
+    # 4736 / 9184 / 13664 are 768P at 5s / 10s / 15s with the perf gate's 39-token prompt, packed and
+    # padded to SP * TILE, divided by SP=8 -- the values the pipeline logs as "rows/device". Padding
+    # buckets prompt length: at 15 s any prompt of 1-250 tokens lands on 13664. The 5 s entry was
+    # measured on Blackhole's 110 SDPA cores and not yet re-checked on Wormhole's 63.
     measured_sdpa_chunk_sizes = {
-        4768: (320, 384),
-        9216: (256, 512),
-        13632: (256, 512),
+        4736: (320, 384),
+        9184: (256, 512),
+        13664: (256, 512),
     }
 
     def __init__(

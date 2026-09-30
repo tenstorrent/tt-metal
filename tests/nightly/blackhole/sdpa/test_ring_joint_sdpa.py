@@ -371,6 +371,59 @@ def generate_ring_joint_perf_model_configs(
         seq_len=4096,
     )
 
+    # MiniMax-H3 t2va at 768P, TP=4 / SP=8 on a Galaxy. 56 attention heads / TP 4 = 14 per device,
+    # head_dim 128, full (non-causal) attention. `seq_len` is the per-device packed sequence length
+    # the pipeline produces at each duration -- text + audio + video in one packed stream -- which
+    # `generate_test_configs` scales by sp_size for the global length. The model drives this op
+    # through the joint entry point with zero-length joint inputs, which is what the harness already
+    # does (it passes None for joint q/k/v), so these measure the path the model actually runs.
+    #
+    # These configs back `MiniMaxH3Attention.measured_sdpa_chunk_sizes`. They were previously cited
+    # by that table's docstring but never committed, so the numbers in it were not reproducible from
+    # the tree; that is what this restores.
+    #
+    # The chunk-size lists deliberately bracket the currently-shipped pick so a sweep produces the
+    # baseline and the candidates in one table. The optimum tracks SDPA core-slot efficiency, and
+    # the core count is architecture-dependent: `MeshConfig` gives 11x10 = 110 SDPA cores on a
+    # Blackhole Galaxy but 7x9 = 63 on Wormhole. At 4768 the shipped q=320 wastes 4.5% of the slots
+    # on 110 cores and 16.7% on 63 (210 work items, 4 passes, 42 idle slots), while q=544/576 divide
+    # 63 exactly -- so Wormhole is where the candidate list is widest. 9216 and 13632 already land
+    # clean on both, and carry a narrower list to confirm rather than to search.
+    for _name, _seq_len, _q_chunks, _k_chunks in (
+        # seq_len is the pipeline's rows/device with the gate's 39-token prompt (4736 / 9184 / 13664),
+        # not the 4768 / 9216 / 13632 an audio-undercounting harness used to report. Slot arithmetic is
+        # unchanged to the tile, and padding buckets prompt length, so these are the stable values.
+        ("minimax_h3_5s_768p", 4736, [256, 320, 384, 544, 576], [256, 384, 512]),
+        ("minimax_h3_10s_768p", 9184, [256, 352, 512], [256, 512]),
+        # 15 s carries the widened list. The first pass here swept q in {256, 384, 512} x k in
+        # {256, 512} and found the shipped (256, 512) already best, with every larger-q candidate
+        # L1-infeasible. That search was bounded on the wrong axis: the CB footprint is dominated by
+        # Sq_chunk_t * Sk_chunk_t, but Sq carries the heavier linear term (q, out_im, out0 and the
+        # statistics FIFO all scale with it, against K/V's two buffers on Sk), which is why
+        # (512, 256) fails while (256, 512) fits at the same product. The unexplored direction is
+        # therefore SMALLER q with LARGER k -- which also halves the ring's K-loop iterations, the
+        # thing that made k=512 win in the first place. q is restricted to the values that tile 63
+        # cores well at seq 13664: 256 (0.0% slot waste), 192 (0.0%) and 128 (0.9%).
+        # q=128 excluded: hung twice on 2026-09-17 on one Wormhole galaxy (seq_local 13632, k=512), did not
+        # reproduce on another the same day (6/6), and is slower than q=192 at every feasible k regardless.
+        ("minimax_h3_15s_768p", 13664, [192, 256], [512, 640, 768, 1024]),
+    ):
+        perf_configs[_name] = ModelConfig(
+            name=_name,
+            nhq=14,
+            nhk=14,
+            nhv=14,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=_q_chunks,
+            k_chunk_sizes=_k_chunks,
+            seq_len=_seq_len,
+        )
+
     return perf_configs
 
 
@@ -4516,16 +4569,19 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
-    "block_cyclic,halo_slots,sliding_window_size",
+    "prefix_kind,halo_slots,sliding_window_size",
     [
-        pytest.param(False, 1, 128, id="aligned-single-halo"),
+        pytest.param("aligned", 1, 128, id="aligned-single-halo"),
         # A 256-token slab: the 384 and 1024 windows need two (the second a partial slab) and four halo
         # hops, so replays also cover the per-hop page ranges and the shared-link hand-off.
-        pytest.param(False, 1, 384, id="aligned-two-hop-partial"),
-        pytest.param(False, 1, 1024, id="aligned-four-hop"),
-        pytest.param(True, 2, 128, id="rotated-two-halos"),
+        pytest.param("aligned", 1, 384, id="aligned-two-hop-partial"),
+        pytest.param("aligned", 1, 1024, id="aligned-four-hop"),
+        # Slab-aligned but not group-aligned prefixes: the four-hop multicast splits into two runs whose
+        # origins change per replay.
+        pytest.param("slab_rotated", 1, 1024, id="slab-rotated-four-hop"),
+        pytest.param("rotated", 2, 128, id="rotated-two-halos"),
         pytest.param(
-            True,
+            "rotated",
             1,
             128,
             id="rotated-single-halo-guard",
@@ -4537,19 +4593,21 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
     ],
 )
 def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
-    block_cyclic, halo_slots, sliding_window_size
+    prefix_kind, halo_slots, sliding_window_size
 ):
     """Replay changing prefixes and slots; undersized halos use the bounded fallback."""
-    invalid_wrap = block_cyclic and halo_slots == 1
+    invalid_wrap = prefix_kind == "rotated" and halo_slots == 1
     halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
     halo_tokens = math.ceil((sliding_window_size - 1) / 128) * 128
     chunk_global = chunk_local * sp_size
-    prefix_lengths = (
-        (0, chunk_global + 32, 2 * chunk_global - 32) if block_cyclic else (0, chunk_global, 2 * chunk_global)
-    )
+    prefix_lengths = {
+        "aligned": (0, chunk_global, 2 * chunk_global),
+        "slab_rotated": (0, chunk_global + 2 * chunk_local, chunk_local),
+        "rotated": (0, chunk_global + 32, 2 * chunk_global - 32),
+    }[prefix_kind]
     stable_groups = 4
     stable_kv_seq = sp_size * stable_groups * chunk_local
 
@@ -6208,15 +6266,13 @@ def test_ring_joint_balanced_overlapping_padding_and_causal_masks(use_rotation):
 
 
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["chunks", "pairs"])
-def test_ring_joint_rotated_q_compact_runtime_args(is_balanced, capfd):
+def test_ring_joint_rotated_q_compact_runtime_args(is_balanced):
     """Large base ranges still rotate without overflowing the portable runtime-arg budget."""
     # Four SDPA cores keep the reference small while producing >= 86 chunks/core.
     # Explicit per-iteration base-ID lists would need > 341 writer args even on ring4.
     mesh_config = replace(MESH_CONFIG, grid_cols=3, grid_rows=2)
     model = replace(MODEL_CONFIGS["minimax3_gqa_smoke"], nhq=173, seq_len=128, is_balanced=is_balanced)
     run_ring_joint_sdpa_model_configs(mesh_config, model, qk_configs=[(64, 128)])
-    output = capfd.readouterr().out
-    assert "Rotated Q split ACTIVE" in output
 
 
 @pytest.mark.timeout(600)

@@ -490,7 +490,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2),
                 ckl::input(dfb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_ex2pe,
                 ckl::ReservePolicy::PerTile,

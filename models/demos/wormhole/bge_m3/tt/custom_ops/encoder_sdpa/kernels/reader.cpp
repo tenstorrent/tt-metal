@@ -60,6 +60,54 @@ FORCE_INLINE void read_chunk_for_forwarding(
 #endif
 }
 
+// read_q_subblock (dataflow_common.hpp) with a source row stride: skip_src_cols tiles
+// follow each source row. The fused QKV input needs it (the Q head is a column slice).
+template <uint32_t tile_bytes, typename ReaderType>
+FORCE_INLINE void read_q_subblock_strided(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    uint32_t& start_tile_id,
+    const uint32_t sb_start_row,
+    const uint32_t subblock_h,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_cols,
+    const uint32_t barrier_threshold,
+    const uint32_t skip_src_cols) {
+    Noc noc;
+    const uint32_t sb_tiles = subblock_h * dst_cols;
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(sb_tiles);
+    const uint32_t base_write_ptr = cb.get_write_ptr();
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
+        const uint32_t local_row = row - sb_start_row;
+        uint32_t write_ptr = base_write_ptr + local_row * dst_cols * tile_bytes;
+        if (row < src_rows) {
+            for (uint32_t col = 0; col < src_cols; ++col) {
+                noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = start_tile_id++}, {});
+                write_ptr += tile_bytes;
+                if (++barrier_count == barrier_threshold) {
+                    noc.async_read_barrier();
+                    barrier_count = 0;
+                }
+            }
+            start_tile_id += skip_src_cols;
+            for (uint32_t col = src_cols; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
+            }
+        } else {
+            for (uint32_t col = 0; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
+            }
+        }
+    }
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    cb.push_back(sb_tiles);
+}
+
 void kernel_main() {
     Noc noc;
 
@@ -203,6 +251,12 @@ void kernel_main() {
     constexpr uint32_t cb_kv_sync = get_compile_time_arg_val(cb_arg_offset + 9);
     constexpr bool use_runtime_lengths = get_compile_time_arg_val(cb_arg_offset + 10) == 1;
     constexpr uint32_t cb_valid_lengths = get_compile_time_arg_val(cb_arg_offset + 11);
+    // Fused QKV input: Q, K and V accessors all point at the QKV projection output
+    // [B, 1, S, (NQH + NKH + NVH) * DHt tiles], sections Q | K | V, head h at h * DHt.
+    // Each head is a DHt-wide column slice, so the row stride is qkv_w_tiles.
+    constexpr bool fused_qkv_input = get_compile_time_arg_val(cb_arg_offset + 12) == 1;
+    constexpr uint32_t qkv_w_tiles = (NQH + NKH + NVH) * DHt;
+    constexpr uint32_t qkv_skip = fused_qkv_input ? qkv_w_tiles - DHt : 0;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -382,13 +436,24 @@ void kernel_main() {
             const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
-            uint32_t q_read_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
+            uint32_t q_read_tile_id = fused_qkv_input
+                                          ? (nb * valid_Sqt + read_offset + q_row_start_tile) * qkv_w_tiles + nq * DHt
+                                          : q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
 
             // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
             // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
             if constexpr (!use_q_subblock_push) {
                 read_chunk_with_padding<q_tile_bytes>(
-                    q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    q_reader,
+                    cb_q_in,
+                    q_read_tile_id,
+                    q_row_tile_count,
+                    DHt,
+                    Sq_chunk_t,
+                    DHt,
+                    barrier_threshold,
+                    false,
+                    qkv_skip);
             }
 
             q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -436,8 +501,11 @@ void kernel_main() {
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
-                const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
-                const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
+                const uint32_t kv_row_base = (nb * valid_Skt + kv_row_start_tile) * qkv_w_tiles;
+                const uint32_t k_start_tile_id = fused_qkv_input ? kv_row_base + (NQH + k_head) * DHt
+                                                                 : k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
+                const uint32_t v_start_tile_id = fused_qkv_input ? kv_row_base + (NQH + NKH + v_head) * DHt
+                                                                 : v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
 
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
@@ -493,8 +561,8 @@ void kernel_main() {
                                 Sk_chunk_t,
                                 DHt,
                                 barrier_threshold,
-                                true  // transpose=true for K reads
-                            );
+                                true,  // transpose=true for K reads
+                                qkv_skip);
                         }
                     }
                 }
@@ -629,7 +697,7 @@ void kernel_main() {
                 if constexpr (use_q_subblock_push) {
                     if (k_chunk == k_loop_start) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            read_q_subblock<q_tile_bytes>(
+                            read_q_subblock_strided<q_tile_bytes>(
                                 q_reader,
                                 cb_q_in,
                                 q_read_tile_id,
@@ -638,7 +706,8 @@ void kernel_main() {
                                 q_row_tile_count,
                                 DHt,
                                 DHt,
-                                barrier_threshold);
+                                barrier_threshold,
+                                qkv_skip);
                         }
                     }
                 }
@@ -708,7 +777,7 @@ void kernel_main() {
                                 vDHt,
                                 barrier_threshold,
                                 false,
-                                skip_src_cols);
+                                skip_src_cols + qkv_skip);
                         }
                     }
                 }

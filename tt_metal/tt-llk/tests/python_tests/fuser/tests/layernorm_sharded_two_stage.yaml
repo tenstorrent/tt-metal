@@ -32,10 +32,10 @@ indexes:
 
 operands:
   - {name: x, dims: [256, 32], format: Float16_b}
-  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.03125}
-  - {name: scaler_first, dims: [32, 32], format: Float16_b, const_value: 1.0}
-  - {name: scaler_global, dims: [32, 32], format: Float16_b, const_value: 0.25}
-  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-12}
+  - {name: scaler, dims: [32, 32], format: Float16_b, stimuli: 0.03125}
+  - {name: scaler_first, dims: [32, 32], format: Float16_b, stimuli: 1.0}
+  - {name: scaler_global, dims: [32, 32], format: Float16_b, stimuli: 0.25}
+  - {name: eps, dims: [32, 32], format: Float16_b, stimuli: 1.0e-12}
   - {name: ex_partial, dims: [256, 32], format: Float32}
   - {name: ex_first, dims: [64, 32], format: Float32}
   - {name: ex_global, dims: [64, 32], format: Float32}

@@ -38,7 +38,6 @@ using tt::tt_metal::experimental::ProgramSpec;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -84,10 +83,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 
-    tt_metal::IDevice* device = &in0_buffer.mutable_device();
+    tt_metal::distributed::MeshDevice& device = in0_buffer.mutable_device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
+        get_compute_kernel_config_args(device.arch(), operation_attributes.compute_kernel_config.value());
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
@@ -412,9 +411,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build KernelSpecs
@@ -459,8 +458,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec reader_writer{
@@ -520,7 +518,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (bias.has_value()) {
         reader_writer.dfb_bindings.push_back(DFBBinding{
@@ -538,23 +536,22 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // Compute kernel. Two specs of one source, one per work-split core group, differing only in the
     // per-group block count; they cover disjoint node sets, so each node still sees exactly one.
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t blocks_per_core_group) {
-        auto compute_hw =
-            ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+        auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
 
         // Legacy set no unpack_to_dest_mode at all, i.e. UnpackToDestMode::Default for every
         // buffer, which is UnpackMode::UnpackToSrc here. Stated explicitly because Metal 2.0
         // requires the choice for a Float32 buffer a compute kernel consumes under
         // enable_32_bit_dest, which the intermediate hits whenever fp32_dest_acc_en is set.
-        unpack_modes(compute_hw) = {
+        compute_hw.unpack_modes = {
             {IN0_DFB, UnpackMode::UnpackToSrc},
             {IN1_DFB, UnpackMode::UnpackToSrc},
             {INTERMED0_DFB, UnpackMode::UnpackToSrc},
         };
         if (bias.has_value()) {
-            unpack_modes(compute_hw).insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+            compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
         }
         if (in0_transpose_tile) {
-            unpack_modes(compute_hw).insert({IN0_TRANSPOSED_DFB, UnpackMode::UnpackToSrc});
+            compute_hw.unpack_modes.insert({IN0_TRANSPOSED_DFB, UnpackMode::UnpackToSrc});
         }
 
         KernelSpec compute{

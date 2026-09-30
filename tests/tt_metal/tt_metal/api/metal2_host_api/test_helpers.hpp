@@ -83,7 +83,7 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = DataMovementGen2Config{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 }
 
@@ -102,28 +102,29 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = DataMovementGen1Config{.processor = processor, .noc = noc}};
+        .hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}}};
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
-// from the READER role via CreateReaderGen1DataMovementConfig (Gen1/WH/BH).
+// from the READER role via CreateReaderDataMovementConfig (Gen1/WH/BH).
 inline KernelSpec MakeMinimalReaderDMKernel(std::string name) {
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = CreateReaderGen1DataMovementConfig(),
+        .hw_config = CreateReaderDataMovementConfig(),
     };
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
-// from the WRITER role via CreateWriterGen1DataMovementConfig (Gen1/WH/BH).
+// from the WRITER role via CreateWriterDataMovementConfig (Gen1/WH/BH).
 inline KernelSpec MakeMinimalWriterDMKernel(std::string name) {
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = CreateWriterGen1DataMovementConfig(),
+        .hw_config = CreateWriterDataMovementConfig(),
     };
 }
 
@@ -133,7 +134,7 @@ inline KernelSpec MakeMinimalGen2ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = ComputeGen2Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 }
 
@@ -143,7 +144,7 @@ inline KernelSpec MakeMinimalGen1ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 }
 
@@ -206,18 +207,20 @@ inline void BindTensorParameterToKernel(
 // differently: a tile tensor's physical shape is rounded up in both dims, while a row-major
 // sharded tensor aligns on width only (create_default_alignment_rm), so its height is never
 // padded up to the shard height and the tensor may legally be smaller than one of its shards.
+// `tile` overrides the default 32x32 page tile (e.g. to exercise narrow / partial tiles).
 inline TensorParameter MakeShardedTensorParameter(
     std::string name,
     const tt::tt_metal::Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
     uint32_t num_cores,
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE) {
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    const std::optional<Tile>& tile = std::nullopt) {
     auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
     tt::tt_metal::ShardSpec shard_spec{
         shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     tt::tt_metal::MemoryConfig memory_config{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto page_config = tt::tt_metal::PageConfig(layout);
+    auto page_config = tt::tt_metal::PageConfig(layout, tile);
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
