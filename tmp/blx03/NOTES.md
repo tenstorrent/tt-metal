@@ -9,3 +9,11 @@ Smoke output: ~/fasth3/out/ltx25_1080p_6s/smoke_dv145/run.log; broker log in ~/f
 Next: when DRIVE36_DONE, read LTX_TIME / stage lines from run.log, fill the timing into READY_blx03.md,
 remove ~/fasth3/uvboot and .uv-cache, report disk after.
 If blx03 reboots: check `tt-device-mcp status` for our job; rerun setup36.sh only if build.log lacks BUILD_EXIT=0.
+
+Attempt 2 (18:39): the first smoke never ran. drive36 was detached with no venv, so the broker defaulted to
+<ws>/tt-metal/python_env and refused it; drive36 then parsed "3" from "fasth3" as the job id. Fixed: submit.sh
+passes -e tmp/blx03/env.yaml (c11bf19dc4); drive36 id parse fixed. Smoke resubmitted by hand as broker job 867
+(queued 18:39, cold cache: "Cache does not exist. Loading PyTorch state dict").
+Waiter: ~/fasth3/wait36.sh 867 (log ~/fasth3/wait36.log, ends SMOKE36_DONE RUN_EXIT[...]).
+Next: read timings from ~/fasth3/out/ltx25_1080p_6s/smoke_dv145/run.log, record DiT cache size, fill READY_blx03.md,
+remove ~/fasth3/uvboot and any .uv-cache, report disk after.
