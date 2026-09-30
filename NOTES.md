@@ -48,3 +48,27 @@
   then S2 self 384,256/192,448/128,608. It waits while any smarton job runs on blx03 (t-other job 867/869 were ahead).
 - Next: read JOB[...] ids in tmp/drive32b.log, grep SWEEP. If a self config beats ref by more than noise (~1-2%) and is bit-exact,
   set it in attention_ltx.py ring_sdpa_chunk_by_n and run block A/B. Otherwise report "shipped configs already optimal".
+
+## 2026-09-30 19:2x, sweep complete (blx03 jobs 875, 876; both RUN_EXIT=0, device healthy after)
+Per-op device time, 5 ops averaged, 1080p/145f shapes on 4x8. rel_l2/maxabs are vs the shipped config.
+
+| stage | op | q | k | us | vs ref | note |
+|---|---|---|---|---|---|---|
+| S1 | self | 96 | 256 | 638.4 | ref (shipped) | |
+| S1 | self | 96 | 608 | 664.2 | +4.0% | rel_l2 0.0171 |
+| S1 | self | 96 | 416 | 660.8 | +3.5% | rel_l2 0.0161 |
+| S1 | V2A ring cross | 32 | 512 | 259.0 | ref (shipped) | host_rel_l2 0.0241 |
+| S1 | V2A split-K | - | - | 536.9 | +107% | host_rel_l2 0.0270 |
+| S2 | self | 192 | 512 | 4579.5 | ref (shipped) | |
+| S2 | self | 384 | 256 | 4712.8 | +2.9% | rel_l2 0.0220 |
+| S2 | self | 192 | 448 | 4645.0 | +1.4% | rel_l2 0.0204 |
+| S2 | self | 128 | 608 | 6514.6 | +42% | rel_l2 0.0213 |
+| S2 | V2A ring cross | 32 | 512 | 837.4 | ref (shipped) | host_rel_l2 0.0268 |
+| S2 | V2A split-K | - | - | 1638.3 | +96% | host_rel_l2 0.0777 (job 865) |
+
+- Verdict: the shipped chunk sizes are already the fastest of every candidate, and V2A split-K is ~2x slower
+  in both stages. No model change: denoise delta 0, output unchanged. The analytic model (tmp/chunk_model.py)
+  predicted ties for the larger K chunks; in practice they lose 1.4-4%, likely L1/CB pressure, not core waves.
+- Cleanup done: blx03 ~/fasth3/t32 worktree and /var/tmp/fasth3/cache/t32-tt-metal-cache (890 MB) removed.
+- Remaining ideas (not pursued here): sparse S2 self-attention (S2 self is ~4.6 ms/op, the real cost), fusing
+  the V2A cross into the self ring pass.
