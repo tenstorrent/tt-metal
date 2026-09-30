@@ -85,3 +85,9 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   every ladder rung's geometry (q32/k256; chunk 2048 / 8192 / 5120 incl. the 51200 last chunk) + q64/k256, q128/k128,
   q32/k128, q64/k128; spread and sharp scores: 22/22 pass, every case bit-identical over two runs, fork more accurate
   in every case (sharp worst row 0.14-0.16 vs 0.64-0.83 at bf16 DEST). Kept. Resumed.
+- 16:05-16:50 M.1: the orchestrator's gate (s4096 ladder) sat silent 27 min after the mesh opened. py-spy: TtEmbedding
+  -> ttnn.as_tensor (tt/model.py:92), 100 % CPU, no I/O. Killed the gate (16:37) and, since attempt 2 got no usable
+  log, stopped the orchestrator and attempt 2's agent before any device run. Overseer probes: as_tensor of the full
+  table takes 1.5 s fresh; its cache hit with an mmap-backed input never finishes (a cloned input hits in 0.6 s): the
+  stale 940 MB embed tensorbin written by the first run made every later load spin. Moved the cache files to
+  runs/run1/stale_cache, added a known_issues entry (fix: no cache_file_name for the embedding, or clone). Resumed.
