@@ -22,21 +22,33 @@ inline constexpr uint32_t kRepeatBatch = 4;
 // two batches.
 inline constexpr uint32_t kRepeatCbDepth = 2 * kRepeatBatch;
 
-// A row-major CB slot is one stick, so its footprint grows with the tensor's width. The factory
-// shrinks batch and depth together to what the L1 left free admits, and the routing gate rejects a
-// stick for which even a one-page batch does not fit. Both call this so they cannot disagree.
+// A row-major CB slot is one stick, so its footprint grows with the tensor's width. `slot_bytes` is
+// the slot, `depth` the slots the CB holds and `batch` the pages a reader/writer moves per turn.
 struct RepeatRmCbPlan {
+    uint32_t slot_bytes = 0;
     uint32_t batch = 0;
     uint32_t depth = 0;
 };
 
-inline std::optional<RepeatRmCbPlan> plan_rm_cb(uint64_t slot_bytes, uint64_t l1_budget) {
+// The largest plan `l1_budget` admits: up to kRepeatBatch pages per turn with two turns in flight, or,
+// when only one slot fits, a single slot that the reader and writer take turns on.
+inline std::optional<RepeatRmCbPlan> plan_rm_cb(uint32_t slot_bytes, uint64_t l1_budget) {
     const uint64_t max_slots = slot_bytes == 0 ? 0 : l1_budget / slot_bytes;
-    const uint64_t batch = std::min<uint64_t>(kRepeatBatch, max_slots / 2);
-    if (batch == 0) {
+    if (max_slots == 0) {
         return std::nullopt;
     }
-    return RepeatRmCbPlan{.batch = static_cast<uint32_t>(batch), .depth = static_cast<uint32_t>(2 * batch)};
+    if (max_slots == 1) {
+        return RepeatRmCbPlan{.slot_bytes = slot_bytes, .batch = 1, .depth = 1};
+    }
+    const auto batch = static_cast<uint32_t>(std::min<uint64_t>(kRepeatBatch, max_slots / 2));
+    return RepeatRmCbPlan{.slot_bytes = slot_bytes, .batch = batch, .depth = 2 * batch};
+}
+
+// The routing gate sends a row-major leg to codegen only if two slots fit the static L1 window, so
+// that on an idle device it double-buffers. The single-slot plan exists for dispatch under L1
+// pressure, where it runs slower instead of failing.
+inline bool rm_slot_routable(uint64_t slot_bytes, uint64_t l1_budget) {
+    return slot_bytes != 0 && 2 * slot_bytes <= l1_budget;
 }
 
 // L1 per worker core that the allocator can ever hand to buffers and CBs, independent of what is
@@ -66,10 +78,6 @@ struct RepeatCodegenParams {
     // RM only; unused on the TILE branch (tile size is fixed by dtype).
     uint32_t stick_size{};
     tt::tt_metal::MemoryConfig output_mem_config;
-    // RM only: pages per reader/writer turn, the CB holding two turns. The prim sizes it to the L1 left
-    // free when it is called, and it is an attribute so that the program-cache key carries it: a
-    // program built under one allocator state is never replayed under a key that implies another.
-    uint32_t rm_cb_batch{};
 };
 
 // The page map a repeat of `input` along `rep_dim` by `num_repeats` addresses: the lower_pages,
@@ -89,6 +97,11 @@ struct RepeatCodegenInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
 };
+
+// The ROW_MAJOR CB plan for a leg from `input` to an output of `output_spec`, sized to the L1 free now.
+// The program-cache key and the factory both call it after the op's output is allocated, so both see
+// the same frontier and the key carries exactly the plan the factory builds.
+std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
 struct RepeatCodegenProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(

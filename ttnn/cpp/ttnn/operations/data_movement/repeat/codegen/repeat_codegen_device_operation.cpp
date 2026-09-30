@@ -6,10 +6,6 @@
 
 #include <optional>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -61,36 +57,6 @@ void validate_output(const RepeatCodegenParams& operation_attributes, const Repe
     TT_FATAL(out.buffer() != input.buffer(), "Repeat codegen optional output must not alias the input buffer");
 }
 
-// The row-major CB plan for this call, sized to the L1 left free now. The op's own output is allocated
-// after this, top-down, so at worst it lands directly under the lowest occupied address and lowers
-// the frontier by its per-bank footprint; that footprint is set aside up front so the plan still fits
-// once the output exists. A preallocated output already sits in the frontier.
-std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(
-    const RepeatCodegenParams& params, const Tensor& input, const std::optional<Tensor>& optional_output_tensor) {
-    const auto& allocator = input.device()->allocator();
-    uint32_t out_aligned = 0;
-    uint64_t own_output_l1 = 0;
-    if (optional_output_tensor.has_value() && optional_output_tensor->buffer() != nullptr) {
-        out_aligned = static_cast<uint32_t>(optional_output_tensor->buffer()->aligned_page_size());
-    } else {
-        // A row-major page is one stick, `num_repeats` input sticks wide on the last-dim leg.
-        const auto buffer_type = params.output_mem_config.buffer_type();
-        const uint32_t out_stick = params.rep_dim == 3 ? params.stick_size * params.num_repeats : params.stick_size;
-        out_aligned = tt::round_up(out_stick, allocator->get_alignment(buffer_type));
-        if (!optional_output_tensor.has_value() && buffer_type == tt::tt_metal::BufferType::L1) {
-            const auto out_spec = RepeatCodegenDeviceOperation::compute_output_specs(
-                params, RepeatCodegenInputs{.input = input, .optional_output_tensor = std::nullopt});
-            own_output_l1 = out_spec.compute_consumed_memory_bytes_per_bank(
-                allocator->get_alignment(tt::tt_metal::BufferType::L1),
-                allocator->get_num_banks(tt::tt_metal::BufferType::L1));
-        }
-    }
-    const uint64_t free_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
-    return plan_rm_cb(
-        rm_slot_bytes(static_cast<uint32_t>(input.buffer()->aligned_page_size()), out_aligned),
-        free_l1 > own_output_l1 ? free_l1 - own_output_l1 : 0);
-}
-
 }  // namespace
 
 void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
@@ -113,6 +79,30 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_hit(
     // The key pins the input spec, the attributes and the CB plan; only the buffers can differ.
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     validate_output(operation_attributes, tensor_args);
+}
+
+// The default key is the attributes and the tensor specs, and neither sees what else occupies L1. A
+// row-major CB is sized to the L1 left free, and Program::validate_circular_buffer_region re-checks a
+// cached program's CB region against the current frontier on every enqueue, so the key also carries
+// the plan: a frontier that moves without changing the plan still hits. create_output_tensors() has
+// run by the time the key is computed, so this sees the frontier create_descriptor() will.
+//
+// A custom hash opts this op out of the canonical program-cache key, so a 64-bit collision between two
+// distinct repeat specs resolves to a wrong hit rather than a rebuild.
+ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    uint32_t cb_batch = 0;
+    uint32_t cb_depth = 0;
+    if (tensor_args.input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        const auto cb_plan =
+            rm_cb_plan_for_call(tensor_args.input, compute_output_specs(operation_attributes, tensor_args));
+        if (cb_plan.has_value()) {
+            cb_batch = cb_plan->batch;
+            cb_depth = cb_plan->depth;
+        }
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>, operation_attributes, tensor_args, cb_batch, cb_depth);
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(
@@ -150,10 +140,6 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOp
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
     const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
-    // The CB plan below reads the input's buffer and device before either validator runs, so the
-    // structural checks cannot wait for validation.
-    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     // The factory indexes a 4D page map by rep_dim and divides the output page count by num_repeats.
     TT_FATAL(
         input.logical_shape().rank() == 4,
@@ -177,19 +163,9 @@ RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
         page_map.rep_dim_pages,
         page_map.total_out_pages,
         page_map.stick_size);
-    RepeatCodegenParams attributes = params;
-    attributes.rm_cb_batch = 0;
-    if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto cb_plan = rm_cb_plan_for_call(params, input, optional_output_tensor);
-        TT_FATAL(
-            cb_plan.has_value(),
-            "RepeatCodegen: a {}-byte row-major stick leaves no room for a two-slot CB in free L1",
-            params.stick_size);
-        attributes.rm_cb_batch = cb_plan->batch;
-    }
     using OperationType = RepeatCodegenDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        attributes,
+        params,
         OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 

@@ -121,6 +121,12 @@ uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const TensorSpec& 
     return tt::round_up(static_cast<uint32_t>(spec.compute_page_size_bytes()), alignment);
 }
 
+std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(const Tensor& input, const TensorSpec& output_spec) {
+    const uint32_t slot = rm_slot_bytes(
+        static_cast<uint32_t>(input.buffer()->aligned_page_size()), spec_aligned_page_bytes(input, output_spec));
+    return plan_rm_cb(slot, ttnn::operations::data_movement::get_max_l1_space(input));
+}
+
 RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
     const auto& shape = input.logical_shape();
     RepeatPageMap map;
@@ -300,18 +306,15 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const uint32_t in_aligned = static_cast<uint32_t>(src_buffer->aligned_page_size());
     const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
     const uint32_t slot_size = rm_slot_bytes(in_aligned, out_aligned);
-    // The prim sized this slot from the output stick, before the output buffer existed.
-    TT_ASSERT(out_aligned == spec_aligned_page_bytes(input, output.tensor_spec()));
-    // The prim sized the batch before this op's own output was allocated; the output can only have
-    // lowered the frontier by what the prim set aside for it.
-    const uint32_t cb_batch = operation_attributes.rm_cb_batch;
-    const uint32_t cb_depth = 2 * cb_batch;
+    // The program-cache key sized the plan from the output spec; this is the buffer allocated from it.
     TT_FATAL(
-        cb_batch > 0 &&
-            static_cast<uint64_t>(cb_depth) * slot_size <= ttnn::operations::data_movement::get_max_l1_space(input),
-        "RepeatCodegen: a {}-slot CB of {}-byte row-major sticks does not fit in free L1",
-        cb_depth,
-        slot_size);
+        out_aligned == spec_aligned_page_bytes(input, output.tensor_spec()),
+        "RepeatCodegen: output aligned page {} does not match its spec",
+        out_aligned);
+    const auto cb_plan = rm_cb_plan_for_call(input, output.tensor_spec());
+    TT_FATAL(cb_plan.has_value(), "RepeatCodegen: a {}-byte row-major CB slot does not fit in free L1", slot_size);
+    const uint32_t cb_batch = cb_plan->batch;
+    const uint32_t cb_depth = cb_plan->depth;
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_depth * slot_size,

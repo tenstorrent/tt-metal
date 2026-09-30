@@ -56,10 +56,8 @@ uint64_t l1_bytes_per_bank(const Tensor& ref, const tt::tt_metal::TensorSpec& sp
         allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1));
 }
 
-// Both ROW_MAJOR branches page one stick per CB slot, and a stick scales with the tensor's width. The
-// factory scales its depth down to the L1 it finds free; reject upfront any leg where even the
-// smallest viable CB would not fit, so an oversized repeat cleanly routes to native (which streams the
-// same output without a stick-sized CB) instead of failing circular buffer allocation.
+// Both ROW_MAJOR branches page one stick per CB slot, and a stick scales with the tensor's width, so a
+// leg whose two slots do not fit routes to native instead.
 //
 // The budget is the static L1 window less `committed_l1`, the per-bank bytes of the L1 buffers this
 // call keeps alive alongside the leg. Live occupancy is never read here: this gate runs at routing and
@@ -76,7 +74,7 @@ bool rm_leg_fits_in_l1(
     const uint32_t slot = ttnn::prim::rm_slot_bytes(
         ttnn::prim::spec_aligned_page_bytes(input, leg_input), ttnn::prim::spec_aligned_page_bytes(input, leg_output));
     const uint64_t window = ttnn::prim::static_l1_window(input);
-    return committed_l1 < window && ttnn::prim::plan_rm_cb(slot, window - committed_l1).has_value();
+    return committed_l1 < window && ttnn::prim::rm_slot_routable(slot, window - committed_l1);
 }
 
 // The host-side page map that feeds the codegen prim derives Ht/Wt from the 32x32
@@ -413,7 +411,7 @@ bool supported_by_codegen(
         const uint64_t widest_stick = static_cast<uint64_t>(shape[-1]) * repeat_dims.back() * input.element_size();
         const uint64_t slot = tt::round_up(
             widest_stick, static_cast<uint64_t>(input.device()->allocator()->get_alignment(BufferType::DRAM)));
-        return ttnn::prim::plan_rm_cb(slot, ttnn::prim::static_l1_window(input)).has_value();
+        return ttnn::prim::rm_slot_routable(slot, ttnn::prim::static_l1_window(input));
     }
     // The row-major legs, in the order the router executes them. Each one's CB shares L1 with the
     // input, the round trip's untilized copy and every leg output so far; all of them are counted as
