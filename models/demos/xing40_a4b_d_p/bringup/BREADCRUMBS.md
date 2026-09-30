@@ -90,3 +90,16 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   vs golden rel 0.0018. The precompile collect pass prints a `FAIL pcc=0` line first (stubbed device results, known
   issue); the real pass line counts.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py`
+
+## C.dense.attn_norm implement (run1, attempt 1)
+- Wrote `tt/norm.py:TtDistributedRmsNorm` / `build_norm` (adapted from hy4 tt/norm.py, itself from deepseek_v3_d_p):
+  `rms_norm_pre_all_gather` (fp32 stats) -> multiply by a [1, 32] one-hot column-0 mask (fp32-input stats junk,
+  known issue) -> `all_gather(dim=3, cluster_axis=1, Linear)` -> `rms_norm_post_all_gather` with the weight split by
+  column (fp32 row-major [1, 1, H/32, 32], dim 2 over axis 1), eps 1e-6, HiFi4 + fp32 dest. In: the collapse output
+  [1, 1, S/4, 1792] fp32; out: [1, 1, S/4, 1792] bf16, column-split for the K-split q_a / kv_a projections.
+  Weight and mask built at load; no host work in the forward.
+- Added `tt/layout.py:col_split_to_device` (harness boundary). Hooks: `_NORM_STEPS` + `_norm_host_fn`,
+  `DEVICE_STEPS["dense"]` now {attn_hc, attn_collapse, attn_norm}.
+- Gate: pcc_attn_norm_L00 0.999996; vs CPU rel 0.0018 (limit 0.0062), ratio [0.9987, 1.0003]; vs golden rel 0.0029;
+  second inputs (layer39, mixed, small, big) rel <= 0.0018. The small negative bias (-0.0005) is the bf16 output.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_norm.py`
