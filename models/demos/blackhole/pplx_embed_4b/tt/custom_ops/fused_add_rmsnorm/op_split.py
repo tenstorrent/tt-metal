@@ -149,7 +149,8 @@ def fused_add_rmsnorm_split(
     for t in (a, b, gamma_tiles, scaler_tile, eps_tile):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     compute_ct = [Wc, R, _CHUNK]
-    writer_ct = [Wt, Wc, R, SEM_ID]
+    # the partial exchange's barrier waits for the partial writes only (transaction id); opt out: QWEN_ADD_NORM_PART_TRID=0
+    writer_ct = [Wt, Wc, R, SEM_ID, int(os.getenv("QWEN_ADD_NORM_PART_TRID", "1") == "1")]
     for t in [sum_tensor] + outs:
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 

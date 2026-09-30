@@ -4,6 +4,8 @@
 // other cores of its row (NoC write into slot k of their CB 8 + semaphore increment), then writes the
 // normalised slice. The normalised output can be split by rows over up to four tensors of split_row tile-rows each:
 // row goes to part row / split_row at row % split_row (split_row = 0xFFFFFFFF: one tensor).
+// PART_TRID: the partial writes carry their own NoC transaction id, so the barrier before the semaphore increments
+// waits for them only, not for the wave's sum-slice writes to DRAM issued just before.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -21,8 +23,10 @@ void kernel_main() {
     constexpr uint32_t Wc = get_compile_time_arg_val(1);
     constexpr uint32_t R = get_compile_time_arg_val(2);
     constexpr uint32_t SEM_ID = get_compile_time_arg_val(3);
+    constexpr bool PART_TRID = get_compile_time_arg_val(4) != 0;
+    constexpr uint32_t part_trid = 1;  // every other write keeps transaction id 0
     const uint32_t split_row = get_arg_val<uint32_t>(6 + 2 * R);
-    constexpr auto s_args = TensorAccessorArgs<4>();
+    constexpr auto s_args = TensorAccessorArgs<5>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     constexpr auto o1_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr auto o2_args = TensorAccessorArgs<o1_args.next_compile_time_args_offset()>();
@@ -60,9 +64,19 @@ void kernel_main() {
         for (uint32_t j = 0; j < R; ++j) {
             const uint32_t vx = get_arg_val<uint32_t>(6 + 2 * j);
             const uint32_t vy = get_arg_val<uint32_t>(7 + 2 * j);
-            noc_async_write(part_src, get_noc_addr(vx, vy, slot), tp);
+            if constexpr (PART_TRID) {
+                noc_async_write_one_packet_with_trid(part_src, get_noc_addr(vx, vy, slot), tp, part_trid);
+            } else {
+                noc_async_write(part_src, get_noc_addr(vx, vy, slot), tp);
+            }
         }
-        noc_async_write_barrier();
+        if constexpr (PART_TRID) {
+            // the id stays in the command buffer's packet tag: put later writes back on id 0
+            noc_async_write_set_trid(0);
+            noc_async_write_barrier_with_trid(part_trid);
+        } else {
+            noc_async_write_barrier();
+        }
         for (uint32_t j = 0; j < R; ++j) {
             const uint32_t vx = get_arg_val<uint32_t>(6 + 2 * j);
             const uint32_t vy = get_arg_val<uint32_t>(7 + 2 * j);
