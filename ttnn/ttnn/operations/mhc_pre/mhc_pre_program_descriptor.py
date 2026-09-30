@@ -82,6 +82,7 @@ def x_pieces(x_dtype):
 SEM_GATHER = 0  # monotonic partial-arrival counter on the group root
 SEM_MCAST_READY = 1  # mcast_pipe data-ready flag
 SEM_MCAST_CONSUMED = 2  # mcast_pipe consumer-ready (pre-handshake) counter
+SEM_W_READY = 3  # W column broadcast: data-ready Counter (one event per W chunk)
 
 # ---- host constants (tunable knobs, single source) ----
 GROUP_CORES_CAP = 32  # flat-root gather cap (cb_gathered grows with group_cores)
@@ -121,6 +122,14 @@ L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (ke
 # trip, y-mix and y stores (design perf lamp L1). Raise it to trade that overlap for fewer per-block
 # fixed costs.
 BLOCK_TOKEN_TILES_CAP = 1
+# Regime R2 `W column broadcast` (op_design.md Regimes): W does not vary along the token-group split, so
+# rank r of the first group row reads its W slice from DRAM once and multicasts it (in W_CHUNK_TILES
+# chunks, Counter signal, write-once landing => no handshake) down its physical column to rank r of every
+# other group. Applies when groups are one core-row tall (group_h == 1: a physical column holds one rank)
+# and at least two full group rows are active; otherwise every core reads W itself (R1). False disables.
+W_BCAST = True
+W_ROLE_DRAM, W_ROLE_SENDER, W_ROLE_RECEIVER = 0, 1, 2  # mirrors the reader's W_ROLE_* constants
+W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
 
 
 def _f32_bits(x):
@@ -362,7 +371,20 @@ def create_program_descriptor(
         ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=all_cores, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_W_READY, core_ranges=all_cores, initial_value=0),
     ]
+
+    # ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle, sender = row 0 ----
+    w_mcast = None
+    active_rows = len(groups) // plan.groups_x
+    if W_BCAST and plan.group_h == 1 and len(groups) % plan.groups_x == 0 and active_rows >= 2:
+        w_rect = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
+        )
+        w_cfg = ttnn.McastConfig(
+            noc=ttnn.NOC.NOC_0, handshake=False, data_ready=ttnn.McastDataReady.Counter, sem_ids=[SEM_W_READY]
+        )
+        w_mcast = ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, 0, w_cfg)
 
     # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
     mcast_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
@@ -400,6 +422,8 @@ def create_program_descriptor(
         CB_MAX_SCALER,
         int(x_pieces(x_tensor.dtype) > 1),
     ]
+    assert len(reader_ct) == 12  # W_MCAST_CT_BASE in the reader
+    reader_ct += list(w_mcast.compile_time_args()) if w_mcast is not None else W_MCAST_PLACEHOLDER_CT
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()
@@ -496,6 +520,12 @@ def create_program_descriptor(
                 rank = dy * plan.group_w + dx
                 cc = plan.core_c_tiles[rank]
                 cs = plan.c_start[rank]
+                if w_mcast is None:
+                    w_rt = [W_ROLE_DRAM, 0, 0, 0, 0]
+                else:
+                    core = ttnn.CoreCoord(x, y)
+                    role = W_ROLE_SENDER if w_mcast.is_sender(core) else W_ROLE_RECEIVER
+                    w_rt = [role] + list(w_mcast.runtime_args(core))
                 reader_rt[x][y] = [
                     x_tensor.buffer_address(),
                     w_tensor.buffer_address(),
@@ -505,7 +535,7 @@ def create_program_descriptor(
                     cs,
                     cc,
                     num_blocks,
-                ]
+                ] + w_rt
                 mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
                 writer_rt[x][y] = [
                     y_tensor.buffer_address(),

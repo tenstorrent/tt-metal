@@ -19,7 +19,19 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "mhc_pre_layout.hpp"
+
+// W fill roles (RT arg; regime R2 `W column broadcast`, op_design.md Regimes):
+//   W_ROLE_DRAM     — this core reads its own W slice from DRAM (R1; no broadcast wire).
+//   W_ROLE_SENDER   — rank r of the first group row: reads the slice from DRAM and multicasts each chunk
+//                      down its physical column (every core of that column holds the same rank r).
+//   W_ROLE_RECEIVER — every other core of the column: the slice lands by mcast, one Counter event per chunk.
+constexpr uint32_t W_ROLE_DRAM = 0;
+constexpr uint32_t W_ROLE_SENDER = 1;
+constexpr uint32_t W_ROLE_RECEIVER = 2;
+constexpr uint32_t W_MCAST_CT_BASE = 12;
+constexpr uint32_t W_MCAST_RT_BASE = 9;
 
 void kernel_main() {
     constexpr uint32_t cb_x_resident = get_compile_time_arg_val(0);
@@ -34,7 +46,8 @@ void kernel_main() {
     constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(9);  // W pushed in chunks (split pipelining)
     constexpr uint32_t cb_max_scaler = get_compile_time_arg_val(10);
     constexpr bool needs_max_scaler = get_compile_time_arg_val(11) != 0;  // fp32 X grid split
-    constexpr auto x_args = TensorAccessorArgs<12>();
+    constexpr auto w_mc = dataflow_kernel_lib::McastArgs<W_MCAST_CT_BASE, W_MCAST_RT_BASE>();
+    constexpr auto x_args = TensorAccessorArgs<w_mc.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
@@ -46,6 +59,7 @@ void kernel_main() {
     const uint32_t c_start = get_arg_val<uint32_t>(5);
     const uint32_t core_c_tiles = get_arg_val<uint32_t>(6);
     const uint32_t num_blocks = get_arg_val<uint32_t>(7);
+    const uint32_t w_role = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t tensor_k_tiles = n_streams * tensor_c_tiles;
     constexpr uint32_t x_block_pages = block_token_tiles * core_k_tiles_max;  // nominal push per block
@@ -59,24 +73,61 @@ void kernel_main() {
     const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
     const auto b_acc = TensorAccessor(b_args, b_addr, b_tile_bytes);
 
-    // ---------------- load_resident_constants ----------------
+    // ---------------- load_resident_constants: W ----------------
     // W slice, K order p = c*n + i, pushed in chunks of w_chunk_tiles so the compute kernel can start
-    // consuming (fp32 W: the hi/lo split) while the rest of the slice is still in flight.
-    cb_reserve_back(cb_weight, core_k_tiles);
-    {
-        const uint32_t w_base = get_write_ptr(cb_weight);
-        for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
-            const uint32_t p1 = (p0 + w_chunk_tiles) < core_k_tiles ? (p0 + w_chunk_tiles) : core_k_tiles;
-            for (uint32_t p = p0; p < p1; ++p) {
-                const uint32_t c = p / n_streams;
-                const uint32_t i = p - c * n_streams;
-                noc_async_read_page(i * tensor_c_tiles + c_start + c, w_acc, w_base + p * w_tile_bytes);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_weight, p1 - p0);
+    // consuming (fp32 W: the hi/lo split) while the rest of the slice is still in flight. cb_weight is
+    // resident (never popped) at the same L1 address on every core, so a chunk multicast lands in place.
+    auto read_w_chunk = [&](uint32_t w_base, uint32_t p0, uint32_t p1) {
+        for (uint32_t p = p0; p < p1; ++p) {
+            const uint32_t c = p / n_streams;
+            const uint32_t i = p - c * n_streams;
+            noc_async_read_page(i * tensor_c_tiles + c_start + c, w_acc, w_base + p * w_tile_bytes);
         }
-    }
+    };
+    auto chunk_end = [&](uint32_t p0) {
+        return (p0 + w_chunk_tiles) < core_k_tiles ? (p0 + w_chunk_tiles) : core_k_tiles;
+    };
+    auto load_w = [&]() {
+        cb_reserve_back(cb_weight, core_k_tiles);
+        const uint32_t w_base = get_write_ptr(cb_weight);
+        if (w_role == W_ROLE_DRAM) {
+            for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
+                const uint32_t p1 = chunk_end(p0);
+                read_w_chunk(w_base, p0, p1);
+                noc_async_read_barrier();
+                cb_push_back(cb_weight, p1 - p0);
+            }
+            return;
+        }
+        if constexpr (w_mc.active) {
+            Noc noc;
+            if (w_role == W_ROLE_SENDER) {
+                // Chunk j+1's DRAM read is in flight while chunk j is multicast (reads and the mcast
+                // are independent NoC transactions; send() only flushes writes).
+                auto sender = w_mc.sender(noc);
+                read_w_chunk(w_base, 0, chunk_end(0));
+                noc_async_read_barrier();
+                for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
+                    const uint32_t p1 = chunk_end(p0);
+                    if (p1 < core_k_tiles) {
+                        read_w_chunk(w_base, p1, chunk_end(p1));
+                    }
+                    const uint32_t a = w_base + p0 * w_tile_bytes;
+                    cb_push_back(cb_weight, p1 - p0);  // compute only reads it: publish before the mcast
+                    sender.send(a, a, (p1 - p0) * w_tile_bytes);
+                    noc_async_read_barrier();
+                }
+            } else {
+                auto receiver = w_mc.receiver(noc);
+                for (uint32_t p0 = 0; p0 < core_k_tiles; p0 += w_chunk_tiles) {
+                    receiver.receive();  // Counter: one event per chunk, lands in place
+                    cb_push_back(cb_weight, chunk_end(p0) - p0);
+                }
+            }
+        }
+    };
 
+    // ---------------- load_resident_constants: bias, scalers ----------------
     // Bias tile staged in the first (not yet pushed) cb_x_resident slot.
     cb_reserve_back(cb_x_resident, x_block_pages);
     const uint32_t stage_addr = get_write_ptr(cb_x_resident);
@@ -111,7 +162,7 @@ void kernel_main() {
     }
 
     // ---------------- load_x_block ----------------
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+    auto issue_x_block = [&](uint32_t block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
         const uint32_t extent =
             (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
@@ -128,6 +179,22 @@ void kernel_main() {
                 }
             }
         }
+    };
+
+    // A W receiver has no DRAM work of its own before block 0: its X block 0 read is issued first and
+    // overlaps the column mcast of W (the reader owns both; the W receive issues no reads).
+    uint32_t first_block = 0;
+    if (w_role == W_ROLE_RECEIVER && num_blocks > 0) {
+        issue_x_block(0);
+        load_w();
+        noc_async_read_barrier();
+        cb_push_back(cb_x_resident, x_block_pages);
+        first_block = 1;
+    } else {
+        load_w();
+    }
+    for (uint32_t block_idx = first_block; block_idx < num_blocks; ++block_idx) {
+        issue_x_block(block_idx);
         noc_async_read_barrier();
         cb_push_back(cb_x_resident, x_block_pages);
     }
