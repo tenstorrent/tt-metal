@@ -1,0 +1,247 @@
+{
+ "dense": [
+  {
+   "name": "attn_hc",
+   "inputs": [
+    "in"
+   ],
+   "output": "attn_hc",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attn_collapse",
+   "inputs": [
+    "in",
+    "attn_hc"
+   ],
+   "output": "attn_in",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attn_norm",
+   "inputs": [
+    "attn_in"
+   ],
+   "output": "attn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "q_a",
+   "inputs": [
+    "attn_norm"
+   ],
+   "output": "q_resid",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attention",
+   "inputs": [
+    "attn_norm",
+    "q_resid"
+   ],
+   "output": "attn_out",
+   "kind": "attention",
+   "stateful": true
+  },
+  {
+   "name": "attn_residual",
+   "inputs": [
+    "in",
+    "attn_hc",
+    "attn_out"
+   ],
+   "output": "h_mid",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "ffn_hc",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "ffn_hc",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "ffn_collapse",
+   "inputs": [
+    "h_mid",
+    "ffn_hc"
+   ],
+   "output": "ffn_in",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "ffn_norm",
+   "inputs": [
+    "ffn_in"
+   ],
+   "output": "ffn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "mlp",
+   "inputs": [
+    "ffn_norm"
+   ],
+   "output": "mlp_out",
+   "kind": "mlp",
+   "stateful": false
+  },
+  {
+   "name": "ffn_residual",
+   "inputs": [
+    "h_mid",
+    "ffn_hc",
+    "mlp_out"
+   ],
+   "output": "out",
+   "kind": "residual",
+   "stateful": false
+  }
+ ],
+ "moe": [
+  {
+   "name": "attn_hc",
+   "inputs": [
+    "in"
+   ],
+   "output": "attn_hc",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attn_collapse",
+   "inputs": [
+    "in",
+    "attn_hc"
+   ],
+   "output": "attn_in",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attn_norm",
+   "inputs": [
+    "attn_in"
+   ],
+   "output": "attn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "q_a",
+   "inputs": [
+    "attn_norm"
+   ],
+   "output": "q_resid",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "attention",
+   "inputs": [
+    "attn_norm",
+    "q_resid"
+   ],
+   "output": "attn_out",
+   "kind": "attention",
+   "stateful": true
+  },
+  {
+   "name": "attn_residual",
+   "inputs": [
+    "in",
+    "attn_hc",
+    "attn_out"
+   ],
+   "output": "h_mid",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "ffn_hc",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "ffn_hc",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "ffn_collapse",
+   "inputs": [
+    "h_mid",
+    "ffn_hc"
+   ],
+   "output": "ffn_in",
+   "kind": "op",
+   "stateful": false
+  },
+  {
+   "name": "ffn_norm",
+   "inputs": [
+    "ffn_in"
+   ],
+   "output": "ffn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "router",
+   "inputs": [
+    "ffn_norm"
+   ],
+   "output": "router",
+   "kind": "router",
+   "stateful": false
+  },
+  {
+   "name": "experts",
+   "inputs": [
+    "ffn_norm",
+    "router"
+   ],
+   "output": "experts_out",
+   "kind": "moe",
+   "stateful": false
+  },
+  {
+   "name": "shared_expert",
+   "inputs": [
+    "ffn_norm"
+   ],
+   "output": "shared_out",
+   "kind": "mlp",
+   "stateful": false
+  },
+  {
+   "name": "moe_add",
+   "inputs": [
+    "experts_out",
+    "shared_out"
+   ],
+   "output": "mlp_out",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "ffn_residual",
+   "inputs": [
+    "h_mid",
+    "ffn_hc",
+    "mlp_out"
+   ],
+   "output": "out",
+   "kind": "residual",
+   "stateful": false
+  }
+ ]
+}
