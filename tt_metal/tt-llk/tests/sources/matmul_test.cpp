@@ -224,8 +224,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
     // The RT x CT block is packed with one _llk_pack_block_ run (one pack program run per block); block-float outputs
-    // are not written back to back by one run and keep one _llk_pack_ per tile.
-    const bool block_pack = !IS_BFP_FORMAT(formats.pack_dst);
+    // are not written back to back by one run and keep one _llk_pack_ per tile, as does a one-tile block.
+    const bool block_pack = (CT_DIM * RT_DIM > 1) && !IS_BFP_FORMAT(formats.pack_dst);
 
     {
         START_PERF_MEASURE("INIT")

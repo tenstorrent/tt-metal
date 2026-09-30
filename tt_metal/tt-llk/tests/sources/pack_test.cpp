@@ -205,8 +205,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
     // pack_block_en: every dest block is packed with one _llk_pack_block_ run (one pack program run per block) instead
-    // of one _llk_pack_ per tile. Block-float outputs are not written back to back by one run and keep the per-tile pack.
-    [[maybe_unused]] const bool block_pack = pack_block_en && !IS_BFP_FORMAT(formats.pack_dst);
+    // of one _llk_pack_ per tile. Block-float outputs are not written back to back by one run and keep the per-tile pack,
+    // and a one-tile block is the per-tile pack already.
+    [[maybe_unused]] const bool block_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
