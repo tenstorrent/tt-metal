@@ -16,8 +16,8 @@
 // Elementwise steps use the kernel_lib eltwise helpers (`eltwise_chain`, `copy`, `sub`,
 // MulUnary / FillScalar elements).  Three block operations are built on the raw compute API:
 //
-//  * every block MATMUL (`mm_block`): `matmul_block_helpers.hpp` does not exist in this tree
-//    (`ttnn/cpp/ttnn/kernel_lib/` has no matmul helper).  `mm_block` walks a whole
+//  * every block MATMUL (`mm`): `matmul_block_helpers.hpp` does not exist in this tree
+//    (`ttnn/cpp/ttnn/kernel_lib/` has no matmul helper).  `mm` walks a whole
 //    [Mt,Kd]x[Kd,Nt] block in DEST-sized subblocks — one init per block when no epilogue is
 //    fused — on `api/compute/matmul.h`, the layer such a helper would wrap.
 //  * the fused DEST epilogues of those matmuls (exp, negate, SFPU multiply by a CB block, DEST
@@ -57,22 +57,29 @@ namespace {
 constexpr uint32_t NONE = 0xFFFFFFFFu;
 
 // ---------------------------------------------------------------------------------------------
-// mm_block — OUT[Mt,Nt] (+)= A[Mt,Kd] @ (tb ? B[Nt,Kd]^T : B[Kd,Nt])  [+ A2[Mt,Kd2] @ B2[Kd2,Nt]]
-// with an optional DEST prologue / epilogue, packed to one or two CBs (caller reserved).
-// All block operands are addressed by tile index inside their (already fronted) CB window.
+// mm — OUT[Mt,Nt] (+)= A[Mt,Kd] @ (TB ? B[Nt,Kd]^T : B[Kd,Nt])   with an optional fused DEST
+// prologue / epilogue, packed into a caller-reserved window of `out_cb` (and optionally a second).
+// Every operand is addressed by tile index inside its already-fronted CB window.
+//
+// The two auxiliary operands x / y take a role chosen by `flags`:
+//   MM_PRE   x = OUT's previous value, preloaded into DEST (the matmul accumulates onto it)
+//   MM_GAM   y = one tile the preload is scaled by (SFPU, fp32 DEST) before accumulating
+//   MM_MUL   x = epilogue multiplier block [Mt,Nt] (SFPU)      MM_MUL2  y = a second one
+//   MM_OUT2  y = second output CB (same tile layout)
+//   MM_DUAL  + x[Mt,kd2] @ y[kd2,Nt] accumulated into the same DEST (E's o = Q@h + intra@v_new)
+//   MM_EXP / MM_NEG   exp / negate on the fp32 accumulation, before any MM_MUL
+// Operand descriptors travel as scalar arguments on purpose: a per-call-site constant struct is
+// materialized in .data, which lives in the TRISC local data memory (< 2 KB).
 // ---------------------------------------------------------------------------------------------
-struct Mm {
-    uint32_t a_cb, a0, b_cb, b0, Mt, Kd, Nt;
-    uint32_t out_cb, out0;
-    uint32_t tb = 0;
-    uint32_t a2_cb = NONE, a20 = 0, b2_cb = NONE, b20 = 0, Kd2 = 0;  // second product, same DEST
-    uint32_t pre_cb = NONE, pre0 = 0;                                // preload OUT's old value
-    uint32_t gam_cb = NONE, gam0 = 0;                                // ... scaled by this tile (SFPU)
-    uint32_t do_exp = 0, do_neg = 0;
-    uint32_t mul_cb = NONE, mul0 = 0;  // epilogue: *= mul[r, c]   (SFPU, fp32 DEST)
-    uint32_t mul2_cb = NONE, mul20 = 0;
-    uint32_t out2_cb = NONE, out20 = 0;  // also pack the result here
-};
+constexpr uint32_t MM_TB = 1u << 0;
+constexpr uint32_t MM_EXP = 1u << 1;
+constexpr uint32_t MM_NEG = 1u << 2;
+constexpr uint32_t MM_PRE = 1u << 3;
+constexpr uint32_t MM_GAM = 1u << 4;
+constexpr uint32_t MM_MUL = 1u << 5;
+constexpr uint32_t MM_MUL2 = 1u << 6;
+constexpr uint32_t MM_OUT2 = 1u << 7;
+constexpr uint32_t MM_DUAL = 1u << 8;
 
 static __attribute__((noipa)) uint32_t largest_divisor_le(uint32_t n, uint32_t cap) {
     uint32_t d = cap < n ? cap : n;
@@ -103,6 +110,7 @@ static __attribute__((noipa)) void copy_block_to_dest(
     }
 }
 
+// DEST[s] *= cb[base + (r0+i)*Nt + c0+j] for the n = rt*ct subblock tiles (scratch slots n..2n-1).
 static __attribute__((noipa)) void mul_by_block(
     uint32_t cb, uint32_t base, uint32_t Nt, uint32_t r0, uint32_t c0, uint32_t rt, uint32_t ct) {
     const uint32_t n = rt * ct;
@@ -113,9 +121,18 @@ static __attribute__((noipa)) void mul_by_block(
     }
 }
 
-// The block operand descriptor travels as scalar arguments: a constant `Mm` temporary per call site
-// would be materialized in .rodata, which lives in the TRISC local data memory (a few KB).
-static __attribute__((noipa)) void mm_impl(
+static __attribute__((noipa)) void pack_block(
+    uint32_t cb, uint32_t base, uint32_t Nt, uint32_t r0, uint32_t c0, uint32_t rt, uint32_t ct) {
+    pack_reconfig_data_format(cb);
+    for (uint32_t i = 0; i < rt; ++i) {
+        for (uint32_t j = 0; j < ct; ++j) {
+            pack_tile<true>(i * ct + j, cb, base + (r0 + i) * Nt + c0 + j);
+        }
+    }
+}
+
+static __attribute__((noipa)) void mm(
+    uint32_t flags,
     uint32_t a_cb,
     uint32_t a0,
     uint32_t b_cb,
@@ -125,52 +142,37 @@ static __attribute__((noipa)) void mm_impl(
     uint32_t Nt,
     uint32_t out_cb,
     uint32_t out0,
-    uint32_t tb,
-    uint32_t a2_cb,
-    uint32_t a20,
-    uint32_t b2_cb,
-    uint32_t b20,
-    uint32_t Kd2,
-    uint32_t pre_cb,
-    uint32_t pre0,
-    uint32_t gam_cb,
-    uint32_t gam0,
-    uint32_t do_exp,
-    uint32_t do_neg,
-    uint32_t mul_cb,
-    uint32_t mul0,
-    uint32_t mul2_cb,
-    uint32_t mul20,
-    uint32_t out2_cb,
-    uint32_t out20) {
-    const Mm m{a_cb, a0,     b_cb, b0,     Mt,   Kd,     Nt,     out_cb, out0, tb,      a2_cb, a20,     b2_cb, b20,
-               Kd2,  pre_cb, pre0, gam_cb, gam0, do_exp, do_neg, mul_cb, mul0, mul2_cb, mul20, out2_cb, out20};
-    const bool prologue = (m.pre_cb != NONE);
-    const bool epilogue = m.do_exp || m.do_neg || (m.mul_cb != NONE);
-    const uint32_t per_tile = (m.mul_cb != NONE) ? 2 : 1;
-    const uint32_t reserve = (m.gam_cb != NONE) ? 1 : 0;
+    uint32_t x_cb = NONE,
+    uint32_t x0 = 0,
+    uint32_t y_cb = NONE,
+    uint32_t y0 = 0,
+    uint32_t kd2 = 0) {
+    const uint32_t tb = (flags & MM_TB) ? 1 : 0;
+    const uint32_t per_tile = (flags & (MM_MUL | MM_MUL2)) ? 2 : 1;
+    const uint32_t reserve = (flags & MM_GAM) ? 1 : 0;
     const uint32_t cap = (DEST_LIMIT - reserve) / per_tile;
 
-    uint32_t ct = m.tb ? 1 : largest_divisor_le(m.Nt, cap);
-    if (m.a2_cb != NONE) {
-        ct = 1;  // keep the second product's in1 walk identical to the first
-    }
-    const uint32_t rt = largest_divisor_le(m.Mt, cap / ct);
+    // in1-transpose reads Kd consecutive B tiles per output column, and the DUAL product walks a
+    // different in1 grid, so both keep one output column per subblock.
+    const uint32_t ct = (tb || (flags & MM_DUAL)) ? 1 : largest_divisor_le(Nt, cap);
+    const uint32_t rt = largest_divisor_le(Mt, cap / ct);
     const uint32_t n = rt * ct;
-    const bool reinit = prologue || epilogue || (m.a2_cb != NONE);
+    // Any fused DEST op re-programs unpack / math, so the matmul init is re-issued per subblock;
+    // a plain block matmul pays exactly one init.
+    const bool reinit = (flags & (MM_PRE | MM_EXP | MM_NEG | MM_MUL | MM_MUL2 | MM_DUAL)) != 0;
 
     if (!reinit) {
-        mm_init(m.a_cb, m.b_cb, m.tb, ct, rt, m.Kd);
+        mm_init(a_cb, b_cb, tb, ct, rt, Kd);
     }
-    for (uint32_t c0 = 0; c0 < m.Nt; c0 += ct) {
-        for (uint32_t r0 = 0; r0 < m.Mt; r0 += rt) {
+    for (uint32_t c0 = 0; c0 < Nt; c0 += ct) {
+        for (uint32_t r0 = 0; r0 < Mt; r0 += rt) {
             tile_regs_acquire();
-            if (prologue) {
-                copy_block_to_dest(m.pre_cb, m.pre0, m.Nt, r0, c0, rt, ct, 0);
-                if (m.gam_cb != NONE) {
-                    reconfig_data_format_srca(m.gam_cb);
-                    copy_init(m.gam_cb);
-                    copy_tile(m.gam_cb, m.gam0, n);
+            if (flags & MM_PRE) {
+                copy_block_to_dest(x_cb, x0, Nt, r0, c0, rt, ct, 0);
+                if (flags & MM_GAM) {
+                    reconfig_data_format_srca(y_cb);
+                    copy_init(y_cb);
+                    copy_tile(y_cb, y0, n);
                     mul_binary_tile_init();
                     for (uint32_t s = 0; s < n; ++s) {
                         mul_binary_tile(s, n, s);
@@ -178,86 +180,45 @@ static __attribute__((noipa)) void mm_impl(
                 }
             }
             if (reinit) {
-                mm_init(m.a_cb, m.b_cb, m.tb, ct, rt, m.Kd);
+                mm_init(a_cb, b_cb, tb, ct, rt, Kd);
             }
-            for (uint32_t k = 0; k < m.Kd; ++k) {
-                const uint32_t bi = m.tb ? (m.b0 + c0 * m.Kd + k) : (m.b0 + k * m.Nt + c0);
-                matmul_block(m.a_cb, m.b_cb, m.a0 + r0 * m.Kd + k, bi, 0, m.tb, ct, rt, m.Kd);
+            for (uint32_t k = 0; k < Kd; ++k) {
+                const uint32_t bi = tb ? (b0 + c0 * Kd + k) : (b0 + k * Nt + c0);
+                matmul_block(a_cb, b_cb, a0 + r0 * Kd + k, bi, 0, tb, ct, rt, Kd);
             }
-            if (m.a2_cb != NONE) {
-                mm_init(m.a2_cb, m.b2_cb, 0, ct, rt, m.Kd2);
-                for (uint32_t k = 0; k < m.Kd2; ++k) {
-                    matmul_block(m.a2_cb, m.b2_cb, m.a20 + r0 * m.Kd2 + k, m.b20 + k * m.Nt + c0, 0, 0, ct, rt, m.Kd2);
+            if (flags & MM_DUAL) {
+                mm_init(x_cb, y_cb, 0, ct, rt, kd2);
+                for (uint32_t k = 0; k < kd2; ++k) {
+                    matmul_block(x_cb, y_cb, x0 + r0 * kd2 + k, y0 + k * Nt + c0, 0, 0, ct, rt, kd2);
                 }
             }
-            if (m.do_exp) {
+            if (flags & MM_EXP) {
                 exp_tile_init();
                 for (uint32_t s = 0; s < n; ++s) {
                     exp_tile(s);
                 }
             }
-            if (m.do_neg) {
+            if (flags & MM_NEG) {
                 negative_tile_init();
                 for (uint32_t s = 0; s < n; ++s) {
                     negative_tile(s);
                 }
             }
-            if (m.mul_cb != NONE) {
-                mul_by_block(m.mul_cb, m.mul0, m.Nt, r0, c0, rt, ct);
+            if (flags & MM_MUL) {
+                mul_by_block(x_cb, x0, Nt, r0, c0, rt, ct);
             }
-            if (m.mul2_cb != NONE) {
-                mul_by_block(m.mul2_cb, m.mul20, m.Nt, r0, c0, rt, ct);
+            if (flags & MM_MUL2) {
+                mul_by_block(y_cb, y0, Nt, r0, c0, rt, ct);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(m.out_cb);
-            for (uint32_t i = 0; i < rt; ++i) {
-                for (uint32_t j = 0; j < ct; ++j) {
-                    pack_tile<true>(i * ct + j, m.out_cb, m.out0 + (r0 + i) * m.Nt + c0 + j);
-                }
-            }
-            if (m.out2_cb != NONE) {
-                pack_reconfig_data_format(m.out2_cb);
-                for (uint32_t i = 0; i < rt; ++i) {
-                    for (uint32_t j = 0; j < ct; ++j) {
-                        pack_tile<true>(i * ct + j, m.out2_cb, m.out20 + (r0 + i) * m.Nt + c0 + j);
-                    }
-                }
+            pack_block(out_cb, out0, Nt, r0, c0, rt, ct);
+            if (flags & MM_OUT2) {
+                pack_block(y_cb, y0, Nt, r0, c0, rt, ct);
             }
             tile_regs_release();
         }
     }
-}
-
-FORCE_INLINE void mm_block(const Mm& m) {
-    mm_impl(
-        m.a_cb,
-        m.a0,
-        m.b_cb,
-        m.b0,
-        m.Mt,
-        m.Kd,
-        m.Nt,
-        m.out_cb,
-        m.out0,
-        m.tb,
-        m.a2_cb,
-        m.a20,
-        m.b2_cb,
-        m.b20,
-        m.Kd2,
-        m.pre_cb,
-        m.pre0,
-        m.gam_cb,
-        m.gam0,
-        m.do_exp,
-        m.do_neg,
-        m.mul_cb,
-        m.mul0,
-        m.mul2_cb,
-        m.mul20,
-        m.out2_cb,
-        m.out20);
 }
 
 // Transpose an [Rt, Nt] tile block (cbi from i0) into an [Nt, Rt] block (cbo from o0).
@@ -352,64 +313,16 @@ void kernel_main() {
         // Gamma_full = exp(ONES @ (g @ E_ROW0)) (every element).  exp() runs on the fp32 DEST
         // accumulation, so decay never passes through an FPU source register on its way to exp.
         cb_reserve_back(cb_out_egress, QO);
-        mm_block(
-            {.a_cb = cb_const,
-             .a0 = CST_LT,
-             .b_cb = cb_gate_in,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = 1,
-             .out_cb = cb_out_egress,
-             .out0 = 0});
+        mm(0, cb_const, CST_LT, cb_gate_in, 0, Ct, Ct, 1, cb_out_egress, 0);
         cb_push_back(cb_out_egress, QO);
 
         cb_reserve_back(cb_vec, VEC_PAGES);
-        mm_block(
-            {.a_cb = cb_const,
-             .a0 = CST_LT,
-             .b_cb = cb_gate_in,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = 1,
-             .out_cb = cb_vec,
-             .out0 = V_GAMMA,
-             .do_exp = 1});
-        mm_block(
-            {.a_cb = cb_const,
-             .a0 = CST_SU,
-             .b_cb = cb_gate_in,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = 1,
-             .out_cb = cb_vec,
-             .out0 = V_W,
-             .do_exp = 1});
+        mm(MM_EXP, cb_const, CST_LT, cb_gate_in, 0, Ct, Ct, 1, cb_vec, V_GAMMA);
+        mm(MM_EXP, cb_const, CST_SU, cb_gate_in, 0, Ct, Ct, 1, cb_vec, V_W);
         cb_reserve_back(cb_cc_b, CtCt);  // g replicated to every column (temporary)
-        mm_block(
-            {.a_cb = cb_gate_in,
-             .a0 = 0,
-             .b_cb = cb_const,
-             .b0 = CST_EROW0,
-             .Mt = Ct,
-             .Kd = 1,
-             .Nt = 1,
-             .out_cb = cb_cc_b,
-             .out0 = 0});
+        mm(0, cb_gate_in, 0, cb_const, CST_EROW0, Ct, 1, 1, cb_cc_b, 0);
         publish(cb_cc_b, CtCt);
-        mm_block(
-            {.a_cb = cb_const,
-             .a0 = CST_ONES,
-             .b_cb = cb_cc_b,
-             .b0 = 0,
-             .Mt = 1,
-             .Kd = Ct,
-             .Nt = 1,
-             .out_cb = cb_vec,
-             .out0 = V_GFULL,
-             .do_exp = 1});
+        mm(MM_EXP, cb_const, CST_ONES, cb_cc_b, 0, 1, Ct, 1, cb_vec, V_GFULL);
         cb_pop_front(cb_cc_b, CtCt);
         publish(cb_vec, VEC_PAGES);
 
@@ -418,32 +331,11 @@ void kernel_main() {
         mul_col<cb_const, cb_gate_in, cb_cc_a>(CST_EYE, 0, 0, Ct, Ct);  // diag(g)
         publish(cb_cc_a, CtCt);
         cb_reserve_back(cb_cc_b, CtCt);
-        mm_block(
-            {.a_cb = cb_const,
-             .a0 = CST_LT,
-             .b_cb = cb_cc_a,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = Ct,
-             .out_cb = cb_cc_b,
-             .out0 = 0});
+        mm(0, cb_const, CST_LT, cb_cc_a, 0, Ct, Ct, Ct, cb_cc_b, 0);
         publish(cb_cc_b, CtCt);
         cb_pop_front(cb_cc_a, CtCt);
         cb_reserve_back(cb_L, CtCt);
-        mm_block(
-            {.a_cb = cb_cc_b,
-             .a0 = 0,
-             .b_cb = cb_const,
-             .b0 = CST_SL,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = Ct,
-             .out_cb = cb_L,
-             .out0 = 0,
-             .do_exp = 1,
-             .mul_cb = cb_const,
-             .mul0 = CST_LT});
+        mm(MM_EXP | MM_MUL, cb_cc_b, 0, cb_const, CST_SL, Ct, Ct, Ct, cb_L, 0, cb_const, CST_LT);
         publish(cb_L, CtCt);
         cb_pop_front(cb_cc_b, CtCt);
 
@@ -462,21 +354,7 @@ void kernel_main() {
 
         // ---- ut_matrix_block: N = (k_beta @ k^T) * L * SL ----------------------------------
         cb_reserve_back(cb_cc_a, CtCt);
-        mm_block(
-            {.a_cb = cb_kb,
-             .a0 = 0,
-             .b_cb = cb_k_in,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Kt,
-             .Nt = Ct,
-             .out_cb = cb_cc_a,
-             .out0 = 0,
-             .tb = 1,
-             .mul_cb = cb_L,
-             .mul0 = 0,
-             .mul2_cb = cb_const,
-             .mul20 = CST_SL});
+        mm(MM_TB | MM_MUL | MM_MUL2, cb_kb, 0, cb_k_in, 0, Ct, Kt, Ct, cb_cc_a, 0, cb_L, 0, cb_const, CST_SL);
         publish(cb_cc_a, CtCt);
 
         // ---- ut_inverse_block: Tinv = (I - N) prod_{j>=1} (I + N^(2^j)) --------------------
@@ -488,46 +366,17 @@ void kernel_main() {
         publish(cb_T, CtCt);
         if constexpr (NEUMANN_STEPS > 1) {
             cb_reserve_back(cb_pow, CtCt);
-            mm_block(
-                {.a_cb = cb_cc_a,
-                 .a0 = 0,
-                 .b_cb = cb_cc_a,
-                 .b0 = 0,
-                 .Mt = Ct,
-                 .Kd = Ct,
-                 .Nt = Ct,
-                 .out_cb = cb_pow,
-                 .out0 = 0});
+            mm(0, cb_cc_a, 0, cb_cc_a, 0, Ct, Ct, Ct, cb_pow, 0);
             publish(cb_pow, CtCt);
         }
         cb_pop_front(cb_cc_a, CtCt);
         for (uint32_t j = 1; j < NEUMANN_STEPS; ++j) {
             cb_reserve_back(cb_T, CtCt);  // T <- T + T @ Pw
-            mm_block(
-                {.a_cb = cb_T,
-                 .a0 = 0,
-                 .b_cb = cb_pow,
-                 .b0 = 0,
-                 .Mt = Ct,
-                 .Kd = Ct,
-                 .Nt = Ct,
-                 .out_cb = cb_T,
-                 .out0 = 0,
-                 .pre_cb = cb_T,
-                 .pre0 = 0});
+            mm(MM_PRE, cb_T, 0, cb_pow, 0, Ct, Ct, Ct, cb_T, 0, cb_T, 0);
             replace(cb_T, CtCt);
             if (j + 1 < NEUMANN_STEPS) {
                 cb_reserve_back(cb_pow, CtCt);  // Pw <- Pw @ Pw
-                mm_block(
-                    {.a_cb = cb_pow,
-                     .a0 = 0,
-                     .b_cb = cb_pow,
-                     .b0 = 0,
-                     .Mt = Ct,
-                     .Kd = Ct,
-                     .Nt = Ct,
-                     .out_cb = cb_pow,
-                     .out0 = 0});
+                mm(0, cb_pow, 0, cb_pow, 0, Ct, Ct, Ct, cb_pow, 0);
                 replace(cb_pow, CtCt);
             }
         }
@@ -543,17 +392,7 @@ void kernel_main() {
         cb_wait_front(cb_kb, CtKt);
 
         cb_reserve_back(cb_scratch_egress, QF);  // nkcd = -(Tinv @ U)
-        mm_block(
-            {.a_cb = cb_T,
-             .a0 = 0,
-             .b_cb = cb_kb,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Ct,
-             .Nt = Kt,
-             .out_cb = cb_scratch_egress,
-             .out0 = 0,
-             .do_neg = 1});
+        mm(MM_NEG, cb_T, 0, cb_kb, 0, Ct, Ct, Kt, cb_scratch_egress, 0);
         cb_push_back(cb_scratch_egress, QF);
 
         cb_reserve_back(cb_scratch_egress, QF);  // Q = q~ * gamma
@@ -561,19 +400,7 @@ void kernel_main() {
         cb_push_back(cb_scratch_egress, QF);
 
         cb_reserve_back(cb_scratch_egress, QF);  // intra = (q~ @ k^T) * L
-        mm_block(
-            {.a_cb = cb_qs,
-             .a0 = 0,
-             .b_cb = cb_k_in,
-             .b0 = 0,
-             .Mt = Ct,
-             .Kd = Kt,
-             .Nt = Ct,
-             .out_cb = cb_scratch_egress,
-             .out0 = 0,
-             .tb = 1,
-             .mul_cb = cb_L,
-             .mul0 = 0});
+        mm(MM_TB | MM_MUL, cb_qs, 0, cb_k_in, 0, Ct, Kt, Ct, cb_scratch_egress, 0, cb_L, 0);
         cb_push_back(cb_scratch_egress, QF);
 
         cb_reserve_back(cb_kw, CtKt);  // P^T = (k * w)^T
@@ -600,16 +427,7 @@ void kernel_main() {
             publish(cb_vmat, CtVi);
             cb_pop_front(cb_vblock_in, QV);
             cb_reserve_back(cb_scratch_egress, QF);
-            mm_block(
-                {.a_cb = cb_T,
-                 .a0 = 0,
-                 .b_cb = cb_vmat,
-                 .b0 = 0,
-                 .Mt = Ct,
-                 .Kd = Ct,
-                 .Nt = Vi,
-                 .out_cb = cb_scratch_egress,
-                 .out0 = 0});
+            mm(0, cb_T, 0, cb_vmat, 0, Ct, Ct, Vi, cb_scratch_egress, 0);
             cb_push_back(cb_scratch_egress, QF);
             cb_pop_front(cb_vmat, CtVi);
         }
@@ -649,39 +467,26 @@ void kernel_main() {
             // v_new = v_corr + nkcd @ S  -> cb_scan_vnew (next matmul) and scratch (stage E)
             cb_reserve_back(cb_scan_vnew, CtVs);
             cb_reserve_back(cb_scratch_egress, QF);
-            mm_block(
-                {.a_cb = cb_kmat_in,
-                 .a0 = 0,
-                 .b_cb = cb_state,
-                 .b0 = 0,
-                 .Mt = Ct,
-                 .Kd = Kt,
-                 .Nt = Vs,
-                 .out_cb = cb_scan_vnew,
-                 .out0 = 0,
-                 .pre_cb = cb_scan_vcorr,
-                 .pre0 = 0,
-                 .out2_cb = cb_scratch_egress,
-                 .out20 = 0});
+            mm(MM_PRE | MM_OUT2,
+               cb_kmat_in,
+               0,
+               cb_state,
+               0,
+               Ct,
+               Kt,
+               Vs,
+               cb_scan_vnew,
+               0,
+               cb_scan_vcorr,
+               0,
+               cb_scratch_egress,
+               0);
             cb_push_back(cb_scratch_egress, QF);
             publish(cb_scan_vnew, CtVs);
 
             // S <- Gamma * S + P^T @ v_new   (in place)
             cb_reserve_back(cb_state, KtVs);
-            mm_block(
-                {.a_cb = cb_scan_pt,
-                 .a0 = 0,
-                 .b_cb = cb_scan_vnew,
-                 .b0 = 0,
-                 .Mt = Kt,
-                 .Kd = Ct,
-                 .Nt = Vs,
-                 .out_cb = cb_state,
-                 .out0 = 0,
-                 .pre_cb = cb_state,
-                 .pre0 = 0,
-                 .gam_cb = cb_scan_gamma,
-                 .gam0 = 0});
+            mm(MM_PRE | MM_GAM, cb_scan_pt, 0, cb_scan_vnew, 0, Kt, Ct, Vs, cb_state, 0, cb_state, 0, cb_scan_gamma, 0);
             replace(cb_state, KtVs);
 
             cb_pop_front(cb_scan_vnew, CtVs);
@@ -707,21 +512,21 @@ void kernel_main() {
             cb_wait_front(cb_vblock_in, QV);
             cb_wait_front(cb_vnew_in, CtVi);
             cb_reserve_back(cb_out_egress, QO);
-            mm_block(
-                {.a_cb = cb_kmat_in,
-                 .a0 = 0,
-                 .b_cb = cb_vblock_in,
-                 .b0 = 0,
-                 .Mt = Ct,
-                 .Kd = Kt,
-                 .Nt = Vi,
-                 .out_cb = cb_out_egress,
-                 .out0 = 0,
-                 .a2_cb = cb_intra_in,
-                 .a20 = 0,
-                 .b2_cb = cb_vnew_in,
-                 .b20 = 0,
-                 .Kd2 = Ct});
+            mm(MM_DUAL,
+               cb_kmat_in,
+               0,
+               cb_vblock_in,
+               0,
+               Ct,
+               Kt,
+               Vi,
+               cb_out_egress,
+               0,
+               cb_intra_in,
+               0,
+               cb_vnew_in,
+               0,
+               Ct);
             cb_push_back(cb_out_egress, QO);
             cb_reserve_back(cb_out_egress, QO);
             copy_blk<cb_vnew_in, cb_out_egress>(0, 0, CtVi);
