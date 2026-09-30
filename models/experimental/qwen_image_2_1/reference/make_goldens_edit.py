@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--out", default="generated/qwen_image_2_1/goldens/edit")
     ap.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     ap.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
+    ap.add_argument("--vae-memory-format", choices=("contiguous", "channels_last"), default="contiguous")
     ap.add_argument(
         "--image",
         action="append",
@@ -42,6 +43,8 @@ def main():
 
     dtype = getattr(torch, args.dtype)
     pipe = QwenImage21Pipeline.from_pretrained(args.model, revision=args.revision, dtype=dtype)
+    if args.vae_memory_format == "channels_last":
+        torch.nn.utils.convert_conv2d_weight_memory_format(pipe.vae, torch.channels_last)
     if args.device == "cuda":
         pipe.enable_model_cpu_offload()
     else:
@@ -244,6 +247,7 @@ def main():
             "device": args.device,
             "dtype": args.dtype,
             "initial_noise_dtype": "bfloat16",
+            "vae_memory_format": args.vae_memory_format,
             "cond_size": [in_w, in_h],
             "output_size": list(image.size),
             "steps": args.steps,
