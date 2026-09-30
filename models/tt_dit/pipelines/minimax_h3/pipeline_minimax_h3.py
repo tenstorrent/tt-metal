@@ -47,7 +47,7 @@ import os
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import NamedTuple
@@ -199,9 +199,9 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 # ref2va ladder; the top rung must admit everything the ref2va arena caps do (326432 rows, aligned).
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 326656)
 
-# 4x8 ladders: SP=8 aligns to 256, so rungs sit at most ~15% apart. Same top-rung rule as above.
+# 4x8 ladders: SP=8 aligns to 256, so rungs sit at most ~15% apart. Same top-rung rule as above. #N
 MINIMAX_H3_BUCKET_LADDER_4X8 = (
-    18944, 22528, 26624, 31488, 37120, 43776, 51712, 60928, 71680, 84480, 99584, 117248, 120320
+18944, 20224, 21760, 23296, 25088, 26880, 28928, 31232, 33536, 36096, 38912, 41984, 45312, 48896, 52736, 56832, 61184, 66048, 71168, 76800, 82688, 89088, 96000, 103424, 111616, 120320
 )  # fmt: skip
 MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8 = (
     24064, 28416, 33536, 39680, 46848, 55296, 65280, 76800, 90368, 106496, 125440, 147712, 173824,
@@ -1337,7 +1337,7 @@ class MiniMaxH3Pipeline:
             is_fsdp=self.dit_fsdp,
             # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
             kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
-            use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
+            # use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -2693,57 +2693,65 @@ class MiniMaxH3Pipeline:
         upload_levels(step_levels(0))
         if _is_host_rank():
             _tqdm_spacer()
-        for i, t in enumerate(
-            tqdm.tqdm(
-                timesteps,
-                desc="Denoising",
-                disable=(not _is_host_rank()),
-                file=sys.stderr,
-                bar_format=_TQDM_BAR_FORMAT,
-            )
-        ):
-            t_step = time.time()
-            video_velocity, audio_velocity = transformer(
-                video_1BVC=self._tt_video.value,
-                audio_1BAC=self._tt_audio.value,
-                assembly_indices=state.assembly_idx.value,
-                video_out_indices=self._tt_video_out_idx.value,
-                audio_out_indices=self._tt_audio_out_idx.value,
-                timestep=self._tt_timestep.value,
-                adaln_indices=state.adaln.value,
-                timestep_indices=state.tsi.value,
-                rope_cos=state.rope_cos.value,
-                rope_sin=state.rope_sin.value,
-                logical_n=self._tt_logical_n.value,
-                pad_to=rung,
-                traced=traced,
-            )
-
-            ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
-            ttnn.add_(self._tt_video.value, video_velocity)
-            ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
-            ttnn.add_(self._tt_audio.value, audio_velocity)
-            if i + 1 < len(timesteps):
-                upload_levels(step_levels(i + 1))
-            ttnn.synchronize_device(self.mesh_device)
-            if ttnn.using_distributed_env():
-                ttnn.distributed_context_barrier()
-            t_step = time.time() - t_step
-            if i == 0:
-                t_first = t_step
-            else:
-                t_steady += t_step
-            on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
-
-        state.warm = True
-        steady_steps = max(len(timesteps) - 1, 1)
-        self._log(
-            f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
-            f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
-            f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+        # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
+        # end of the scope lands the last step's CCL traffic before the pairs are freed.
+        transient = (
+            self.ccl_manager.transient_ping_pong_buffers()
+            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            else nullcontext()
         )
+        with transient:
+            for i, t in enumerate(
+                tqdm.tqdm(
+                    timesteps,
+                    desc="Denoising",
+                    disable=(not _is_host_rank()),
+                    file=sys.stderr,
+                    bar_format=_TQDM_BAR_FORMAT,
+                )
+            ):
+                t_step = time.time()
+                video_velocity, audio_velocity = transformer(
+                    video_1BVC=self._tt_video.value,
+                    audio_1BAC=self._tt_audio.value,
+                    assembly_indices=state.assembly_idx.value,
+                    video_out_indices=self._tt_video_out_idx.value,
+                    audio_out_indices=self._tt_audio_out_idx.value,
+                    timestep=self._tt_timestep.value,
+                    adaln_indices=state.adaln.value,
+                    timestep_indices=state.tsi.value,
+                    rope_cos=state.rope_cos.value,
+                    rope_sin=state.rope_sin.value,
+                    logical_n=self._tt_logical_n.value,
+                    pad_to=rung,
+                    traced=traced,
+                )
 
-        ttnn.synchronize_device(self.mesh_device)
+                ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
+                ttnn.add_(self._tt_video.value, video_velocity)
+                ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
+                ttnn.add_(self._tt_audio.value, audio_velocity)
+                if i + 1 < len(timesteps):
+                    upload_levels(step_levels(i + 1))
+                ttnn.synchronize_device(self.mesh_device)
+                if ttnn.using_distributed_env():
+                    ttnn.distributed_context_barrier()
+                t_step = time.time() - t_step
+                if i == 0:
+                    t_first = t_step
+                else:
+                    t_steady += t_step
+                on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
+
+            state.warm = True
+            steady_steps = max(len(timesteps) - 1, 1)
+            self._log(
+                f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
+                f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
+                f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+            )
+
+            ttnn.synchronize_device(self.mesh_device)
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
         video_rows[num_cond:] = (

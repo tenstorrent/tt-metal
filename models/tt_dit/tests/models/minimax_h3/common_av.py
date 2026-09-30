@@ -489,13 +489,13 @@ def artifact_dir(name: str) -> Path:
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    # warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
+    warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
     # # the rung the measured call will run at -- take the reference from there.
-    # with pipeline.quiet():
-    #     pipeline(prompt, seed=seed, **warmup_kwargs)
+    with pipeline.quiet():
+        pipeline(prompt, seed=seed, **warmup_kwargs)
     # warm_padded_len = pipeline.last_seq_len.padded
 
     # ttnn.synchronize_device(pipeline.mesh_device)
