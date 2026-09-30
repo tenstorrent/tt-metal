@@ -50,6 +50,10 @@ perf: |
   The gate re-runs an accuracy rung and the warm profile; it passes only if every accuracy threshold still holds and
   the measured time drops below its threshold. Keep the previous behaviour selectable (a named setting or an env var,
   recorded in the profile's settings) so the two can be compared. Do not change thresholds, goldens or frozen tests.
+  Measure only the e2e chunk time and the changed section's time, before and after, with the plain profile
+  (test_profile.py without BRINGUP_PROFILE_OPS; a few minutes). Never profile per op over the whole model: per-op mode
+  runs on the representative layers only (BRINGUP_PROFILE_LAYERS picks others) and only when the section time
+  cannot explain a result.
 optests: |
   Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
   distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real

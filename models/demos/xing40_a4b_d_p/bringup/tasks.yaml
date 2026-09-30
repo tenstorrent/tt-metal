@@ -1837,8 +1837,7 @@ tasks:
       on pre, comb logits clamped to [-30, 30], exp(L - rowmax) then 20 x (row + eps, column + eps), comb in Xing''s convention. Land (1) first; if (2)
       cannot pass the frozen attn_hc / collapse tests, keep (1) and report. Frozen tests must pass unchanged (never edit a frozen test or its limits); if
       the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the current behaviour (skill
-      bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Report the measured before/after per op (BRINGUP_PROFILE_OPS=1
-      profile).'
+      bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and the changed section time, before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer and only when the section time cannot explain a result).'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh --run-all
       models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
@@ -1902,8 +1901,7 @@ tasks:
       in tt/experts.py) at MathFidelity.HiFi2 instead of HiFi4 (explicit owner exception to rule 7 for the routed experts only); weights stay bfp8, never
       bfp4. Re-tune the expert kernel config if HiFi2 allows it, and measure. Frozen tests must pass unchanged (never edit a frozen test or its limits);
       if the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the current behaviour
-      (skill bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Report the measured before/after per
-      op (BRINGUP_PROFILE_OPS=1 profile).'
+      (skill bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Measure only the e2e chunk time and the changed section time, before and after, from the plain profile (no BRINGUP_PROFILE_OPS: per-op mode is for one layer and only when the section time cannot explain a result).'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_experts.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_11_experts.py
       && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
