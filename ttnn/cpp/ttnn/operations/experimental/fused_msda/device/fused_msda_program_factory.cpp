@@ -160,6 +160,12 @@ constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
 constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
 constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
 constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
+constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
+
+// Split gather: the writer RISC, idle but for each block's output rows,
+// gathers half of every row-major block on its own NoC (see
+// msda_gather_rows.hpp). The scatter path keeps the reader-only gather.
+bool msda_split_gather(const MSDAShapes& s) { return s.head_dim % kTileWidth == 0; }
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
     const auto *const it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
@@ -277,9 +283,10 @@ MSDARuntimeArgs msda_runtime_args(
         }
 
         auto& writer = args.writer.emplace_back();
-        writer.reserve(2 + slots * 3);
+        writer.reserve(3 + slots * 3);
         writer.push_back(output.buffer()->address());
         writer.push_back(count);
+        writer.push_back(tensor_args.value.buffer()->address());
 
         for (uint32_t t = 0; t < count; ++t) {
             const auto& asn = split.tiles[tile_cursor + t];
@@ -288,7 +295,7 @@ MSDARuntimeArgs msda_runtime_args(
             writer.insert(writer.end(), {asn.batch * s.num_queries + asn.q_start, asn.head, asn.v_rows});
         }
         reader.resize(5 + 3 * s.num_levels + slots * 4, 0u);
-        writer.resize(2 + slots * 3, 0u);
+        writer.resize(3 + slots * 3, 0u);
 
         // `mul_unary_tile` takes its scalar as a runtime uint32 and the level
         // index is a runtime value, so the per-level constants are runtime args.
@@ -419,6 +426,10 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
     // Writer-only scratch.
     push(output_scratch_cb, 1, head_stick_aligned, output_format);
+    if (msda_split_gather(s)) {
+        // Reader -> writer, one point's gather arguments at a time.
+        push(gather_mailbox_cb, 1, 64, datatype_to_dataformat_converter(value.dtype()));
+    }
     return plan;
 }
 
@@ -502,6 +513,15 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     }
     const bool rm_staging = s.head_dim % kTileWidth == 0;
     const bool ref_fp32 = attrs.from_offsets && tensor_args.reference_points->dtype() == DataType::FLOAT32;
+    const bool split_gather = msda_split_gather(s);
+    constexpr uint32_t gather_ready_sem = 0;
+    constexpr uint32_t gather_done_sem = 1;
+    if (split_gather) {
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_done_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
 
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both
@@ -540,6 +560,10 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         y0_cb,
         kGeomCbPages,
         static_cast<uint32_t>(rm_staging),
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
@@ -611,8 +635,19 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         output_scratch_cb,
         output_page_aligned,
         s.head_dim,
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
+        s.num_levels * s.num_points,
+        s.num_heads,
+        s.num_keys,
+        static_cast<uint32_t>(s.value_packed),
+        value_stick_aligned,
+        static_cast<uint32_t>(value.buffer()->page_size()),
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*value.buffer()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "dataflow/writer_msda.cpp";
