@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN port of BEVFormer's detection decoder, from UniAD's ``TtDetectionTransformerDecoder``.
+"""TTNN port of BEVFormer's detection decoder, from UniAD's ``TtDetectionTransformerDecoder``
+(``models/experimental/uniad/tt/ttnn_decoder.py``).
 
 Tensors stay sequence-first ``(num_query, bs, embed_dims)`` between layers, as in the
 reference. Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``.
@@ -16,14 +17,14 @@ and the error compounds across layers through the reference-point refinement.
 import math
 
 import ttnn
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.reference.decoder import REG_XY, REG_Z
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
+from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
+from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 GRID_DTYPE = ttnn.float32
 
 
-def _linear_rows(x, weight, bias):
+def _linear_rows(x, weight, bias, dtype=None):
     """``ttnn.linear`` with every leading dim folded into M.
 
     A sequence-first ``(nq, bs, C)`` tensor otherwise runs as ``nq`` matmuls of ``bs`` rows,
@@ -33,8 +34,8 @@ def _linear_rows(x, weight, bias):
     shape = list(x.shape)
     rows = math.prod(shape[:-1])
     if len(shape) < 3 or rows == shape[-2]:
-        return ttnn.linear(x, weight, bias=bias)
-    y = ttnn.linear(ttnn.reshape(x, (1, 1, rows, shape[-1])), weight, bias=bias)
+        return ttnn.linear(x, weight, bias=bias, dtype=dtype)
+    y = ttnn.linear(ttnn.reshape(x, (1, 1, rows, shape[-1])), weight, bias=bias, dtype=dtype)
     return ttnn.reshape(y, tuple(shape[:-1]) + (y.shape[-1],))
 
 
@@ -89,52 +90,44 @@ class TtDetrTransformerDecoderLayer:
     def __init__(self, params, device, bev_shape, grid_sample_compute_config):
         self.params = params
         self.self_attn = TtMultiheadAttention(params.self_attn)
-        cross = params.cross_attn
         self.cross_attn = TTMSDeformableAttention(
-            DeformableAttentionConfig(
-                embed_dims=cross.embed_dims,
-                num_heads=cross.num_heads,
-                num_levels=1,
-                num_points=cross.num_points,
-                batch_first=False,
-            ),
+            params.cross_attn.config,
             device,
-            cross,
+            params.cross_attn,
             spatial_shapes=[list(bev_shape)],
             grid_dtype=GRID_DTYPE,
             grid_sample_compute_config=grid_sample_compute_config,
         )
         self.ffn = TtFFN(params.ffn)
 
-    def _norm(self, x, index):
-        norm = self.params.norms[index]
-        return ttnn.layer_norm(x, weight=norm.weight, bias=norm.bias, epsilon=norm.eps)
+    def __call__(self, query, bev_value, query_pos, bev_query_pos, reference_points):
+        """Sequence-first ``query``/``query_pos``; ``bev_value``/``bev_query_pos`` batch-first.
 
-    def __call__(self, query, value, query_pos, reference_points):
-        """``reference_points`` is ``(bs, nq, 1, 2)`` in [0, 1]."""
-        query = self._norm(self.self_attn(query, query_pos), 0)
-        query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
-        query = self._norm(query, 1)
-        return self._norm(self.ffn(query), 2)
+        The cross-attention runs batch-first, so the large BEV value is permuted once per
+        decoder, not once per layer. ``reference_points`` is ``(bs, nq, 1, 2)`` in [0, 1].
+        """
+        norms = self.params.norms
+        query = layer_norm(self.self_attn(query, query_pos), norms[0])
+        query = self.cross_attn(
+            query=ttnn.permute(query, (1, 0, 2)),
+            value=bev_value,
+            query_pos=bev_query_pos,
+            reference_points=reference_points,
+        )
+        query = layer_norm(ttnn.permute(query, (1, 0, 2)), norms[1])
+        return layer_norm(self.ffn(query), norms[2])
 
 
 class TtDetectionTransformerDecoder:
     """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map.
 
-    The cross-attention folds ``bev_shape`` into its sampling-offset Linear, so the
-    constructor consumes ``params.layers[*].cross_attn.sampling_offsets``; build a fresh
-    ``params`` per instance.
+    The cross-attention folds ``bev_shape`` into its sampling-offset Linear, which consumes
+    ``params.layers[*].cross_attn.sampling_offsets``: each instance needs its own
+    ``create_decoder_parameters``, and reusing them raises.
     """
 
     def __init__(self, params, device, bev_shape):
-        # fp32 accumulation of grid_sample's weighted 4-corner sum.
-        grid_sample_compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-            math_approx_mode=False,
-        )
+        grid_sample_compute_config = fp32_grid_sample_config(device)
         self.layers = [
             TtDetrTransformerDecoderLayer(p, device, bev_shape, grid_sample_compute_config) for p in params.layers
         ]
@@ -143,7 +136,8 @@ class TtDetectionTransformerDecoder:
     def _reg_branch(x, branch):
         x = ttnn.relu(_linear_rows(x, branch[0].weight, branch[0].bias))
         x = ttnn.relu(_linear_rows(x, branch[1].weight, branch[1].bias))
-        return _linear_rows(x, branch[2].weight, branch[2].bias)
+        # Emitted in GRID_DTYPE: its output is added to the reference points' logits.
+        return _linear_rows(x, branch[2].weight, branch[2].bias, dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
         """``reference_points`` is ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1].
@@ -152,13 +146,15 @@ class TtDetectionTransformerDecoder:
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
+        bev_value = ttnn.permute(value, (1, 0, 2))
+        bev_query_pos = ttnn.permute(query_pos, (1, 0, 2))
         output = query
         intermediate = []
         intermediate_reference_points = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
-            output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
+            output = layer(output, bev_value, query_pos, bev_query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
-            tmp = ttnn.typecast(self._reg_branch(ttnn.permute(output, (1, 0, 2)), branch), GRID_DTYPE)
+            tmp = self._reg_branch(ttnn.permute(output, (1, 0, 2)), branch)
             updated_xy = ttnn.add(tmp[..., REG_XY], inverse_sigmoid(reference_points[..., :2]))
             updated_z = ttnn.add(tmp[..., REG_Z], inverse_sigmoid(reference_points[..., 2:3]))
             reference_points = ttnn.sigmoid(ttnn.concat([updated_xy, updated_z], dim=-1))

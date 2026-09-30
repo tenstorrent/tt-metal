@@ -116,11 +116,11 @@ Tests the six-layer detection decoder, layer by layer.
   inputs
 - That a second eager run adds no programs to the program cache
 
-It uses seeded random weights (`tests/decoder_common.py`): mmcv's sampling-offset grid init with
-random weights on top, so offsets spread over a few pixels and attention is peaked. The BEV
-features are random but spatially smooth, as the encoder's are, and the reference points include
-the grid edges. Per-layer thresholds are in `THRESHOLDS`: bfloat16 error grows through the
-reference-point refinement, about 1.6x per layer on the 50x50 grid and 3x on 200x200.
+It uses seeded random weights (`tests/decoder_common.py`): BEVFormer's sampling-offset grid init
+with random weights on top, so offsets spread over a few pixels, and peaked cross- and
+self-attention. The BEV features are random but spatially smooth, as the encoder's are, and the
+reference points include the grid edges. Per-layer bounds are in `THRESHOLDS`; bfloat16 error
+grows through the reference-point refinement, faster on the 200x200 grid.
 
 **Usage:**
 ```bash

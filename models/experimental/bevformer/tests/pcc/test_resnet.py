@@ -10,12 +10,12 @@ from models.experimental.bevformer.tests.backbone_common import (
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
     NUM_CAMS,
+    assert_pcc,
     build_reference_backbone,
     from_conv_layout,
     to_conv_layout,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tests.test_utils import assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing_backbone import create_resnet_parameters
 from models.experimental.bevformer.tt.tt_resnet import TtBottleneck, TtResLayer, TtResNet
 
