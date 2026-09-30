@@ -8,3 +8,5 @@
   baseline init S1 ~85 ms, S2 ~135 ms, S1 2.18 s, S2 2.46 s (job 574).
 - E2E job 602: same + LTX_DEVICE_PROMPT_HANDOFF=1 (plan item #2), outputs tmp/e2e/noisepf_ph/. Compare its latents to safe too
   (handoff may change nothing numerically — the prompt comes from the encoder straight into device buffers).
+- 2026-09-30 14:10 UTC (attempt 2): 601/602 still queued (first in line); device HELD by broker for recovery
+  (chip 20 left PCIe bus). Nothing run. On resume: `bash tmp/cmp.sh noisepf 601` and `bash tmp/cmp.sh noisepf_ph 602`.
