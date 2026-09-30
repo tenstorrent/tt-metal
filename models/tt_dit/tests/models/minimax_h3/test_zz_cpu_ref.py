@@ -5,16 +5,16 @@
 """Device side of tools/cpu_reference_forward.py: run the full-depth real-checkpoint transformer on the reference's
 inputs for one or more MINIMAX_H3_* knob sets, save each output, and print PSNR / PCC against the CPU reference.
 
-All knob sets run in ONE process (one mesh open, the checkpoint read once): every fresh process start on the 4x8 risks
-the pipeline start-up hang, and the knobs are read when a model is constructed, so each set builds its own model.
+One process, one model: the checkpoint goes onto the mesh once (~9 min), then every knob set is applied in place (the
+SDPA knobs are attention attributes plus environment read when the program config is built) and scored. A set with
+MINIMAX_H3_BF8_WEIGHTS typecasts the weights on the device, which cannot be undone, so list such sets last.
 
     H3_CPU_REF=~/cpu_ref/ref_5s.npz H3_TAG=tip pytest test_zz_cpu_ref.py -k 4x8 -s
-    H3_CPU_REF=... H3_CPU_REF_CONFIGS="tip:;bf8:MINIMAX_H3_BF8_WEIGHTS=qkv,ff1;rec3:MINIMAX_H3_BF8_WEIGHTS=qkv,ff1|MINIMAX_H3_SDPA_PV_FIDELITY=LoFi" \
+    H3_CPU_REF=... H3_CPU_REF_CONFIGS="tip:;lofipv:MINIMAX_H3_SDPA_PV_FIDELITY=LoFi;bf8:MINIMAX_H3_BF8_WEIGHTS=qkv,ff1" \
         pytest test_zz_cpu_ref.py -k 4x8 -s
 (configs are separated by ';', a config is 'tag:ENV=VAL|ENV=VAL'; an empty knob list is the plain tip)
 """
 
-import gc
 import json
 import os
 import time
@@ -29,6 +29,7 @@ import ttnn
 
 from ....models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from ....utils.tensor import typed_tensor
 from ....utils.test import skip_if_unsupported_num_links
 from .common import GALAXY_RING
 from .test_transformer_minimax_h3 import (
@@ -58,11 +59,35 @@ def _configs() -> list[tuple[str, dict[str, str]]]:
     return out
 
 
-def _set_knobs(base: dict[str, str], knobs: dict[str, str]) -> None:
+def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
+    """Put the model into the state a fresh process with exactly `knobs` in its environment would build."""
     for k in [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]:
         del os.environ[k]
-    os.environ.update({k: v for k, v in base.items() if k not in _KEEP or True})
     os.environ.update(knobs)
+    fidelity = getattr(ttnn.MathFidelity, knobs.get("MINIMAX_H3_SDPA_FIDELITY", "HiFi2"))
+    v_dtype = getattr(ttnn, knobs["MINIMAX_H3_SDPA_V_DTYPE"]) if "MINIMAX_H3_SDPA_V_DTYPE" in knobs else None
+    for block in tt_model.transformer_blocks:
+        attn = block.attn
+        attn.sdpa_fixed_offset = False
+        attn.sdpa_fixed_offset_value = 0.0
+        attn._sdpa_program_configs.clear()  # per-phase fidelity is read from the environment when a config is built
+        attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=False, dst_full_sync_en=False
+        )
+        attn.sdpa_v_dtype = v_dtype
+        attn.dummy_joint_v = (
+            attn.dummy_joint_input
+            if v_dtype is None
+            else typed_tensor(torch.zeros((1, attn.n_local_heads, 0, attn.head_dim)), v_dtype, mesh_device)
+        )
+    spec = knobs.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS")
+    if spec:
+        tt_model._set_fixed_softmax_blocks(spec)
+    if "MINIMAX_H3_BF8_WEIGHTS" in knobs and not getattr(tt_model, "_cpu_ref_bf8_applied", False):
+        apply_env_quant_config(tt_model)
+        tt_model._cpu_ref_bf8_applied = True
+    weights = "bf8:" + os.environ.get("MINIMAX_H3_BF8_WEIGHTS", "") if getattr(tt_model, "_cpu_ref_bf8_applied", False) else "bf16"
+    return " ".join(f"{k}={v}" for k, v in sorted(knobs.items())) + f" [weights {weights}]" if knobs else f"(tip) [weights {weights}]"
 
 
 @pytest.mark.timeout(10800)
@@ -72,7 +97,6 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
     if not ref_path:
         pytest.skip("set H3_CPU_REF to a tools/cpu_reference_forward.py npz")
     configs = _configs()
-    base_env = {k: v for k, v in os.environ.items() if k.startswith("MINIMAX_H3_")}
     ref = np.load(ref_path)
     skip_if_unsupported_num_links(mesh_device, num_links)
     directory = _checkpoint_dir()
@@ -103,9 +127,23 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
     # the same metadata as the reference run, or the comparison is meaningless
     assert np.array_equal(inputs.position_ids.numpy(), ref["position_ids"]) and np.array_equal(inputs.tags.numpy(), ref["tags"])
 
+    # build the model in the plain-tip state; every knob set is applied in place afterwards
+    _apply_knobs_env_only = [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]
+    for k in _apply_knobs_env_only:
+        del os.environ[k]
+    tt_model = MiniMaxH3Transformer3DModel(
+        **model_kwargs,
+        mesh_device=mesh_device,
+        ccl_manager=inputs.ccl_manager,
+        parallel_config=inputs.parallel_config,
+        is_fsdp=is_fsdp,
+    )
     start = time.time()
-    state_dict = _load_reference_state_dict(directory)  # once: ~62 GB of host RAM, shared by every knob set
-    logger.info(f"checkpoint read from disk in {time.time() - start:.0f} s; {len(configs)} knob set(s): {[c[0] for c in configs]}")
+    state_dict = _load_reference_state_dict(directory)
+    tt_model.load_torch_state_dict(state_dict)
+    del state_dict
+    logger.info(f"checkpoint on the mesh in {time.time() - start:.0f} s; {len(configs)} knob set(s): {[c[0] for c in configs]}")
+    tt_model.prepare_static_sources(**inputs.tt_static, prompt_cap=inputs.tt_static["prompt_1BLP"].shape[2])
 
     out_dir = Path(os.environ.get("H3_CPU_REF_OUT", Path(ref_path).parent))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -118,22 +156,9 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
 
     results = []
     for tag, knobs in configs:
-        _set_knobs(base_env, knobs)
-        knob_str = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items()) if k.startswith("MINIMAX_H3_") and k not in _KEEP) or "(tip)"
-        tt_model = MiniMaxH3Transformer3DModel(
-            **model_kwargs,
-            mesh_device=mesh_device,
-            ccl_manager=inputs.ccl_manager,
-            parallel_config=inputs.parallel_config,
-            is_fsdp=is_fsdp,
-        )
-        start = time.time()
-        tt_model.load_torch_state_dict(dict(state_dict))
-        apply_env_quant_config(tt_model)
-        logger.info(f"[{tag}] weights on the mesh in {time.time() - start:.0f} s; knobs: {knob_str}")
-
-        tt_model.prepare_static_sources(**inputs.tt_static)
-        tt_model(**inputs.tt)  # compile pass
+        knob_str = _apply_knobs(tt_model, knobs, mesh_device)
+        logger.info(f"[{tag}] knobs: {knob_str}")
+        tt_model(**inputs.tt)  # compile pass for this knob set
         ttnn.synchronize_device(mesh_device)
         start = time.time()
         tt_video, tt_audio = tt_model(**inputs.tt)
@@ -150,12 +175,6 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
             f"audio PSNR {row[4]:.2f} dB PCC {row[5]:.6f}; wrote {out_path}"
         )
 
-        tt_model.deallocate_weights()
-        del tt_model
-        gc.collect()
-        ttnn.synchronize_device(mesh_device)
-
-    _set_knobs(base_env, {})
     logger.info("SUMMARY vs CPU reference (5 s shape, full depth, fp32 CPU): tag | warm s | video dB | video PCC | audio dB | audio PCC")
     for tag, warm, vp, vc, ap, ac in results:
         logger.info(f"SUMMARY {tag:12s} | {warm:6.2f} | {vp:7.2f} | {vc:.6f} | {ap:7.2f} | {ac:.6f}")
