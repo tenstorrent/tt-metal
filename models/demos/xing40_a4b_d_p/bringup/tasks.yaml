@@ -1361,6 +1361,14 @@ tasks:
     kind: router
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T15:20:55'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_router.py: aef68ce149599ed8f0973bb4634752c5b6cf5055ba871f41cad244f1f8536fab
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.10
   title: 'moe block with steps 1-10 on device (last: router)'
   step: implement
