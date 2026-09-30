@@ -2190,3 +2190,23 @@
 #       release_ready: false
 #   owner_id: U07K00A281X # Kevin Wu
 #   team: train
+
+# ── VibeVoice ──────────────────────────────────────────────────────
+- name: VibeVoice-1.5B e2e accuracy tests (P150 1x1)
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/VibeVoice-1.5B
+    python3 models/experimental/vibevoice/demo/demo.py --demo 2p_goat --trace
+    VV_WER_MAX_NEW_TOKENS=128 pytest --timeout 1500 models/experimental/vibevoice/tests/pcc/test_e2e_wer.py
+    pytest --timeout 600 models/experimental/vibevoice/tests/pcc/test_e2e_sim.py
+  model: vibevoice-1.5b
+  model_family: VibeVoice
+  skus:
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: e2e

@@ -2225,3 +2225,26 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: unit
+
+# ── VibeVoice ──────────────────────────────────────────────────────
+- name: VibeVoice-1.5B unit tests (P150 1x1)
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export VIBEVOICE_MODEL_PATH=/mnt/MLPerf/huggingface/microsoft/VibeVoice-1.5B
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/VibeVoice-1.5B
+    pytest --timeout 600 \
+      models/experimental/vibevoice/tests/pcc/test_diffusion_head_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_acoustic_tokenizer_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_semantic_tokenizer_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_connector_pcc.py \
+      models/experimental/vibevoice/tests/pcc/test_dpm_scheduler_pcc.py
+  model: vibevoice-1.5b
+  model_family: VibeVoice
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: unit
