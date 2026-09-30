@@ -207,4 +207,90 @@ CASES = [
         "atol": 0.005,
         "rtol": 0.008,
     },
+    {
+        # Hy4 q_a_layernorm (tt/q_a.py, q_lora_rank 2048) on the 2560 rows of a 2x2 chip (5120-token chunk), fp32 in /
+        # out, fp32 row-major weight.
+        "id": "hy4_preview_d_p-2x2-s2560-h2048-fp32-rmw-eps1e-6",
+        "model": "hy4_preview_d_p",
+        "task": "O.1",
+        "sig": "16501544dc",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input [1, 1, 2560, 2048] fp32 TILE DRAM interleaved (per device); fp32 random values (not bf16-rounded)
+        "input": {"shape": [1, 1, 2560, 2048], "dtype": "FLOAT32", "layout": "TILE"},
+        # weight [1, 1, 64, 32] fp32 ROW_MAJOR DRAM interleaved: the 2048 channels as rows of 32 (replicated)
+        "weight": {"shape": [1, 1, 64, 32], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 0,
+        # vs the float64 reference on the same fp32 x / w. Measured (seed as above, 4 chips): pcc 0.9999998, max abs err
+        # 0.024, max rel err 0.0030 (the FPU's fp32 multiply); limits at 2x the measured rel error. A 1.01 scale of the
+        # output fails (checked by hand).
+        "pcc": 0.99999,
+        "atol": 0.002,
+        "rtol": 0.006,
+    },
+    {
+        # Hy4 kv_a_layernorm (kv_lora_rank 512) on the 2560 rows of a 2x2 chip, fp32 in / out, fp32 row-major weight.
+        "id": "hy4_preview_d_p-2x2-s2560-h512-fp32-rmw-eps1e-6",
+        "model": "hy4_preview_d_p",
+        "task": "O.1",
+        "sig": "31912e9ee9",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input [1, 1, 2560, 512] fp32 TILE DRAM interleaved (per device); fp32 random values (not bf16-rounded)
+        "input": {"shape": [1, 1, 2560, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        # weight [1, 1, 16, 32] fp32 ROW_MAJOR DRAM interleaved: the 512 channels as rows of 32 (replicated)
+        "weight": {"shape": [1, 1, 16, 32], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 1,
+        # vs the float64 reference on the same fp32 x / w. Measured (seed as above, 4 chips): pcc 0.9999998, max abs err
+        # 0.015, max rel err 0.0030 (the FPU's fp32 multiply); limits at 2x the measured rel error. A 1.01 scale of the
+        # output fails (checked by hand).
+        "pcc": 0.99999,
+        "atol": 0.002,
+        "rtol": 0.006,
+    },
+    {
+        # Hy4 hidden RMSNorm (tt/norm.py:TtGatheredRmsNorm, 6144, after the TP all_gather: ffn_norm, final norm) on
+        # the 2560 rows of a 2x2 chip, fp32 in / out, fp32 row-major weight, eps 1e-5.
+        "id": "hy4_preview_d_p-2x2-s2560-h6144-fp32-rmw-eps1e-5",
+        "model": "hy4_preview_d_p",
+        "task": "O.1",
+        "sig": "d24c5a2de5",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input [1, 1, 2560, 6144] fp32 TILE DRAM interleaved (per device); fp32 random values (not bf16-rounded)
+        "input": {"shape": [1, 1, 2560, 6144], "dtype": "FLOAT32", "layout": "TILE"},
+        # weight [1, 1, 192, 32] fp32 ROW_MAJOR DRAM interleaved: the 6144 channels as rows of 32 (replicated)
+        "weight": {"shape": [1, 1, 192, 32], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "epsilon": 1e-05,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 2,
+        # vs the float64 reference on the same fp32 x / w. Measured (seed as above, 4 chips): pcc 0.9999998, max abs err
+        # 0.020, max rel err 0.0029 (the FPU's fp32 multiply); limits at 2x the measured rel error. A 1.01 scale of the
+        # output fails (checked by hand).
+        "pcc": 0.99999,
+        "atol": 0.002,
+        "rtol": 0.006,
+    },
 ]

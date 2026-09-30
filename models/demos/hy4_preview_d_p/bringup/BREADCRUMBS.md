@@ -3330,3 +3330,82 @@ Gotchas
 Re-run
     PYTHONPATH=$PWD BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     HY4_ATTN_MM=default ... (same command) for the old matmul configs
+
+## X.3 fix, attempt 1 (timeline_ok = 0)
+
+What
+- Every accuracy and perf metric passed (pcc_layer L00-L05 >= 0.99989, pcc_state_min 0.99996, prefill_ms_full 4906,
+  pos_chunk 5120, op_rows 829). Only `timeline_ok` failed: `device programs per chip {1: 1170, 2: 1172, 0: 1172, 3: 1170}
+  != op-mode counts {...: 1177}`, next to `Profiler DRAM buffers were full, markers were dropped! ... bufferEndIndex = 12000`.
+- Cause: the timeline run reads the device profiler once per chunk. Each program takes 12 words per RISC and the buffer
+  holds `DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000` programs (tt_metal/impl/profiler/profiler_state_manager.cpp).
+  One chunk of layers 0-5 is 1177 programs per chip (slice 420, multiply 107, addcmul 84, linear 74, ...), so cores
+  that run every program (worker 1,2) overflow and the single-core tail programs are lost.
+- Diagnostic (not the gate): the same test_profile command with `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000` passed
+  with an aligned timeline: device 461.4 ms = kernels 459.3 + gaps 2.0 (chip 2), host dispatch 131.2 ms, host wall
+  462.7 ms. Log: /tmp/hy4_x3_diag.log. results/ was not written.
+
+Decisions
+- No code change. No module or fork is at fault, and the only lever inside this step's allowed paths would be setting a
+  global profiler env var from `ttnn/ttnn/bringup/__init__.py` (it is imported by `import ttnn`). That hides harness
+  config in an op package, so I did not do it. Cutting the program count means changing model modules (tt/), which
+  this step may not touch, and would need about 180 fewer programs per chip anyway.
+- The fix belongs in the framework or the gate env: set `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` (for example 3000)
+  before the mesh opens when the op profile is on, or drain the timeline at layer boundaries.
+- Gate not re-run: nothing changed, so it would fail the same way (1177 > 1000 is deterministic).
+
+Re-run (diagnostic)
+    PYTHONPATH=$PWD TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+
+## X.3 fix, attempt 2 (timeline_ok = 0)
+
+What
+- Same failure as attempt 1 (profiler buffer 1000 programs < 1177 per chunk). The overseer has since changed the X.3
+  gate in tasks.yaml (commit 93c2126d220, after this brief was written) to prefix the profile command with
+  `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`. No code change in this step.
+- Ran the current tasks.yaml gate. Ladder s56320 PASS; test_profile PASS: 829 op rows over 84 sections, timeline
+  device 460.1 ms = kernels 459.0 + gaps 1.0 (chip 1), host dispatch 95.7 ms, host wall 461.3 ms (no alignment
+  error); full prefill 4.90 s warm.
+- test_positions hung in my hand run: it ran with the precompile pass (my shell, no `--no-precompile`), whose collect
+  pass mutates the spec's target.seq, so the real pass picked positions up to 819200. Re-run with `--no-precompile`
+  (what core/gate.py adds for perf steps): PASS, positions 0 / 51200 / 102400 / 153600 / 204800 at 448.0 / 483.8 /
+  519.5 / 548.2 / 577.8 ms.
+
+Gotchas
+- The "Profiler DRAM buffers were full ... bufferEndIndex = 48000" warnings in test_profile come from the 11-chunk
+  full-prefill warm run (no profiler reads), before the op / timeline runs; the timeline itself aligns.
+- Run bring-up gates by hand with `--no-precompile` on every run_safe_pytest.sh call, as the orchestrator does.
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && PYTHONPATH=$PWD TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py && PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_positions.py
+
+## O.1 optests, attempt 1 (derived-op tests)
+
+What
+- The capture signature was unstable. The three `ring_indexer_score_dsa` sigs changed on every capture, because
+  `fork_capture` records `IndexerScoreProgramConfig` and the global-semaphore pair by `str()`, which gives
+  `<... object at 0x...>`. Fixed with value reprs: `IndexerScoreProgramConfig.__repr__` in the fork's
+  `indexer_score_nanobind.cpp` (rebuilt), and `global_semaphore.__repr__ = "global_semaphore"` in
+  `ttnn/ttnn/bringup/__init__.py`. Two captures in a row then gave the same 8 sigs; the indexer is one sig, 9d64887fca x3.
+- Cases added, all random inputs:
+  - dispatch 8865b74785, combine 9891342eaa and offset_cumsum 5ac677f17a: 2x2, dgs 2, H 6144. These are exact.
+  - rms_norm 16501544dc / 31912e9ee9 / d24c5a2de5: widths 2048 / 512 / 6144, fp32 TILE in, fp32 row-major weight
+    [1, 1, W/32, 32]. Measured rel 0.0030, limit rtol 0.006 + atol 0.002, pcc 0.99999.
+  - unified_routed_expert_moe 4fe753a443: ClampedSiluGlu, H 6144, I 2048, bfp8, x_scale 4 so the clamps are hit
+    (dropping the clamps moves the output by rel 0.075). Measured pcc 0.999997, rel 0.0025, limit 0.008.
+  - indexer_score ring 9d64887fca: a new `tests/` suite for this fork. Measured pcc 0.9999985, rel 0.00186, limit 0.004.
+- Test changes, each behind a per-case key or dtype, so other models' cases keep their inputs:
+  - rms_norm test: host values are drawn in the captured dtype (fp32 stays fp32).
+  - URE reference: gains `ClampedSiluGlu`. The URE test gains an optional `x_scale` (default 1).
+- Checked by hand: a 1.01-scaled output fails the rms_norm, URE and indexer cases. The indexer case also fails with
+  k_local in natural order (pcc 0.33).
+- indexer_score source regression (fork_source): 129 tests, 0 regressions vs baseline. The one failure is the known
+  expected divergence, test_indexer_score_rejects_fp32_dest_acc.
+
+Gotchas
+- Run the capture twice before writing cases. Any opaque nanobind argument without a repr makes the sig random.
+- The indexer's k_local layout: SP row r's k_local is the TP-inner gather of stripes (r, 0), (r, 1) of the 4-chip
+  cache. `reference.k_local_positions` gives the same order as the source op's `_to_tp_inner_reconstructed`.
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_CAPTURE_FORKS=models/demos/hy4_preview_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/hy4_preview_d_p/bringup/results/fork_calls.json --run-tests
