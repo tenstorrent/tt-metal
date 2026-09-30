@@ -162,6 +162,17 @@ tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distrib
     return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
 }
 
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type) {
+    if (sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL) {
+        return;
+    }
+    log_warning(
+        tt::LogOp,
+        "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. "
+        "Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region "
+        "for them.");
+}
+
 size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const auto& allocator = mesh_device.allocator();
     return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);

@@ -55,6 +55,10 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 // itself (see selective_reduce_combine, whose mux is by far the greediest).
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
+// Companion to prefer_l1_small_buffer_type: when it fell back to L1, name the device-open parameter
+// that would have kept the semaphores in L1_SMALL.
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type);
+
 // Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
 // from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
 // size IS reduced by a sub-device manager's bottom-up reservation

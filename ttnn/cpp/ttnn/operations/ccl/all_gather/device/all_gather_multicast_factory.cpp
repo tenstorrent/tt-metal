@@ -33,15 +33,8 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     // for all remote devices to be ready before beginning operation.
     // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
     // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an "
-            "L1_SMALL region for them.");
-    }
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphore allocated and waiting for all devices to be ready");
