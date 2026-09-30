@@ -497,6 +497,9 @@ class TestTriage:
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
 
+    def test_dump_semaphores(self):
+        self.run_triage_script("dump_semaphores.py")
+
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")
 
