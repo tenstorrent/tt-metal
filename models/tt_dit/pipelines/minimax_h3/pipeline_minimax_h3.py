@@ -346,6 +346,7 @@ class MiniMaxH3Pipeline:
         # The last call's (label, seconds) rows, as LTXPipeline exposes them, so a test can assert on
         # or report the breakdown without re-timing anything.
         self.last_timings: list[tuple[str, float]] = []
+        self.last_latents: dict[str, torch.Tensor] | None = None
         # The last call's padded packed length. Exposed so a perf test can assert that `warmup` and the
         # measured call agree on it -- every program in the 50-block stack is keyed on this, so a
         # mismatch means the "warm" number was cold and nothing else would say so.
@@ -1698,6 +1699,8 @@ class MiniMaxH3Pipeline:
         t_denoise = time.time() - t0
         timings.append(("Denoise", t_denoise))
         logger.info(f"Denoise: {t_denoise:.1f}s — {num_inference_steps - 1} steps")
+        # Host tensors already; kept so quality checks can compare latents, not just decoded pixels.
+        self.last_latents = {"video_rows": video_rows, "audio_rows": audio_rows}
 
         # Same rule: `_prepare_*` before `t0`, never inside it -- and for the VAE that includes the
         # per-shape decoder, whose weight upload would otherwise be timed.
