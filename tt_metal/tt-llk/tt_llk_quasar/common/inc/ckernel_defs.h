@@ -78,6 +78,13 @@ enum class BinaryOp : std::uint8_t
     DEQUANT,
     ATAN2,
     COPY_DEST,
+    MAX_POOL_WITH_INDICES,
+};
+
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
 };
 
 // For instructions that address lower/upper 16 bits of a register
