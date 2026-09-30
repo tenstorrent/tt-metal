@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.utils import v41_perf_model as M
 CHUNK = 5120
 LAYERS = (2, 20, 24)
 TIMED_ITERS = 2
+KEY_BLOCK_ROWS = 16384  # rows of the uploaded random index-key block (repeated on device over longer caches)
 TTNN_OPS = (
     "from_torch",
     "to_layout",
@@ -76,6 +77,7 @@ TTNN_OPS = (
     "bitwise_right_shift",
     "bitwise_left_shift",
     "repeat_interleave",
+    "generic_op",
 )
 EXPERIMENTAL_OPS = (
     "indexer_score_dsa",
@@ -172,6 +174,22 @@ def _model_ms(layer: int, start: int) -> dict:
     }
 
 
+def _random_rows(up, rows: int, width: int, g, block: int = KEY_BLOCK_ROWS):
+    """Replicated row-major bf16 [1, 1, rows, width]: one uploaded random block of ``block`` rows repeated on device
+    (a replicated host upload of a 0.5M-row cache outlasts the safe runner's dispatch timeout)."""
+    src = up(torch.randn(1, 1, min(rows, block), width, generator=g).to(torch.bfloat16), None, ttnn.ROW_MAJOR_LAYOUT)
+    if rows <= block:
+        return src
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, width]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, src.device(), ttnn.DRAM_MEMORY_CONFIG
+    )
+    for first in range(0, rows, block):
+        n = min(block, rows - first)
+        piece = src if n == block else ttnn.slice(src, [0, 0, 0, 0], [1, 1, n, width])
+        ttnn.experimental.slice_write(piece, out, [0, 0, first, 0], [1, 1, first + n, width], [1, 1, 1, 1])
+    return out
+
+
 def _run(indexer, x, qr, index_k, tables, start, candidates, timer=None):
     """Indexer forward split into its stages (same calls as ``TtV41Indexer.forward``) -> (idx, published, ms, ...)."""
     ms = {}
@@ -211,7 +229,7 @@ def _traced_ms(indexer, x, qr, index_k, tables, start, candidates, replays: int 
 
 
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize("start", [0, 16384, 131072, 262144, 1048576], ids=lambda p: f"P{p}")
+@pytest.mark.parametrize("start", [0, 16384, 51200, 131072, 262144, 512000, 1048576], ids=lambda p: f"P{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -246,9 +264,7 @@ def test_v41_indexer_perf(mesh_device, device_params, start):
     index_k = {}
     for ratio in sorted({C.compress_ratio(l) for l in LAYERS}):
         rows = -(-(start + CHUNK) // ratio // 32) * 32
-        index_k[ratio] = up(
-            torch.randn(1, 1, rows, C.INDEX_HEAD_DIM, generator=g).to(torch.bfloat16), None, ttnn.ROW_MAJOR_LAYOUT
-        )
+        index_k[ratio] = _random_rows(up, rows, C.INDEX_HEAD_DIM, g)
     _log(f"P={start}: inputs uploaded {time.perf_counter() - t0:.1f}s")
 
     try:

@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 index keys, indexer, candidates, top-k (beads F4, F10) vs the reference at real dims.
+"""DeepSeek-V4.1 index keys, indexer, candidates, top-k (beads F4, F10) vs the reference at real dims, and the
+selection kernels (``tt/v41/indexer_kernels.py``) vs torch.
 
 ``test_v41_indexer`` uses the oracle's V4.1 layers 2 -> 3 -> 20 -> 21 -> 24 reference (synthetic weights, 96
 candidate blocks) and tests layers 2 (ratio-2 KV+index source), 20 (ratio-1 candidate source), 24
@@ -13,7 +14,7 @@ selection against the reference under device scores is reported as a diagnostic 
 
 ``test_v41_indexer_selection_long`` feeds tie-free scores of chunks starting at 0 / 20,480 / 65,536 with the
 production 2048 candidate blocks (all blocks candidates / one-level / two-level candidates and the gathered
-candidate top-k) and checks the same exactness against ``v41.select_candidate_blocks`` + ``torch.topk``.
+candidate top-k, ``segment_max`` / ``gather_runs`` underneath) and checks the same exactness against ``v41.select_candidate_blocks`` + ``torch.topk``.
 """
 
 import pytest
@@ -29,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, CandidateBlocks, TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import gather_runs, segment_max
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCORE_PCC = 0.999
@@ -112,18 +114,12 @@ def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int,
     results[f"{tag}_source_topk_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     if published.ids is not None and cfg.CANDIDATE_TOPK_BLOCKS > k:
         # the source's top-k among its own candidate blocks (its path on rows wider than SUBSET_TOPK_MIN_WIDTH)
-        idx = source._topk_in_blocks(feed, published.ids, tables, k)
+        idx = source._topk_in_blocks(feed, published.ids, k)
         results[f"{tag}_source_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     idx, _ = consumer.select(feed, tables, start, visible, published)
     masked = scores.masked_fill(~ref_mask, float("-inf"))
     ref_masked = _ref_rows(masked, k)
     results[f"{tag}_consumer_topk_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
-    if published.ids is not None:
-        # both implementations of the candidate-restricted top-k (select picks one by row width)
-        idx = consumer._topk_in_blocks(feed, published.ids, tables, k)
-        results[f"{tag}_consumer_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
-        idx = consumer._topk_masked(feed, published.ids, k)
-        results[f"{tag}_consumer_topk_masked_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
     return published
 
 
@@ -285,3 +281,95 @@ def test_v41_indexer_selection_long(mesh_device, device_params, start):
         _check_selection(mesh_device, C, tables, scores, start, results, f"start{start}")
     print(f"indexer selection: {results}")
     assert all(results.values()), results
+
+
+def _pin_table(mesh_device, rows: int):
+    """Per-chip uint32 [1, 1, 1, 8] first chunk query index, as ``V41ChunkTables.query_first``."""
+    sp, tp = tuple(mesh_device.shape)
+    first = torch.zeros(sp, tp, 1, 8, dtype=torch.int32)
+    first[..., 0] = (torch.arange(sp * tp, dtype=torch.int32) * rows).reshape(sp, tp, 1)
+    return ttnn.from_torch(
+        first,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(0, 1)),
+    )
+
+
+def _kernel_rows(seq: int, width: int, g) -> torch.Tensor:
+    """[seq, width] bf16 rows with negatives, zeros, repeated values and -inf runs (whole blocks, partial blocks and
+    a -inf row tail)."""
+    x = (torch.randn(seq, width, generator=g) * 4).to(torch.bfloat16).float()
+    x[:, ::7] = -x[:, ::7].abs() - 1  # plenty of all-negative blocks
+    x[::5, 3:40] = float("-inf")
+    x[1::3, width // 2 :] = float("-inf")
+    x[2, :] = -3.0  # a row of ties
+    x[3, 10:20] = 0.0
+    return x.to(torch.bfloat16).float()
+
+
+@pytest.mark.parametrize("width", [1056, 8288, 16384], ids=lambda w: f"W{w}")
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+def test_v41_segment_max(mesh_device, device_params, width):
+    """segment_max vs torch (exact, every chip): seg 8 / 32, partial last chunk and padded output widths,
+    negative / -inf / tied values, pins inside, at the edge of and past the row, and the rank-0 (masked) pin."""
+    sp, tp = tuple(mesh_device.shape)
+    rows = 64  # per chip
+    seq = rows * sp * tp
+    g = torch.Generator().manual_seed(width)
+    x = _kernel_rows(seq, width, g)
+    feed = _feed(mesh_device, x)
+    pin = _pin_table(mesh_device, rows)
+    q = torch.arange(seq)
+    for seg in (8, 32):
+        out_width = -(-(width // seg) // 32) * 32
+        base = x.reshape(seq, width // seg, seg).amax(dim=-1)
+        for pin_base, pin_mask in ((width - seq // 2, 0xFFFFFFFF), (0, 31), (width, 0xFFFFFFFF)):
+            ref = torch.full((seq, out_width), float("-inf"))
+            ref[:, : width // seg] = base
+            e = (pin_base + q) & pin_mask
+            hit = e < width
+            ref[q[hit], e[hit] // seg] = float("inf")
+            out = segment_max(feed, seg, pin, pin_base, pin_mask)
+            assert list(out.shape) == [1, 1, rows, out_width]
+            dev = _per_query(out)[0, 0].float()
+            assert torch.equal(dev, ref), (seg, pin_base, pin_mask, (dev != ref).nonzero()[:8].tolist())
+            again = _per_query(segment_max(feed, seg, pin, pin_base, pin_mask))[0, 0].float()
+            assert torch.equal(again, dev), "segment_max is not deterministic"
+
+
+@pytest.mark.parametrize("k", [96, 2048], ids=lambda k: f"K{k}")
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+def test_v41_gather_runs(mesh_device, device_params, k):
+    """gather_runs vs torch (exact, every chip): runs of 8 and 32, ids in any order with repeats, the sentinel and
+    ids just past the row reading -inf."""
+    sp, tp = tuple(mesh_device.shape)
+    rows, width = 64, 65536 + 96
+    seq = rows * sp * tp
+    g = torch.Generator().manual_seed(k)
+    x = _kernel_rows(seq, width, g)
+    feed = _feed(mesh_device, x)
+    for run in (8, 32):
+        nruns = width // run
+        ids = torch.randint(0, nruns, (seq, k), generator=g)
+        ids[:, -3] = nruns  # first id past the row
+        ids[::2, -1] = SENTINEL
+        ids = ids & 0xFFFFFFFF
+        ids[:, 0] = nruns - 1  # the row's last run
+        ids[:, 1] = ids[:, 2]  # a repeat
+        dev_ids = ttnn.from_torch(
+            ids.to(torch.int32).reshape(sp, tp, rows, k),  # the sentinel wraps to -1: its uint32 bits
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(0, 1)),
+        )
+        cols = ids.clamp(max=nruns).unsqueeze(-1) * run + torch.arange(run)  # [seq, k, run]
+        padded = torch.cat([x, torch.full((seq, run), float("-inf"))], dim=1)
+        ref = torch.gather(padded, 1, cols.clamp(max=width).reshape(seq, -1))
+        out = gather_runs(feed, dev_ids, run)
+        assert list(out.shape) == [1, 1, rows, k * run]
+        dev = _per_query(out)[0, 0].float()
+        assert torch.equal(dev, ref), (run, (dev != ref).nonzero()[:8].tolist())
+        assert torch.equal(_per_query(gather_runs(feed, dev_ids, run))[0, 0].float(), dev), "not deterministic"

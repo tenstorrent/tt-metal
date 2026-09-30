@@ -21,8 +21,10 @@ Exact subset selection (bead F10, design R): with tie-free scores the k best ele
 blocks by block max, for any block size (k other blocks with larger maxima would hold k larger elements). So the
 candidate source takes the top-2048 blocks of 8 among the blocks of its top-2048 superblocks of 32 rows (level 1
 is skipped while a row has at most 2048 superblocks), and a candidate index source takes its top-512 rows among
-the 16,384 rows of its candidate blocks, gathered from its dense score. Superblocks are 64-byte bf16 runs, gathered
-by ``ttnn.embedding`` from a zero-copy 64-byte-row view of the row-major score (``_gather_superblocks``).
+the 16,384 rows of its candidate blocks. Two V4.1 kernels (``tt/v41/kernels``, launched through ``ttnn.generic_op``)
+work on the row-major score in DRAM: ``segment_max`` (block or superblock maxima in one read of the row, the newest
+row's block pinned to +inf) and ``gather_runs`` (a query's ranked blocks or superblocks, gathered from its row);
+``tt/v41/indexer_kernels.py``.
 """
 
 from dataclasses import dataclass
@@ -32,26 +34,22 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.v41.cache import SUPERBLOCK, dram_banks
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import gather_runs, segment_max
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_ue8m0_qdq, fp8_qdq
 
 SENTINEL = 0xFFFFFFFF
 TOPK_MIN, TOPK_ALIGN = 16, 16
+SUPERBLOCK = 32  # the candidate selection's first level: 32 rows (one 64-byte bf16 run), 4 candidate blocks
 # ttnn.gather's row-major factory for index rows wider than 60 tiles gives every core a slice of each index row and
 # re-reads the whole input row on each core; up to this width it splits rows over cores (measured on [640, 2048]
 # uint32: 2.8 ms by a 2048-wide index vs 0.14 ms by a 1024-wide one)
 GATHER_INDEX_WIDTH = 60 * 32
 # The candidate source's own top-k runs among its candidate blocks' rows (exact: its top-512 rows lie in its top-512
-# blocks, which are among the 2048 kept ones) once that is cheaper than a top-k over the whole row: measured on LB
-# 2x4 the gathered path costs ~12 ms at any width, the direct top-512 3.5 ms at 136K and 27 ms at 1.05M columns
-SUBSET_TOPK_MIN_WIDTH = 1 << 19
-# A candidate index source masks its whole score to its candidate blocks (a scatter of the block ids, an 8x
-# expansion, one top-k over the row) up to this width and gathers the candidates' rows above it: the gathered path
-# costs ~12 ms at any width (2048 superblocks of 32 rows per query), the masked one grows with the row (LB 2x4
-# traced L24: 3.8 / 16.1 / 30.1 ms masked vs 13.0 / 15.7 / 18.8 ms gathered at 21.5K / 136K / 267K columns)
-DENSE_MASK_MAX_WIDTH = 1 << 17
-
+# blocks, which are among the 2048 kept ones) above this width, where that is cheaper than a top-k over the row
+# (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.4 ms; gather_runs 0.85 ms + top-512 of 16,384 0.38 ms + the
+# id mapping; the gather's sequential row read and the direct top-k both grow with the row)
+SUBSET_TOPK_MIN_WIDTH = 1 << 16
 
 WQ_B_GRID = (11, 10)  # the attention projections' 2D-multicast grid (tt/v41/attention.py MATMUL_GRID)
 WQ_B_L1_BUDGET = 1 << 20  # bytes of output / fp32 partials / double-buffered in0 and in1 blocks per core
@@ -139,15 +137,6 @@ def _min(t, bound: int):
 def _u32(t):
     """``t`` as uint32 (comparisons and scalar ops may return another dtype)."""
     return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
-
-
-def _split_major(pos, n: int, parts: int):
-    """uint32 tiled positions ``pos = j * n + c`` (j < parts, c < n) -> (j, c); a sentinel gives j = parts - 1 and a
-    large c (callers clamp c and restore the sentinel)."""
-    j = _u32(ttnn.ge(pos, n))
-    for m in range(2, parts):
-        j = ttnn.add(j, _u32(ttnn.ge(pos, m * n)))
-    return j, _u32(ttnn.subtract(pos, ttnn.multiply(j, n)))
 
 
 class _Rope:
@@ -248,37 +237,15 @@ class TtV41Indexer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(None, 2)),  # row-parallel over hidden
         )
-        self.banks = dram_banks(mesh_device)
-        self.subblock_pattern = None
         if self.is_candidate_source or self.uses_candidates:
             assert (
                 self.ratio == config.compress_ratio(config.CANDIDATE_SOURCE_LAYER) == 1
             ), "candidates are ratio-1 rows"
-            block, blocks = config.CANDIDATE_BLOCK_SIZE, config.CANDIDATE_TOPK_BLOCKS
-            assert SUPERBLOCK % block == 0
-            # column u of the gathered candidate superblocks lies in sub-block (u % 32) // block of its superblock
-            pattern = (torch.arange(blocks * SUPERBLOCK) % SUPERBLOCK) // block
-            self.subblock_pattern = ttnn.from_torch(
-                pattern.to(torch.bfloat16).reshape(1, 1, 1, -1),
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=rep,
-            )
+            assert SUPERBLOCK % config.CANDIDATE_BLOCK_SIZE == 0
 
     def _query_shard(self, t):
         """[1, *, S/sp, W] replicated across TP -> this chip's contiguous quarter of the SP shard."""
         return ttnn.mesh_partition(t, dim=2, cluster_axis=1) if self.tp > 1 else t
-
-    @staticmethod
-    def _add_cols(t, first: int, cols):
-        """Tiled ``t`` [1, 1, R, W] with the additive ``cols`` [1, 1, R, w] added to its columns [first, first + w)."""
-        rows, width, w = t.shape[2], t.shape[3], cols.shape[3]
-        pieces = [ttnn.slice(t, [0, 0, 0, 0], [1, 1, rows, first])] if first else []
-        pieces.append(ttnn.add(ttnn.slice(t, [0, 0, 0, first], [1, 1, rows, first + w]), cols))
-        if first + w < width:
-            pieces.append(ttnn.slice(t, [0, 0, 0, first + w], [1, 1, rows, width]))
-        return pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=-1)
 
     def scores(self, x, qr, index_k, tables, start: int, length: int):
         """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] tiled,
@@ -328,124 +295,42 @@ class TtV41Indexer(LightweightModule):
 
     # ---- selection (B11 candidates, B12 top-k) on a row-major score [1, 1, R, W] (W a multiple of 32) ----
 
-    def _gather_superblocks(self, score, superblocks, tables):
-        """Row i of the output holds ``score[i, 32 c : 32 c + 32]`` for its superblocks c = ``superblocks[i, r]``
-        (r < k): ``score`` [1, 1, R, W] bf16 row-major DRAM-interleaved, ``superblocks`` [1, 1, R, k] uint32 tiled
-        (< W / 32) -> [1, 1, R, 32 k] bf16 row-major.
-
-        Zero-copy view: a row-major interleaved tensor stores page (row) p in DRAM bank p % n at offset (p // n) * its
-        page size, so the same buffer read with 64-byte pages holds superblock c of row i at page
-        ``((i // n) * W/32 + c) * n + i % n``; ``ttnn.embedding`` gathers those pages. Output page ``((i // n) * k + r)
-        * n + i % n`` gets superblock r of row i, which is where the [R, 32 k] view of the output keeps it."""
-        rows, width, k, n = score.shape[2], score.shape[3], superblocks.shape[3], self.banks
-        memory = score.memory_config()
-        assert score.layout == ttnn.ROW_MAJOR_LAYOUT and score.dtype == ttnn.bfloat16 and width % SUPERBLOCK == 0
-        assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), "needs a DRAM-interleaved score"
-        nsb = width // SUPERBLOCK
-        view = ttnn.experimental.view(score, [1, 1, rows * nsb, SUPERBLOCK])
-        page = ttnn.add(ttnn.multiply(superblocks, n), tables.row_view_base(nsb))
-        page = ttnn.transpose(ttnn.reshape(page, [rows // n, n, k]), -2, -1)  # output page order
-        page = ttnn.to_layout(ttnn.reshape(page, [1, 1, 1, rows * k]), ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.embedding(page, view, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.experimental.view(out, [1, 1, rows, SUPERBLOCK * k])
-
-    def _block_max(self, s):
-        """Tiled ``s`` [1, 1, R, w] -> tiled [1, 1, R, w / block]: max of each block of ``CANDIDATE_BLOCK_SIZE``
-        columns, sub-block major (column j * w/32 + c holds block j of superblock c)."""
-        rows, width = s.shape[2], s.shape[3]
-        block, nsb = self.config.CANDIDATE_BLOCK_SIZE, width // SUPERBLOCK
-        t = ttnn.reshape(ttnn.transpose(s, -2, -1), [1, nsb, SUPERBLOCK, rows])  # superblock c = batch c
-        parts = []
-        for j in range(SUPERBLOCK // block):
-            part = ttnn.max(ttnn.slice(t, [0, 0, j * block, 0], [1, nsb, (j + 1) * block, rows]), dim=-2)
-            parts.append(ttnn.transpose(ttnn.reshape(part, [1, 1, nsb, rows]), -2, -1))
-        return ttnn.concat(parts, dim=-1)
-
-    def _superblock_max(self, s):
-        """Tiled ``s`` [1, 1, R, W] -> tiled [1, 1, R, W / 32]: max of each superblock of 32 columns."""
-        rows, nsb = s.shape[2], s.shape[3] // SUPERBLOCK
-        t = ttnn.reshape(ttnn.transpose(s, -2, -1), [1, nsb, SUPERBLOCK, rows])
-        return ttnn.transpose(ttnn.reshape(ttnn.max(t, dim=-2), [1, 1, nsb, rows]), -2, -1)
-
     def candidates(self, score, tables, start: int) -> CandidateBlocks:
         """B11 on the candidate source's score: per query the CANDIDATE_TOPK_BLOCKS best blocks by max score, its
         newest row's block pinned in (``v41.select_candidate_blocks``)."""
         block, k = self.config.CANDIDATE_BLOCK_SIZE, self.config.CANDIDATE_TOPK_BLOCKS
-        per = SUPERBLOCK // block
         width = score.shape[3]
         if width // block <= k:
             return CandidateBlocks(None)
         assert start % SUPERBLOCK == 0, f"chunk start {start} does not begin a superblock"
-        nsb = width // SUPERBLOCK
-        tiled = ttnn.to_layout(score, ttnn.TILE_LAYOUT)
-        if nsb <= k:
-            # one level: block maxima of the whole row, the newest row pinned to +inf (so is its block's max)
-            tiled = self._add_cols(tiled, start, tables.newest_pin(width - start))
-            pos = _topk(ttnn.to_layout(self._block_max(tiled), ttnn.ROW_MAJOR_LAYOUT), k)
-            pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
-            j, c = _split_major(pos, nsb, per)
-            ids = ttnn.add(ttnn.multiply(c, per), j)
-        else:
-            # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned
-            # first); their rows are gathered, pinned again at the newest row, and ranked by block max
-            first = start // SUPERBLOCK
-            sbmax = self._add_cols(self._superblock_max(tiled), first, tables.newest_pin(nsb - first, superblock=True))
-            sb = _topk(ttnn.to_layout(sbmax, ttnn.ROW_MAJOR_LAYOUT), k)
-            # a sentinel pick (the row sees fewer than k superblocks) reads the last superblock, invisible to it
-            sb_safe = _min(ttnn.to_layout(sb, ttnn.TILE_LAYOUT), nsb - 1)
-            rows = ttnn.to_layout(self._gather_superblocks(score, sb_safe, tables), ttnn.TILE_LAYOUT)
-            rows = self._add_cols(rows, 0, tables.rank0_pin())
-            pos = _topk(ttnn.to_layout(self._block_max(rows), ttnn.ROW_MAJOR_LAYOUT), k)
-            pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
-            j, r = _split_major(pos, k, per)
-            r = ttnn.to_layout(_min(r, k - 1), ttnn.ROW_MAJOR_LAYOUT)
-            c = ttnn.to_layout(_gather_cols(sb, r), ttnn.TILE_LAYOUT)
-            ids = ttnn.add(ttnn.multiply(c, per), j)
+        pin, every = tables.query_first(), 0xFFFFFFFF
+        if width // SUPERBLOCK <= k:
+            # one level: block maxima of the whole row (block ids in order), the newest row's block pinned to +inf
+            return CandidateBlocks(_topk(segment_max(score, block, pin, start, every), k))
+        # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned first);
+        # their rows are gathered in rank order and ranked by block max, the newest row pinned again in rank 0 (at
+        # column (start + q) % 32; chunk starts and per-chip query offsets are multiples of 32)
+        per = SUPERBLOCK // block
+        sb = _topk(segment_max(score, SUPERBLOCK, pin, start, every), k)  # sentinels gather -inf superblocks
+        rows = gather_runs(score, sb, SUPERBLOCK)
+        pos = ttnn.to_layout(_topk(segment_max(rows, block, pin, start, SUPERBLOCK - 1), k), ttnn.TILE_LAYOUT)
+        rank = _min(ttnn.bitwise_right_shift(pos, per.bit_length() - 1), k - 1)  # pos = rank * per + sub-block
+        c = ttnn.to_layout(_gather_cols(sb, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
+        ids = ttnn.add(ttnn.multiply(c, per), ttnn.bitwise_and(pos, per - 1))
         return CandidateBlocks(ttnn.to_layout(_keep_sentinel(ids, pos), ttnn.ROW_MAJOR_LAYOUT))
 
-    def _topk_in_blocks(self, score, ids, tables, k: int):
+    def _topk_in_blocks(self, score, ids, k: int):
         """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major (sentinel
         tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""
-        block, per = self.config.CANDIDATE_BLOCK_SIZE, SUPERBLOCK // self.config.CANDIDATE_BLOCK_SIZE
-        nsb = score.shape[3] // SUPERBLOCK
-        c = ttnn.to_layout(ids, ttnn.TILE_LAYOUT)
-        sentinel = _is_sentinel(c)
-        superblocks = _min(ttnn.bitwise_right_shift(c, per.bit_length() - 1), nsb - 1)
-        # sub-block of each candidate inside its superblock; a sentinel candidate gets a key no column matches
-        key = ttnn.add(ttnn.bitwise_and(c, per - 1), ttnn.multiply(sentinel, per))
-        rows = ttnn.to_layout(self._gather_superblocks(score, superblocks, tables), ttnn.TILE_LAYOUT)
-        keep = ttnn.eq(
-            ttnn.repeat_interleave(ttnn.typecast(key, ttnn.bfloat16), SUPERBLOCK, dim=-1), self.subblock_pattern
-        )
-        rows = ttnn.where(keep, rows, float("-inf"))
-        pos = ttnn.to_layout(_topk(ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT), k), ttnn.TILE_LAYOUT)
-        rank = _min(ttnn.bitwise_right_shift(pos, SUPERBLOCK.bit_length() - 1), ids.shape[3] - 1)
+        block = self.config.CANDIDATE_BLOCK_SIZE
+        rows = gather_runs(score, ids, block)  # rank r's rows at [r * block, (r + 1) * block); sentinels -inf
+        if rows.shape[3] < k:  # fewer candidate rows than picks (small candidate counts): the rest are sentinels
+            rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - rows.shape[3])], float("-inf"))
+        pos = ttnn.to_layout(_topk(rows, k), ttnn.TILE_LAYOUT)
+        rank = _min(ttnn.bitwise_right_shift(pos, block.bit_length() - 1), ids.shape[3] - 1)
         chosen = ttnn.to_layout(_gather_cols(ids, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
         row = ttnn.add(ttnn.multiply(chosen, block), ttnn.bitwise_and(pos, block - 1))
         return ttnn.to_layout(_keep_sentinel(row, pos), ttnn.ROW_MAJOR_LAYOUT)
-
-    def _topk_masked(self, score, ids, k: int):
-        """Top-k rows of ``score`` among each query's candidate blocks ``ids`` (as ``_topk_in_blocks``) by masking
-        the whole row: the block ids scatter into per-block keep flags, expanded to the rows of each block."""
-        rows, width = score.shape[2], score.shape[3]
-        block, kc = self.config.CANDIDATE_BLOCK_SIZE, ids.shape[3]
-        nblocks = width // block
-        cols = _round_up(nblocks + 1, 32)  # one spare column takes the sentinel picks
-        assert cols <= width and kc <= width
-        tiled = ttnn.to_layout(score, ttnn.TILE_LAYOUT)
-        # flags base / source from device fills of tiled slices (zeros_like / ones_like of a tiled tensor run
-        # ttnn.fill; of a row-major one, or a ttnn.full on the device, they write from the host)
-        base = ttnn.zeros_like(ttnn.slice(tiled, [0, 0, 0, 0], [1, 1, rows, cols]))
-        ones = ttnn.ones_like(ttnn.slice(tiled, [0, 0, 0, 0], [1, 1, rows, kc]))
-        target = _min(ttnn.to_layout(ids, ttnn.TILE_LAYOUT), nblocks)
-        target = ttnn.to_layout(ttnn.typecast(target, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT)
-        keep = ttnn.scatter(
-            ttnn.to_layout(base, ttnn.ROW_MAJOR_LAYOUT), -1, target, ttnn.to_layout(ones, ttnn.ROW_MAJOR_LAYOUT)
-        )
-        keep = ttnn.slice(keep, [0, 0, 0, 0], [1, 1, rows, nblocks])
-        keep = ttnn.repeat_interleave(ttnn.to_layout(keep, ttnn.TILE_LAYOUT), block, dim=-1)
-        masked = ttnn.where(ttnn.gtz(keep), tiled, float("-inf"))
-        return _topk(ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT), k)
 
     def select(self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None):
         """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with a
@@ -456,13 +341,11 @@ class TtV41Indexer(LightweightModule):
             published = self.candidates(score, tables, start)
             in_blocks = self.config.CANDIDATE_TOPK_BLOCKS > k  # its top-k rows lie in its top-k blocks
             if published.ids is not None and in_blocks and score.shape[3] > SUBSET_TOPK_MIN_WIDTH:
-                return self._topk_in_blocks(score, published.ids, tables, k), published
+                return self._topk_in_blocks(score, published.ids, k), published
         elif self.uses_candidates:
             assert isinstance(candidates, CandidateBlocks), "a candidate index source needs the published candidates"
-            if candidates.ids is not None and score.shape[3] <= DENSE_MASK_MAX_WIDTH:
-                return self._topk_masked(score, candidates.ids, k), None
             if candidates.ids is not None:
-                return self._topk_in_blocks(score, candidates.ids, tables, k), None
+                return self._topk_in_blocks(score, candidates.ids, k), None
         return _topk(score, k), published
 
     def forward(self, x, qr, index_k, tables, start: int, length: int, candidates: CandidateBlocks | None = None):

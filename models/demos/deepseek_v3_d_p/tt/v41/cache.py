@@ -45,7 +45,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
-SUPERBLOCK = 32  # the candidate selection's first level: 32 rows (one 64-byte bf16 run), 4 candidate blocks
 # per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
 # replicated 0.5 GB host upload is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout)
 ZERO_BLOCK_BYTES = 4 << 20
@@ -78,11 +77,6 @@ def replicated_zeros(mesh_device, rows: int, width: int, dtype):
         ttnn.experimental.slice_write(piece, out, [0, 0, first, 0], [1, 1, first + n, width], [1, 1, 1, 1])
     ttnn.deallocate(block)
     return out
-
-
-def dram_banks(mesh_device) -> int:
-    """DRAM banks a device's interleaved buffers stripe their pages over (page p in bank p % n)."""
-    return ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).num_banks
 
 
 @dataclass(frozen=True)
@@ -135,10 +129,9 @@ class V41ChunkTables:
       (stride r: compressed KV, index keys).
     * Window rows (``window_rows``): the per-chip query rows' 128-row causal windows into the KV tensor's window
       region; they depend on the chunk start only through ``min(start, window - 1)``.
-    * The indexer's start-relative constants for chunks starting at a multiple of the ratio: the visibility of the
-      chunk's own compressed rows (``visibility_tail``; rows before the chunk are visible to every query) and the
-      candidate source's pin of each query's newest row (``newest_pin``, ``superblock_pin``, ``rank0_pin``), plus
-      the per-chip row bases of its superblock gathers (``row_view_base``).
+    * The indexer's start-relative visibility of the chunk's own compressed rows for chunks starting at a multiple
+      of the ratio (``visibility_tail``; rows before the chunk are visible to every query), and each chip's first
+      chunk query index (``query_first``: the candidate source pins each query's newest row from it).
 
     Per-chip query layout (window rows, indexer tails): chip (a, b) holds the chunk's contiguous query rows
     ``(a * tp + b) * S/(sp*tp)`` onwards, as after the head->sequence all-to-all."""
@@ -154,12 +147,7 @@ class V41ChunkTables:
         self._window = {w: self._window_table(w) for w in {min(s, window - 1) for s in range(0, max_seq_len, chunk)}}
         # ratio 1 needs no visibility table: the score kernel's causal mask is exactly t <= p there
         self._visibility = {r: self._visibility_table(r) for r in ratios if r > 1}
-        self._pins, self._row_base = None, None
-        if config.CANDIDATE_SOURCE_LAYER in layers:
-            assert config.compress_ratio(config.CANDIDATE_SOURCE_LAYER) == 1, "the pins assume a ratio-1 source"
-            # newest row / its superblock of 32 rows (start-relative), and its offset in the pinned superblock
-            self._pins = (self._pin_table(1), self._pin_table(SUPERBLOCK), self._rank0_table())
-            self._row_base = self._row_base_tables()
+        self._query_first = self._query_first_table()
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(
@@ -200,26 +188,18 @@ class V41ChunkTables:
         u = torch.arange(self.chunk // ratio + 32).view(1, -1)
         return self._per_query_chip(torch.where(u >= (i + 1) // ratio, float("-inf"), 0.0), ttnn.bfloat16)
 
-    def _pin_table(self, block: int):
-        """Additive [chunk, chunk / block]: +inf at query i's newest block (the chunk's block i // block)."""
-        i = torch.arange(self.chunk).view(-1, 1)
-        u = torch.arange(-(-self.chunk // block)).view(1, -1)
-        return self._per_query_chip(torch.where(u == i // block, float("inf"), 0.0), ttnn.bfloat16)
-
-    def _rank0_table(self):
-        """Additive [chunk, 32]: +inf at column i % 32 (query i's newest row inside its own superblock; chunk
-        starts and per-chip query offsets are multiples of 32)."""
-        i = torch.arange(self.chunk).view(-1, 1)
-        u = torch.arange(SUPERBLOCK).view(1, -1)
-        return self._per_query_chip(torch.where(u == i % SUPERBLOCK, float("inf"), 0.0), ttnn.bfloat16)
-
-    def _row_base_tables(self):
-        """Per-chip query-row constants (a, b) = ((i // n) * n, i % n), n the DRAM bank count: see ``row_view_base``."""
+    def _query_first_table(self):
+        """Per-chip uint32 row-major [1, 1, 1, 8]: element 0 is the chip's first chunk query index (sp, tp) order."""
         rows = self.chunk // (self.sp * self.tp)
-        banks = dram_banks(self.mesh_device)
-        assert rows % banks == 0, f"{rows} query rows per chip are not a multiple of the {banks} DRAM banks"
-        i = torch.arange(rows, dtype=torch.int32).view(1, 1, -1, 1)
-        return tuple(self._replicated(t, ttnn.uint32) for t in ((i // banks) * banks, i % banks))
+        first = torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32)
+        first[..., 0] = (torch.arange(self.sp * self.tp, dtype=torch.int32) * rows).reshape(self.sp, self.tp, 1)
+        return ttnn.from_torch(
+            first,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+        )
 
     def rope(self, compressed: bool, stride: int, start: int):
         """cos, sin of the chunk at ``start``: rows at positions ``start + stride * j`` (j < chunk / stride), each SP
@@ -241,23 +221,9 @@ class V41ChunkTables:
         t = self._visibility[ratio]
         return ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
 
-    def newest_pin(self, width: int, superblock: bool = False):
-        """Per-chip additive [1, 1, chunk/(sp*tp), width] +inf at each query's newest row (``superblock``: at its
-        superblock of 32 rows) among the chunk's first ``width`` rows (superblocks); a padding query's newest row may
-        lie past them: no pin, as it is unreachable."""
-        t = self._pins[1 if superblock else 0]
-        return ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
-
-    def rank0_pin(self):
-        """Per-chip additive [1, 1, chunk/(sp*tp), 32] +inf at each query's newest row inside its superblock."""
-        return self._pins[2]
-
-    def row_view_base(self, superblocks: int):
-        """Per-chip [1, 1, chunk/(sp*tp), 1] uint32 page of row i's first superblock in the 64-byte-row view of a
-        DRAM-interleaved row-major [chunk/(sp*tp), 32 * superblocks] bf16 tensor, (i // n) * n * superblocks + i % n
-        (n DRAM banks; superblock c of row i is at that page + c * n)."""
-        a, b = self._row_base
-        return ttnn.add(ttnn.multiply(a, superblocks), b)
+    def query_first(self):
+        """Per-chip [1, 1, 1, 8] uint32 row-major: element 0 is the chunk query index of the chip's first query row."""
+        return self._query_first
 
 
 class V41PrefillState:
