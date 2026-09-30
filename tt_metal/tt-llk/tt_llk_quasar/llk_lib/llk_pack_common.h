@@ -167,7 +167,7 @@ inline void _llk_pack_dest_dvalid_section_done_()
 /**
  * @brief Configures Packer 0 edge-mask programming for reduce operations.
  *
- * @tparam reduce_type: Pool type; MAX selects negative-infinity filling, except MX and integer outputs retain zero fill.
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity filling, except MX, integer and Fp8P outputs retain zero fill.
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param pack_dst_format: Packer output (L1) data format.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
@@ -179,9 +179,11 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
 {
     // Masked infinities can overwrite the shared MX scale and zero the valid result.
     // Integer outputs keep zero fill: the all-ones pattern is not a MAX identity for them.
+    // Fp8P (E4M3) has no infinity encoding, so it keeps zero fill as well.
     if constexpr (reduce_type == PoolType::MAX)
     {
-        const bool zero_fill = IS_MX_FORMAT(pack_dst_format) || IS_INTEGER_FORMAT(pack_dst_format);
+        const bool zero_fill =
+            IS_MX_FORMAT(pack_dst_format) || IS_INTEGER_FORMAT(pack_dst_format) || static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8P;
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, zero_fill ? ckernel::pack::EDGE_MASK_MODE_ZERO : ckernel::pack::EDGE_MASK_MODE_NEG_INF);
     }
     else
