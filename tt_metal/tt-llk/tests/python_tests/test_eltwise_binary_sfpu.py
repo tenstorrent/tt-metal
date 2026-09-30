@@ -1900,6 +1900,48 @@ def _tt_poly_declared_erf_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_hardsigmoid_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=bool)
+    for first, stop in ((0, 16448), (32641, 49216), (65409, 65536)):
+        result |= (raw >= first) & (raw < stop)
+    return result.astype(np.float64) * 0.1666666716337204
+
+
+def _tt_poly_declared_hardswish_bw(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x / 3 + 1 / 2, dtype=np.float64), x.shape)
+
+    def _declared_piece_2(x):
+        return np.broadcast_to(np.asarray(x / 3 + 1 / 2, dtype=np.float64), x.shape)
+
+    def _declared_piece_3(x):
+        return np.broadcast_to(np.asarray(1, dtype=np.float64), x.shape)
+
+    def _declared_derivative(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((-3.0, -1.5, 3.0), x, side="right")
+        bins[finite & (x == 3.0)] = 2
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        active = finite & (bins == 2)
+        result[active] = _declared_piece_2(x[active])
+        active = finite & (bins == 3)
+        result[active] = _declared_piece_3(x[active])
+        result[np.isnan(x)] = 1.0
+        result[np.isneginf(x)] = 0.0
+        result[np.isposinf(x)] = 1.0
+        return result
+
+    return _declared_derivative(x)
+
+
 @pytest.mark.memory_layout("debug")
 @pytest.mark.parametrize(
     "op,mask_only,declared_reference,boundaries",
@@ -1907,6 +1949,8 @@ def _tt_poly_declared_erf_bw(x):
         ("celu_bw", False, _tt_poly_declared_celu_bw, ()),
         ("elu_bw", False, _tt_poly_declared_elu_bw, ()),
         ("erf_bw", False, _tt_poly_declared_erf_bw, ()),
+        ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
+        ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),
     ],
 )
 def test_tt_poly_generated_backward_bf16_llk(

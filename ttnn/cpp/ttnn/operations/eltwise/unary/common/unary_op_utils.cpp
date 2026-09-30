@@ -18,6 +18,8 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "TT_POLY_BACKWARD_HARDSIGMOID_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "TT_POLY_BACKWARD_ERF_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "TT_POLY_BACKWARD_ELU_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "TT_POLY_BACKWARD_CELU_BW_INCLUDE";
@@ -810,6 +812,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW:
+            TT_THROW("Complete backward marker requires the selected binary factory");
+        case UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW:
+            TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_ELU_BW:
