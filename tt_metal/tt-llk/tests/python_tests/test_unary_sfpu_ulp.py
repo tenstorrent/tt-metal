@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every distinct finite 16-bit value, every ULP-gateable unary SFPU op.
+"""Every distinct finite 16-bit value -- a stride of Float32 -- every ULP-gateable unary
+SFPU op.
 
 The functional drivers in test_eltwise_unary_sfpu.py sample a few thousand points from
 an op's safe domain, so a budget measured that way can only ever be re-confirmed by
@@ -9,8 +10,9 @@ them: it cannot see a tail the sample never reaches.
 
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
-in. Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name
-or with ``-m accuracy``. Run it as a gate::
+in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
+Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name or with
+``-m accuracy``. Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
 
@@ -68,10 +70,10 @@ from helpers.ulp_sweep import (
     sweep_cells,
     sweep_spec,
 )
-from helpers.utils import passed_test
+from helpers.utils import _record_ulp_measurement, passed_test
 
-#: ~7 minutes of 64-tile device runs. `accuracy` is the marker every LLK workflow
-#: deselects; `nightly` is deselected only by the PR gate, so llk-e2e would still run it.
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` is deselected only
+#: by the PR gate, so llk-e2e would still run it.
 pytestmark = pytest.mark.accuracy
 
 #: 64 tiles: the whole bf16/fp16 value set in one run, and the generator's own ceiling.
@@ -82,7 +84,8 @@ _MAX_LANES_IN_MESSAGE = 4
 
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
-    """One exhaustive variant on hardware. Returns ``(src, golden, result)``."""
+    """One variant on hardware, over every value of a 16-bit input or a stride of a
+    Float32 one (``ulp_sweep.is_exhaustive``). Returns ``(src, golden, result)``."""
     torch.manual_seed(0)
     stimuli_format = stimuli_format_for(formats.input_format)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -90,7 +93,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         input_dimensions_A=SWEEP_DIMENSIONS,
         stimuli_format_B=stimuli_format,
         input_dimensions_B=SWEEP_DIMENSIONS,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
     # The walk's one data zero is -0.0, and the unpack drops the sign: the kernel is
     # handed +0.0. So the golden is computed on what the kernel receives, or every op
@@ -212,7 +215,8 @@ def _sweep_ops():
 )
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
-    """Every non-special value of the input format, against the op's declared budget."""
+    """Every non-special value of a 16-bit input format, or a stride of Float32, against
+    the op's declared budget."""
     formats = InputOutputFormat(in_fmt, out_fmt)
     cell = (
         f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
@@ -238,47 +242,22 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             "domain is the functional driver's, the full-format tail only an emit's"
         )
 
-    try:
-        src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
-    except OverflowError as exc:
-        if not ulp_sweep.EMIT:
-            # A gated cell's golden already ran over the full range when its budget was
-            # measured, so an overflow now is a regression, not a limit of the reference.
-            raise
-        # The float64 host golden overflows on inputs no sampled domain reaches
-        # (cosh(3.4e38)): a limit of the reference, not a measurement, for an op emit
-        # is measuring for the first time. Only OverflowError -- a ValueError here is a
-        # real "Unsupported operation".
-        pytest.skip(f"golden cannot be computed over the full range: {exc}")
+    # No OverflowError skip: every golden goes through torch now (cosh/sinh were the
+    # last on `math.*`), so an exception from the reference fails the cell loudly
+    # rather than turning it into a skip nobody reads.
+    src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
 
-    mask = measurable_mask(src, golden, result, in_fmt)
+    mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
-        mathop,
-        src,
-        golden,
-        result,
-        in_fmt,
-        out_fmt,
-        approx_mode=approx_mode,
-        dest_acc=dest_acc,
+        mathop, src, golden, result, in_fmt, out_fmt, dest_acc
     )
-    if not ulp_sweep.EMIT:
-        # An excused lane that agrees again means the defect its issue tracks is gone
-        # from this cell; the entry has to go with it, or its lanes stay ungated.
-        stale = ulp_sweep.stale_excuses(
-            mathop, src, golden, result, in_fmt, out_fmt, approx_mode, dest_acc
-        )
-        assert not stale, (
-            f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
-            f"{', '.join(entry.issue for entry in stale)} names disagrees with the "
-            "golden any more; drop the entry so those lanes are gated again"
-        )
     # Subnormal outputs flushed on every format, fp16 included. The metric keeps fp16's
     # subnormal band by default, but the golden keeps IEEE subnormals the pack path
     # does not reproduce: an exact op read 512 steps on Float16_b->Float16 from that
     # band alone. A difference below 6.1e-05 is the store's, not the op's. The gate
     # below takes the same flag, so emit and gate rank identically.
-    stats = ulp_stats(ulp_distance(golden, result, flush_subnormals=True), mask)
+    distance = ulp_distance(golden, result, flush_subnormals=True)
+    stats = ulp_stats(distance, mask)
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
@@ -306,6 +285,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     if ulp_sweep.EMIT:
         ulp_sweep.record(mathop.name, key, int(stats["max"]))
+        # Also the JSONL row `--ulp-measure` writes from inside passed_test, which this
+        # branch returns before.
+        _record_ulp_measurement(distance, mask=mask)
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
