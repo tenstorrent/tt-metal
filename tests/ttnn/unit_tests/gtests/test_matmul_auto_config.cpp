@@ -682,3 +682,18 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
     }
 }
 }  // namespace
+
+// Block-float B with A tiles under 16 rows only runs on Reuse with a single K block
+TEST(MatmulAutoConfig, CheckTinyTileBlockFloatB) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_problem(4, 4, 128, 256, 256, tt::DataFormat::Bfp8_b);
+    p.in0_tile_h = p.out_tile_h = 8;
+    p.Mt = 128 / 8;
+    const auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    ASSERT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));
+    EXPECT_EQ(check(p, hw, to_program_config(p, *chosen)), "");
+    auto split = *chosen;
+    split.blocking.in0_block_w = p.Kt / 2;
+    EXPECT_NE(check(p, hw, to_program_config(p, split)), "");
+}

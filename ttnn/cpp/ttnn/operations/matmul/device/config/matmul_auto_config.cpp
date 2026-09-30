@@ -992,6 +992,16 @@ std::string check(const Problem& p, const HardwareDesc& hw, const MatmulProgramC
                 if (c.per_core_M == 0 || c.per_core_N == 0 || c.out_subblock_h == 0 || c.out_subblock_w == 0) {
                     return "zero block size";
                 }
+                // Block-float B with A tiles under 16 rows: the mcast kernels can't unpack it, and Reuse computes
+                // wrong values unless K is a single block
+                if (is_block_float(p.in1_format) && p.in0_tile_h < 16) {
+                    if (!reuse) {
+                        return "block-float B with A tiles under 16 rows needs Reuse";
+                    }
+                    if (c.in0_block_w != p.Kt) {
+                        return "block-float B with A tiles under 16 rows needs a single K block";
+                    }
+                }
                 if constexpr (reuse) {
                     if (c.out_subblock_h * c.out_subblock_w > max_subblock_area(p, Family::Reuse)) {
                         return "subblock exceeds DST";
