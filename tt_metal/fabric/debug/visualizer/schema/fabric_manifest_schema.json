@@ -104,7 +104,7 @@
           "items": { "type": "integer" }
         },
         "written_at": {
-          "description": "UTC timestamp when this rank wrote the manifest after router sync.",
+          "description": "UTC timestamp when this rank wrote the manifest, after fabric compile and before router sync.",
           "type": "string"
         }
       }

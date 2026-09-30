@@ -479,10 +479,7 @@ public:
     uint32_t get_downstream_edm_mask_for_vc(uint32_t vc) const;
     bool has_tensix_extension_enabled() const { return has_tensix_extension; }
     bool is_udm_mode() const { return udm_mode; }
-
-    // Get the downstream sender channels that a receiver channel forwards to.
-    // This information is forwarded from the static connection adapter.
-    std::vector<ManifestDownstreamEdge> get_manifest_downstream_edges(uint32_t vc) const;
+    bool has_channel_trimming_overrides() const { return channel_trimming_overrides_.has_value(); }
 
     //    protected:
     tt::tt_metal::CoreCoord my_eth_core_logical;

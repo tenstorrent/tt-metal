@@ -12,15 +12,15 @@ Each MPI rank writes one file:
 
 ## When the file is written
 
-The manifest is collected in two steps. The router builders are destroyed when compilation returns, so the per-router snapshot has to be taken while `FabricBuilder` still owns them. The file itself is written later, after the routers have reached traffic-ready.
+Both steps run only when `TT_METAL_FABRIC_GENERATE_MANIFEST=1` is set. The manifest is collected in two steps. The router builders are destroyed when compilation returns, so the per-router snapshot has to be taken while `FabricBuilder` still owns them. The file itself is written once every device has compiled and launched its routers, before the host waits for router sync.
 
 1. **Snapshot, during compile.** `create_and_compile_tt_fabric_program()` in `tt_metal/fabric/fabric_init.cpp` runs the existing build, then asks each router for a manifest instance before the program is compiled:
 
    `discover_channels` → `create_routers` → `connect_routers` → `compile_ancillary_kernels` → `create_kernels` → `build_and_publish_manifest_router_instances` → `Program::compile`
 
-2. **Write, after router sync.** `FabricFirmwareInitializer::init()` deletes a stale manifest at that path, then compiles and configures fabric. `configure()` calls `wait_for_fabric_router_sync()`, then `serialize_fabric_manifest_to_file()`. The write is `tmp` plus rename. A file on disk means this `INIT_FABRIC` configure finished router sync.
+2. **Write, before router sync.** `FabricFirmwareInitializer::init()` deletes a stale manifest at that path, whether or not the option is set. It then compiles and configures fabric, which launches the routers, and calls `serialize_fabric_manifest_to_file()`. `configure()` waits for router sync afterwards. The write is `tmp` plus rename. A file on disk means this `INIT_FABRIC` run compiled fabric. It does not mean the routers reached sync, so a run that hangs during bring-up still leaves a manifest.
 
-Mock and emule skip configure, so they never write the file. `TERMINATE_FABRIC` compiles routers to set up the fabric context and does not take the write path. If serialization throws, configure logs a warning and fabric init continues.
+Mock devices take the same steps around `compile_fabric_only()`, so mock cluster descriptors produce manifests without hardware. Emule never writes the file. `TERMINATE_FABRIC` compiles routers to set up the fabric context and does not take the write path. If serialization throws, fabric init fails with the manifest path and the underlying error.
 
 ## What the builder records
 

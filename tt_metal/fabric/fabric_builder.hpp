@@ -67,9 +67,9 @@ public:
     void create_kernels();
 
     /**
-     * Snapshot each router's finalized host-side allocation and publish it on FabricBuilderContext.
+     * Collect this chip's and its routers' manifest facts and publish them on FabricBuilderContext.
      */
-    void build_and_publish_manifest_router_instances();
+    void build_and_publish_manifest_chip();
 
     /**
      * Check if any routers were created.

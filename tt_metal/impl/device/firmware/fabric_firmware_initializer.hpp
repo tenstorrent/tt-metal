@@ -38,6 +38,12 @@ private:
     // No-op when debug tooling disables erisc IRAM.
     void compile_fabric_only();
 
+    // Removes the stale fabric manifest if it exists
+    void remove_stale_fabric_manifest() const;
+
+    // Writes the fabric manifest to disk. Requires every device's fabric program to be compiled.
+    void write_fabric_manifest() const;
+
     // Wait for fabric router handshake on all devices.
     void wait_for_fabric_router_sync(uint32_t timeout_ms) const;
 
