@@ -7,6 +7,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <llrt/hal.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -96,6 +97,59 @@ json make_fabric_context_json(const FabricContext& fabric_context) {
     }
     block["multi_txq"] = uses_multi_txq(fabric_context.get_builder_context());
     return block;
+}
+
+// ============ Architecture ============
+
+json hal_region_json(const tt::tt_metal::Hal& hal, tt::tt_metal::HalL1MemAddrType type, const char* schema) {
+    json out;
+    out["address"] = hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, type);
+    out["size"] = hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, type);
+    if (schema != nullptr) {
+        out["schema"] = schema;
+    }
+    return out;
+}
+
+// The router kernel writes its heartbeat word at a fixed per-architecture address: Blackhole's, or else
+// Wormhole's.
+json heartbeat_json(tt::ARCH arch) {
+    json out;
+    out["address"] =
+        arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
+    out["size"] = sizeof(uint32_t);
+    out["magic"] = FABRIC_KERNEL_HEARTBEAT_MAGIC;
+    out["magic_mask"] = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK;
+    out["period_iters"] = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS;
+    out["schema"] = "heartbeat_word";
+    return out;
+}
+
+// The router L1 areas fixed by the architecture rather than allocated by the builder, keyed by architecture.
+// `run.arch` indexes into it.
+json make_archs_json(const tt::tt_metal::Hal& hal, const tt::Cluster& cluster) {
+    using tt::tt_metal::HalL1MemAddrType;
+    TT_FATAL(
+        hal.get_arch() == cluster.arch(),
+        "Fabric manifest: the HAL is for {}, but the cluster is {}",
+        lower_enum_name(hal.get_arch()),
+        lower_enum_name(cluster.arch()));
+
+    json arch;
+    arch["heartbeat"] = heartbeat_json(hal.get_arch());
+    // Bounds only: the builder allocates everything inside it.
+    arch["unreserved"] = hal_region_json(hal, HalL1MemAddrType::UNRESERVED, nullptr);
+    arch["fabric_telemetry"] = hal_region_json(hal, HalL1MemAddrType::FABRIC_TELEMETRY, "struct:FabricTelemetry");
+    arch["routing_table"] = hal_region_json(hal, HalL1MemAddrType::ROUTING_TABLE, "struct:routing_l1_info_t");
+    arch["go_msg"] = hal_region_json(hal, HalL1MemAddrType::GO_MSG, "struct:go_msg_t");
+    arch["launch"] = hal_region_json(hal, HalL1MemAddrType::LAUNCH, "raw");
+    if (hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) != 0) {
+        arch["eth_fw_mailbox"] = hal_region_json(hal, HalL1MemAddrType::ETH_FW_MAILBOX, "raw");
+    }
+
+    json archs;
+    archs[lower_enum_name(hal.get_arch())] = std::move(arch);
+    return archs;
 }
 
 // ============ Credit transport ============
@@ -692,6 +746,26 @@ json make_chip_routers_json(
     return routers;
 }
 
+// The host signals the chip's master router, which passes the signal on to the others, and at bring-up waits for
+// every router to check in. Each collected router is one the kernel counts in NUM_LOCAL_EDMS.
+json local_sync_json(const json& routers, uint32_t master_router_chan, FabricNodeId node) {
+    std::optional<std::string> master;
+    for (const auto& [key, router] : routers.items()) {
+        if (router.at("identity").at("eth_chan") == master_router_chan) {
+            master = key;
+        }
+    }
+    TT_FATAL(
+        master.has_value(),
+        "Fabric manifest: {} master router channel {} is not one of its routers",
+        node,
+        master_router_chan);
+    json out;
+    out["master"] = router_path(node, *master);
+    out["num_routers"] = routers.size();
+    return out;
+}
+
 // Every chip in the mesh graph appears, local or not, so the viewer can draw the whole mesh and show the host
 // boundary. Only local chips have routers.
 json make_chip_json(
@@ -729,8 +803,10 @@ json make_chip_json(
     chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
     chip["is_local"] = true;
     chip["z_port_role"] = lower_enum_name(collected.z_port_role);
-    chip["routers"] =
-        make_chip_routers_json(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
+    auto routers = make_chip_routers_json(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
+    chip["local_sync"] =
+        collected.routers.empty() ? json(nullptr) : local_sync_json(routers, collected.master_router_chan, node);
+    chip["routers"] = std::move(routers);
     return chip;
 }
 
@@ -798,6 +874,7 @@ void serialize_fabric_manifest_to_file(
     manifest["kind"] = "fabric_manifest";
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
+    manifest["archs"] = make_archs_json(tt::tt_metal::MetalContext::instance().hal(), cluster);
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
