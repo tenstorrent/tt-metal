@@ -326,6 +326,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
+    # Xing4.0-29B-A4B: dense MLA + mHC 4-stream residual + 64-expert top-4 MoE; 4x2 BH mesh (SP 4 x TP 2).
+    "xing40_a4b_d_p": "models.demos.xing40_a4b_d_p.tt.runners.adapter:XingPrefillAdapter",
     # MiMo-V2.6-Flash-RL: full + sliding-window (sink) GQA, QK 192 / V 128, 256-expert top-8 MoE; 1x4 BH mesh.
     "mimo_v2_6_d_p": "models.demos.mimo_v2_6_d_p.tt.runners.adapter:MiMoPrefillAdapter",
     # MiMo-V2.6-Flash-RL on a 2x2 BH mesh (TP 4 over the flattened mesh, EP over 2 dispatch groups).
