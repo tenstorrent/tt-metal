@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,29 @@ CONVERTER_SOURCES = (
     ("models/demos/blackhole/qwen38_flash_next/ttnn/bf4.py", "1" * 64),
     ("tt_metal/impl/data_format/bfloat4.cpp", "2" * 64),
 )
+
+
+@contextmanager
+def _record_load_verification_fds(retained_paths):
+    """Observe real model-owned verification FDs without changing their lifetime."""
+    original = bf4_module._verified_artifact_fd
+
+    @contextmanager
+    def record(path, artifact, *, expected_signature=None):
+        with original(path, artifact, expected_signature=expected_signature) as verified:
+            if expected_signature is not None:
+                retained_paths.append(Path(f"/proc/self/fd/{verified.descriptor}"))
+            yield verified
+
+    with mock.patch.object(bf4_module, "_verified_artifact_fd", side_effect=record):
+        yield
+
+
+def _canonical_tensorbin_path(path):
+    path = Path(path)
+    assert path.is_absolute() and path == path.resolve()
+    assert path.suffix == ".tensorbin" and path.is_file() and not path.is_symlink()
+    return path
 
 
 def _identity() -> BF4CacheIdentity:
@@ -505,15 +529,14 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def load_tensor(path, *, device):
                 self.assertIs(device, mesh)
-                self.assertRegex(str(path), r"\A/proc/self/fd/[1-9][0-9]*\Z")
-                retained_paths.append(Path(path))
-                name = Path(os.readlink(path)).name
+                name = _canonical_tensorbin_path(path).name
                 artifact_name = "w0_w1" if name.startswith("w0_w1_") else "w2"
                 memory_config = getattr(memory_configs, artifact_name)
                 return _FakeBF4Tensor(memory_config, mesh_shapes[artifact_name])
 
             real_sha256_fd = bf4_module._sha256_fd
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(cache, "_read_manifest", wraps=cache._read_manifest) as read_manifest,
                 mock.patch.object(bf4_module, "_sha256_fd", wraps=real_sha256_fd) as sha256,
                 mock.patch.object(
@@ -572,9 +595,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def load_tensor(path, *, device):
                 self.assertIs(device, mesh)
-                self.assertRegex(str(path), r"\A/proc/self/fd/[1-9][0-9]*\Z")
-                retained_paths.append(Path(path))
-                target = Path(os.readlink(path)).name
+                target = _canonical_tensorbin_path(path).name
                 artifact_name = "w0_w1" if target.startswith("w0_w1_") else "w2"
                 return _FakeBF4Tensor(getattr(memory_configs, artifact_name), mesh_shapes[artifact_name])
 
@@ -586,6 +607,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
                 return original_validate(tensor, placement=placement, shard_dim=shard_dim)
 
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(bf4_module, "qualify_live_bf4_ring", return_value=RING7_ORDER),
                 mock.patch.object(bf4_module.ttnn, "load_tensor", side_effect=load_tensor),
                 mock.patch.object(
@@ -614,7 +636,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def load_tensor(path, *, device):
                 self.assertIs(device, mesh)
-                target = Path(os.readlink(path)).name
+                target = _canonical_tensorbin_path(path).name
                 artifact_name = "w0_w1" if target.startswith("w0_w1_") else "w2"
                 shape = mesh_shapes[artifact_name]
                 if artifact_name == "w2":
@@ -656,7 +678,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
                 def load_tensor(path, *, device):
                     self.assertIs(device, mesh)
-                    target = Path(os.readlink(path)).name
+                    target = _canonical_tensorbin_path(path).name
                     artifact_name = "w0_w1" if target.startswith("w0_w1_") else "w2"
                     shape = invalid_shape if artifact_name == "w0_w1" else mesh_shapes[artifact_name]
                     tensor = _FakeBF4Tensor(getattr(memory_configs, artifact_name), shape)
@@ -691,8 +713,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def replace_after_both_reads(path, *, device):
                 self.assertIs(device, mesh)
-                retained_paths.append(Path(path))
-                target = os.readlink(path)
+                target = _canonical_tensorbin_path(path)
                 artifact_name = "w0_w1" if Path(target).name.startswith("w0_w1_") else "w2"
                 tensor = _FakeBF4Tensor(getattr(memory_configs, artifact_name), mesh_shapes[artifact_name])
                 loaded_tensors.append(tensor)
@@ -703,6 +724,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
                 return tensor
 
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(bf4_module, "qualify_live_bf4_ring", return_value=RING7_ORDER),
                 mock.patch.object(bf4_module.ttnn, "load_tensor", side_effect=replace_after_both_reads),
                 mock.patch.object(
@@ -732,8 +754,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def load_tensor(path, *, device):
                 self.assertIs(device, mesh)
-                retained_paths.append(Path(path))
-                target = Path(os.readlink(path)).name
+                target = _canonical_tensorbin_path(path).name
                 artifact_name = "w0_w1" if target.startswith("w0_w1_") else "w2"
                 tensor = _FakeBF4Tensor(getattr(memory_configs, artifact_name), mesh_shapes[artifact_name])
                 loaded_tensors.append(tensor)
@@ -749,6 +770,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
                 return original_validate(tensor, placement=placement, shard_dim=shard_dim)
 
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(bf4_module, "qualify_live_bf4_ring", return_value=RING7_ORDER),
                 mock.patch.object(bf4_module.ttnn, "load_tensor", side_effect=load_tensor),
                 mock.patch.object(
@@ -772,6 +794,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
         memory_configs = SimpleNamespace(w0_w1=object(), w2=object())
         mesh_shapes = _mesh_shapes(identity)
         retained_paths = []
+        loaded_paths = []
         first_tensor = _FakeBF4Tensor(memory_configs.w0_w1, mesh_shapes["w0_w1"])
         with tempfile.TemporaryDirectory() as directory:
             cache = Qwen38BF4Cache(directory, identity, contract)
@@ -779,12 +802,13 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def fail_second_load(path, *, device):
                 self.assertIs(device, mesh)
-                retained_paths.append(Path(path))
-                if len(retained_paths) == 1:
+                loaded_paths.append(_canonical_tensorbin_path(path))
+                if len(loaded_paths) == 1:
                     return first_tensor
                 raise RuntimeError("synthetic second load failure")
 
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(bf4_module, "qualify_live_bf4_ring", return_value=RING7_ORDER),
                 mock.patch.object(bf4_module.ttnn, "load_tensor", side_effect=fail_second_load),
                 mock.patch.object(
@@ -808,6 +832,7 @@ class TTNNBF4StaticTest(unittest.TestCase):
         mesh_shapes = _mesh_shapes(identity)
         first_tensor = _FakeBF4Tensor(memory_configs.w0_w1, mesh_shapes["w0_w1"])
         retained_paths = []
+        loaded_paths = []
         with tempfile.TemporaryDirectory() as directory:
             cache = Qwen38BF4Cache(directory, identity, contract)
             record, paths = _write_layer(cache, 0)
@@ -815,12 +840,13 @@ class TTNNBF4StaticTest(unittest.TestCase):
 
             def fail_second_load(path, *, device):
                 self.assertIs(device, mesh)
-                retained_paths.append(Path(path))
-                if len(retained_paths) == 1:
+                loaded_paths.append(_canonical_tensorbin_path(path))
+                if len(loaded_paths) == 1:
                     return first_tensor
                 raise RuntimeError("synthetic cache load failure")
 
             with (
+                _record_load_verification_fds(retained_paths),
                 mock.patch.object(bf4_module.ttnn, "load_tensor", side_effect=fail_second_load),
                 mock.patch.object(
                     bf4_module.ttnn,
