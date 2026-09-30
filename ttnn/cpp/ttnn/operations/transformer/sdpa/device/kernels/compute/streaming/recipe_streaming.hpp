@@ -458,7 +458,7 @@ void reduce_c_row_group(
         // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce. A plain copy:
         // the reduce's seeding copy transposes within faces for the reduce's dest layout.
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
-        copy_tile_to_dst_init_short(prev_cb);
+        copy_init(prev_cb);
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
@@ -1161,7 +1161,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             reconfig_data_format_srca(cur_out_cb);
 #endif
 #if defined(SDPA_PA) && (SDPA_PA_DBG & 4)
-            copy_tile_to_dst_init_short(cur_out_cb);
+            copy_init(cur_out_cb);
 #else
             recipe_output_scale_init(cur_out_cb, scratch_cb);
 #endif
@@ -1922,6 +1922,7 @@ static void sdpa_inner_loop_step(
 #endif
 #ifdef SDPA_PA
             // Reference max: nothing to fold; numerator and denominator accumulate in Float32 L1.
+            CircularBuffer(cb_exp_max_diff).wait_front(sbh);
             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
             return;
 #endif
