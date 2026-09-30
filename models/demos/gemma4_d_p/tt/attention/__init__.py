@@ -284,6 +284,7 @@ class Gemma4Attention:
                 max_seq_len=self.ring_max_seq_len,
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
+                gather_buffer_key=self.layer_idx % 2,
                 sliding_window_size=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
