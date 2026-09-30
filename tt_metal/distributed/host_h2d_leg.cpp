@@ -10,7 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/distributed/host_ring_alias.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_layout.h"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
