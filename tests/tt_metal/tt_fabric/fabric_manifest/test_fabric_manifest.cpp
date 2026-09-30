@@ -792,6 +792,73 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
     }
 }
 
+// The lifecycle is what the builder published. The scratch syncs exist exactly on two-ERISC routers, and there
+// is one feature set per active ERISC.
+void check_router_lifecycle(const std::vector<RouterEntry>& routers) {
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& lifecycle = entry.router->at("lifecycle");
+        const auto& published = entry.published->lifecycle;
+        const bool two_eriscs = entry.published->shape.num_active_eriscs > 1;
+
+        std::set<std::string> keys = {
+            "edm_status",
+            "termination_signal",
+            "local_sync",
+            "local_tensix_sync",
+            "handshake",
+            "erisc_features",
+            "kernel_params"};
+        if (two_eriscs) {
+            keys.insert({"erisc_sync", "retrain_sync"});
+        }
+        EXPECT_EQ(keys_of(lifecycle), keys);
+
+        expect_region(lifecycle.at("edm_status"), published.edm_status);
+        expect_region(lifecycle.at("termination_signal"), published.termination_signal);
+        expect_region(lifecycle.at("local_sync"), published.local_sync);
+        expect_region(lifecycle.at("local_tensix_sync"), published.local_tensix_sync);
+        expect_region(lifecycle.at("handshake"), published.handshake.region);
+        EXPECT_EQ(lifecycle.at("handshake").at("role"), lower_enum_name(published.handshake.role));
+
+        EXPECT_EQ(published.erisc_sync.has_value(), two_eriscs);
+        EXPECT_EQ(published.retrain_sync.has_value(), two_eriscs);
+        if (two_eriscs) {
+            expect_stream(lifecycle.at("erisc_sync"), *published.erisc_sync);
+            expect_stream(lifecycle.at("retrain_sync"), *published.retrain_sync);
+            EXPECT_EQ(lifecycle.at("erisc_sync").at("register"), "remote_src");
+            EXPECT_EQ(lifecycle.at("retrain_sync").at("register"), "remote_src");
+        }
+
+        ASSERT_EQ(published.erisc_features.size(), entry.published->shape.num_active_eriscs);
+        const auto& erisc_features = lifecycle.at("erisc_features");
+        ASSERT_EQ(erisc_features.size(), published.erisc_features.size());
+        for (size_t risc_id = 0; risc_id < published.erisc_features.size(); ++risc_id) {
+            const auto& expected = published.erisc_features[risc_id];
+            EXPECT_EQ(
+                erisc_features.at(fmt::format("erisc{}", risc_id)),
+                json({{"handshake_enabled", expected.handshake_enabled},
+                      {"context_switch_enabled", expected.context_switch_enabled},
+                      {"interrupts_enabled", expected.interrupts_enabled},
+                      {"teardown_check_iterations", expected.teardown_check_iterations}}));
+        }
+
+        const auto& params = published.kernel_params;
+        EXPECT_EQ(
+            lifecycle.at("kernel_params"),
+            json({{"wait_for_host_signal", params.wait_for_host_signal},
+                  {"context_switch",
+                   {{"mode", lower_enum_name(params.context_switch.mode)},
+                    {"interval", params.context_switch.interval}}},
+                  {"handshake_context_switch_timeout", params.handshake_context_switch_timeout},
+                  {"txq_spin_wait",
+                   {{"send_data", params.txq_spin_wait.send_data},
+                    {"completion_ack", params.txq_spin_wait.completion_ack}}},
+                  {"txq_accept_ahead", params.txq_accept_ahead},
+                  {"risc_cpu_data_cache", params.risc_cpu_data_cache}}));
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -842,6 +909,12 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
+
+    EXPECT_EQ(lower_enum_name(manifest::HandshakeRole::SENDER), "sender");
+    EXPECT_EQ(lower_enum_name(manifest::HandshakeRole::RECEIVER), "receiver");
+
+    EXPECT_EQ(lower_enum_name(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE), "wait_for_idle");
+    EXPECT_EQ(lower_enum_name(FabricEriscDatamoverContextSwitchType::INTERVAL), "interval");
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
@@ -882,5 +955,8 @@ TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_,
 
 TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterLifecycle) { check_router_lifecycle(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterLifecycle) { check_router_lifecycle(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

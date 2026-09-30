@@ -483,6 +483,58 @@ json receivers_json(
     return out;
 }
 
+// ============ Lifecycle ============
+
+json handshake_json(const manifest::Handshake& handshake) {
+    json out = l1_region_json(handshake.region);
+    out["role"] = lower_enum_name(handshake.role);
+    return out;
+}
+
+json erisc_features_json(const std::vector<manifest::EriscFeatures>& erisc_features) {
+    json out = json::object();
+    for (size_t risc_id = 0; risc_id < erisc_features.size(); ++risc_id) {
+        const auto& features = erisc_features[risc_id];
+        auto& erisc = out[fmt::format("erisc{}", risc_id)];
+        erisc["handshake_enabled"] = features.handshake_enabled;
+        erisc["context_switch_enabled"] = features.context_switch_enabled;
+        erisc["interrupts_enabled"] = features.interrupts_enabled;
+        erisc["teardown_check_iterations"] = features.teardown_check_iterations;
+    }
+    return out;
+}
+
+json kernel_params_json(const manifest::RouterKernelParams& params) {
+    json out;
+    out["wait_for_host_signal"] = params.wait_for_host_signal;
+    out["context_switch"] = {
+        {"mode", lower_enum_name(params.context_switch.mode)}, {"interval", params.context_switch.interval}};
+    out["handshake_context_switch_timeout"] = params.handshake_context_switch_timeout;
+    out["txq_spin_wait"] = {
+        {"send_data", params.txq_spin_wait.send_data}, {"completion_ack", params.txq_spin_wait.completion_ack}};
+    out["txq_accept_ahead"] = params.txq_accept_ahead;
+    out["risc_cpu_data_cache"] = params.risc_cpu_data_cache;
+    return out;
+}
+
+json lifecycle_json(const manifest::Lifecycle& lifecycle) {
+    json out;
+    out["edm_status"] = l1_region_json(lifecycle.edm_status);
+    out["termination_signal"] = l1_region_json(lifecycle.termination_signal);
+    out["local_sync"] = l1_region_json(lifecycle.local_sync);
+    out["local_tensix_sync"] = l1_region_json(lifecycle.local_tensix_sync);
+    out["handshake"] = handshake_json(lifecycle.handshake);
+    if (lifecycle.erisc_sync.has_value()) {
+        out["erisc_sync"] = stream_ref_json(*lifecycle.erisc_sync);
+    }
+    if (lifecycle.retrain_sync.has_value()) {
+        out["retrain_sync"] = stream_ref_json(*lifecycle.retrain_sync);
+    }
+    out["erisc_features"] = erisc_features_json(lifecycle.erisc_features);
+    out["kernel_params"] = kernel_params_json(lifecycle.kernel_params);
+    return out;
+}
+
 // A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
 json make_router_json(
     const manifest::Router& router,
@@ -519,6 +571,7 @@ json make_router_json(
     out["credit_counters"] = credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = senders_json(router, control_plane, node);
     out["channels"]["receivers"] = receivers_json(router, peer_path, control_plane, node);
+    out["lifecycle"] = lifecycle_json(router.lifecycle);
     return out;
 }
 

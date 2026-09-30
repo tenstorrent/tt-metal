@@ -252,7 +252,7 @@ struct Lifecycle {
     Handshake handshake;
     // Two ERISCs only.
     std::optional<StreamRef> erisc_sync;
-    // Blackhole context switch only.
+    // Two ERISCs only; the ERISC with context switch enabled leads it.
     std::optional<StreamRef> retrain_sync;
     // Indexed by ERISC id, one per active ERISC.
     std::vector<EriscFeatures> erisc_features;
