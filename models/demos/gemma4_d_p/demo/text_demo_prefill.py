@@ -227,7 +227,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     model.set_prefill_rope_positions(device_positions)
     model._prefill_metadata_external = True
 
-    stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
+    stage_breakdown_ms = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
@@ -243,11 +243,11 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
-        stage_breakdown["tokens"] += time.time() - _t
+        stage_breakdown_ms["tokens"] += (time.time() - _t) * 1000
 
         _t = time.time()
         model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
-        stage_breakdown["metadata"] += time.time() - _t
+        stage_breakdown_ms["metadata"] += (time.time() - _t) * 1000
 
         # Update absolute token positions across CP ranks.
         _t = time.time()
@@ -259,7 +259,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
-        stage_breakdown["rope"] += time.time() - _t
+        stage_breakdown_ms["rope"] += (time.time() - _t) * 1000
 
         return chunk_start
 
@@ -285,50 +285,50 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
 
     try:
-        per_chunk = []
-        cumulative_wall_s = []
-        stage_s = 0.0
+        per_chunk_ms = []
+        cumulative_wall_ms = []
+        stage_ms = 0.0
         t_run = time.time()
         for chunk_idx in range(n_chunks):
             t_stage = time.time()
             chunk_start = _stage(chunk_idx)
-            stage_s += time.time() - t_stage
+            stage_ms += (time.time() - t_stage) * 1000
             t_c = time.time()
             ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
-            per_chunk.append(time.time() - t_c)
-            cumulative_wall_s.append(time.time() - t_run)
+            per_chunk_ms.append((time.time() - t_c) * 1000)
+            cumulative_wall_ms.append((time.time() - t_run) * 1000)
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk) * 1000:.1f}ms wall={cumulative_wall_s[-1] * 1000:.1f}ms"
+                f"device={per_chunk_ms[-1]:.1f}ms ({chunk_size * 1000 / per_chunk_ms[-1]:.0f} tok/s) | "
+                f"total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms"
             )
-        total_s = time.time() - t_run
+        total_ms = (time.time() - t_run) * 1000
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
 
-    device_s = sum(per_chunk)
+    device_ms = sum(per_chunk_ms)
     # Separate device execution from host-side staging in the wall time.
     #   device   — execute_trace + synchronize. What the hardware spends on prefill.
     #   staging  — token upload, ring metadata, pinned RoPE refresh. Real work a
     #              deployment also pays, though it should overlap rather than serialize.
     logger.info(
-        f"[traced_perf] DEVICE {context_len} tokens in {device_s:.1f}s "
-        f"({context_len / device_s:.0f} tok/s) | staging {stage_s:.1f}s | wall {total_s:.1f}s"
+        f"[traced_perf] DEVICE {context_len} tokens in {device_ms:.1f}ms "
+        f"({context_len * 1000 / device_ms:.0f} tok/s) | staging {stage_ms:.1f}ms | wall {total_ms:.1f}ms"
     )
     logger.info(
         f"[traced_perf] staging breakdown: "
-        + ", ".join(f"{k}={v:.1f}s ({1000 * v / n_chunks:.0f}ms/chunk)" for k, v in stage_breakdown.items())
+        + ", ".join(f"{k}={v:.1f}ms ({v / n_chunks:.0f}ms/chunk)" for k, v in stage_breakdown_ms.items())
     )
     logger.info(
-        f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
-        f"| chunks mean={device_s / len(per_chunk) * 1000:.1f}ms "
-        f"min={min(per_chunk) * 1000:.1f}ms max={max(per_chunk) * 1000:.1f}ms"
+        f"[traced_perf] TOTAL {context_len} tokens in {total_ms:.1f}ms ({context_len * 1000 / total_ms:.0f} tok/s) "
+        f"| chunks mean={device_ms / len(per_chunk_ms):.1f}ms "
+        f"min={min(per_chunk_ms):.1f}ms max={max(per_chunk_ms):.1f}ms"
     )
     logger.info(
-        f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
-        f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
+        f"[traced_perf] ring-depth cost: first={per_chunk_ms[0]:.1f}ms -> last={per_chunk_ms[-1]:.1f}ms "
+        f"= {per_chunk_ms[-1] / per_chunk_ms[0]:.2f}x over {len(per_chunk_ms) - 1} extra chunks of history"
     )
 
     # Use measured elapsed time through the last whole chunk needed for each context.
@@ -336,9 +336,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     for context_k in (1, 10, 100, 256):
         required_chunks = (context_k * 1024 + chunk_size - 1) // chunk_size
         wall_ms = (
-            f"{cumulative_wall_s[required_chunks - 1] * 1000:.1f}"
-            if required_chunks <= len(cumulative_wall_s)
-            else "N/A"
+            f"{cumulative_wall_ms[required_chunks - 1]:.1f}" if required_chunks <= len(cumulative_wall_ms) else "N/A"
         )
         context_rows.append(f"{str(context_k) + 'k':>8} | {required_chunks:>6} | {wall_ms:>12}")
     logger.info(
