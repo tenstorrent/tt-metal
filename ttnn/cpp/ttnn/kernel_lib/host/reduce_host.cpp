@@ -62,11 +62,6 @@ ReduceValidShape valid_shape(const ReduceBlockSpec& block) {
     return block.tail ? block.tail->shape : ReduceValidShape{block.logical_h, block.logical_w, block.batches};
 }
 
-bool has_output_mask(const ReducePlan& plan) {
-    return plan.tail && !plan.tail_plan &&
-           (plan.reduce_dim == ReduceOpDim::W ? plan.logical_h % 32 : plan.logical_w % 32) != 0;
-}
-
 void validate_block(const ReduceBlockSpec& block, ReduceOpDim dim, ReduceInputPolicy input_policy) {
     TT_FATAL(
         input_policy == ReduceInputPolicy::WaitAndPopPerTile || input_policy == ReduceInputPolicy::BulkWaitBulkPop ||
@@ -357,15 +352,6 @@ void configure_scalar_and_aux(
         }
     }
     plan.partial_reduce_axis_elements = has_partial ? partial_elements : 0U;
-    const auto output_partial_elements = dim == ReduceOpDim::W ? plan.logical_h % tile_h : plan.logical_w % tile_w;
-    if (plan.tail && output_partial_elements != 0) {
-        // Tail extents are known now. Allocate an output mask only when needed,
-        // with its final lane count serialized alongside the reduction masks.
-        plan.auxiliary_tiles.push_back(
-            {.value = 1.0F,
-             .type = dim == ReduceOpDim::W ? ReduceAuxiliaryTileType::FirstColumn : ReduceAuxiliaryTileType::FirstRow,
-             .num_valid_elements = output_partial_elements});
-    }
 }
 
 ReducePlan make_tiled_plan(
@@ -459,7 +445,7 @@ ReducePlan make_tiled_plan(
     const std::uint32_t aux_tile_bytes = tt::tile_size(aux_format);
 
     // Policy is a caller contract. Memory availability never changes it.
-    const auto output_slots = destination_tiles(hardware) - (uses_sfpu || has_output_mask(plan) ? 1U : 0U);
+    const auto output_slots = destination_tiles(hardware) - (uses_sfpu ? 1U : 0U);
     const auto output_group = dim == ReduceOpDim::H ? std::min(work_wt, output_slots) : 1U;
     std::uint32_t input_pages;
     if (is_retained(input_policy)) {
@@ -817,9 +803,8 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
                     first_config.reduce_dim == ReduceOpDim::HW ? std::sqrt(grand_scalar) : grand_scalar;
                 plan.reduce_factor = 1;
                 plan.post_scale = 1.0F;
-                const auto scaler_tiles = plan.auxiliary_tiles.size() - (has_output_mask(plan) ? 1U : 0U);
-                for (std::size_t i = 0; i < scaler_tiles; ++i) {
-                    plan.auxiliary_tiles[i].value =
+                for (auto& tile : plan.auxiliary_tiles) {
+                    tile.value =
                         round_reduce_auxiliary_value(reader_scaler, plan.find_cb(ReduceCbRole::Auxiliary)->data_format);
                 }
             }
@@ -1197,7 +1182,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
             input && (input->data_format == tt::DataFormat::Int32 ||
                       (input->data_format == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate));
         TT_FATAL(
-            sfpu && plan.partial_mode == compute_kernel_lib::ReducePartialMode::None && !has_output_mask(plan) &&
+            sfpu && plan.partial_mode == compute_kernel_lib::ReducePartialMode::None &&
                 plan.reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair,
             "Reduce plan args: this reduction requires auxiliary tiles");
         TT_FATAL(call.auxiliary_tile_offset == 0, "Reduce plan args: an empty auxiliary slice must have offset zero");

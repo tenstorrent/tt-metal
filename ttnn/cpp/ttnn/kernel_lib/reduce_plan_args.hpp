@@ -262,9 +262,6 @@ public:
     }
     static constexpr std::uint32_t logical_h = word<reduce_plan_args::CallWord::LogicalHeight>();
     static constexpr std::uint32_t logical_w = word<reduce_plan_args::CallWord::LogicalWidth>();
-    static constexpr bool has_output_mask =
-        is_tail && ((reduce_dim == ckernel::ReduceDim::REDUCE_ROW && logical_h % 32 != 0) ||
-                    (reduce_dim == ckernel::ReduceDim::REDUCE_COL && logical_w % 32 != 0));
     static constexpr std::uint32_t row_stride = word<reduce_plan_args::CallWord::RowStride>();
     static constexpr std::uint32_t reduce_factor = word<reduce_plan_args::CallWord::ReduceFactor>();
     static constexpr std::uint32_t reduce_axis_chunk_tiles = word<reduce_plan_args::CallWord::ReduceAxisChunkTiles>();
@@ -296,9 +293,9 @@ public:
         "A non-empty reduction auxiliary slice requires a CB");
     static_assert(auxiliary_tile_count != 0 || auxiliary_tile_offset == 0, "An empty auxiliary slice has offset zero");
     static_assert(
-        auxiliary_tile_count != 0 || (partial_mode == compute_kernel_lib::ReducePartialMode::None && !has_output_mask &&
+        auxiliary_tile_count != 0 || (partial_mode == compute_kernel_lib::ReducePartialMode::None &&
                                       reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair),
-        "Partial reductions, output masks and zero-pair reloads require auxiliary tiles");
+        "Partial reductions and zero-pair reloads require auxiliary tiles");
     static_assert(
         partial_mode == compute_kernel_lib::ReducePartialMode::None ||
             partial_mode == compute_kernel_lib::ReducePartialMode::Scaler ||

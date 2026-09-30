@@ -64,6 +64,7 @@ struct ReduceValidShape {
 // Plan both the ordinary block and this exact tail. At runtime [0] selects
 // the ordinary block; [height, width, batches] selects the tail on any core using
 // the same compiled kernel. Both auxiliary recipes are prepared upfront.
+// Output lanes beyond the tail's valid non-reduced extent are unspecified.
 struct ReduceTailConfig {
     ReduceValidShape shape;
 };

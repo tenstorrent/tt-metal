@@ -817,13 +817,6 @@ def _meaningful_output(case: ReduceCase, output: torch.Tensor) -> torch.Tensor:
     return output.reshape(case.batches, TILE, TILE)[:, 0, 0]
 
 
-def _sfpu_row_finalization(case: ReduceCase, plan) -> bool:
-    if case.dim != "REDUCE_ROW":
-        return False
-    sfpu_path = case.input_dtype == "int32" or (case.input_dtype == "fp32" and case.fp32_mode == "Accurate")
-    return sfpu_path or any(call.plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] for call in plan.calls)
-
-
 def _mark_sfpu_row_accumulation(request, case: ReduceCase) -> None:
     sfpu_path = case.input_dtype == "int32" or (case.input_dtype == "fp32" and case.fp32_mode == "Accurate")
     # A zero scalar multiplies the folded partial sums away.
@@ -903,17 +896,7 @@ def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tup
         [*device_inputs, output],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
-    physical_output = ttnn.to_torch(result)
-    # Fused consumers can reduce these statistics again, so every datum
-    # outside the reduced row/column/scalar must be exactly zero.
-    padding = physical_output.clone()
-    _meaningful_output(case, padding).zero_()
-    if _sfpu_row_finalization(case, plan):
-        # TODO: assert the right-hand faces once the LLK reduce pack-mask fix lands; the
-        # SFPU REDUCE_ROW finalization leaves partial sums there until then.
-        padding = padding[:, : TILE // 2]
-    assert torch.count_nonzero(padding).item() == 0, f"{case.name}: nonzero reduction output padding"
-    actual = _meaningful_output(case, physical_output)
+    actual = _meaningful_output(case, ttnn.to_torch(result))
     return actual, _golden(case, logical_chunks)
 
 
@@ -1288,7 +1271,6 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 atol=0.02,
                 msg=lambda error: f"core={index}, shape={shapes[index]}\n{error}\nactual={lanes[:, :8]}\nexpected={golden[:, :8]}",
             )
-            assert torch.all(lanes[:, valid_outputs:] == 0), f"core {index}: invalid output lanes were not cleared"
             assert torch.all(output_tiles[index, count:] == -992), f"core {index}: wrote beyond runtime output shape"
 
 
@@ -1456,7 +1438,6 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             if pool == "AVG":
                 golden /= width if dim == "REDUCE_ROW" else height
             torch.testing.assert_close(lanes[:, :valid_outputs], golden, rtol=0.01, atol=0.01)
-            assert torch.all(lanes[:, valid_outputs:] == 0)
             assert torch.all(result_tiles[count:] == -999)
 
 
@@ -1568,8 +1549,6 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
     reduction_size = (199 if distinct_tails and use_tail else 256) + (135 if use_tail else 256)
     scale = 1 / reduction_size if scalar is None else scalar
     torch.testing.assert_close(lanes[:65], (sums[0] + sums[1]) * scale, rtol=0.02, atol=0.02)
-    if use_tail:
-        assert torch.all(lanes[65:] == 0)
 
 
 @pytest.mark.parametrize("runtime_arg_offset", [0, 7])
