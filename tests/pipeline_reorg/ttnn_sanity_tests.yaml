@@ -139,7 +139,7 @@
     sim_wh_n150:
       timeout: 60
     sim_bh_p150:
-      timeout: 60
+      timeout: 40  # runs in 12-13 min on main; the 20 min freed here fund the misc ops group below
   team: ttnn
   budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -223,8 +223,10 @@
       timeout: 40
     sim_wh_n150:
       timeout: 40
+    # The Blackhole simulator runs this directory (289 fused-GDN cases since #57440) in 40-45 min;
+    # the group above already gives its sim lanes 60. sim_wh finishes in ~4 min, silicon stays at 40.
     sim_bh_p150:
-      timeout: 40
+      timeout: 60
   team: ttnn
   budget_type: sanity
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
