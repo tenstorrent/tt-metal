@@ -173,23 +173,30 @@ def case_faithful():
         spec = tg.get_spec(op)
         hp = spec.math(tg.bf16_truncate(u))
         mine = tg.format_golden_f32_noacc(hp)
-        # For a spec with a MATHEMATICAL domain, faithfulness is asserted on the
-        # in-domain inputs only. Outside the domain neither oracle is computing
-        # the function: trigamma on the negative axis is all poles (every float
-        # past 2^24 is an integer), where the true value is +-inf and torch
-        # returns evaluation noise that disagrees with ITSELF between fp32 and
-        # fp64. Asserting parity there would be asserting that two wrong numbers
-        # match. The out-of-domain population is reported, never silently
-        # dropped, and the leg classifies those inputs out-of-domain anyway.
+        # Faithfulness is asserted where the function is DEFINED. Two exclusions,
+        # both pointwise and both because neither oracle is computing the
+        # function there -- asserting parity would be asserting that two wrong
+        # numbers match:
+        #   * outside spec.domain (erfinv |x|>=1, sqrt of a negative);
+        #   * at a gamma-family POLE. torch does not signal these: trigamma(-1)
+        #     is 1.29e15 in fp32 and 6.58e32 in fp64, finite precision-dependent
+        #     noise where the true value is +inf.
+        # Every other input is graded, INCLUDING the non-pole negatives of the
+        # gamma family -- digamma(-1.5) is an ordinary defined value and a
+        # kernel that flips its sign there is a defect, not a licensed miss.
+        # The excluded population is reported, never silently dropped.
+        xs = tg.bf16_truncate(u)
         graded = np.ones(u.shape, dtype=bool)
-        ungraded_note = ""
         if spec.domain is not None:
-            xs = tg.bf16_truncate(u)
             classes = tg.unary_input_classes(xs, spec.domain)
-            graded = ~classes["out_of_domain_finite_normal"]
-            n_ungraded = int(np.count_nonzero(~graded))
-            if n_ungraded:
-                ungraded_note = f"; {n_ungraded}/1024 out-of-domain not graded"
+            graded &= ~classes["out_of_domain_finite_normal"]
+        if op in tg.GAMMA_POLE_OPS:
+            graded &= ~np.array([tg.at_gamma_pole(op, float(v)) for v in xs])
+        n_ungraded = int(np.count_nonzero(~graded))
+        ungraded_note = (
+            f"; {n_ungraded}/1024 undefined (out-of-domain or pole) not graded"
+            if n_ungraded else ""
+        )
         try:
             ref = _scalar_golden(mathop, u)
         except Exception as e:  # pragma: no cover

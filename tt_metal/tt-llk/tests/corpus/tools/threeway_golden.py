@@ -603,36 +603,32 @@ _CORPUS_UNARY = [
     GoldenSpec("heaviside", _heaviside, note="0/0.5/1; EXACT"),
     # -- fitted polynomial / series: the erf mechanism (a fit evaluated where it
     #    has no meaning, with a clamp turning garbage into a plausible constant).
-    # The gamma family carries DOMAIN (0, inf): a pole sits on every non-positive
-    # integer, and above ~2^24 every float IS an integer, so the whole large
-    # negative axis is poles. The true value there is +-inf; torch returns a
-    # large finite number that is pure evaluation noise and disagrees with
-    # itself between fp32 and fp64 (trigamma(-1): 1.29e15 in fp32, 6.58e32 in
-    # fp64 -- the answer is +inf). No oracle speaks for that region, so it is
-    # declared out-of-domain instead of being graded.
+    # The gamma family gets NO domain. It is defined on every real that is not a
+    # pole, and the poles are exactly the non-positive INTEGERS -- see
+    # GAMMA_POLE_OPS / at_gamma_pole below. Declaring domain=(0, inf) here would
+    # have been wrong in a way that matters: it would license the whole negative
+    # axis, and digamma(-1.5) = +0.703157 is an ordinary defined value where the
+    # kernel returns -10.2929, a sign flip. A pole is excluded pointwise, not by
+    # excluding a half-line.
     GoldenSpec(
         "digamma",
         _digamma,
-        domain=(0.0, float("inf")),
-        note="torch.digamma; DOMAIN (0, inf) -- poles on the non-positive integers",
+        note="torch.digamma; all non-pole reals; poles at the non-positive integers",
     ),
     GoldenSpec(
         "digamma-fresh",
         _digamma,
-        domain=(0.0, float("inf")),
-        note="torch.digamma; fresh_cpp arm; same pole structure",
+        note="torch.digamma; fresh_cpp arm; same pole set",
     ),
     GoldenSpec(
         "lgamma",
         _lgamma,
-        domain=(0.0, float("inf")),
-        note="torch.lgamma; DOMAIN (0, inf) -- single-tile Stirling, x >= ~0.5",
+        note="torch.lgamma; all non-pole reals; poles at the non-positive integers",
     ),
     GoldenSpec(
         "polygamma",
         _polygamma,
-        domain=(0.0, float("inf")),
-        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x) trigamma; DOMAIN (0, inf)",
+        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x) trigamma; poles at the non-positive integers",
     ),
     GoldenSpec("i0", _i0, note="torch.special.i0; kernel poly valid |x| <= 3.75"),
     GoldenSpec("i1", _i1, note="torch.special.i1; kernel poly valid |x| <= 3.75"),
@@ -745,6 +741,31 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
     "erfc-fresh": (-3.0, 3.0),
     "erfinv-fresh": (-0.99, 0.99),
 }
+
+
+# The gamma family's poles are the non-positive INTEGERS. They need naming
+# separately from a domain because torch does not signal them: trigamma(-1) comes
+# back as 1.29e15 in fp32 and 6.58e32 in fp64 -- finite, precision-dependent
+# noise, where the true value is +inf. So "the fp64 golden is non-finite" does NOT
+# find these, and neither oracle is computing the function there.
+#
+# Excluded POINTWISE, deliberately. Excluding the negative half-line instead would
+# license digamma(-1.5) = +0.703157, an ordinary defined value where the kernel
+# returns -10.2929 -- a sign flip, and a real defect.
+GAMMA_POLE_OPS = frozenset({"digamma", "digamma-fresh", "lgamma", "polygamma"})
+
+
+def at_gamma_pole(op: str, x: float) -> bool:
+    """True iff `op` is a gamma-family op and `x` is one of its poles."""
+    if op not in GAMMA_POLE_OPS:
+        return False
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return False
+    if not np.isfinite(xf):
+        return False
+    return xf <= 0.0 and float(xf).is_integer()
 
 
 def claim_status(op: str, x: float) -> str:

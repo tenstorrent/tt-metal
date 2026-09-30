@@ -22,12 +22,6 @@ UNARY_DOMAIN_PARTITION_OPS = frozenset(
         "erfinv",  # |x| >= 1 undefined
         "sqrtcustom",  # x < 0 undefined
         "rsqrtcompat",  # x <= 0 undefined / pole
-        # gamma family: a pole on every non-positive integer, and past 2^24
-        # every float is an integer, so the negative axis is all poles.
-        "digamma",
-        "digamma-fresh",
-        "lgamma",
-        "polygamma",
     }
 )
 
