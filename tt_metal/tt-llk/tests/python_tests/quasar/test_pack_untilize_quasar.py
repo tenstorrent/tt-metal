@@ -103,10 +103,6 @@ def generate_pack_untilize_combinations(
         if not is_supported_format_conversion(in_fmt, out_fmt):
             continue
 
-        # MX as output format produces flaky results on Quasar.
-        if out_fmt.is_mx_format():
-            continue
-
         for dest_acc in get_dest_acc_modes(in_fmt):
             for dest_sync in dest_sync_modes:
                 tile_sizes = (
@@ -252,9 +248,7 @@ def test_pack_untilize_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-        ),
+        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(
