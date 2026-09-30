@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <optional>
 #include <variant>
 
@@ -95,6 +96,13 @@ manifest::RouterShape collect_shape(
                 shape.senders_per_vc[vc],
                 vc);
         }
+        const uint32_t num_receivers =
+            std::accumulate(shape.receivers_per_vc.begin(), shape.receivers_per_vc.end(), 0u);
+        TT_FATAL(
+            get_named_arg(args, "NUM_RECEIVER_CHANNELS") == num_receivers,
+            "Fabric manifest: NUM_RECEIVER_CHANNELS is {}, but the router's shape has {} receivers",
+            get_named_arg(args, "NUM_RECEIVER_CHANNELS"),
+            num_receivers);
     }
     return shape;
 }
@@ -220,8 +228,15 @@ struct SenderChannelIndex {
     uint32_t fabric_position;
 };
 
-// The builder facts shared by every sender channel on a router.
-struct SenderCollectionContext {
+// What the kernel reads for one receiver channel. Every receiver table is indexed by the compact index.
+struct ReceiverChannelIndex {
+    uint32_t vc;
+    uint32_t channel;
+    uint32_t compact;
+};
+
+// The builder facts shared by every channel on a router.
+struct ChannelCollectionContext {
     const FabricEriscDatamoverBuilder& erisc_builder;
     const FabricStaticSizedChannelsAllocator& allocator;
     const builder::RouterProducerSlots& producer_slots;
@@ -231,19 +246,62 @@ struct SenderCollectionContext {
     const CreditTransportPlan& plan;
     const std::vector<size_t>& addresses_to_clear;
     bool vc0_bubble_flow_control;
+    bool is_2d_routing;
 };
 
 // The stream register the builder assigned under `name`. Every RISC must receive the same id.
-manifest::StreamRef assigned_stream(const SenderCollectionContext& ctx, const std::string& name) {
+manifest::StreamRef assigned_stream(const ChannelCollectionContext& ctx, const std::string& name) {
     const uint32_t stream_id = get_named_arg(ctx.assigned_streams, name);
     check_named_arg(ctx.named_ct_args_per_risc, name, stream_id);
     return {.stream_id = stream_id};
 }
 
+// The RISCs that the builder says are servicing a channel. Each RISC's `name` flag must agree.
+template <typename IsServiced>
+std::vector<uint32_t> collect_serviced_by(
+    const ChannelCollectionContext& ctx, const std::string& name, IsServiced is_serviced) {
+    std::vector<uint32_t> serviced_by;
+    for (uint32_t risc_id = 0; risc_id < ctx.named_ct_args_per_risc.size(); ++risc_id) {
+        const bool serviced = is_serviced(risc_id);
+        const uint32_t actual = get_named_arg(ctx.named_ct_args_per_risc[risc_id], name);
+        TT_FATAL(
+            (actual != 0) == serviced,
+            "Fabric manifest: ERISC{} {} is {}, but the builder has the channel {}",
+            risc_id,
+            name,
+            actual,
+            serviced ? "serviced" : "not serviced");
+        if (serviced) {
+            serviced_by.push_back(risc_id);
+        }
+    }
+    return serviced_by;
+}
+
+// A serviced channel polls this register, so it must be allocated.
+void require_allocated(
+    const char* kind, uint32_t vc, uint32_t channel, const char* role, const manifest::StreamRef& stream) {
+    TT_FATAL(
+        stream.stream_id != k_unused_stream_id,
+        "Fabric manifest: VC{} {} channel {} is serviced, but its {} stream register is not allocated",
+        vc,
+        kind,
+        channel,
+        role);
+}
+
+manifest::L1Region ring_buffer_region(const ChannelCollectionContext& ctx, size_t address, size_t num_slots) {
+    const size_t slot_size = ctx.erisc_builder.config.channel_buffer_size_bytes;
+    auto region = l1_region(address, num_slots * slot_size, "packet_ring", ctx.addresses_to_clear);
+    region.num_elements = static_cast<uint32_t>(num_slots);
+    region.size_per_element = static_cast<uint32_t>(slot_size);
+    return region;
+}
+
 // The worker slot is fed by the local worker. Any other channel is fed by the sibling router in its producer
 // slot, but only once that router has connected to it, which is what marks the channel's connection static.
 std::optional<manifest::SenderChannelProducer> collect_sender_producer(
-    const SenderCollectionContext& ctx, const SenderChannelIndex& index) {
+    const ChannelCollectionContext& ctx, const SenderChannelIndex& index) {
     const bool static_connection =
         ctx.erisc_builder.sender_channel_connection_liveness_check_disable_array[index.compact];
     check_named_arg(
@@ -261,7 +319,7 @@ std::optional<manifest::SenderChannelProducer> collect_sender_producer(
         return manifest::LocalWorker{};
     }
 
-    // We shouldn't get here because if the channel is not statically connected, it should be be a worker channel
+    // A non-worker channel that has no sibling router connected to it has no producer
     if (!static_connection) {
         return std::nullopt;
     }
@@ -280,7 +338,7 @@ std::optional<manifest::SenderChannelProducer> collect_sender_producer(
 // credits are this channel's element of the to_sender counter arrays. Only VC0 with bubble flow control
 // receives first-level acks.
 manifest::SenderChannelCredits collect_sender_credits(
-    const SenderCollectionContext& ctx, const SenderChannelIndex& index) {
+    const ChannelCollectionContext& ctx, const SenderChannelIndex& index) {
     const bool counters = ctx.plan.vc_uses_counters(index.vc);
     const auto credit = [&](const char* array, const char* stream_name_pattern) -> manifest::CreditRef {
         if (counters) {
@@ -298,26 +356,16 @@ manifest::SenderChannelCredits collect_sender_credits(
     return credits;
 }
 
-manifest::SenderChannel collect_sender_channel(const SenderCollectionContext& ctx, const SenderChannelIndex& index) {
+manifest::SenderChannel collect_sender_channel(const ChannelCollectionContext& ctx, const SenderChannelIndex& index) {
     const auto& erisc_builder = ctx.erisc_builder;
     const auto& config = erisc_builder.config;
 
     // Check that the compile-time arguments match the builder's info for whether the channel is serviced
     manifest::SenderChannel sender;
-    for (uint32_t risc_id = 0; risc_id < ctx.named_ct_args_per_risc.size(); ++risc_id) {
-        const bool serviced = erisc_builder.is_sender_channel_serviced(risc_id, index.compact);
-        const auto name = fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", index.compact);
-        TT_FATAL(
-            (get_named_arg(ctx.named_ct_args_per_risc[risc_id], name) != 0) == serviced,
-            "Fabric manifest: ERISC{} {} is {}, but the builder has the channel {}",
-            risc_id,
-            name,
-            get_named_arg(ctx.named_ct_args_per_risc[risc_id], name),
-            serviced ? "serviced" : "not serviced");
-        if (serviced) {
-            sender.serviced_by.push_back(risc_id);
-        }
-    }
+    sender.serviced_by = collect_serviced_by(
+        ctx, fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", index.compact), [&](uint32_t risc_id) {
+            return erisc_builder.is_sender_channel_serviced(risc_id, index.compact);
+        });
 
     // Get the producer for the channel
     sender.producer = collect_sender_producer(ctx, index);
@@ -340,14 +388,10 @@ manifest::SenderChannel collect_sender_channel(const SenderCollectionContext& ct
     };
 
     // Ring buffer info for the channel
-    const size_t num_slots = ctx.allocator.get_sender_channel_number_of_slots(index.vc, index.channel);
-    sender.ring_buffer = l1_region(
+    sender.ring_buffer = ring_buffer_region(
+        ctx,
         ctx.allocator.get_sender_channel_base_address(index.vc, index.channel),
-        num_slots * config.channel_buffer_size_bytes,
-        "packet_ring",
-        ctx.addresses_to_clear);
-    sender.ring_buffer.num_elements = static_cast<uint32_t>(num_slots);
-    sender.ring_buffer.size_per_element = static_cast<uint32_t>(config.channel_buffer_size_bytes);
+        ctx.allocator.get_sender_channel_number_of_slots(index.vc, index.channel));
 
     // Credits and free slots stream registers
     sender.free_slots =
@@ -384,29 +428,93 @@ manifest::SenderChannel collect_sender_channel(const SenderCollectionContext& ct
 
     // A serviced channel polls its free-slots register and, on registers, its credit registers.
     if (!sender.serviced_by.empty()) {
-        const auto require_allocated = [&](const char* role, const manifest::StreamRef& stream) {
-            TT_FATAL(
-                stream.stream_id != k_unused_stream_id,
-                "Fabric manifest: VC{} channel {} is serviced, but its {} stream register is not allocated",
-                index.vc,
-                index.channel,
-                role);
-        };
-        require_allocated("free_slots", sender.free_slots);
+        require_allocated("sender", index.vc, index.channel, "free_slots", sender.free_slots);
         if (const auto* stream = std::get_if<manifest::StreamRef>(&sender.credits.completed)) {
-            require_allocated("completed", *stream);
+            require_allocated("sender", index.vc, index.channel, "completed", *stream);
         }
         if (sender.credits.acked.has_value()) {
             if (const auto* stream = std::get_if<manifest::StreamRef>(&*sender.credits.acked)) {
-                require_allocated("acked", *stream);
+                require_allocated("sender", index.vc, index.channel, "acked", *stream);
             }
         }
     }
     return sender;
 }
 
-// Every sender channel in the router's shape, indexed [vc][channel].
-std::vector<std::vector<manifest::SenderChannel>> collect_senders(
+// A flag the builder decides only while emitting compile-time arguments, so it is read back from them. Every
+// RISC must receive the same value.
+bool emitted_flag(const ChannelCollectionContext& ctx, const std::string& name) {
+    const uint32_t value = get_named_arg(ctx.named_ct_args_per_risc.front(), name);
+    check_named_arg(ctx.named_ct_args_per_risc, name, value);
+    return value != 0;
+}
+
+// A builder config value that the kernel also receives under `name`, which must match it on every RISC.
+uint32_t emitted_config(const ChannelCollectionContext& ctx, const std::string& name, size_t value) {
+    check_named_arg(ctx.named_ct_args_per_risc, name, static_cast<uint32_t>(value));
+    return static_cast<uint32_t>(value);
+}
+
+manifest::ReceiverChannel collect_receiver_channel(
+    const ChannelCollectionContext& ctx, const ReceiverChannelIndex& index) {
+    const auto& erisc_builder = ctx.erisc_builder;
+    const auto& config = erisc_builder.config;
+    const uint32_t c = index.compact;
+
+    manifest::ReceiverChannel receiver;
+    receiver.serviced_by =
+        collect_serviced_by(ctx, fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", c), [&](uint32_t risc_id) {
+            return erisc_builder.is_receiver_channel_serviced(risc_id, c);
+        });
+
+    receiver.forwarding_disabled = emitted_flag(ctx, fmt::format("DISABLE_RX_CH{}_FORWARDING", c));
+    // Only 2D kernels read the ingress flags; 1D kernels treat every channel as not ingress.
+    receiver.intermesh_ingress =
+        ctx.is_2d_routing && emitted_flag(ctx, fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", c));
+
+    receiver.forward_noc = {
+        .noc = static_cast<tt::tt_metal::NOC>(emitted_config(
+            ctx, fmt::format("RX_CH_{}_FWD_NOC_ID", c), config.receiver_channel_forwarding_noc_ids[c])),
+        .data_cmd_buf = static_cast<manifest::NocCmdBuf>(emitted_config(
+            ctx,
+            fmt::format("RX_CH_{}_FWD_DATA_CMD_BUF_ID", c),
+            config.receiver_channel_forwarding_data_cmd_buf_ids[c])),
+        .sync_cmd_buf = static_cast<manifest::NocCmdBuf>(emitted_config(
+            ctx,
+            fmt::format("RX_CH_{}_FWD_SYNC_CMD_BUF_ID", c),
+            config.receiver_channel_forwarding_sync_cmd_buf_ids[c])),
+    };
+    receiver.local_write_noc = {
+        .noc = static_cast<tt::tt_metal::NOC>(emitted_config(
+            ctx, fmt::format("RX_CH_{}_LOCAL_WRITE_NOC_ID", c), config.receiver_channel_local_write_noc_ids[c])),
+        .cmd_buf = static_cast<manifest::NocCmdBuf>(emitted_config(
+            ctx,
+            fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", c),
+            config.receiver_channel_local_write_cmd_buf_ids[c])),
+    };
+
+    receiver.ring_buffer = ring_buffer_region(
+        ctx,
+        ctx.allocator.get_receiver_channel_base_address(index.vc, index.channel),
+        ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel));
+
+    receiver.pkts_sent = assigned_stream(ctx, fmt::format("TO_RECEIVER_{}_PKTS_SENT_ID", c));
+    // Only VC2's receiver has a free-slots register, pinned (StreamRegAssignments::IncrementOnWrite).
+    if (index.vc == 2) {
+        receiver.free_slots = assigned_stream(ctx, "VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
+    }
+
+    if (!receiver.serviced_by.empty()) {
+        require_allocated("receiver", index.vc, index.channel, "pkts_sent", receiver.pkts_sent);
+        if (receiver.free_slots.has_value()) {
+            require_allocated("receiver", index.vc, index.channel, "free_slots", *receiver.free_slots);
+        }
+    }
+    return receiver;
+}
+
+// Every sender and receiver channel in the router's shape, each indexed [vc][channel].
+manifest::Channels collect_channels(
     const FabricEriscDatamoverBuilder& erisc_builder,
     const RouterVcShape& vc_shape,
     const RouterLocation& location,
@@ -428,8 +536,8 @@ std::vector<std::vector<manifest::SenderChannel>> collect_senders(
         builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
     const auto addresses_to_clear = builder_context().get_fabric_router_addresses_to_clear();
 
-    // Context for sender channels on this router
-    const SenderCollectionContext ctx{
+    // Context for channels on this router
+    const ChannelCollectionContext ctx{
         .erisc_builder = erisc_builder,
         .allocator = *allocator,
         .producer_slots = producer_slots,
@@ -438,21 +546,31 @@ std::vector<std::vector<manifest::SenderChannel>> collect_senders(
         .plan = stream_assignment.plan(),
         .addresses_to_clear = addresses_to_clear,
         .vc0_bubble_flow_control = shape.vc0_bubble_flow_control,
+        .is_2d_routing = tt::tt_metal::MetalContext::instance()
+                             .get_control_plane()
+                             .get_fabric_context()
+                             .is_2D_routing_enabled(),
     };
 
-    // Collect the sender channels for each VC
-    std::vector<std::vector<manifest::SenderChannel>> senders(builder_config::MAX_NUM_VCS);
+    // Collect the sender and receiver channels for each VC
+    manifest::Channels channels;
+    channels.senders.resize(builder_config::MAX_NUM_VCS);
+    channels.receivers.resize(builder_config::MAX_NUM_VCS);
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t channel = 0; channel < vc_shape.sender_counts[vc]; ++channel) {
-            senders[vc].push_back(collect_sender_channel(
+            channels.senders[vc].push_back(collect_sender_channel(
                 ctx,
                 {.vc = vc,
                  .channel = channel,
                  .compact = vc_shape.flat_sender_id(vc, channel),
                  .fabric_position = stream_assignment.sender_flat_base(vc) + channel}));
         }
+        for (uint32_t channel = 0; channel < vc_shape.receiver_counts[vc]; ++channel) {
+            channels.receivers[vc].push_back(collect_receiver_channel(
+                ctx, {.vc = vc, .channel = channel, .compact = vc_shape.flat_receiver_id(vc, channel)}));
+        }
     }
-    return senders;
+    return channels;
 }
 
 }  // namespace
@@ -472,13 +590,13 @@ manifest::Router collect_manifest_router(
     check_credit_transport_args(erisc_builder, named_ct_args_per_risc);
 
     auto shape = collect_shape(erisc_builder, vc_shape, named_ct_args_per_risc);
-    auto senders = collect_senders(erisc_builder, vc_shape, location, shape, named_ct_args_per_risc);
+    auto channels = collect_channels(erisc_builder, vc_shape, location, shape, named_ct_args_per_risc);
     return {
         .identity = collect_identity(location),
         .link = collect_link(erisc_builder, location, chip_facts),
         .shape = std::move(shape),
         .credit_counters = collect_credit_counters(erisc_builder, named_ct_args_per_risc),
-        .channels = {.senders = std::move(senders)},
+        .channels = std::move(channels),
     };
 }
 

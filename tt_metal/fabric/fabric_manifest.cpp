@@ -351,12 +351,24 @@ json sender_producer_json(
         control_plane, node, chan, std::get<manifest::SiblingRouterRef>(*producer).direction);
 }
 
+json noc_forward_config_json(const manifest::NocForwardConfig& config) {
+    json out;
+    out["noc"] = static_cast<uint32_t>(config.noc);
+    out["data_cmd_buf"] = lower_enum_name(config.data_cmd_buf);
+    out["sync_cmd_buf"] = lower_enum_name(config.sync_cmd_buf);
+    return out;
+}
+
+json serviced_by_json(const std::vector<uint32_t>& risc_ids) {
+    json out = json::array();
+    for (const auto risc_id : risc_ids) {
+        out.push_back(fmt::format("erisc{}", risc_id));
+    }
+    return out;
+}
+
 json sender_channel_json(
     const manifest::SenderChannel& sender, const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan) {
-    json serviced_by = json::array();
-    for (const auto risc_id : sender.serviced_by) {
-        serviced_by.push_back(fmt::format("erisc{}", risc_id));
-    }
 
     json credits;
     if (sender.credits.acked.has_value()) {
@@ -372,7 +384,7 @@ json sender_channel_json(
     }
 
     json out;
-    out["serviced_by"] = std::move(serviced_by);
+    out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, control_plane, node, chan);
     out["is_injection_channel"] = sender.is_injection_channel;
     out["producer_credit_return"] = noc_write_config_json(sender.producer_credit_return);
@@ -395,6 +407,40 @@ json senders_json(const manifest::Router& router, const ControlPlane& control_pl
         for (size_t channel = 0; channel < channels.size(); ++channel) {
             vc_json[fmt::format("ch{}", channel)] =
                 sender_channel_json(channels[channel], control_plane, node, router.identity.eth_chan);
+        }
+        out[fmt::format("vc{}", vc)] = std::move(vc_json);
+    }
+    return out;
+}
+
+// A receiver's producer is always the peer router, so it is the link's peer.
+json receiver_channel_json(const manifest::ReceiverChannel& receiver, const std::optional<std::string>& peer_path) {
+    json out;
+    out["serviced_by"] = serviced_by_json(receiver.serviced_by);
+    out["producer"] = peer_path.has_value() ? json(*peer_path) : json(nullptr);
+    out["forwarding_disabled"] = receiver.forwarding_disabled;
+    out["intermesh_ingress"] = receiver.intermesh_ingress;
+    out["forward_noc"] = noc_forward_config_json(receiver.forward_noc);
+    out["local_write_noc"] = noc_write_config_json(receiver.local_write_noc);
+    out["ring_buffer"] = l1_region_json(receiver.ring_buffer);
+    out["pkts_sent"] = stream_ref_json(receiver.pkts_sent);
+    if (receiver.free_slots.has_value()) {
+        out["free_slots"] = stream_ref_json(*receiver.free_slots);
+    }
+    return out;
+}
+
+// Keyed like senders_json. VCs this router has no receivers on are left out.
+json receivers_json(const manifest::Router& router, const std::optional<std::string>& peer_path) {
+    json out = json::object();
+    for (size_t vc = 0; vc < router.channels.receivers.size(); ++vc) {
+        const auto& channels = router.channels.receivers[vc];
+        if (channels.empty()) {
+            continue;
+        }
+        json vc_json;
+        for (size_t channel = 0; channel < channels.size(); ++channel) {
+            vc_json[fmt::format("ch{}", channel)] = receiver_channel_json(channels[channel], peer_path);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
     }
@@ -436,6 +482,7 @@ json make_router_json(
     out["shape"] = router_shape_json(router.shape);
     out["credit_counters"] = credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = senders_json(router, control_plane, node);
+    out["channels"]["receivers"] = receivers_json(router, peer_path);
     return out;
 }
 
