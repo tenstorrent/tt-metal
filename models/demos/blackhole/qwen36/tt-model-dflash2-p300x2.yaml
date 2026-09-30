@@ -2,17 +2,17 @@
 # serving WITH the DFlash2 block-diffusion speculative-decode drafter (models/demos/blackhole/qwen36/tt/dflash2*.py,
 # qwen36_vllm_dflash.py) through the Tenstorrent vLLM plugin's block-output contracts. Built for small batches
 # (1-8 users): profiles `batch8-dflash2` (default: eight speculative slots in two verify buckets -- K=7 at 1-4 live
-# users, K=3 at 5-8, switched at runtime with no recapture; ragged widths), `single-user-dflash2` (one slot, fastest
-# for exactly one request) and `batch8-dflash2-chunked` (batch8-dflash2 + opt-in chunked prefill: a long prompt joining
-# under load is prefilled in 2048-token chunks between the other users' speculative steps). For 8+ users or sampled
-# output use changh95/qwen3.8-27b-p300x2 (plain decode, 32 users).
+# users, K=3 at 5-8, switched at runtime with no recapture; ragged widths; chunked prefill: a prompt of 8192+ tokens
+# that arrives while earlier requests decode is prefilled in 2048-token chunks between their speculative steps) and
+# `single-user-dflash2` (one slot, fastest for exactly one request). For 8+ users or sampled output use
+# changh95/qwen3.8-27b-p300x2 (plain decode, 32 users).
 #
 # This file used to be models/demos/blackhole/qwen36/tt-model.yaml on branch qwen36-dflash-batch (published package
 # v13: tt-metal c6bf41673e2, plugin 7ddf2c8); that path now holds the p150x2 manifest (changh95/qwen3.8-27b-p150x2).
 # tt-model takes any manifest path:
 #
 #   tt-model package --container models/demos/blackhole/qwen36/tt-model-dflash2-p300x2.yaml --out <builds>
-#   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json [--profile batch8-dflash2-chunked]
+#   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json [--profile single-user-dflash2]
 #   tt-model push    <builds>/qwen3.8-27b-dflash2-p300x2 --private
 schema: "5.1"
 repo: changh95/qwen3.8-27b-dflash2-p300x2
@@ -24,9 +24,8 @@ kind: vllm-plugin
 arch: blackhole
 
 source:
-  # Branch qwen36-dflash2-p300x2-pkg (= qwen36-p150x2 + this manifest). Package only after the chunked-prefill commits
-  # (qwen36-tp4-dflash-chunked, rebased per profiles/tp4_chunked/REPORT.md section 8) are merged here and the branch is
-  # pushed (provenance: built.tt_metal.pushed); the batch8-dflash2-chunked verify line below fails on a tree without them.
+  # Branch qwen36-dflash2-p300x2-pkg = qwen36-int3 (qwen36-p150x2 + TP=2 prefill + tp2/TP=4 chunked prefill, validated
+  # in profiles/tp4_chunked/{EVAL,VALIDATE_INT3}.md) + this manifest.
   tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-pkg4
   code:                                                        # import closure of qwen36_vllm.py + the demo/spec-decode path
     - models/common
@@ -44,12 +43,10 @@ source:
 
 runtime:
   vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
-  # vllm-tt-plugin branch pd-disagg-dflash-chunked: pd-disagg (superset of the published 7ddf2c8: the block-output /
-  # batched / ragged contracts the DFlash2 profiles use, plus PD connector, host sampler and scheduler fixes, all inert for
-  # these single-process profiles) + the TT chunk policy (413c910) + the block-output chunked-prefill capability
-  # (044fa75, 81c8318, af18709, 988cf33) the batch8-dflash2-chunked profile needs. Pin to the pushed commit before
-  # packaging (stage() resolves the ref with git; the placeholder fails there, on purpose).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: PLUGIN_REF_TBD}
+  # vllm-tt-plugin branch pd-disagg: superset of the published 7ddf2c8 (the block-output / batched / ragged contracts the
+  # DFlash2 profiles use, plus PD connector, host sampler and scheduler fixes, inert for these single-process profiles) +
+  # the TT chunk policy and the block-output chunked-prefill capability batch8-dflash2 now uses. Pinned to the pushed commit.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 96d4416d31f79973c9ff10b3b41e15d0b06e3430}
   extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle  # same adapter the plugin registers built-in
 
 serve:
@@ -110,34 +107,20 @@ serve_profiles:
                                         # smallest bucket that seats the live requests and reseeds them across a switch bit-exactly
       QWEN36_DFLASH_RAGGED: "1"       # one speculative iteration per decode step: a bucket switch stays inside one step
       QWEN36_DFLASH_FOLD_SEED: "1"    # (both verify traces + both buckets' draft/extend traces fit: TRACE region 137 MiB of 1 GiB)
-    args:
-      - [--max-num-batched-tokens, "262144"]
-      - --no-async-scheduling           # the plugin's block-output contract is synchronous
-  - name: batch8-dflash2-chunked
-    description: batch8-dflash2 with chunked prefill — a long prompt that arrives while others decode is prefilled in 2048-token chunks, one every 4 speculative steps, so the other users keep decoding instead of pausing for the whole prefill, at the cost of the long prompt's own TTFT and of throughput when long prompts arrive in a burst. For interactive multi-user traffic.
-    max_num_seqs: 8
-    additional_config:
-      tt:                               # deep-merged over serve.additional_config.tt (the four keys above stay)
-        prefill_chunk_tokens: 2048      # chunk size: a multiple of the model's tt_prefill_chunk_tokens (2048) and of block_size
-        chunked_prefill_decode_steps: 4 # speculative decode steps between two chunk steps while requests decode (N=4)
-        # Every other chunk-policy key keeps its block-output default (vllm_tt_plugin/config.py
-        # resolve_tt_prefill_chunk_policy): rider_tokens 512 (hard, oversized_rider_step), max_riders 1,
-        # cadence_after_final, chunk_without_decoders, burst_longs 0 (off). The plugin raises max_num_batched_tokens to
-        # max_model_len + max_num_seqs * chunk = 278528 at boot, and warns that the 525,312-token KV pool is below
-        # max_num_seqs * max_model_len (both logged by every validated run of this profile).
-    env:                                # = batch8-dflash2 + QWEN36_DFLASH_CHUNKED_PREFILL
-      QWEN36_DRAFTER: dflash2
-      QWEN36_GDN_SPEC_FUSED: "1"
-      QWEN36_DFLASH_BLOCK: "8"
-      QWEN36_DFLASH_BUCKETS: "8x4,4x8"
-      QWEN36_DFLASH_RAGGED: "1"
-      QWEN36_DFLASH_FOLD_SEED: "1"
-      QWEN36_DFLASH_CHUNKED_PREFILL: "1"  # model side (qwen36_vllm_dflash.py): declares supports_chunked_prefill +
+      QWEN36_DFLASH_CHUNKED_PREFILL: "1"  # chunked prefill (qwen36_vllm_dflash.py declares supports_chunked_prefill +
                                           # tt_prefill_chunk_tokens 2048 + tt_block_output_chunked_prefill; refused at
-                                          # TP != 4 and at max_num_seqs 1 (profiles/tp4_chunked/REPORT.md section 1)
+                                          # TP != 4 and max_num_seqs 1). Evaluated OFF vs ON: profiles/tp4_chunked/EVAL.md
+    additional_config:
+      tt:                               # deep-merged over serve.additional_config.tt
+        prefill_chunk_tokens: 2048      # chunk size (a multiple of the model's tt_prefill_chunk_tokens and of block_size)
+        chunked_prefill_decode_steps: 4 # speculative decode steps between two chunk steps while requests decode
+        # Other chunk-policy keys keep their block-output defaults (vllm_tt_plugin/config.py
+        # resolve_tt_prefill_chunk_policy): only a prompt with >= 8192 tokens left (chunked_prefill_min_tokens) that
+        # arrives while an EARLIER request decodes (chunked_prefill_protect_prior_decoders) is chunked; bursts
+        # (burst_longs 2) and idle steps prefill whole, exactly as without chunking.
     args:
       - [--max-num-batched-tokens, "262144"]
-      - --no-async-scheduling           # also required by the TT chunk policy (the cadence counts synchronous steps)
+      - --no-async-scheduling           # the block-output contract and the chunk cadence are synchronous
 default_profile: batch8-dflash2
 
 verify:
@@ -150,8 +133,8 @@ verify:
   - "from vllm_tt_plugin.config import get_tt_block_output_kv_lookahead_tokens, is_tt_adaptive_block_output_model, is_tt_adaptive_block_batched, is_tt_adaptive_block_ragged"
   - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ['QWEN36_DFLASH_RAGGED']='1'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['tt_adaptive_block_ragged']"
   - "from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder; from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP; assert DFlash2Decoder and DFlash2DrafterTP"
-  # batch8-dflash2-chunked: the model declares the block-output chunk contract only with the knob on (and never with it off),
-  # and the plugin carries the chunk policy that reads prefill_chunk_tokens / chunked_prefill_decode_steps.
+  # batch8-dflash2 chunked prefill: the model declares the block-output chunk contract only with the knob on (never with it
+  # off: single-user-dflash2), and the plugin carries the chunk policy that reads prefill_chunk_tokens / chunked_prefill_decode_steps.
   - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ['QWEN36_DFLASH_CHUNKED_PREFILL']='1'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; c=C.model_capabilities; assert c['supports_chunked_prefill'] and c['tt_block_output_chunked_prefill'] and c['tt_prefill_chunk_tokens'] == 2048, dict(c)"
   - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ.pop('QWEN36_DFLASH_CHUNKED_PREFILL', None); from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; c=C.model_capabilities; assert not c.get('supports_chunked_prefill') and 'tt_block_output_chunked_prefill' not in c, dict(c)"
   - "from vllm_tt_plugin.config import resolve_tt_prefill_chunk_policy, is_tt_block_output_chunked_prefill, get_tt_prefill_chunk_extras"
