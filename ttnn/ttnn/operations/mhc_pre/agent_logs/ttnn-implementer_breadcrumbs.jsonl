@@ -9,3 +9,4 @@
 {"event":"test_run","refinement":2,"result":"pass","detail":"target cell worst row 0.0672204 (limit 0.0672702); z rms 3.45e-5; 98/98 fp32 golden; regression 10/10; unit 35/35; fp32 640x7168 567us (was 378), bf16 270us unchanged","ts":"2026-09-30T04:16:58+00:00"}
 {"event":"test_run","status":"pass","detail":"R3 W bcast: unit 27/27; perf bf16 640x7168 193.5us (was 272.0)","ts":"2026-09-30T04:31:52+00:00"}
 {"event":"fix_applied","detail":"W sender: cb_push_back after sender.send (in-place fp32 W split raced the mcast source read)","stress_before":"1/40 bad","stress_after":"0/40","golden":"206/206","unit":"35/35","ts":"2026-09-30T04:50:31+00:00"}
+{"event":"test_run","refinement":4,"status":"pass","detail":"640x1792 bf16 86.5->44.3-45.6us; guard set all faster than R3; unit 27/27; golden slices cover 206/206 after L1 margin 64->96KB fix","ts":"2026-09-30T06:48:22+00:00"}
