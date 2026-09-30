@@ -6,18 +6,17 @@
 
 ``TtV41Attention.forward`` reshards q head->sequence before ``sparse_sdpa`` (in the seq-major projection layout, heads
 side by side: ``head_to_seq_flat``) and the output sequence->head after it, over TP (cluster_axis 1). On the LoudBox
-2x4 mesh TP has 4 chips; on 4x2 it has 2, where the block test hung.
+2x4 mesh TP has 4 chips; on 4x2 it has 2.
 Each case runs one direction on one mesh axis and checks the result bit-exact against the torch reshard:
 global tensor sharded [in_dim over the axis, out_dim over the other axis] -> the same global tensor sharded
 [out_dim over the axis, ...], i.e. the op must concatenate ``in_dim`` and split ``out_dim`` across the axis.
 
-Finding (4x2, cluster_axis 1): the op's writer stops in ``fail_stop_invalid_fabric_route`` during its multicast
-initialization (it picks east/west for mesh axis 1; the LoudBox 4x2 TP axis is wired north-south), so the collective
-hangs. ``test_v41_tp_all_to_all`` covers the V4.1 reshard ``V41Collectives.tp_all_to_all`` that attention uses,
-which routes TP=2 around the op (gather + ``mesh_partition``).
+Regression (4x2, cluster_axis 1; bead 8y7.13.7): the op's Fabric2D multicast initialization routes mesh axis 1
+east/west, and the LoudBox 4x2 TP axis is wired north-south; the writer stopped in ``fail_stop_invalid_fabric_route``
+and the collective hung. The host now enables that initialization only on axes wired in the kernel's direction.
+``test_v41_tp_all_to_all`` covers the V4.1 reshard ``V41Collectives.tp_all_to_all`` that attention uses.
 """
 
-import os
 import time
 
 import pytest
@@ -107,12 +106,7 @@ def _check(mesh_device, y, host, local, cluster_axis, direction):
 @pytest.mark.parametrize("cluster_axis", [1, 0], ids=["tp_axis", "sp_axis"])
 @pytest.mark.parametrize("mesh_device, device_params", [_mesh((2, 4)), _mesh((4, 2))], indirect=True)
 def test_v41_all_to_all(mesh_device, device_params, cluster_axis, size, direction, num_links):
-    """The shared op itself. On 4x2 it runs only with V41_A2A_REPRO_4X2=1: the tp_axis case hangs the mesh (the safe
-    runner then resets it; see module docstring) and the sp_axis cases were not run."""
-    if tuple(mesh_device.shape) == (4, 2) and os.environ.get("V41_A2A_REPRO_4X2") != "1":
-        pytest.skip(
-            "4x2 all_to_all_async_generic: known TP-axis hang (bead 8y7.9.1); set V41_A2A_REPRO_4X2=1 to reproduce"
-        )
+    """The shared op itself, on both mesh axes of both meshes (4x2 tp_axis is the hang regression)."""
     t0 = time.time()
     host, x, local = _make_input(mesh_device, cluster_axis, size, direction)
     topology = per_axis_topology()[cluster_axis]

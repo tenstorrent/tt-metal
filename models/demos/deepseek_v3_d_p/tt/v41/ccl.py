@@ -64,18 +64,9 @@ class V41Collectives:
         return self.tp_all_gather(self.tp_reduce_scatter(t))
 
     def tp_all_to_all(self, t, in_dim, out_dim):
-        """Reshard over TP: concatenate ``in_dim`` across the TP chips and keep this chip's slice of ``out_dim``.
-
-        TP=2 (LoudBox 4x2) gathers ``in_dim`` and keeps this chip's ``out_dim`` slice (``mesh_partition``, local)
-        instead of calling ``all_to_all_async_generic``: that op's Fabric2D multicast initialization assumes mesh
-        axis 1 runs physically east-west, and on the 4x2 mesh TP runs north-south, so its writer stops in
-        ``fail_stop_invalid_fabric_route`` and the collective hangs (bead 8y7.9.1). The gather moves twice the
-        all-to-all bytes, only on this 2-chip axis. Remove once the shared op takes the axis's physical direction.
-        """
+        """Reshard over TP: concatenate ``in_dim`` across the TP chips and keep this chip's slice of ``out_dim``."""
         if self.tp == 1:
             return t
-        if self.tp == 2:
-            return ttnn.mesh_partition(self.tp_all_gather(t, dim=in_dim), dim=out_dim, cluster_axis=TP_AXIS)
         return ttnn.experimental.all_to_all_async_generic(
             t,
             in_dim=in_dim,
