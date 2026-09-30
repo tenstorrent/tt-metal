@@ -1097,8 +1097,8 @@ def resolve_has_indexer(config, state_dict=None, explicit=None, weight_cache_pat
 
 def indexer_layer_is_reused(config, layer_idx: int) -> bool:
     """GLM-5.3 ``shared`` layer: sparse attention but owns NO indexer (it reuses a prior ``full`` layer's
-    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2 /
-    GLM-5.1) every layer is a full indexer owner -> current behavior. Single source of truth for the
+    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2)
+    every layer is a full indexer owner -> current behavior. Single source of truth for the
     device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
     types = getattr(config, "indexer_types", None)
     return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"

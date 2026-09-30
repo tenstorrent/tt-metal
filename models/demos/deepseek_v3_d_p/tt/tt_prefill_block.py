@@ -402,7 +402,7 @@ class TtPrefillBlock(LightweightModule):
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
-            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # so GLM-5.3 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
             # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
             # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
             _dense_ffn_kwargs = {}
