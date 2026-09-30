@@ -191,6 +191,15 @@ ALWI void sdpa_maybe_pack_reconfig_data_format() {
 }
 
 template <uint32_t old_cb, uint32_t new_cb>
+constexpr bool sdpa_pack_format_changed() {
+#ifdef TRISC_PACK
+    return pack_dst_format[old_cb] != pack_dst_format[new_cb];
+#else
+    return false;
+#endif
+}
+
+template <uint32_t old_cb, uint32_t new_cb>
 constexpr bool sdpa_unpack_format_changed() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     return unpack_src_format[old_cb] != unpack_src_format[new_cb] ||
@@ -448,8 +457,11 @@ void blocked_matmul_and_pack(
 }
 
 // Fixed-offset softmax QK^T subblock: matmul into DEST, exp(scale * S - c) on the PACK SFPU, pack P to out_cb
-// and L1-accumulate the tile row sums into sum_cb[row] (fresh on column 0); restores out_cb's row pack width.
-template <uint32_t in1_stride, uint32_t out_num_cols, int fidelity>
+// and L1-accumulate the tile row sums into sum_cb[row] (fresh on column 0). The caller holds the packer ReLU on.
+// Consecutive subblocks alternate the pack order so the L1-acc bit and the pack MOP change once per subblock:
+// !sums_first enters with (acc off, out_cb row MOP) and leaves with (acc on, sum_cb single-tile MOP),
+// sums_first the reverse. Each sum tile still sees its columns in order, column 0 as the overwrite.
+template <bool profiling_enabled, uint32_t in1_stride, uint32_t out_num_cols, int fidelity>
 void blocked_matmul_exp_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -462,7 +474,9 @@ void blocked_matmul_exp_pack(
     uint32_t subblock_w,
     uint32_t subblock_h,
     uint32_t inner_dim,
-    uint32_t matmul_stride) {
+    uint32_t matmul_stride,
+    bool sums_first,
+    [[maybe_unused]] bool prof_win) {
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -476,35 +490,47 @@ void blocked_matmul_exp_pack(
     tile_regs_commit();
 
     tile_regs_wait();
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
     const uint32_t num_tiles = subblock_h * subblock_w;
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        exp_packthread_tile<true, false, InputClamping::None, 32>(i, VectorMode::None);
-    }
-    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     const uint32_t row_base = row_subblock_idx * subblock_h;
-    pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
-    configure_single_tile_pack(sum_cb);
-    const bool overwrite = out_col_offset == 0;
-    dst_index = 0;
-#pragma GCC unroll 1
-    for (uint32_t i = 0; i < subblock_h; i++) {
-        if (overwrite) {
-            PACK((llk_pack_reconfig_l1_acc(0)));
-        } else {
-            PACK((llk_pack_reconfig_l1_acc(1)));
+    sdpa_profile::fine_sync(prof_win);
+    {
+        MaybeDeviceZoneScopedNFine(profiling_enabled, "QK_EXP", prof_win);
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            exp_packthread_tile<true, false, InputClamping::None, 32>(i, VectorMode::None);
         }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        sdpa_profile::fine_sync(prof_win);
+    }
+    {
+        MaybeDeviceZoneScopedNFine(profiling_enabled, "QK_PACK", prof_win);
+        if (!sums_first) {
+            pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
+            configure_single_tile_pack(sum_cb);
+        }
+        // Pass 0 (chunk-start subblock only): column 0 of every row with L1-acc off; pass 1: the other columns.
+        const bool fresh = out_col_offset == 0;
 #pragma GCC unroll 1
-        for (uint32_t j = 0; j < subblock_w; ++j) {
-            pack_tile<true>(dst_index++, sum_cb, row_base + i);
-            if (overwrite && j == 0) {
+        for (uint32_t pass = fresh ? 0 : 1; pass < 2; pass++) {
+            if (pass == 1 && !sums_first) {
                 PACK((llk_pack_reconfig_l1_acc(1)));
             }
+            const uint32_t col_lo = (pass == 1 && fresh) ? 1 : 0;
+            const uint32_t col_hi = pass == 0 ? 1 : subblock_w;
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < subblock_h; i++) {
+#pragma GCC unroll 1
+                for (uint32_t j = col_lo; j < col_hi; ++j) {
+                    pack_tile<true>(i * subblock_w + j, sum_cb, row_base + i);
+                }
+            }
         }
+        if (sums_first) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            configure_row_pack_width(out_cb, subblock_w);
+            pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
+        }
+        sdpa_profile::fine_sync(prof_win);
     }
-    PACK((llk_pack_reconfig_l1_acc(0)));
-    PACK((llk_pack_relu_config(ReluConfig::none())));
-    configure_row_pack_width(out_cb, subblock_w);
     tile_regs_release();
 }
 
@@ -559,12 +585,17 @@ void inplace_v_matmul_pack_batched(
  * needs the full init (the replay image is recorded per fidelity); otherwise the addrmod-only reinit.
  * LoFi always re-records: its replay image bakes the operand clear chosen from the init's ct/rt, and a
  * QK^T image recorded for a narrowed tail chunk (ct < rt) deadlocks the PV matmul (ct >= rt).
+ * rerecord = false: the replay already holds this PV image (same fidelity, same reuse_a), reinit only.
  */
 ALWI void pv_mm_no_mop_reinit_short(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim, bool rerecord = true) {
     constexpr bool pv_lofi = PV_MATH_FIDELITY == 0;  // MathFidelity::LoFi
     if constexpr (PV_MATH_FIDELITY != QK_MATH_FIDELITY || pv_lofi) {
-        mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+        if (rerecord) {
+            mm_no_mop_init_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+        } else {
+            mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
+        }
     } else {
         mm_no_mop_reinit_short<PV_MATH_FIDELITY>(in0_cb, in1_cb, false, ct_dim, rt_dim, kt_dim);
     }
@@ -1557,6 +1588,12 @@ static void sdpa_inner_loop_step(
         MaybeDeviceZoneScopedNWindow(profiling_enabled, "K_WAIT", prof_win);
         CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
     }
+    if constexpr (fixed) {
+        if (dest_exp) {
+            // Held for the whole phase: clamps the pack exp's negative out-of-range results in P and the row sums.
+            PACK((llk_pack_relu_config(ReluConfig::zero())));
+        }
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedNIf(profiling_enabled, "Softmax(Q@KT)", prof_win);
@@ -1571,7 +1608,12 @@ static void sdpa_inner_loop_step(
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
-        configure_row_pack_width(cb_qkt_im, actual_sbw);
+        // An even count of exp-pack subblocks already left this MOP (blocked_matmul_exp_pack).
+        const bool row_mop_kept = dest_exp && q_subblock > 0 && kt_num_full_subblocks % 2 == 0 &&
+                                  !sdpa_pack_format_changed<cb_normalized_out, cb_qkt_im>();
+        if (!row_mop_kept) {
+            configure_row_pack_width(cb_qkt_im, actual_sbw);
+        }
 
         // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
         // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
@@ -1625,7 +1667,7 @@ static void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedNIf(profiling_enabled, "Q@KT MM+Pack", prof_win);
                 if (dest_exp) {
                     if constexpr (fixed) {
-                        blocked_matmul_exp_pack<KT_stride, KT_stride, QK_MATH_FIDELITY>(
+                        blocked_matmul_exp_pack<profiling_enabled, KT_stride, KT_stride, QK_MATH_FIDELITY>(
                             cb_q_in,
                             cb_kt_in,
                             cb_qkt_im,
@@ -1637,7 +1679,9 @@ static void sdpa_inner_loop_step(
                             actual_sbw,
                             qkt_subblock_h,
                             in0_block_w,
-                            in0_block_w);
+                            in0_block_w,
+                            /*sums_first=*/(kt_subblock & 1) != 0,
+                            prof_win);
                     }
                 } else {
                     blocked_matmul_and_pack<true, KT_stride, KT_stride, QK_MATH_FIDELITY>(
@@ -1660,6 +1704,11 @@ static void sdpa_inner_loop_step(
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
                 }
                 kt_index_offset += actual_sbw;
+            }
+        }
+        if constexpr (fixed) {
+            if (dest_exp && kt_num_full_subblocks % 2 == 1) {
+                PACK((llk_pack_reconfig_l1_acc(0)));  // an odd count ends on the sums' L1-acc
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
@@ -1766,6 +1815,11 @@ static void sdpa_inner_loop_step(
 
         q_index_offset += qkt_subblock_h * in0_block_w;
         q_wait_tiles += q_subblock_num_tiles;
+    }
+    if constexpr (fixed) {
+        if (dest_exp) {
+            PACK((llk_pack_relu_config(ReluConfig::none())));  // O can be negative: off before the PV packs
+        }
     }
 
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
@@ -1995,11 +2049,11 @@ static void sdpa_inner_loop_step(
             }
         }
 
+        // The datacopy leaves the matmul replay image alone; the next PV group's reinit restores the rest.
         [[maybe_unused]] auto fold_chunk_sum = [&]() {
             MaybeDeviceZoneScopedNWindow(profiling_enabled, "FOLD", prof_win);
             sdpa_fold_chunk_sum(chunk_sum_cb, cur.sum, Sq_chunk_t, dst_size);
             reconfig_data_format_srca(cb_qkt_im);
-            mm_no_mop_init_short<PV_MATH_FIDELITY>(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
         };
         if constexpr (fixed) {
             if (!pv_early) {
@@ -2102,7 +2156,12 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, cur_h, KT_stride);
+                // Fixed mode: only group 0 follows the QK^T image; later groups reuse the first PV image
+                // (the fold between them is a datacopy) unless the remainder height flips reuse_a.
+                constexpr bool remainder_new_image =
+                    has_qktv_remainder && ((qktv_subblock_w >= qktv_remainder_h) != (qktv_subblock_w >= qktv_h));
+                const bool pv_rerecord = !fixed || q_subblock == 0 || (is_remainder_iter && remainder_new_image);
+                pv_mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, qktv_subblock_w, cur_h, KT_stride, pv_rerecord);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 if (!acc_overwrite) {

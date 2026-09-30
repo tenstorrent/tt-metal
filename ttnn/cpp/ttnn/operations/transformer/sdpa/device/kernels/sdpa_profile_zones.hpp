@@ -34,6 +34,18 @@
 #else
 #define SDPA_PROFILE_HAS_WINDOW 0
 #endif
+// TT_SDPA_PROFILE_FINE (with a window): exp and pack zones in every fixed-offset QK^T subblock, PACK thread only.
+// 32 extra zone pairs per K chunk, so the window should span one chunk.
+#ifndef SDPA_PROFILE_FINE
+#define SDPA_PROFILE_FINE 0
+#endif
+#if SDPA_PROFILE_FINE == 1 && SDPA_PROFILE_HAS_WINDOW && defined(TRISC_PACK) && defined(PROFILE_KERNEL) && \
+    !defined(PROFILE_STREAMING)
+#define SDPA_PROFILE_FINE_ZONES 1
+#include "ckernel.h"
+#else
+#define SDPA_PROFILE_FINE_ZONES 0
+#endif
 
 namespace sdpa_profile {
 constexpr int32_t iter = SDPA_PROFILE_ITER;
@@ -57,6 +69,15 @@ inline __attribute__((always_inline)) bool window_hit(uint32_t ring_iter, uint32
 // (and whose code must fit the kernel config buffer).
 template <bool profiling_enabled>
 constexpr bool helper_zones = profiling_enabled && SDPA_PROFILE_HAS_WINDOW == 0;
+
+// Fine zones start and end on an idle Tensix pipe, so they time execution rather than instruction issue.
+inline __attribute__((always_inline)) void fine_sync([[maybe_unused]] bool on) {
+#if SDPA_PROFILE_FINE_ZONES
+    if (on) {
+        ckernel::tensix_sync();
+    }
+#endif
+}
 }  // namespace sdpa_profile
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -130,4 +151,9 @@ struct MaybeProfileScopeIf<true, timer_id> {
 #define MaybeDeviceZoneScopedNWindow(ENABLED, name, on) MaybeDeviceZoneScopedNIf(ENABLED, name, on)
 #else
 #define MaybeDeviceZoneScopedNWindow(ENABLED, name, on) (void(sizeof(on)))
+#endif
+#if SDPA_PROFILE_FINE_ZONES
+#define MaybeDeviceZoneScopedNFine(ENABLED, name, on) MaybeDeviceZoneScopedNIf(ENABLED, name, on)
+#else
+#define MaybeDeviceZoneScopedNFine(ENABLED, name, on) (void(sizeof(on)))
 #endif
