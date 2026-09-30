@@ -25,6 +25,8 @@ index-K rows and every window carry >= the cache bar. The single-shot oracle sco
 (``oracle.INDEXER_QUERY_BLOCK``, bit-identical) so that it fits in host memory at S=56320.
 """
 
+import hashlib
+import os
 import time
 from contextlib import contextmanager
 
@@ -228,6 +230,17 @@ def _check(model, spec, tokens, reference, name, last_chunk=None):
     with _stage(f"{name} reference (cached unless precomputed)", "oracle"):
         clean, expected, drifts, token_floor = reference_data(spec, tokens, reference, last_chunk)
     assert torch.equal(logits, logits2), "prefill is not bit-identical across repeats"
+    dump = os.environ.get("TT_V41_TRANSFORMER_DUMP")
+    if dump:  # cross-process determinism: compare two runs' dumps with torch.equal
+        final = torch.cat(streams[list(streams)[-1]])
+        digests = {
+            l: hashlib.sha256(torch.cat(p).contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+            for l, p in streams.items()
+        }
+        torch.save({"logits": logits, "final_stream": final, "stream_sha256": digests}, dump)
+        logger.info(
+            f"transformer {name}: dumped logits {tuple(logits.shape)}, final stream {tuple(final.shape)} to {dump}"
+        )
     tokens_device = _agreement(expected, logits)
     logger.info(
         f"transformer {name} tokens (reported): "
