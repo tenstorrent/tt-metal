@@ -752,9 +752,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const tt::tt_metal::NOC reader_noc =
-        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    // Keep DRAM weight reads and activation multicast traffic on separate NoCs.
+    const tt::tt_metal::NOC weights_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt::tt_metal::NOC activation_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     // The block-sharded output grid is produced by determine_output_parallel_config as one dense,
     // zero-anchored rectangle. The weights channel uses one fixed sender per row/column of that output
@@ -768,7 +768,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             "Block-sharded Conv2D weights multicast requires one dense, zero-anchored output grid");
         weights_mcast.emplace(
             *device,
-            mcast::McastConfig{.noc = writer_mcast_noc},
+            mcast::McastConfig{.noc = weights_noc},
             output_cores,
             /*receiver_group_size=*/transpose_mcast ? num_cores_x : num_cores_y,
             mcast::McastFixedSenderConfig{},
@@ -780,7 +780,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     if (!block_sharded && !skip_weights_mcast) {
         weights_mcast.emplace(
             *device,
-            mcast::McastConfig{.noc = writer_mcast_noc, .handshake_cores = input_cores},
+            mcast::McastConfig{.noc = weights_noc, .handshake_cores = input_cores},
             all_cores,
             /*receiver_group_size=*/all_cores.num_cores(),
             mcast::McastExplicitSenderConfig{{{top_left_core}}});
@@ -1177,7 +1177,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
     writer_mcast_sender_desc.config = DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = writer_mcast_noc,
+        .noc = weights_noc,
     };
 
     // Optional writer_mcast_receiver kernel (created only when weights mcast is not skipped).
@@ -1193,7 +1193,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
         writer_mcast_receiver_desc.config = DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = writer_mcast_noc,
+            .noc = weights_noc,
         };
     }
 
@@ -1207,7 +1207,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
     reader_desc.config = DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = reader_noc,
+        .noc = activation_noc,
     };
 
     KernelDescriptor compute_kernel_desc;
@@ -1250,7 +1250,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
         const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+        const bool activation_is_noc_0 = activation_noc == tt::tt_metal::NOC::NOC_0;
 
         for (const CoreRange& core_range : all_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
@@ -1262,7 +1262,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
 
                     reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
+                        activation_is_noc_0,
                         bottom_core_physical.x,
                         top_left_core_physical.y,
                         bottom_core_physical.x,
@@ -1274,7 +1274,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     CoreCoord core_physical = device->worker_core_from_logical_core(core);
 
                     reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
+                        activation_is_noc_0,
                         top_left_core_physical.x,
                         core_physical.y,
                         out_bottom_right_core_physical.x,
