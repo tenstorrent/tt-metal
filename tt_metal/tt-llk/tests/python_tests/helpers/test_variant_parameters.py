@@ -2085,3 +2085,21 @@ class SFPU_DROPOUT_PROBE(TemplateParameter):
                 f"constexpr std::uint32_t DROPOUT_SEED = {self.dropout_seed}u;",
             ]
         )
+
+
+@dataclass
+class SFPU_MASK_PLACEMENT(TemplateParameter):
+    """DEST tile indices of the data and the mask tile for sources/sfpu_mask_test.cpp."""
+
+    mask_data_dst_index: int = 0
+    mask_mask_dst_index: int = 1
+    mask_posinf: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t MASK_DATA_DST_INDEX = {self.mask_data_dst_index};",
+                f"constexpr std::uint32_t MASK_MASK_DST_INDEX = {self.mask_mask_dst_index};",
+                f"constexpr bool MASK_POSINF = {'true' if self.mask_posinf else 'false'};",
+            ]
+        )
