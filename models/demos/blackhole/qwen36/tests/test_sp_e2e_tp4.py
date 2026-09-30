@@ -218,9 +218,7 @@ def test_sp_e2e_tp4():
                 ttnn.execute_trace(s, sp._trace_ids[d], cq_id=0, blocking=False)
             if overlap:
                 ho.execute([0, 1, 2])
-            first = int(
-                ttnn.to_torch(sp._traced_tok, mesh_composer=ttnn.ConcatMeshToTensor(subs[-1], dim=0)).reshape(-1)[0]
-            )
+            first = sp.read_traced_token()
             t_ttft = time.perf_counter()
             ho.execute([3] if overlap else [0, 1, 2, 3])
             for s in subs:

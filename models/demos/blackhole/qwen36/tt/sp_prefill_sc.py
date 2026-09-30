@@ -133,6 +133,10 @@ class SPPrefillSC:
         # 1-tile tensor per hop at the very start and the very end of every die's program (see
         # _prof_anchor_pass), so the profiler has 2 clock-alignment anchors per link per replay.
         self._prof_anchors = os.environ.get("QWEN36_SP_PROF_ANCHORS", "0") == "1"
+        # QWEN36_SP_TOKEN_FETCH: "sync" = legacy TTFT read (synchronize every die, then a blocking to_torch);
+        # default = queue a non-blocking read + event behind die 3's trace and wait on that event only
+        # (read_traced_token); dies 0-2 are synchronized after the TTFT stamp.
+        self._token_fetch_sync = os.environ.get("QWEN36_SP_TOKEN_FETCH", "async").strip().lower() == "sync"
         if self._static_send:
             assert state_socket_mode == "direct" and kv_socket_mode == "direct", "STATIC_SEND needs direct mode"
         logger.info(
@@ -193,6 +197,7 @@ class SPPrefillSC:
         self.last_first_token = None
         # ---- trace state (populated by capture(), released by _release_traces()) ----
         self._traced_tok = None  # last die: persistent greedy uint32 token the trace writes
+        self._tok_composer = None  # ConcatMeshToTensor(last die) built once in capture() (token host read)
         self._traced_hidden = None  # last die: persistent DRAM final hidden the trace writes (logits tail input)
         self._trace_pc_entries = None  # per-die program-cache entry counts at capture (no compile after park)
         self._trace_refs_snap = None  # tensors whose addresses the traces bake in (identity-checked on replay)
@@ -902,6 +907,7 @@ class SPPrefillSC:
         if isinstance(tok, dict):  # QWEN36_SP_LMHEAD_SHARD
             tok = tok["tok"]
         self._traced_tok, self._traced_hidden = tok, keep
+        self._tok_composer = ttnn.ConcatMeshToTensor(self.subs[-1], dim=0)
         n2 = [sub.num_program_cache_entries() for sub in self.subs]
         if n2 != n0:
             self._release_traces()
@@ -928,8 +934,12 @@ class SPPrefillSC:
     def prefill_traced(self, tokens: torch.Tensor, return_logits: bool = True):
         """Replay the captured per-die traces on a new prompt (capture() must have run). Only the token
         buffers are written (host -> device) before the replay. Returns (logits, wavefront_s, total_s):
-        wavefront_s = all traces launched + synchronized; total_s additionally includes the on-device
-        greedy token readback (TTFT). The logits (return_logits=True; else None) come from the eager
+        total_s = TTFT = traces launched + the greedy token of the last die read back on host (a
+        non-blocking read + event queued behind die 3's trace, see read_traced_token; the other dies are
+        NOT synchronized first: the token is causally after all of their work); wavefront_s = all dies
+        done, stamped after the token (so wavefront_s >= total_s). With QWEN36_SP_TOKEN_FETCH=sync the
+        legacy order is used instead (synchronize every die -> wavefront_s, then a blocking token read
+        -> total_s >= wavefront_s). The logits (return_logits=True; else None) come from the eager
         logits tail on the trace's kept hidden, AFTER total_s is stamped, and cross-check the token."""
         assert all(t is not None for t in self._trace_ids), "capture() must run before prefill_traced()"
         want = (1, self.total_len)
@@ -950,12 +960,21 @@ class SPPrefillSC:
         t0 = time.perf_counter()
         for d, sub in enumerate(self.subs):
             ttnn.execute_trace(sub, self._trace_ids[d], cq_id=0, blocking=False)
-        for sub in self.subs:
-            ttnn.synchronize_device(sub)
-        t1 = time.perf_counter()
-        tok_t = ttnn.to_torch(self._traced_tok, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
-        first = int(tok_t.reshape(-1)[0])
-        t2 = time.perf_counter()
+        if self._token_fetch_sync:  # legacy: every die finished first, then a blocking read
+            for sub in self.subs:
+                ttnn.synchronize_device(sub)
+            t1 = time.perf_counter()
+            tok_t = ttnn.to_torch(self._traced_tok, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
+            first = int(tok_t.reshape(-1)[0])
+            t2 = time.perf_counter()
+        else:
+            first = self.read_traced_token()
+            t2 = time.perf_counter()
+            # Untimed: the token depends on all dies' work, so these return almost at once; they keep the
+            # host state quiescent before the next replay / export.
+            for sub in self.subs:
+                ttnn.synchronize_device(sub)
+            t1 = time.perf_counter()
         self.last_first_token = first
 
         logits = None
@@ -973,10 +992,23 @@ class SPPrefillSC:
                 assert float(logits[first]) == float(top2.values[0]), msg
                 logger.warning(msg + " (exact tie)")
         logger.info(
-            f"[SPPrefillSC traced] wavefront={(t1 - t0) * 1000:.2f} ms ttft={(t2 - t0) * 1000:.2f} ms "
-            f"first_token={first}"
+            f"[SPPrefillSC traced] ttft={(t2 - t0) * 1000:.2f} ms all-dies-done={(t1 - t0) * 1000:.2f} ms "
+            f"first_token={first} fetch={'sync' if self._token_fetch_sync else 'event'}"
         )
         return logits, (t1 - t0), (t2 - t0)
+
+    def read_traced_token(self) -> int:
+        """Greedy first token of the replayed trace, on host. Call right after the per-die execute_trace
+        launches (they are non-blocking). The D2H read and a completion event are appended to the LAST die's
+        (single, in-order) command queue behind its trace, then the host spin-waits on that event only: the
+        read executes after die 3's last op, and the token is causally after all of dies 0..n-2's work
+        (argmax consumes their slice rows), so no per-die synchronize_device is needed first. Does not
+        wait for dies 0..n-2 to drain: synchronize them afterwards if the host state must be quiescent."""
+        last = self.subs[-1]
+        tok_host = self._traced_tok.cpu(blocking=False)
+        ev = ttnn.record_event(last, 0)
+        ttnn.event_synchronize(ev)
+        return int(ttnn.to_torch(tok_host, mesh_composer=self._tok_composer).reshape(-1)[0])
 
     def _release_traces(self):
         """Release every captured trace and free the trace outputs. Idempotent."""
@@ -989,6 +1021,7 @@ class SPPrefillSC:
             if t is not None:
                 ttnn.deallocate(t)
             setattr(self, name, None)
+        self._tok_composer = None
         self._trace_pc_entries = None
         self._trace_refs_snap = None
 

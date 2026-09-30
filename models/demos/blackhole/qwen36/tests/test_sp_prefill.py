@@ -458,9 +458,11 @@ def test_sp_prefill_traced_ttft(sp_mesh):
             _, wave_s, total_s = sp.prefill_traced(tokens_a)
             wave_times.append(wave_s)
             total_times.append(total_s)
-            logger.info(f"[traced ttft] replay {i}: wavefront={wave_s * 1000:.2f}ms total={total_s * 1000:.2f}ms")
+            logger.info(
+                f"[traced ttft] replay {i}: total={total_s * 1000:.2f}ms (ttft) all-dies-done={wave_s * 1000:.2f}ms"
+            )
         logger.info(
-            f"[traced ttft] wavefront: mean={sum(wave_times) / 5 * 1000:.2f}ms min={min(wave_times) * 1000:.2f}ms"
+            f"[traced ttft] all-dies-done: mean={sum(wave_times) / 5 * 1000:.2f}ms min={min(wave_times) * 1000:.2f}ms"
         )
         logger.info(
             f"[traced ttft] total: mean={sum(total_times) / 5 * 1000:.2f}ms min={min(total_times) * 1000:.2f}ms"
@@ -844,7 +846,7 @@ def test_sp_prefill_then_tp_decode():
 
     total_e2e_s = ttft_s + export_s + inject_s
     logger.info(
-        f"[e2e-c] SP traced TTFT={ttft_s * 1000:.2f}ms (wavefront={wave_s * 1000:.2f}ms) "
+        f"[e2e-c] SP traced TTFT={ttft_s * 1000:.2f}ms (all-dies-done={wave_s * 1000:.2f}ms) "
         f"export={export_s * 1000:.2f}ms inject={inject_s * 1000:.2f}ms "
         f"end-to-end prefill->decode-ready={total_e2e_s * 1000:.2f}ms"
     )
