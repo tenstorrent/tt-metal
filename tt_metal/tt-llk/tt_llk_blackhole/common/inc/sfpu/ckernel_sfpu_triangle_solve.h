@@ -49,8 +49,10 @@ constexpr std::uint32_t TRIANGLE_SOLVE_BLOCK_OFF[TRIANGLE_SOLVE_ROWS_PER_GROUP] 
 constexpr std::uint32_t TRIANGLE_SOLVE_DEST_TILE_ROWS = 1u << DstTileSizeLog2[DstTileShape::Tile32x32];
 static_assert(TRIANGLE_SOLVE_DEST_TILE_ROWS == 2 * TRIANGLE_SOLVE_FACE_PAIR_ROWS, "the solve's DEST layout assumes four 16-row faces per 32x32 tile");
 
-constexpr std::uint32_t TRIANGLE_SOLVE_SIGN_BIT_FP32 = 0x80000000u;
-constexpr std::uint32_t TRIANGLE_SOLVE_SIGN_BIT_BF16 = 0x8000u;
+static_assert(TRIANGLE_SOLVE_FACE_DIM % TRIANGLE_SOLVE_ROWS_PER_GROUP == 0, "a row group's columns must not straddle a face boundary");
+
+constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_MASK     = 0xFFFFu; // a 16-bit SFPLOADI immediate
+constexpr std::uint32_t TRIANGLE_SOLVE_IMM16_SIGN_BIT = 0x8000u; // its sign bit: bit 15 of a bf16, bit 31 of an fp32 in the upper half
 
 template <DataFormat L_FORMAT>
 using _triangle_solve_l_elem_t_ = std::conditional_t<L_FORMAT == DataFormat::Float32, std::uint32_t, std::uint16_t>;
@@ -88,6 +90,26 @@ inline constexpr std::uint32_t _triangle_solve_row_off_(const std::uint32_t row)
 }
 
 /**
+ * @brief SFPLOADI into LREG7 with a compile-time XOR applied to the immediate: TT_SFPLOADI(LREG7, MOD0, imm16 ^ FLIP).
+ *
+ * The immediate fills the zero low half of the instruction word, so the flip is folded into the constant opcode and the RISC
+ * builds the word with one XOR; through the TT_SFPLOADI macro the flip would be a separate XOR before the macro's add.
+ *
+ * @tparam MOD0: SFPLOADI mode, one of sfpi::SFPLOADI_MOD0_*
+ * @tparam FLIP: Bits XORed into the immediate, within the low 16 bits
+ * @param imm16: The 16-bit immediate; must fit TRIANGLE_SOLVE_IMM16_MASK.
+ */
+template <std::uint32_t MOD0, std::uint32_t FLIP = 0>
+inline void _triangle_solve_sfploadi_lreg7_(const std::uint32_t imm16)
+{
+    constexpr std::uint32_t OPCODE = TT_OP_SFPLOADI(p_sfpu::LREG7, MOD0, 0);
+    static_assert(MOD0 <= 0xF, "SFPLOADI mod0 is a 4-bit field");
+    static_assert((OPCODE & TRIANGLE_SOLVE_IMM16_MASK) == 0, "the immediate must fill the zero low half of the SFPLOADI word");
+    static_assert(FLIP <= TRIANGLE_SOLVE_IMM16_MASK, "the flip must stay within the 16-bit immediate");
+    TT_INSN((OPCODE ^ FLIP) ^ imm16);
+}
+
+/**
  * @brief Splat -L (or L when L_NEGATED, i.e. the entry is already -L) into LREG7 across all lanes from the raw bits of one L element.
  *
  * fp32 takes two immediates (upper and lower halves); bf16 is the upper half of an fp32, so one FLOATB immediate restores the exact
@@ -98,25 +120,19 @@ inline constexpr std::uint32_t _triangle_solve_row_off_(const std::uint32_t row)
  * @param bits: Raw bits of the element as read from L1.
  */
 template <DataFormat L_FORMAT, bool L_NEGATED>
-inline void _triangle_solve_load_l_(std::uint32_t bits)
+inline void _triangle_solve_load_l_(const std::uint32_t bits)
 {
     static_assert(L_FORMAT == DataFormat::Float32 || L_FORMAT == DataFormat::Float16_b, "the triangle solve reads L as Float32 or Float16_b");
+    // Sign bit of the 16-bit immediate: bit 15 of a bf16, and bit 31 of an fp32 once shifted into the upper-half immediate.
+    constexpr std::uint32_t SIGN_FLIP = L_NEGATED ? 0 : TRIANGLE_SOLVE_IMM16_SIGN_BIT;
     if constexpr (L_FORMAT == DataFormat::Float32)
     {
-        if constexpr (!L_NEGATED)
-        {
-            bits ^= TRIANGLE_SOLVE_SIGN_BIT_FP32;
-        }
-        TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
-        TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
+        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_UPPER, SIGN_FLIP>(bits >> 16);
+        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_LOWER>(bits & TRIANGLE_SOLVE_IMM16_MASK);
     }
     else
     {
-        if constexpr (!L_NEGATED)
-        {
-            bits ^= TRIANGLE_SOLVE_SIGN_BIT_BF16;
-        }
-        TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, bits);
+        _triangle_solve_sfploadi_lreg7_<sfpi::SFPLOADI_MOD0_FLOATB, SIGN_FLIP>(bits);
     }
 }
 
@@ -219,24 +235,17 @@ inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_
     {
         _triangle_solve_load_group_(in_base + _triangle_solve_group_base_(group));
 
-        // Columns of the previous groups. Columns 0..15 and 16..row0-1 live in different faces, so the element pointer
-        // restarts at column 16 instead of walking across the face boundary.
+        // Columns of the previous groups, walked one solved group (four columns) at a time. A group's four columns never
+        // straddle a face boundary, so they are contiguous in L1; the unrolled body makes each stash slot offset a constant.
         const std::uint32_t row0 = group * TRIANGLE_SOLVE_ROWS_PER_GROUP;
-        if (row0 > 0)
+        for (std::uint32_t src = 0; src < group; src++)
         {
-            const std::uint32_t face0_cols             = row0 < TRIANGLE_SOLVE_FACE_DIM ? row0 : TRIANGLE_SOLVE_FACE_DIM;
-            volatile tt_l1_ptr l_elem_t* const l_face0 = tile + _triangle_solve_elem_(row0, 0);
-            for (std::uint32_t col = 0; col < face0_cols; col++)
+            volatile tt_l1_ptr l_elem_t* const l_blk = tile + _triangle_solve_elem_(row0, src * TRIANGLE_SOLVE_ROWS_PER_GROUP);
+            const std::uint32_t x_base               = out_base + _triangle_solve_group_base_(src);
+#pragma GCC unroll TRIANGLE_SOLVE_ROWS_PER_GROUP
+            for (std::uint32_t k = 0; k < TRIANGLE_SOLVE_ROWS_PER_GROUP; k++)
             {
-                _triangle_solve_apply_prev_col_<L_FORMAT, L_NEGATED>(l_face0 + col, out_base + _triangle_solve_row_off_(col));
-            }
-            if (row0 > TRIANGLE_SOLVE_FACE_DIM)
-            {
-                volatile tt_l1_ptr l_elem_t* const l_face1 = tile + _triangle_solve_elem_(row0, TRIANGLE_SOLVE_FACE_DIM);
-                for (std::uint32_t col = TRIANGLE_SOLVE_FACE_DIM; col < row0; col++)
-                {
-                    _triangle_solve_apply_prev_col_<L_FORMAT, L_NEGATED>(l_face1 + (col - TRIANGLE_SOLVE_FACE_DIM), out_base + _triangle_solve_row_off_(col));
-                }
+                _triangle_solve_apply_prev_col_<L_FORMAT, L_NEGATED>(l_blk + k, x_base + TRIANGLE_SOLVE_BLOCK_OFF[k]);
             }
         }
 
