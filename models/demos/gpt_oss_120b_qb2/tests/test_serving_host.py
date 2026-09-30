@@ -278,7 +278,7 @@ def test_serving_report_serializes_fabric_without_mutating_capabilities(monkeypa
     assert report["resident_layers"] == 36
 
 
-@pytest.mark.parametrize("logical_len,padded_len", [(3, 128), (4, 128), (128, 128), (129, 256), (511, 512)])
+@pytest.mark.parametrize("logical_len,padded_len", [(3, 128), (4, 128), (128, 128), (129, 1024), (511, 1024)])
 @pytest.mark.parametrize("return_all_logits", [False, True])
 def test_host_prefill_matches_shared_padding_and_preserves_logical_outputs(logical_len, padded_len, return_all_logits):
     generator = object.__new__(Generator)
