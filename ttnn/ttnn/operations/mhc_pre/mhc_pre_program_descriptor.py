@@ -91,6 +91,10 @@ X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of th
 # transaction id each), so the projection runs under the rest of the burst instead of after it (Refinement 4).
 # 1 = one publish per block (the pre-Refinement-4 behaviour); at most 15 (NoC transaction ids).
 X_STREAM_CHUNKS = 4
+# Chunks of one X block in flight at once (Refinement 4). With every chunk issued up front the banks serve all
+# cores' requests interleaved and even chunk 0 lands only at the end of the burst; a bounded look-ahead keeps
+# this core's chunks roughly in order. >= X_STREAM_CHUNKS = all issued up front.
+X_STREAM_INFLIGHT = 2
 Y_DEPTH = 2  # cb_y_out windows in flight
 Y_CHUNK_TILES_CAP = 8  # 4-8 writes in flight per barrier saturate (catalog: double_buffer)
 # W is pushed into cb_weight in chunks of this many tiles (one read barrier each), so the compute kernel's
@@ -141,12 +145,29 @@ W_BCAST = True
 # NoC placement (noc_placement): the reader's X stream rides READER_NOC; the writer (W fill, both multicasts,
 # partial / y / post / comb stores) rides the other one.
 READER_NOC = ttnn.NOC.NOC_0
+# Groups whose first logical core-row is < READER_NOC_FLIP_ROWS swap the two NoCs (reader on the other NoC,
+# writer on READER_NOC). With every reader on NoC0 the X burst starves the top core rows (their DRAM responses
+# share the most south links: measured 26 us vs 8 us for the bottom row at 640x1792), and those rows set the
+# wall. 0 = no row flipped.
+READER_NOC_FLIP_ROWS = 0
 
 
-def _writer_noc():
-    return ttnn.NOC.NOC_1 if READER_NOC == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
+def _other_noc(noc):
+    return ttnn.NOC.NOC_1 if noc == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
 
 
+def _reader_noc_of(group_y0):
+    return _other_noc(READER_NOC) if group_y0 < READER_NOC_FLIP_ROWS else READER_NOC
+
+
+# Stream-column tiles moved off rank 0 when rank 0 owns every Sinkhorn row (one token tile-row per group): the
+# owner's tail is its projection / sum x^2 / y-mix + the Sinkhorn, every other rank's only the former
+# (Refinement 4). Sized ~ Sinkhorn time / per-C-tile tail time (~6.7 us / ~0.7 us x (G-1)/G), both independent
+# of C. Measured (BH, bf16 X, device ns): 640x1792 48.3 -> 45.7 us, 640x7168 157.6 -> 155.7 us. Note: the stream
+# stride C/32 is a multiple of the DRAM bank count for these shapes, so a rank's reads walk banks
+# (c_start + c) mod banks; discounts that make two ranks' c_start collide mod banks measured slower (2: 50.2 us).
+# 0 = even split.
+OWNER_C_DISCOUNT = 6
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
 W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
 
@@ -170,6 +191,19 @@ def _split(total, parts):
     for p in range(1, parts):
         starts[p] = starts[p - 1] + sizes[p - 1]
     return sizes, starts
+
+
+def _c_split(Ct, group_cores, owner_fixed):
+    """Per-rank stream-column split. owner_fixed (every group has <= 1 token tile-row, so rank 0 owns every
+    Sinkhorn row): rank 0 gets OWNER_C_DISCOUNT tiles fewer than the even share (>= 1 kept), the other ranks
+    split the rest evenly, so the owner's y-mix / projection shrink by what its Sinkhorn adds."""
+    even = Ct // group_cores
+    d = min(OWNER_C_DISCOUNT, even - 1) if owner_fixed and group_cores > 1 else 0
+    if d <= 0:
+        return _split(Ct, group_cores)
+    rest, rest_starts = _split(Ct - (even - d), group_cores - 1)
+    sizes = [even - d] + rest
+    return sizes, [0] + [even - d + st for st in rest_starts]
 
 
 @dataclass
@@ -270,11 +304,12 @@ def make_plan(device, x_tensor, w_tensor, n):
     def fit(group_w, group_h):
         """(bt, depth, geometry) of a group_w x group_h group shape, or None if no block fits L1."""
         group_cores = group_w * group_h
-        kmax = n * math.ceil(Ct / group_cores)
-        y_chunk = min(math.ceil(Ct / group_cores), Y_CHUNK_TILES_CAP)
         groups_x, groups_y = grid_x // group_w, grid_y // group_h
         core_token_tiles, t_start = _split(Mt, groups_x * groups_y)
         ctt_max = max(core_token_tiles)
+        c_tiles, c_starts = _c_split(Ct, group_cores, owner_fixed=ctt_max <= 1)
+        kmax = n * max(c_tiles)
+        y_chunk = min(max(c_tiles), Y_CHUNK_TILES_CAP)
 
         def l1_at(bt_, depth_):
             return _l1_bytes(
@@ -306,6 +341,8 @@ def make_plan(device, x_tensor, w_tensor, n):
                     groups_y=groups_y,
                     core_token_tiles=core_token_tiles,
                     t_start=t_start,
+                    c_tiles=c_tiles,
+                    c_starts=c_starts,
                     bt=bt,
                     depth=depth,
                     blocks=math.ceil(ctt_max / bt),
@@ -348,7 +385,7 @@ def make_plan(device, x_tensor, w_tensor, n):
     core_token_tiles, t_start = chosen["core_token_tiles"], chosen["t_start"]
     kmax, y_chunk, bt, depth = chosen["kmax"], chosen["y_chunk"], chosen["bt"], chosen["depth"]
 
-    core_c_tiles, c_start = _split(Ct, group_cores)
+    core_c_tiles, c_start = chosen["c_tiles"], chosen["c_starts"]
     return Plan(
         n=n,
         Mt=Mt,
@@ -437,30 +474,36 @@ def create_program_descriptor(
     ]
 
     # ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle, sender = row 0 ----
-    w_mcast = None
+    # Kernel sets: the groups sharing one (reader NoC, writer NoC) placement get their own reader / writer
+    # descriptors (the NoC is a kernel-config property; the multicast wires depend on it too).
+    reader_nocs = sorted({_reader_noc_of(gy0) for _, _, gy0 in groups}, key=lambda c: c.value)
+
+    w_mcast = {}  # reader NoC of the kernel set -> Mcast1D (same rectangle and semaphore; senders may ride either NoC)
     active_rows = len(groups) // plan.groups_x
     if W_BCAST and plan.group_h == 1 and len(groups) % plan.groups_x == 0 and active_rows >= 2:
         w_rect = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
         )
-        w_cfg = ttnn.McastConfig(
-            noc=_writer_noc(),
-            handshake=False,
-            data_ready=ttnn.McastDataReady.Counter,
-            rotating_sender=True,
-            sem_ids=[SEM_W_READY],
-        )
-        w_mcast = ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, 0, w_cfg)
+        for rnoc in reader_nocs:
+            w_cfg = ttnn.McastConfig(
+                noc=_other_noc(rnoc),
+                handshake=False,
+                data_ready=ttnn.McastDataReady.Counter,
+                rotating_sender=True,
+                sem_ids=[SEM_W_READY],
+            )
+            w_mcast[rnoc] = ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, 0, w_cfg)
 
     # fp32 W hi/lo split done per column share (bf16 X only: the fp32-X grid split needs the whole slice's max).
-    w_presplit = w_mcast is not None and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
+    w_presplit = bool(w_mcast) and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
 
     # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
-    mcast_cfg = ttnn.McastConfig(noc=_writer_noc(), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
     helpers = {}
-    mcast_ct = None
+    mcast_ct = {}  # reader NoC of the kernel set -> the group-mcast CT wire (identical within a set)
     if G > 1:
         for g, gx0, gy0 in groups:
+            rnoc = _reader_noc_of(gy0)
+            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
             rect = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -470,11 +513,11 @@ def create_program_descriptor(
             )
             helpers[g] = ttnn.Mcast2D(device, rect, ttnn.CoreCoord(gx0, gy0), mcast_cfg)
             ct = list(helpers[g].compile_time_args())
-            assert mcast_ct is None or ct == mcast_ct, "mcast CT wire must be identical across groups"
-            mcast_ct = ct
+            assert mcast_ct.get(rnoc, ct) == ct, "mcast CT wire must be identical across the groups of a set"
+            mcast_ct[rnoc] = ct
     else:
         # group_cores == 1: no receivers, the pipe is never used. Placeholder wire with real sem ids.
-        mcast_ct = [0, SEM_MCAST_READY, SEM_MCAST_CONSUMED, 0, 1, 0]
+        mcast_ct = {rnoc: [0, SEM_MCAST_READY, SEM_MCAST_CONSUMED, 0, 1, 0] for rnoc in reader_nocs}
 
     # ---- kernel CT args ----
     reader_ct = [
@@ -487,8 +530,9 @@ def create_program_descriptor(
         CB_MAX_SCALER,
         int(x_pieces(x_tensor.dtype) > 1),
         X_STREAM_CHUNKS,
+        X_STREAM_INFLIGHT,
     ]
-    assert len(reader_ct) == 9  # TensorAccessorArgs base in the reader
+    assert len(reader_ct) == 10  # TensorAccessorArgs base in the reader
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
 
     compute_ct = [
@@ -559,13 +603,16 @@ def create_program_descriptor(
         int(w_presplit),
     ]
     assert len(writer_ct) == 20  # MCAST_CT_BASE in the writer
-    writer_ct += mcast_ct
-    writer_ct += list(w_mcast.compile_time_args()) if w_mcast is not None else W_MCAST_PLACEHOLDER_CT
-    writer_ct += ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args()
-    writer_ct += ttnn.TensorAccessorArgs(post_tensor).get_compile_time_args()
-    writer_ct += ttnn.TensorAccessorArgs(comb_tensor).get_compile_time_args()
-    writer_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()
-    writer_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
+    writer_tail_ct = []
+    writer_tail_ct += ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args()
+    writer_tail_ct += ttnn.TensorAccessorArgs(post_tensor).get_compile_time_args()
+    writer_tail_ct += ttnn.TensorAccessorArgs(comb_tensor).get_compile_time_args()
+    writer_tail_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()
+    writer_tail_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
+
+    def writer_ct_of(rnoc):
+        w_ct = list(w_mcast[rnoc].compile_time_args()) if w_mcast else W_MCAST_PLACEHOLDER_CT
+        return writer_ct + mcast_ct[rnoc] + w_ct + writer_tail_ct
 
     # ---- per-core RT args ----
     a_pre, a_post, a_res = scale
@@ -579,10 +626,11 @@ def create_program_descriptor(
         _f32_bits(1.0 / (n * C)),
         int(sinkhorn_iters),
     ]
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
+    reader_rt = {rnoc: ttnn.RuntimeArgs() for rnoc in reader_nocs}
+    writer_rt = {rnoc: ttnn.RuntimeArgs() for rnoc in reader_nocs}
     compute_rt = ttnn.RuntimeArgs()
     for g, gx0, gy0 in groups:
+        rnoc = _reader_noc_of(gy0)
         ctt = plan.core_token_tiles[g]
         ts = plan.t_start[g]
         num_blocks = math.ceil(ctt / bt)
@@ -594,7 +642,7 @@ def create_program_descriptor(
                 cc = plan.core_c_tiles[rank]
                 cs = plan.c_start[rank]
                 own = [0, 0]
-                if w_mcast is None:
+                if not w_mcast:
                     w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0], [0, 0, 0, 0]
                 else:
                     # Column share: row y of the column reads / splits / multicasts W tiles [own0, own1).
@@ -602,10 +650,10 @@ def create_program_descriptor(
                     own = [starts[y], starts[y] + sizes[y]]
                     events = sum(1 for sz in sizes if sz > 0) - (1 if sizes[y] > 0 else 0)
                     w_rt = [W_ROLE_SPREAD] + own + [events]
-                    w_mc_rt = list(w_mcast.runtime_args(ttnn.CoreCoord(x, y)))
-                reader_rt[x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks]
+                    w_mc_rt = list(w_mcast[rnoc].runtime_args(ttnn.CoreCoord(x, y)))
+                reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks]
                 mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
-                writer_rt[x][y] = (
+                writer_rt[rnoc][x][y] = (
                     [
                         y_tensor.buffer_address(),
                         post_tensor.buffer_address(),
@@ -627,20 +675,27 @@ def create_program_descriptor(
                 )
                 compute_rt[x][y] = [num_blocks, ctt, cc, rank] + scalar_bits + own
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "mhc_pre_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, READER_NOC),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "mhc_pre_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _writer_noc()),
-    )
+    dm_kernels = []
+    for rnoc in reader_nocs:
+        set_cores = ttnn.CoreRangeSet([r for (_, _, gy0), r in zip(groups, ranges) if _reader_noc_of(gy0) == rnoc])
+        dm_kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "mhc_pre_reader.cpp"),
+                core_ranges=set_cores,
+                compile_time_args=reader_ct,
+                runtime_args=reader_rt[rnoc],
+                config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, rnoc),
+            )
+        )
+        dm_kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "mhc_pre_writer.cpp"),
+                core_ranges=set_cores,
+                compile_time_args=writer_ct_of(rnoc),
+                runtime_args=writer_rt[rnoc],
+                config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _other_noc(rnoc)),
+            )
+        )
     compute_cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=cfg.math_fidelity,
         fp32_dest_acc_en=True,
@@ -663,4 +718,4 @@ def create_program_descriptor(
         runtime_args=compute_rt,
         config=compute_cfg,
     )
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs), plan
+    return ttnn.ProgramDescriptor(kernels=dm_kernels + [compute], semaphores=semaphores, cbs=cbs), plan

@@ -5,11 +5,12 @@
 //
 //   w_split_block       ONCE, before block 0, fp32 W only: each fp32 W tile k of cb_weight is rewritten
 //                        in place (aliased cb_weight_split) into the exact bf16 pair [W_hi(k), W_lo(k)]
-//   sumsq_block         eltwise_chain Mul x*x DEST-accumulated over K (streams under the X burst)
-//                        + reduce<SUM, REDUCE_ROW, Accurate>                  -> cb_partial [sumsq rows]
 //   project_block       bf16 W:  matmul_block helper: mix partial = X_blk @ W_slice -> cb_partial [mix rows]
 //                        (in0 WaitAndRetainOnLastBlock, num_k_blocks = 1: the X block stays resident)
 //                        fp32 W:  project_block_pieces: X_blk @ W_hi + X_blk @ W_lo in ONE DEST window
+//                        (waits per K tile: streams under the X burst)
+//   sumsq_block         eltwise_chain Mul x*x DEST-accumulated over K (X resident by now)
+//                        + reduce<SUM, REDUCE_ROW, Accurate>                  -> cb_partial [sumsq rows]
 //   combine_block       root only: rank-ordered fp32 SFPU fold of cb_gathered -> cb_combined
 //   coefficients_block  S row-major (cb_coef_in, multicast by the root) -> transpose_tile -> SFPU subvector
 //                        gather into coefficient-major -> custom SFPU coefficients (r, pre) -> pre_i tiles
@@ -1011,35 +1012,10 @@ void kernel_main() {
             x_stats_block(extent, core_k_tiles);
         }
         {
-            DeviceZoneScopedN("C-sumsq");
-            // ---- sumsq_block (first: it needs only X, so it streams under the X burst while W may still be
-            // landing): per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse -> cb_partial
-            // [sumsq rows]. Row 0 (CB-front based) waits per K tile (Cumulative); a later row (runtime base
-            // offset, which the chain's cumulative count cannot carry) first waits for its whole row explicitly.
-            for (uint32_t t = 0; t < extent; ++t) {
-                const uint32_t base = t * core_k_tiles;
-                if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
-                    if (t == 0) {
-                        sumsq_row<WaitPolicy::Cumulative, TileAddressing::Direct>(core_k_tiles, 0);
-                    } else {
-                        cb_wait_front(cb_x_resident, base + core_k_tiles);
-                        sumsq_row<WaitPolicy::None, TileAddressing::Offset>(core_k_tiles, base);
-                    }
-                }
-                reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    cb_sq_acc,
-                    cb_reduce_scaler,
-                    cb_partial,
-                    ReduceInputPolicy::WaitAndPopPerTile,
-                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
-            }
-        }
-        {
             DeviceZoneScopedN("C-proj");
-            // ---- project_block: mix partial = X_blk @ W_slice -> cb_partial [mix rows] ----
+            // ---- project_block (first: it waits per K tile, so it streams under the X burst; the longest
+            // per-block compute phase must not start only after the last X tile): mix partial = X_blk @ W_slice
+            // -> cb_partial [mix rows] ----
             if constexpr (x_grid_split) {
                 project_block_split(extent, core_k_tiles, sb_h);
             } else if constexpr (w_pieces > 1) {
@@ -1063,6 +1039,27 @@ void kernel_main() {
                     partial_buf,
                     partial_buf,
                     MatmulBlockShape::of(extent / sb_h, 1, sb_h, 1, core_k_tiles, 1));
+            }
+        }
+        {
+            DeviceZoneScopedN("C-sumsq");
+            // ---- sumsq_block (after the projection: the X block is resident by now): per row,
+            // Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse -> cb_partial [sumsq rows].
+            for (uint32_t t = 0; t < extent; ++t) {
+                const uint32_t base = t * core_k_tiles;
+                if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
+                    cb_wait_front(cb_x_resident, base + core_k_tiles);  // no-op: the projection waited
+                    sumsq_row<WaitPolicy::None, TileAddressing::Offset>(core_k_tiles, base);
+                }
+                reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_sq_acc,
+                    cb_reduce_scaler,
+                    cb_partial,
+                    ReduceInputPolicy::WaitAndPopPerTile,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
             }
         }
         // ---- combine_block (root only) ----

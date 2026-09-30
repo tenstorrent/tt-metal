@@ -30,7 +30,9 @@ void kernel_main() {
     constexpr bool needs_max_scaler = get_compile_time_arg_val(7) != 0;  // fp32 X grid split
     constexpr uint32_t x_stream_chunks = get_compile_time_arg_val(8);    // 1 = one publish per block
     static_assert(x_stream_chunks >= 1 && x_stream_chunks <= 15, "one NoC transaction id per chunk (1..15)");
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t x_stream_inflight = get_compile_time_arg_val(9);  // chunks outstanding (>= chunks: all)
+    static_assert(x_stream_inflight >= 1, "at least one chunk in flight");
+    constexpr auto x_args = TensorAccessorArgs<10>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t t_start = get_arg_val<uint32_t>(1);
@@ -51,32 +53,50 @@ void kernel_main() {
             (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
         const uint32_t real_pages = extent * core_k_tiles;
         const uint32_t chunk_pages = (real_pages + x_stream_chunks - 1) / x_stream_chunks;
+        const uint32_t num_chunks = chunk_pages == 0 ? 0 : (real_pages + chunk_pages - 1) / chunk_pages;
         cb_reserve_back(cb_x_resident, x_block_pages);
         const uint32_t base = get_write_ptr(cb_x_resident);
-        uint32_t p = 0;  // L1 slot = t*core_k_tiles + c*n + i
-        for (uint32_t t = 0; t < extent; ++t) {
-            const uint32_t m = t_start + row0 + t;
-            const uint32_t row_page = m * tensor_k_tiles + c_start;
-            for (uint32_t c = 0; c < core_c_tiles; ++c) {
-                for (uint32_t i = 0; i < n_streams; ++i) {
-                    if (p % chunk_pages == 0) {
-                        noc_async_read_set_trid(1 + p / chunk_pages);  // sticky for this chunk's reads
+        // Issue cursor over L1 slot p = t*core_k_tiles + c*n + i (DRAM page row(t) + i*Ct + c).
+        uint32_t p = 0, t = 0, c = 0, i = 0;
+        uint32_t row_page = (t_start + row0) * tensor_k_tiles + c_start;
+        auto issue_chunk = [&](uint32_t j) {
+            const uint32_t end = (j + 1) * chunk_pages < real_pages ? (j + 1) * chunk_pages : real_pages;
+            noc_async_read_set_trid(1 + j);  // sticky for this chunk's reads
+            for (; p < end; ++p) {
+                noc_async_read_page(row_page + i * tensor_c_tiles + c, x_acc, base + p * x_tile_bytes);
+                if (++i == n_streams) {
+                    i = 0;
+                    if (++c == core_c_tiles) {
+                        c = 0;
+                        ++t;
+                        row_page += tensor_k_tiles;
                     }
-                    noc_async_read_page(row_page + i * tensor_c_tiles + c, x_acc, base + p * x_tile_bytes);
-                    ++p;
                 }
             }
-        }
-        noc_async_read_set_trid(0);
+            noc_async_read_set_trid(0);
+        };
         uint32_t pushed = 0;
-        for (uint32_t j = 0; j * chunk_pages < real_pages; ++j) {
+        auto publish_chunk = [&](uint32_t j) {
             {
                 DeviceZoneScopedN("R-chunk");
                 noc_async_read_barrier_with_trid(1 + j);
             }
+            // the last chunk carries the nominal-size padding
             const uint32_t end = (j + 1) * chunk_pages < real_pages ? (j + 1) * chunk_pages : x_block_pages;
             cb_push_back(cb_x_resident, end - pushed);
             pushed = end;
+        };
+        // At most x_stream_inflight chunks outstanding: the DRAM banks then serve this core's chunks roughly in
+        // order (all issued at once, every chunk lands at ~the end of the burst), so the compute's per-K-tile
+        // projection runs under the rest of the stream.
+        for (uint32_t j = 0; j < num_chunks; ++j) {
+            if (j >= x_stream_inflight) {
+                publish_chunk(j - x_stream_inflight);
+            }
+            issue_chunk(j);
+        }
+        for (uint32_t j = num_chunks > x_stream_inflight ? num_chunks - x_stream_inflight : 0; j < num_chunks; ++j) {
+            publish_chunk(j);
         }
         if (pushed < x_block_pages) {  // empty block (never issued): keep the nominal push count
             cb_push_back(cb_x_resident, x_block_pages - pushed);

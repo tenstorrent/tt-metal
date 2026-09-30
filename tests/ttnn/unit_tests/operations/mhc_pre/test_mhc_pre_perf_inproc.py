@@ -53,7 +53,13 @@ def test_mhc_pre_perf_inproc(device, monkeypatch):
                     tw = ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
                     tb = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
                     _read_ns(device)  # drain anything earlier
-                    y, post, comb = mhc_pre(tx, tw, tb, scale=(1.0, 1.0, 1.0))
+                    y, post, comb = mhc_pre(
+                        tx,
+                        tw,
+                        tb,
+                        scale=(1.0, 1.0, 1.0),
+                        sinkhorn_iters=int(os.environ.get("MHC_PRE_SINKHORN_ITERS", 20)),
+                    )
                     ttnn.synchronize_device(device)
                     ns = _read_ns(device)
                     for t in (y, post, comb):

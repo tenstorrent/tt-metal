@@ -30,6 +30,18 @@ ALL_KNOBS = {
     "fullrow": dict(NARROW_GROUPS=False),
     "nostream": dict(X_STREAM_CHUNKS=1),
     "readernoc1": dict(READER_NOC=ttnn.NOC.NOC_1),
+    "inflight_all": dict(X_STREAM_INFLIGHT=15),
+    "inflight1": dict(X_STREAM_INFLIGHT=1),
+    "chunks8": dict(X_STREAM_CHUNKS=8),
+    "chunks8_if3": dict(X_STREAM_CHUNKS=8, X_STREAM_INFLIGHT=3),
+    "own2": dict(OWNER_C_DISCOUNT=2),
+    "own4": dict(OWNER_C_DISCOUNT=4),
+    "own6": dict(OWNER_C_DISCOUNT=6),
+    "own8": dict(OWNER_C_DISCOUNT=8),
+    "flip2": dict(READER_NOC_FLIP_ROWS=2),
+    "flip3": dict(READER_NOC_FLIP_ROWS=3),
+    "flip4": dict(READER_NOC_FLIP_ROWS=4),
+    "flip5": dict(READER_NOC_FLIP_ROWS=5),
 }
 _sel = os.environ.get("MHC_PRE_PERF_KNOBS")
 KNOBS = {k: ALL_KNOBS[k] for k in _sel.split(",")} if _sel else ALL_KNOBS

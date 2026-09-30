@@ -20,7 +20,7 @@
 //
 // Per block, in this mandatory order (gather-slot reuse invariant):
 //
-//   send_partial_block        cb_partial [sumsq rows | mix rows] -> root cb_gathered slot [rank]
+//   send_partial_block        cb_partial [mix rows | sumsq rows] -> root cb_gathered slot [rank]
 //                              (push model; slot layout [mix x block_token_tiles | sumsq x block_token_tiles]),
 //                              then one semaphore increment on the root.
 //   (root) gather credit       wait the monotonic arrival counter >= group_cores*(block+1), push cb_gathered.
@@ -229,11 +229,18 @@ void kernel_main() {
         {
             DeviceZoneScopedN("W-send");
             {
-                // cb_partial holds [sumsq rows | mix rows] (the compute runs sumsq first); the slot keeps
-                // [mix x block_token_tiles | sumsq x block_token_tiles].
+                // cb_partial holds [mix rows | sumsq rows] (the compute projects first); the slot keeps
+                // [mix x block_token_tiles | sumsq x block_token_tiles] (one write when the block is full).
                 const uint32_t src = get_read_ptr(cb_partial);
-                noc_async_write(src, root_slot_noc + block_token_tiles * f_tile_bytes, extent * f_tile_bytes);
-                noc_async_write(src + extent * f_tile_bytes, root_slot_noc, extent * f_tile_bytes);
+                if (extent == block_token_tiles) {
+                    noc_async_write(src, root_slot_noc, 2 * extent * f_tile_bytes);
+                } else {
+                    noc_async_write(src, root_slot_noc, extent * f_tile_bytes);
+                    noc_async_write(
+                        src + extent * f_tile_bytes,
+                        root_slot_noc + block_token_tiles * f_tile_bytes,
+                        extent * f_tile_bytes);
+                }
                 noc_async_write_barrier();
                 noc_semaphore_inc(root_sem_noc, 1);
             }
