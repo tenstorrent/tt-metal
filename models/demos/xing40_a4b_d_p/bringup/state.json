@@ -2757,6 +2757,39 @@
   "attempts": 0,
   "status": "TODO"
  },
+ "P.1": {
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 626.7,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T18:18:45"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T18:50:47"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T19:01:30"
+   }
+  ],
+  "last_run": "2026-09-30T19:01:30",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.1.log",
+  "metrics": {
+   "device_ms_attention": 782.63,
+   "device_ms_total": 1413.38,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9990345662046523
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-30T18:51:03",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 3.7,
@@ -3993,7 +4026,8 @@
   "rc": 0,
   "reason": [],
   "started": "2026-09-30T17:56:00",
-  "status": "PASS"
+  "status": "PASS",
+  "waiting": "pick opportunities in models/demos/xing40_a4b_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
  "X.3": {
   "attempts": 0,
