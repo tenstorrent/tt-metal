@@ -44,7 +44,7 @@ def test_registry_entry_is_a_bitwise_default_the_off_switch_undoes():
     assert entry.tolerance == fused.BITWISE and entry.default_on is True and NAME in fused.DEFAULT_ON
     assert entry.fused is module.rows_body_wrap and entry.composed is module.rows_body_composed
     assert entry.admits is module.admits and entry.gate is None and entry.component_proof is None
-    assert "gdn_pre_rows" in entry.replaces and "public chunk_gated_delta_rule" in entry.replaces
+    assert "gdn_pre_rows" in entry.replaces and "source chunk numerical policy" in entry.replaces
     # the served default: the admitted dispatcher (the wrap where a rows state carries its buffers, the chain else)
     default = fused.resolve_admitted(NAME, {})
     assert isinstance(default, fused.AdmittedStep) and default.fused is module.rows_body_wrap
@@ -231,7 +231,7 @@ def test_the_wrapped_body_is_the_nine_programs_in_order():
         "post.post_norm",
         "gdn._out_proj_tile",
     ]
-    assert _calls(module.chunk).count("chunk_public") == 1
+    assert _calls(module.chunk).count("chunk_source") == 1
     # the body allocates only what does not outlive it; the prim layouts are the attached buffers
     assert inspect.getsource(module.rows_body_wrap).count("fp.allocate(") == 2  # o16 and the gated tile
     assert "buffers.q_c" in inspect.getsource(module.chunk) and "rows_state.v" in inspect.getsource(module.chunk)

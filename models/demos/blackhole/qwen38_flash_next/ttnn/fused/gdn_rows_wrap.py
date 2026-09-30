@@ -3,8 +3,8 @@
 
 """GDN verify rows with fused input preparation and gated output programs.
 
-The recurrence uses the public GDN adapter over Samuel Jett's normalized and
-scaled producer buffers. Forward and masked commit calls share that adapter.
+The recurrence retains Samuel Jett's source numerical sequence on normalized
+and scaled producer buffers. Forward and masked commits share that sequence.
 Persistent buffers belong to the rows state; the body releases only its own
 intermediates. QWEN38_FUSED_OFF=gdn_rows_wrap restores the composed control.
 
@@ -23,7 +23,7 @@ import ttnn
 from . import gdn_post_rows as post
 from . import gdn_pre_rows as pre
 from . import program as fp
-from .gdn_public_adapter import chunk_public
+from .gdn_source_chunk import chunk_source
 from .registry import BITWISE, FusedKernel, enabled, register
 
 NAME = "gdn_rows_wrap"
@@ -168,11 +168,10 @@ def buffers_of(rows_state) -> Buffers | None:
 
 
 def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
-    """Run the public recurrence, masking decay and beta for a committed prefix.
+    """Run the source numerical sequence, masking beta and decay for a commit.
 
-    The producer's q/k are already normalized and scaled. The shared adapter restores
-    the public rank-four layout and passes scale=1. Only the temporary masked tensors
-    are released here; persistent producer buffers, constants and input state survive.
+    The producer already includes normalization and both query scale folds.
+    Only temporary masks are released; persistent producers/constants survive.
     """
     beta_c, g_c, masked = buffers.beta_c, buffers.g_c, ()
     if committed_mask_c is not None:
@@ -182,7 +181,7 @@ def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
         masked = (beta_c, g_c)
     constants = rows_state.constants
     try:
-        return chunk_public(
+        return chunk_source(
             buffers.q_c,
             buffers.k_c,
             rows_state.v,
@@ -294,7 +293,7 @@ def admits(gdn, full_hidden, rows_state, state, *, full_tile: bool = False) -> b
 register(
     FusedKernel(
         name=NAME,
-        replaces="the GDN verify-rows preparation and epilogue with gdn_pre_rows, public chunk_gated_delta_rule, "
+        replaces="the GDN verify-rows preparation and epilogue with gdn_pre_rows, source chunk numerical policy, "
         "post_cast and post_norm",
         tolerance=BITWISE,
         fused=rows_body_wrap,
