@@ -4,10 +4,11 @@
 
 """Mesh test for hybrid_routed_expert_moe overlapped with combine_fabric2d in one program.
 
-Graded against the same two ops run back to back: the solo hybrid routed expert, then the standalone
-combine_fabric2d on its output. Combine only moves tokens, and both runs compute the routed expert
-with the same binaries, so the two outputs must be bit-identical. A mismatch is a handoff bug: combine
-read an expert before the routed expert finished writing it.
+Graded against a host PyTorch reference run sequentially: TorchExpert (the SwiGLU FFN, fp32) over every
+expert's dispatched rows, then TorchCombineModule. The device runs bfloat4_b weights, bfloat8_b activations
+and LoFi, so the check is per-slot PCC over every (chip, token, topk) slot combine writes, the same
+validate_combine_output the combine unit test uses. A slot combine read before the routed expert finished
+writing it holds unrelated data, so a handoff bug fails that slot however close the rest is.
 
 seq 640, because shorter sequences finish every expert before combine reaches it and never exercise
 the wait. Threshold 0 runs the unified half alone; the median count splits the experts across both.
@@ -29,7 +30,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -41,11 +44,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_gate_outputs,
     initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
-from tests.ttnn.utils_for_testing import comp_pcc
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
@@ -96,6 +99,81 @@ _CAPTURED_COUNTS = {
             146, 56, 90, 99, 149, 120, 215, 350, 25, 55, 129, 58, 153, 80, 155, 91, 52, 3, 143, 115, 32, 183,
             142, 62, 148, 23, 0, 33, 69, 85, 178, 145, 4, 148, 23, 226, 129, 2877, 264, 54, 163, 117, 91, 49,
             14, 182, 223, 419, 114, 78, 185, 124, 150, 209, 33, 120, 4, 177, 55, 29, 68, 67, 308, 152
+        ),
+    },
+}
+# The same cells over the full mesh, for (8, 4): every expert, unscaled, since a whole chunk is exactly this
+# test's 5120 tokens x top-8 = 40960 routings. Across the full mesh no captured cell leaves every expert under
+# the threshold, so balanced here still lifts a few experts into the unified pass (Kimi 9, GLM 5).
+_CAPTURED_COUNTS_FULL_MESH = {
+    "kimi-k27": {
+        "balanced": (
+            # MoE layer 34, chunk 1
+            249, 75, 99, 69, 83, 31, 53, 65, 9, 71, 77, 108, 95, 190, 36, 75, 93, 67, 101, 33, 250, 129, 52, 39, 106,
+            69, 42, 0, 32, 143, 106, 218, 84, 102, 116, 202, 108, 91, 162, 46, 139, 16, 2, 259, 211, 93, 95, 24, 219,
+            20, 191, 88, 125, 143, 160, 55, 127, 111, 15, 29, 46, 65, 31, 177, 71, 122, 192, 61, 34, 101, 142, 34, 137,
+            37, 146, 101, 25, 77, 78, 2, 56, 82, 2, 88, 59, 40, 125, 253, 93, 24, 216, 141, 47, 172, 77, 8, 225, 50, 37,
+            34, 6, 33, 128, 140, 87, 120, 89, 175, 174, 178, 116, 55, 76, 70, 41, 84, 38, 174, 115, 39, 1, 0, 33, 107,
+            136, 89, 72, 309, 93, 61, 72, 83, 97, 135, 58, 50, 94, 83, 67, 69, 285, 118, 91, 91, 42, 86, 123, 89, 98,
+            247, 99, 85, 62, 108, 191, 577, 136, 80, 122, 251, 97, 62, 69, 149, 50, 348, 53, 131, 32, 52, 41, 85, 28,
+            122, 70, 12, 132, 18, 82, 195, 73, 30, 82, 162, 184, 78, 37, 97, 26, 123, 357, 102, 117, 153, 54, 94, 90,
+            58, 78, 183, 108, 37, 108, 199, 15, 90, 111, 41, 85, 225, 28, 19, 57, 101, 64, 151, 30, 108, 61, 128, 55,
+            64, 17, 56, 145, 914, 103, 195, 78, 70, 76, 209, 183, 65, 43, 104, 20, 75, 130, 99, 1, 155, 30, 68, 183, 73,
+            151, 106, 253, 45, 21, 75, 11, 13, 32, 62, 228, 92, 99, 148, 140, 19, 25, 66, 63, 358, 59, 134, 203, 159,
+            43, 17, 36, 133, 101, 100, 29, 612, 118, 76, 24, 94, 63, 173, 155, 150, 42, 112, 85, 158, 79, 94, 46, 53,
+            46, 40, 32, 91, 118, 186, 34, 192, 193, 81, 95, 79, 94, 89, 157, 250, 93, 101, 17, 89, 35, 146, 123, 83,
+            170, 83, 20, 221, 855, 83, 160, 131, 56, 28, 73, 141, 81, 180, 126, 21, 47, 99, 230, 89, 109, 95, 167, 105,
+            87, 76, 284, 51, 151, 235, 3, 106, 25, 49, 130, 31, 103, 31, 43, 128, 51, 281, 14, 340, 8, 227, 381, 142,
+            109, 82, 164, 114, 164, 158, 128, 12, 234, 84, 77, 112, 50, 55, 117, 216, 92, 9
+        ),
+        "hot-expert": (
+            # MoE layer 5, chunk 0
+            7, 91, 72, 85, 17, 184, 89, 45, 157, 4, 44, 56, 30, 42, 61, 76, 21, 90, 30, 36, 30, 143, 51, 38, 27, 96, 33,
+            3, 0, 48, 1, 33, 2399, 3, 90, 44, 238, 48, 77, 81, 40, 121, 57, 58, 56, 110, 29, 284, 34, 14, 44, 240, 108,
+            55, 41, 192, 43, 5, 39, 136, 5, 35, 14, 54, 47, 5, 2, 82, 115, 13, 36, 26, 93, 41, 92, 78, 71, 37, 101, 117,
+            63, 103, 54, 129, 151, 91, 50, 24, 32, 13, 44, 13, 116, 45, 68, 48, 77, 569, 71, 52, 22, 36, 39, 9, 130, 43,
+            9, 78, 70, 43, 2532, 44, 77, 154, 1, 186, 41, 38, 14, 173, 243, 232, 63, 40, 1224, 45, 40, 16, 189, 57, 19,
+            61, 52, 48, 243, 209, 57, 43, 58, 109, 150, 247, 3, 8, 99, 23, 18, 0, 26, 148, 73, 209, 83, 92, 60, 3, 77,
+            5, 29, 73, 260, 81, 26, 23, 120, 70, 294, 93, 116, 28, 168, 149, 72, 22, 90, 46, 241, 112, 127, 72, 46, 408,
+            55, 53, 242, 116, 42, 7, 12, 111, 122, 65, 1436, 110, 35, 90, 41, 57, 56, 15, 133, 65, 54, 179, 13, 45, 56,
+            74, 12, 120, 1, 175, 103, 419, 153, 56, 261, 89, 83, 49, 16, 144, 139, 84, 71, 154, 142, 122, 20, 14, 103,
+            413, 47, 82, 47, 175, 15, 133, 84, 171, 30, 70, 129, 95, 50, 91, 15, 111, 37, 4, 8, 2, 77, 50, 312, 46, 82,
+            196, 0, 62, 15, 25, 187, 85, 98, 12, 44, 24, 53, 130, 81, 351, 289, 90, 111, 90, 124, 299, 193, 3, 424, 35,
+            592, 65, 45, 65, 35, 300, 167, 68, 53, 37, 1, 51, 29, 39, 75, 16, 1, 292, 83, 67, 0, 116, 134, 62, 97, 32,
+            45, 94, 172, 47, 63, 34, 0, 54, 14, 44, 64, 288, 30, 14, 94, 31, 74, 31, 24, 21, 45, 58, 103, 104, 120, 30,
+            130, 50, 3, 21, 143, 116, 234, 74, 28, 39, 47, 19, 66, 32, 280, 86, 84, 277, 3, 10, 35, 44, 38, 105, 103,
+            73, 64, 145, 16, 51, 123, 75, 56, 1, 122, 77, 88, 54, 1596, 112, 70, 84, 10, 81, 25, 28, 60, 23, 166, 82
+        ),
+    },
+    "glm-53": {
+        "balanced": (
+            # MoE layer 3, chunk 5
+            204, 173, 187, 187, 221, 270, 142, 107, 261, 203, 183, 69, 211, 178, 186, 115, 63, 219, 81, 135, 134, 158,
+            240, 96, 185, 151, 155, 206, 96, 188, 131, 187, 225, 88, 200, 140, 198, 134, 213, 165, 119, 46, 163, 106,
+            128, 157, 152, 301, 174, 105, 192, 179, 212, 125, 259, 112, 186, 233, 216, 198, 69, 196, 106, 234, 172, 146,
+            159, 183, 160, 129, 222, 205, 368, 148, 141, 220, 118, 34, 54, 104, 129, 245, 168, 202, 101, 145, 85, 76,
+            180, 70, 142, 242, 180, 333, 190, 131, 193, 130, 233, 221, 189, 157, 182, 121, 148, 245, 185, 59, 196, 100,
+            80, 273, 154, 171, 69, 134, 200, 167, 167, 119, 149, 234, 304, 186, 84, 96, 166, 197, 138, 176, 137, 88,
+            131, 94, 187, 133, 155, 109, 158, 164, 157, 107, 300, 235, 153, 91, 102, 19, 121, 93, 115, 146, 171, 83,
+            199, 164, 224, 131, 252, 117, 153, 90, 98, 93, 218, 127, 123, 386, 268, 118, 182, 177, 269, 155, 148, 167,
+            137, 184, 111, 93, 63, 419, 163, 173, 74, 144, 132, 203, 222, 186, 161, 192, 43, 132, 170, 212, 148, 142,
+            122, 144, 183, 167, 228, 168, 84, 166, 171, 131, 195, 131, 85, 235, 108, 123, 182, 148, 175, 249, 183, 113,
+            80, 126, 137, 83, 212, 82, 83, 126, 153, 113, 201, 202, 200, 75, 61, 155, 269, 83, 84, 176, 97, 159, 184,
+            354, 133, 44, 49, 154, 190, 75, 267, 283, 138, 255, 237, 79
+        ),
+        "hot-expert": (
+            # MoE layer 21, chunk 9
+            166, 64, 102, 113, 170, 136, 245, 398, 29, 63, 147, 66, 174, 91, 176, 103, 59, 3, 163, 131, 36, 208, 161,
+            70, 168, 26, 0, 38, 79, 97, 202, 165, 4, 168, 26, 257, 147, 3275, 300, 61, 185, 133, 103, 56, 16, 207, 254,
+            478, 130, 89, 211, 141, 171, 238, 38, 136, 5, 201, 63, 33, 77, 76, 350, 173, 26, 240, 131, 71, 49, 9, 42,
+            147, 86, 85, 235, 70, 144, 87, 11, 55, 66, 63, 202, 10, 67, 222, 16, 207, 85, 258, 31, 66, 105, 104, 282, 2,
+            104, 80, 51, 256, 30, 136, 358, 124, 291, 161, 106, 94, 69, 143, 155, 83, 116, 83, 426, 53, 176, 49, 49, 47,
+            181, 192, 74, 98, 165, 168, 271, 126, 250, 122, 272, 35, 209, 79, 187, 8, 324, 105, 274, 89, 59, 131, 59,
+            611, 714, 77, 39, 120, 121, 257, 154, 223, 4, 71, 91, 116, 325, 148, 57, 479, 138, 153, 52, 157, 85, 276,
+            35, 151, 15, 10, 71, 30, 23, 51, 1, 620, 65, 122, 41, 122, 77, 16, 327, 70, 181, 82, 23, 147, 107, 171, 258,
+            137, 154, 75, 15, 16, 64, 29, 1133, 12, 940, 0, 4, 264, 50, 86, 163, 529, 147, 228, 148, 78, 2, 40, 207,
+            150, 65, 14, 304, 289, 94, 211, 169, 16, 724, 320, 29, 132, 118, 435, 22, 180, 540, 609, 106, 231, 216, 394,
+            217, 114, 45, 42, 177, 84, 606, 72, 130, 75, 78, 105, 102, 83, 75, 15, 88, 36
         ),
     },
 }
@@ -214,9 +292,10 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     )
     # Replay the measured routing rather than the draw initialize_test_inputs made; x and the gate weights
     # it produced are kept.
-    indices = _indices_from_counts(
-        _CAPTURED_COUNTS[model_id][threshold_id], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
-    )
+    captured = _CAPTURED_COUNTS_FULL_MESH if tuple(mesh_device.shape) == _FULL_MESH else _CAPTURED_COUNTS
+    counts_in = captured[model_id][threshold_id]
+    assert len(counts_in) == num_routed_experts, f"{len(counts_in)} captured counts for {num_routed_experts} experts"
+    indices = _indices_from_counts(counts_in, dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok)
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
@@ -350,12 +429,59 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
         )
 
+    reference = []
+
+    def torch_reference():
+        """TorchExpert over each expert's dispatched rows, then TorchCombineModule.
+
+        Rewrites the host dispatched buffer in place -- it is already on the device, and a copy would be
+        another ~19 GB at (8, 4) -- so the result is computed once and cached."""
+        if reference:
+            return reference[0]
+        expert = TorchExpert(emb_dim, hidden_dim, torch_weights=expert_weights)
+        with torch.no_grad():
+            for group in range(num_dispatch_groups):
+                for chip in range(dispatch_group_size):
+                    for local_expert in range(experts_per_chip):
+                        global_expert = ExpertMapping.get_global_expert_idx(
+                            group=group,
+                            chip=chip,
+                            local_expert=local_expert,
+                            experts_per_chip=experts_per_chip,
+                            dispatch_group_size=dispatch_group_size,
+                            num_dispatch_groups=num_dispatch_groups,
+                            is_col_major=True,
+                        )
+                        start = int(expert_region_offsets[group, chip, global_expert])
+                        rows = int(expert_token_counts[group, 0, global_expert])
+                        if rows:
+                            region = dispatched_buffer[group, chip, start : start + rows]
+                            region.copy_(expert(region.float()).to(region.dtype))
+        combine_ref = TorchCombineModule(
+            dispatch_group_size=dispatch_group_size,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=_SEQ_LEN_PER_CHIP,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        reference.append(
+            combine_ref(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
+        )
+        return reference[0]
+
     return SimpleNamespace(
         emb_dim=emb_dim,
         composer=get_ep_mesh_composer(mesh_device),
         solo_routed_expert=solo_routed_expert,
         combine=combine,
         overlapped=overlapped,
+        torch_reference=torch_reference,
+        indices=indices,
+        num_dispatch_groups=num_dispatch_groups,
+        num_routed_experts=num_routed_experts,
+        experts_per_chip=experts_per_chip,
+        expert_dispatch_table=expert_dispatch_table,
+        expert_token_counts=expert_token_counts,
     )
 
 
@@ -365,30 +491,31 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
 )
 def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, threshold_id, model_id):
     case = _build_case(mesh_device, device_params, threshold_id, model_id)
-    emb_dim = case.emb_dim
-    expected = ttnn.to_torch(case.combine(case.solo_routed_expert()), mesh_composer=case.composer)
-
+    # Run the device first: the reference rewrites the host dispatched buffer in place.
+    actuals = [ttnn.to_torch(case.overlapped(), mesh_composer=case.composer)]
     # Twice: the second run is a program-cache hit, which reuses the cached arena and fwd_arrived.
-    for run in range(2):
-        actual = ttnn.to_torch(case.overlapped(), mesh_composer=case.composer)
-        assert actual.shape == expected.shape, f"run {run}: shape {actual.shape} != {expected.shape}"
-        if not torch.equal(actual, expected):
-            tokens_expected = expected.reshape(-1, emb_dim).float()
-            tokens_actual = actual.reshape(-1, emb_dim).float()
-            mismatched = (tokens_actual != tokens_expected).any(dim=-1)
-            bad_expected = tokens_expected[mismatched]
-            bad_actual = tokens_actual[mismatched]
-            _, pcc = comp_pcc(expected, actual)
-            _, bad_pcc = comp_pcc(bad_expected, bad_actual)
-            # Rounding differences keep a mismatched token close to its reference; a token read before the
-            # routed expert wrote it is unrelated to it.
-            pytest.fail(
-                f"run {run}: {mismatched.sum().item()}/{mismatched.numel()} output tokens differ from solo "
-                f"routed expert + combine_fabric2d (PCC {pcc:.6f}; over those tokens PCC {bad_pcc:.6f}, "
-                f"elements differing {(bad_actual != bad_expected).float().mean().item():.2%}, "
-                f"max |diff| {(bad_actual - bad_expected).abs().max().item():.4g} vs max |ref| "
-                f"{bad_expected.abs().max().item():.4g})"
-            )
+    actuals.append(ttnn.to_torch(case.overlapped(), mesh_composer=case.composer))
+    expected = case.torch_reference()
+
+    for run, actual in enumerate(actuals):
+        result = validate_combine_output(
+            expected,
+            actual,
+            case.indices,
+            case.num_dispatch_groups,
+            case.num_routed_experts,
+            use_pcc=True,
+            verbose=True,
+            expert_dispatch_table=case.expert_dispatch_table,
+            expert_token_counts=case.expert_token_counts,
+            experts_per_chip=case.experts_per_chip,
+        )
+        worst = min((m[-1] for m in result.mismatches), default=None)
+        logger.info(
+            f"run {run}: {result.matches}/{result.total} combine slots match the PyTorch RE + combine reference"
+            + (f", worst slot PCC {worst:.6f}" if worst is not None else "")
+        )
+        result.assert_passed(f"run {run}: overlapped RE + combine vs PyTorch RE + combine")
 
 
 def _median_program_ns(mesh_device, run_fn, iters, is_target, label):
