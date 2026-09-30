@@ -769,8 +769,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             WAIT(cb.scr3, 1);
             WAIT(cb.scr1, 1);
             mm_diag_qk(cb.scr3, cb.q, cb.supd, cb.scr1, cb.k, cb.stmp, Kt);
-            WAIT(cb.supd, ck);
-            WAIT(cb.stmp, ck);
+            // The normalized q/k are waited for at their first readers (Kk at pp_p1's second block, Q at
+            // pp_kd), so their packs overlap the v_beta block; the pops below are ordered after this thread's
+            // unpacks by the CB protocol.
             POP(cb.scr3, 1);
             POP(cb.scr1, 1);
             POP(cb.q, ck);
@@ -788,6 +789,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // the same rule -- a WAIT right after a producing block drains the unpack->math->pack pipeline (~0.2-0.3 us
         // on a one-tile block), so it is placed only where the next block reads the result.
         bcast_cols_mul(cb.v, cb.beta, cb.vbeta, ct, Vt);
+        if constexpr (qk_norm) {
+            WAIT(Kk, ck);  // the normalized k's first reader
+        }
         bcast_cols_mul(Kk, cb.beta, cb.kbeta, ct, Kt);
         POP(cb.beta, Ct);
         POP(cb.v, cv);
@@ -910,6 +914,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // reserve/reconfig/init for both outputs (the writers wait per CB, so the push order is free).
         WAIT(cb.decay_exp, Ct);
         if constexpr (Ct == 1) {
+            if constexpr (qk_norm) {
+                WAIT(Q, ck);  // the normalized q's first reader
+            }
             kd_qdecay<qk_norm>(cb.kbeta, Q, cb.decay_exp, cb.w, cb.qdecay, Kt);  // nkd -> cb.w, q_decay -> cb.qdecay
         } else {
             bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
