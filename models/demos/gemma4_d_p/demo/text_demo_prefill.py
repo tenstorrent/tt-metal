@@ -322,9 +322,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
         + ", ".join(f"{k}={v:.1f}ms ({v / n_chunks:.0f}ms/chunk)" for k, v in stage_breakdown_ms.items())
     )
     logger.info(
-        f"[traced_perf] TOTAL {context_len} tokens in {total_ms:.1f}ms ({context_len * 1000 / total_ms:.0f} tok/s) "
-        f"| chunks mean={device_ms / len(per_chunk_ms):.1f}ms "
-        f"min={min(per_chunk_ms):.1f}ms max={max(per_chunk_ms):.1f}ms"
+        f"[traced_perf] TOTAL {context_len} tokens in {total_ms:.1f}ms ({context_len * 1000 / total_ms:.0f} tok/s)"
     )
     logger.info(
         f"[traced_perf] ring-depth cost: first={per_chunk_ms[0]:.1f}ms -> last={per_chunk_ms[-1]:.1f}ms "
