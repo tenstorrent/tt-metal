@@ -15,7 +15,8 @@ _chunked_attn -> ttnn.transformer.ring_mla, _o_proj_epilogue) and hy4_preview_d_
 (ttMLA's ops without its fixed CCL buffers; _Geometry.load / read at the harness boundary). Differences to ttMLA:
 
 - bf16 weights (as stored) and a bf16 TILE latent cache, not bfp8; every matmul, the norm, the RoPE and ring_mla at
-  HiFi4 + fp32 dest (owner rule). ring_mla through the sdpa fork (ttnn.bringup.ring_mla), whose streaming latent-V
+  HiFi4 + fp32 dest (owner rule), except the ring_mla matmuls at HiFi2 (owner exception, P.1;
+  XING_MLA_SDPA_FIDELITY). ring_mla through the sdpa fork (ttnn.bringup.ring_mla), whose streaming latent-V
   path runs at fp32 dest; XING_MLA_SDPA=source keeps ttnn.transformer.ring_mla at bf16 dest (owner 06:35).
 - kv_a_proj: K-split fp32 partials + ttnn.all_reduce over axis 1; kv_a_layernorm through ttnn.bringup.rms_norm.
 - o_proj: row-parallel fp32 partials -> ttnn.reduce_scatter over axis 1 -> attn_out [1, 1, S/4, 1792] fp32.
@@ -50,8 +51,23 @@ TILE = 32
 # ring_mla q / k chunk sizes (tokens); XING_MLA_Q_CHUNK / XING_MLA_K_CHUNK override (L1 probing). Each is reduced
 # to the largest multiple of 32 that divides the local chunk. ttMLA runs Kimi at q32 / k640 on a bfp8 cache;
 # the bf16 cache doubles the K CB, so k256 here.
-Q_CHUNK = int(os.environ.get("XING_MLA_Q_CHUNK", "32"))
+# P.1 (chunk 5120 after 51200, per layer, bringup ring_mla): HiFi4 q32 / k256 25.9 ms; HiFi3 q32 / k256 20.6 ms
+# (q64 23.6); HiFi2 q64 / k256 17.9 ms (q32 18.7). q128 / k256, q256 / k128, q32 / k384 overflow L1 at any fidelity.
 K_CHUNK = int(os.environ.get("XING_MLA_K_CHUNK", "256"))  # k512 overflows L1 with a bf16 cache (2.15 MB)
+
+
+def sdpa_fidelity() -> str:
+    """XING_MLA_SDPA_FIDELITY for the ring_mla matmuls only (owner exception to rule 7 for the SDPA, P.1; every
+    other matmul stays HiFi4): ``HiFi2`` (default, the owner's pick) or ``HiFi4`` (the previous setting). HiFi2 fails
+    the frozen C.moe.attention component test (L02 median row norm -0.0068 vs limit 0.004) but is accepted by the owner
+    on end-to-end accuracy (rung last / s56320 within 1e-3 of HiFi4, top5 1.0; supervision.md P.1)."""
+    f = os.environ.get("XING_MLA_SDPA_FIDELITY", "HiFi2")
+    assert f in ("HiFi2", "HiFi4"), f"XING_MLA_SDPA_FIDELITY must be HiFi2 or HiFi4, got {f}"
+    return f
+
+
+def sdpa_q_chunk() -> int:
+    return int(os.environ.get("XING_MLA_Q_CHUNK", "64" if sdpa_fidelity() == "HiFi2" else "32"))
 
 
 def sdpa_impl() -> str:
@@ -145,7 +161,7 @@ class _Geometry:
             )
         self.kv_buf = _KV_BUFS[key]
         cl = self.chunk_local
-        q_chunk, k_chunk = _largest_divisor_chunk(cl, Q_CHUNK), _largest_divisor_chunk(cl, K_CHUNK)
+        q_chunk, k_chunk = _largest_divisor_chunk(cl, sdpa_q_chunk()), _largest_divisor_chunk(cl, K_CHUNK)
         _, _, grid = _ring_ccl(mesh)
         self.sdpa_pc = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
@@ -229,13 +245,14 @@ class TtMlaAttention:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # ring_mla at HiFi4. The source op runs latent V only on its streaming path, which it allows only at bf16
+        # ring_mla at HiFi2 by default (owner exception for the SDPA only, XING_MLA_SDPA_FIDELITY=HiFi4 = previous);
+        # fp32 dest (fork) as before. The source op runs latent V only on its streaming path, which it allows only at bf16
         # dest (owner 06:35: bf16 dest); the fork (XING_MLA_SDPA=fork, default) runs that path at fp32 dest.
         self.sdpa_impl = sdpa_impl()
         self.ring_mla = ttnn.bringup.ring_mla if self.sdpa_impl == "fork" else ttnn.transformer.ring_mla
         self.sdpa_ckc = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, sdpa_fidelity()),
             math_approx_mode=False,
             fp32_dest_acc_en=self.sdpa_impl == "fork",
             packer_l1_acc=False,
