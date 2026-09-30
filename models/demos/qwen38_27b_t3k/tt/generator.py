@@ -13,7 +13,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.qwen38_27b_t3k.tt.model import Qwen38Model
+from models.demos.qwen38_27b_t3k.tt.model import MAX_SERVING_BATCH, Qwen38Model
 
 # Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
 # tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B), the same way
@@ -789,7 +789,7 @@ class Qwen38Generator:
         return self._read_tokens()[: kv_cache.batch_size] if read_from_device else self.tokens
 
     def bind_cache(self, cache, page_table):
-        if not 1 <= cache.batch_size <= 32 or not 1 <= cache.capacity <= self.model.context:
+        if not 1 <= cache.batch_size <= MAX_SERVING_BATCH or not 1 <= cache.capacity <= self.model.context:
             raise ValueError("External cache dimensions exceed the model contract")
         shape = (
             tuple(page_table.shape) if isinstance(page_table, ttnn.Tensor) else tuple(torch.as_tensor(page_table).shape)

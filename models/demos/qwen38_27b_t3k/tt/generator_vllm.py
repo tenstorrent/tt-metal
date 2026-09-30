@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.qwen38_27b_t3k.tt.decoder_tp import resolve_mesh_tp, supported_device_counts
 from models.demos.qwen38_27b_t3k.tt.generator import build_generator
-from models.demos.qwen38_27b_t3k.tt.model import ModelCache
+from models.demos.qwen38_27b_t3k.tt.model import MAX_SERVING_BATCH, ModelCache
 
 
 def _shared_pool_ceiling():
@@ -54,8 +54,11 @@ class Qwen38ForCausalLM:
         resolve_mesh_tp(mesh_device)
         if tt_data_parallel != 1:
             raise ValueError("Qwen3.8 does not support tt_data_parallel > 1")
-        if not 1 <= max_batch_size <= 32 or not 1 <= max_seq_len <= cls._MAX_CONTEXT:
-            raise ValueError("Serving dimensions exceed the validated model contract")
+        if not 1 <= max_batch_size <= MAX_SERVING_BATCH or not 1 <= max_seq_len <= cls._MAX_CONTEXT:
+            raise ValueError(
+                f"Serving dimensions exceed the validated model contract: max_num_seqs must be "
+                f"1..{MAX_SERVING_BATCH}"
+            )
         if os.getenv("QWEN_DECODE_BUCKETS", "0") == "1" and max_batch_size not in (1, 8, 16):
             raise ValueError("Bucketed decode requires max_num_seqs of 1, 8, or 16; capacity above 16 is unsupported")
         root = Path(__file__).parents[1]

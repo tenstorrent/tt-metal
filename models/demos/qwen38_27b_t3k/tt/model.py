@@ -22,6 +22,11 @@ from models.demos.qwen38_27b_t3k.tt.precision import decoder_policy, load_precis
 MODEL_ID = "Qwen/Qwen3.8-27B"
 REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 
+# Attention decode returns wrong results above this width: per-user PCC 0.019 at batch 32
+# against ~0.9999 at 1, 2, 4, 8 and 16. Nothing between 17 and 31 has been measured, and the
+# decode bucket set stops at 16, so 16 is the widest batch this mesh may serve.
+MAX_SERVING_BATCH = 16
+
 
 def checkpoint_path():
     mounted_weights = os.getenv("MODEL_WEIGHTS_DIR")
@@ -195,8 +200,8 @@ class Qwen38Model:
         )
 
     def allocate_cache(self, *, batch_size, capacity):
-        if not 1 <= batch_size <= 32 or not 1 <= capacity <= self.context:
-            raise ValueError("Cache requires 1..32 slots and capacity within the HF context")
+        if not 1 <= batch_size <= MAX_SERVING_BATCH or not 1 <= capacity <= self.context:
+            raise ValueError(f"Cache requires 1..{MAX_SERVING_BATCH} slots and capacity within the HF context")
         pages = (capacity + 31) // 32
         return ModelCache(
             [layer.allocate_state(batch_size=batch_size, num_pages=batch_size * pages) for layer in self.layers],
