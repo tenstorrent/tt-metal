@@ -426,7 +426,9 @@ def _assert_against_contract(
 
     The whole contract, step budget included: every binary row was measured over this
     file's own sweeps, so unlike a unary budget from the exhaustive sweep it describes
-    the stimuli it gates.
+    the stimuli it gates. Ranked with fp16 subnormal outputs flushed, as the exhaustive
+    sweep ranks them: a near-cancelling ``a - b`` lands in the band the golden keeps and
+    the pack does not, 140 steps from a correct kernel.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
@@ -445,7 +447,7 @@ def _assert_against_contract(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=True),
     ), "Assert against golden failed"
 
 
@@ -824,7 +826,8 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
 )
 def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
-    # (and the |y|>=|x| / x<0 branches) are exercised; minimax approximation matched under PCC.
+    # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
+    # its step budget on Wormhole, and by tolerance + PCC elsewhere.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
@@ -896,8 +899,9 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
+    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
+    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
+    # The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 

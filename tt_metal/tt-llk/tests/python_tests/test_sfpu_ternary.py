@@ -161,7 +161,8 @@ def _run_sfpu_ternary(
 
     # The op's declared accuracy contract for this exact variant, the same lookup the
     # unary and binary drivers make. Gated on the whole contract, step budget included:
-    # the ternary rows were measured over this driver's own variants.
+    # the ternary rows were measured over this driver's own variants. fp16 subnormal
+    # outputs are flushed for the ULP arm, as in the binary driver.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -176,7 +177,7 @@ def _run_sfpu_ternary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=True),
     ), "Assert against golden failed"
 
 
