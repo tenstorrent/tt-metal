@@ -211,18 +211,124 @@ inline void perform_float_average() {
     TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
+// Dest addresses of the four column SUM/AVG groups: group i reduces the even (i = 0, 2) or odd (i = 1, 3) columns of
+// the face pair 0+2 (i = 0, 1) or 1+3 (i = 2, 3); the group's 32 rows are the upper face (rows 0-15) and the lower face.
+constexpr std::uint32_t COL_SUM_UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
+constexpr std::uint32_t COL_SUM_LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};  // Face 2, 2, 3, 3
+constexpr std::uint32_t COL_SUM_COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};        // even, odd, even, odd
+
 /**
- * @brief One add of the column half-reduce: dst = dst + src (SFPIADD for integer modes, SFPADD otherwise).
+ * @brief Load one 4-row group of a face into LREG (an immediate-encoded SFPLOAD), masking the garbage high bits of a
+ *        UInt16 datum in a 32-bit dest as load_and_clear_high_bits does.
+ *
+ * The column kernel issues every load, add and store as a TTI_ immediate rather than a TT_ runtime word: a TT_ push costs
+ * the issuing RISC an address computation and a store per instruction, and with the half tree issued inline the RISC
+ * would otherwise need more cycles per tile than the SFPU (the Int32 column sum was already bound by it).
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, std::uint32_t LREG, std::uint32_t ADDR>
+inline void col_sum_load() {
+    TTI_SFPLOAD(LREG, INSTRUCTION_MODE, ADDR_MOD_7, ADDR);
+    if constexpr (clear_high_bits) {
+        TTI_SFPAND(0, CLEAR_REG, LREG, 0);
+    }
+}
+
+/**
+ * @brief One add of the column half-reduce: DST = DST + SRC (SFPIADD for integer modes, SFPADD otherwise).
  *        The same instruction the recorded tree reduce uses, issued inline so the column kernel can place
  *        other work between the dependent adds.
  */
-template <bool is_integer_mode>
-inline void half_reduce_add(std::uint32_t dst, std::uint32_t src) {
+template <bool is_integer_mode, std::uint32_t DST, std::uint32_t SRC>
+inline void half_reduce_add() {
     if constexpr (is_integer_mode) {
-        TT_SFPIADD(0, src, dst, 4);
+        TTI_SFPIADD(0, SRC, DST, 4);
     } else {
-        TT_SFPADD(dst, p_sfpu::LCONST_1, src, dst, 0);
+        TTI_SFPADD(DST, p_sfpu::LCONST_1, SRC, DST, 0);
     }
+}
+
+/**
+ * @brief One column group of perform_reduce_col_sum_avg (see there). The lower face of this group is already in
+ *        LREG4-7; the upper face is loaded here, and the next group's lower face is loaded between the dependent
+ *        instructions of the half tree.
+ *
+ * @tparam GROUP Column group 0 to 3 (COL_SUM_* tables).
+ */
+template <
+    PoolType pool_type,
+    InstrModLoadStore INSTRUCTION_MODE,
+    bool clear_high_bits,
+    bool pack_low16,
+    bool is_signed_int,
+    std::uint32_t GROUP>
+inline void perform_reduce_col_sum_avg_group() {
+    static_assert(GROUP < NUM_FACES, "four column groups per tile");
+    constexpr bool is_integer_mode =
+        (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16);
+    constexpr std::uint32_t UPPER = COL_SUM_UPPER_FACE_ADDRS[GROUP] + COL_SUM_COLUMN_OFFSETS[GROUP];
+    constexpr bool HAS_NEXT = (GROUP + 1 < NUM_FACES);
+    constexpr std::uint32_t NEXT_LOWER =
+        HAS_NEXT ? COL_SUM_LOWER_FACE_ADDRS[GROUP + 1] + COL_SUM_COLUMN_OFFSETS[GROUP + 1] : 0;
+    // Mode 9 (SFPSTORE_MOD0_FMT_LO16) is only needed when the packer-visible OUTPUT is UInt16 in a
+    // 32-bit dest: there the reduced value sits in the low 16 bits but the packer reads the high 16,
+    // so we move low->high. When the output is a full 32-bit format (e.g. UInt32) the packer reads
+    // the whole dest word, so we use the plain INSTRUCTION_MODE store even for UInt16 input.
+    constexpr std::uint32_t STORE_MODE =
+        pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+
+    // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
+    // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
+    // across all 4 loaded LREGs (e.g., LREG0[i] = sum of row[i], row[i+4], row[i+8], row[i+12]).
+    // The lower face (LREG4-7) was loaded ahead of this group; only the upper face is loaded here.
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0, UPPER>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG1, UPPER + ROWS_PER_LOAD>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG2, UPPER + 2 * ROWS_PER_LOAD>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG3, UPPER + 3 * ROWS_PER_LOAD>();
+    lltt::replay(0, 6);
+
+    // Step 2: Cross-face addition. Unlike the old approach where only position 0 of the
+    // cross-face sum was meaningful, here ALL 4 positions carry useful partial sums.
+    if constexpr (is_integer_mode) {
+        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);  // LREG0 = upper + lower (int)
+    } else {
+        TTI_SFPADD(
+            p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // LREG0 = upper + lower (float)
+    }
+
+    // Result of column reduction now stored in LREG0 as 4 partial sums
+    // Step 3: Transpose to rearrange the 4 partial sums for final reduction
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline as
+    // LREG2 += LREG3, LREG1 += LREG2, LREG0 += LREG1 so that the next group's lower-face loads can
+    // sit between the dependent adds. This sums the 4 partial sums into LREG0[0] = total column sum.
+    half_reduce_add<is_integer_mode, p_sfpu::LREG2, p_sfpu::LREG3>();
+    if constexpr (HAS_NEXT) {
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, NEXT_LOWER>();
+    }
+    half_reduce_add<is_integer_mode, p_sfpu::LREG1, p_sfpu::LREG2>();
+    if constexpr (HAS_NEXT) {
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, NEXT_LOWER + ROWS_PER_LOAD>();
+    }
+    half_reduce_add<is_integer_mode, p_sfpu::LREG0, p_sfpu::LREG1>();
+    if constexpr (HAS_NEXT) {
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG6, NEXT_LOWER + 2 * ROWS_PER_LOAD>();
+    }
+
+    // Perform averaging if requested (different for int vs float)
+    if constexpr (pool_type == PoolType::AVG) {
+        if constexpr (is_integer_mode) {
+            perform_int_average<INSTRUCTION_MODE, is_signed_int>();
+        } else {
+            perform_float_average();
+        }
+    }
+    if constexpr (HAS_NEXT) {
+        col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG7, NEXT_LOWER + 3 * ROWS_PER_LOAD>();
+    }
+
+    // Store the final column sum/average to the first row.
+    TTI_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, UPPER);
 }
 
 template <
@@ -232,14 +338,6 @@ template <
     bool pack_low16,
     bool is_signed_int>
 inline void perform_reduce_col_sum_avg() {
-    // Determine if integer or float mode at compile time
-    constexpr bool is_integer_mode =
-        (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16);
-
-    constexpr std::uint32_t UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
-    constexpr std::uint32_t LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};  // Face 2, 2, 3, 3
-    constexpr std::uint32_t COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};        // even, odd, even, odd
-
     // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
     // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
@@ -249,82 +347,26 @@ inline void perform_reduce_col_sum_avg() {
     // Scheduling: on Blackhole a result of the multiply-add unit (SFPADD, SFPMUL) that the very next
     // instruction reads costs one stall cycle; a result read two instructions later costs nothing
     // (SFPIADD results are available to the next instruction, so the integer path never stalls).
-    // The half-reduce below is a chain of three dependent adds followed by the store (and the AVG
-    // multiply), so the float path paid a stall on every one of them. LREG4-7 are free once the
-    // transpose has run, and the next column group needs its lower face loaded into exactly those
-    // registers, so those four loads are issued between the dependent instructions of the current
-    // group instead of at the start of the next one. Same instructions, same operand order, same
-    // results; only the issue order changes. The last group has no next lower face and keeps its stalls.
-    load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(LOWER_FACE_ADDRS[0], COLUMN_OFFSETS[0]);
+    // The half-reduce is a chain of three dependent adds followed by the store (and the AVG multiply),
+    // so the float path paid a stall on every one of them. LREG4-7 are free once the transpose has run,
+    // and the next column group needs its lower face loaded into exactly those registers, so those four
+    // loads are issued between the dependent instructions of the current group instead of at the start
+    // of the next one. Same instructions, same operand order, same results; only the issue order
+    // changes. The last group has no next lower face and keeps its stalls.
+    //
+    // The four groups are instantiated at compile time so that every load, add and store is an immediate
+    // (TTI_) push: the issuing RISC then keeps ahead of the SFPU, which the runtime-encoded (TT_) pushes of the
+    // loop form did not allow once the half tree was no longer replayed.
+    constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG6, LOWER0 + 2 * ROWS_PER_LOAD>();
+    col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG7, LOWER0 + 3 * ROWS_PER_LOAD>();
 
-    for (std::uint32_t i = 0; i < NUM_FACES; i++) {
-        const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
-        const std::uint32_t column_offset = COLUMN_OFFSETS[i];
-        const bool has_next = (i + 1 < NUM_FACES);
-        const std::uint32_t next_lower_addr =
-            has_next ? LOWER_FACE_ADDRS[i + 1] + COLUMN_OFFSETS[i + 1] : 0;
-
-        // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
-        // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
-        // across all 4 loaded LREGs (e.g., LREG0[i] = sum of row[i], row[i+4], row[i+8], row[i+12]).
-        // The lower face (LREG4-7) was loaded ahead of this group; only the upper face is loaded here.
-        load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0>(upper_face_addr, column_offset);
-        lltt::replay(0, 6);
-
-        // Step 2: Cross-face addition. Unlike the old approach where only position 0 of the
-        // cross-face sum was meaningful, here ALL 4 positions carry useful partial sums.
-        if constexpr (is_integer_mode) {
-            TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);  // LREG0 = upper + lower (int)
-        } else {
-            TTI_SFPADD(
-                p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // LREG0 = upper + lower (float)
-        }
-
-        // Result of column reduction now stored in LREG0 as 4 partial sums
-        // Step 3: Transpose to rearrange the 4 partial sums for final reduction
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline as
-        // LREG2 += LREG3, LREG1 += LREG2, LREG0 += LREG1 so that the next group's lower-face loads can
-        // sit between the dependent adds. This sums the 4 partial sums into LREG0[0] = total column sum.
-        half_reduce_add<is_integer_mode>(p_sfpu::LREG2, p_sfpu::LREG3);
-        if (has_next) {
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr);
-        }
-        half_reduce_add<is_integer_mode>(p_sfpu::LREG1, p_sfpu::LREG2);
-        if (has_next) {
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + ROWS_PER_LOAD);
-        }
-        half_reduce_add<is_integer_mode>(p_sfpu::LREG0, p_sfpu::LREG1);
-        if (has_next) {
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + 2 * ROWS_PER_LOAD);
-        }
-
-        // Perform averaging if requested (different for int vs float)
-        if constexpr (pool_type == PoolType::AVG) {
-            if constexpr (is_integer_mode) {
-                perform_int_average<INSTRUCTION_MODE, is_signed_int>();
-            } else {
-                perform_float_average();
-            }
-        }
-        if (has_next) {
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + 3 * ROWS_PER_LOAD);
-        }
-        // Store the final column sum/average to the first row.
-        // Mode 9 (SFPSTORE_MOD0_FMT_LO16) is only needed when the packer-visible OUTPUT is UInt16 in a
-        // 32-bit dest: there the reduced value sits in the low 16 bits but the packer reads the high 16,
-        // so we move low->high. When the output is a full 32-bit format (e.g. UInt32) the packer reads
-        // the whole dest word, so we use the plain INSTRUCTION_MODE store even for UInt16 input.
-        constexpr std::uint32_t STORE_MODE =
-            pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
-        // Runtime-address store (TT_ not TTI_): the face address comes from the loop index and is not
-        // guaranteed to fold to a compile-time constant.
-        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, upper_face_addr + column_offset);
-    }
+    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 0>();
+    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 1>();
+    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 2>();
+    perform_reduce_col_sum_avg_group<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int, 3>();
 }
 
 // ============================================================================
