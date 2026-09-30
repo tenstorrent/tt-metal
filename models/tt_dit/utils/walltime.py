@@ -88,12 +88,12 @@ def record(
 
 
 @contextmanager
-def timed(category: str, label: str, *, cached: bool | None = None):
+def timed(category: str, label: str, *, cached: bool | None = None, detail: str = ""):
     t0 = time.monotonic()
     try:
         yield
     finally:
-        record(category, label, time.monotonic() - t0, cached=cached)
+        record(category, label, time.monotonic() - t0, cached=cached, detail=detail)
 
 
 def reset() -> None:

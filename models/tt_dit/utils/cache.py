@@ -183,7 +183,7 @@ def load_model(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
-        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False, detail="TT_DIT_CACHE_DIR unset"):
             tt_model.load_torch_state_dict(get_torch_state_dict())
         if post_load_hook is not None:
             post_load_hook(tt_model)
@@ -203,7 +203,7 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False, detail=miss_reason(cache_dir)):
         tt_model.load_torch_state_dict(get_torch_state_dict())
 
     # Hook (e.g. quant typecast) must run BEFORE save so the cache holds the post-hook
@@ -316,6 +316,16 @@ def model_cache_dir(
         path = path / ownership_suffix
 
     return path
+
+
+def miss_reason(cache_dir: str | Path) -> str:
+    """Why `load_model` is rebuilding `cache_dir`, for the wall-time anomaly list."""
+    if _kernel_capture_only():
+        # The capture pass never publishes, so its misses say nothing about the next run's hits.
+        return f"kernel capture-only pass, cache not written to '{cache_dir}'"
+    if not (Path(cache_dir) / CACHE_DICT_FILE).is_file():
+        return f"no cache at '{cache_dir}' yet, writing it"
+    return f"cache at '{cache_dir}' rejected by the manifest check, rebuilding"
 
 
 def _cache_is_complete(cache_dir: str | Path, tt_model: Module, key: str | None) -> bool:

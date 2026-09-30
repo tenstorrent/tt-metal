@@ -232,3 +232,27 @@ def test_the_poisoned_cache_is_not_servable(subfolder, checkpoint, monkeypatch, 
     assert cache._cache_is_complete(poisoned, module, None)
 
     assert not cache._cache_is_complete(poisoned, module, key)
+
+
+def test_a_capture_pass_miss_names_the_capture_pass(checkpoint, monkeypatch, tmp_path):
+    """The prewarm capture pass misses by design and never writes. Its anomaly must say so, or it
+    reads as an unstable key and sends the next reader chasing one."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TT_METAL_KERNEL_CAPTURE_ONLY", "1")
+    cache_dir = _key(_module(), [checkpoint])
+
+    assert "capture-only" in cache.miss_reason(cache_dir)
+
+
+def test_a_miss_says_whether_the_cache_was_absent_or_rejected(checkpoint, monkeypatch, tmp_path):
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("TT_METAL_KERNEL_CAPTURE_ONLY", raising=False)
+    module, key = _module(), cache.content_key(_module(), [checkpoint])
+    cache_dir = _key(module, [checkpoint])
+
+    assert "no cache" in cache.miss_reason(cache_dir)
+
+    cache._publish_cache(module, cache_dir, key)
+    (cache_dir / "weight.tensorbin").write_bytes(b"\x00" * 8)
+
+    assert "rejected" in cache.miss_reason(cache_dir)
