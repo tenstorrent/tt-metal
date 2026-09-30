@@ -35,3 +35,7 @@
 - 2026-09-30 16:03 UTC (attempt 7): box rebooted 16:00 UTC and killed the drive6 driver (651 still queued, #2 behind 643;
   656 and 671 also queued). Restarted `nohup setsid bash tmp/drive6.sh` (PID 9190, log tmp/drive6.log). busy() already
   counts queued smarton jobs, so the e2e run goes in only after 643/651/656/671 all finish. Resume steps unchanged.
+- 2026-09-30 16:30 UTC (attempt 8): job 686 (noisepf) DONE: latents + mp4s byte-identical to t14 safe; warm S1 2.14 s,
+  S2 2.42-2.43 s (574: 2.18 / 2.46); init S1 52 ms (was ~85), S2 82-93 ms (was ~135). DEVICE PAUSE in force: no submissions.
+  Committed 5d993cd2f7c: traced S2 reuses S1's persisted prompt (LTX_S2_PROMPT_REUSE=0 to disable), CPU test
+  test_ltx_stage_prompts.py. Ready-to-run commands in tmp/READY_22.md. Next when the pause lifts: READY_22 #1.
