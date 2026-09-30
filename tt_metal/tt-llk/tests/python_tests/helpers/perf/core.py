@@ -809,6 +809,13 @@ def _expand_run_types(text):
     return names
 
 
+_ISOLATE_RUN_TYPES = (
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+)
+
+
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
@@ -856,6 +863,16 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # L1_TO_L1 keeps the state the kernel before it left, so a run without isolate kernels also warms up the
+        # first isolate kernel of the test, which sets that state; otherwise the previous test still shows through.
+        self.warmup_configs = list(self.run_configs)
+        if not any(rt in _ISOLATE_RUN_TYPES for _, _, rt in self.run_configs):
+            extra = next((rt for rt in _ISOLATE_RUN_TYPES if rt in run_types), None)
+            if extra is not None and self.run_configs:
+                self.warmup_configs.insert(
+                    0,
+                    (templates.copy() + [PERF_RUN_TYPE(extra)], runtimes.copy(), extra),
+                )
 
         super().__init__(
             test_name,
@@ -1023,18 +1040,8 @@ class PerfConfig(TestConfig):
         window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
-                self.current_run_type = run_type
-                # We need to manually assign different modified templates here if the speed of light is set,
-                # because we run TestConfig constructor only once
-                if TestConfig.SPEED_OF_LIGHT:
-                    self.templates = templates + runtimes
-                    self.runtimes = []
-                    self.compile_time_formats = True
-                else:
-                    self.templates = templates
-                    self.runtimes = runtimes
-                self.generate_variant_hash()
+            for templates, runtimes, run_type in self.warmup_configs:
+                self._select_run_type(templates, runtimes, run_type)
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
@@ -1045,7 +1052,7 @@ class PerfConfig(TestConfig):
         # A kernel inherits state from the kernel before it: run each kernel once
         # unrecorded, so no measured kernel follows a kernel of another test.
         if not TestConfig.TEST_TARGET.run_simulator:
-            for templates, runtimes, run_type in self.run_configs:
+            for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
