@@ -18,6 +18,8 @@ namespace fp32_dest_acc
 {
 // One 0/1 ping-pong semaphore per consumer. No semaphore is free, so these borrow the unpack-to-dest
 // pair: both are Max=1, start at 0, and are balanced at op boundaries. Do not switch mid unpack-to-dest.
+// The math RISC also reads and decrements MATH_DONE (math_unpack_to_dest_math_ready), so every thread
+// holds its RISC until the handshake completes; no other RISC access to these semaphores is allowed.
 constexpr std::uint8_t UNPACK_SEM = semaphore::UNPACK_TO_DEST;
 constexpr std::uint8_t PACK_SEM   = semaphore::MATH_DONE;
 
@@ -30,20 +32,21 @@ constexpr std::uint32_t THREAD_IDLE = p_stall::UNPACK | p_stall::PACK | p_stall:
  * @brief Coordinate a mid-kernel FP32 dest-acc reconfiguration across Unpack, Math, and Pack.
  *
  * Dest-acc CFG is MATH-owned. The handshake is Tensix-only, so ordering is enforced at each thread's
- * Wait Gate and no RISC blocks:
+ * Wait Gate:
  *   1. UNPACK/PACK wait until none of their own work is in flight on any engine, SEMPOST their
  *      semaphore, then SEMWAIT with every instruction class blocked until MATH takes it back.
  *   2. MATH waits for both semaphores, waits until its own work has drained, programs ALU_ACC_CTRL and
  *      PCK_DEST_RD_CTRL, then SEMGETs both semaphores to release UNPACK/PACK. The Wait Gate issues in
  *      order and RMWCIB executes in the cycle it leaves the gate, so the SEMGET cannot take effect
  *      before the config writes have.
- * Old-mode work finishes before the config changes, and no Tensix instruction issued after the call
- * on any thread sees the old config.
+ *   3. Every thread tensix_syncs, holding its RISC until its own part of the handshake has executed.
+ * Old-mode work finishes before the config changes, and nothing issued after the call on any thread,
+ * Tensix or RISC, sees the old config. Step 3 also keeps the math RISC from touching MATH_DONE in a
+ * following unpack-to-dest op while PACK's token is still outstanding.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
- * @note All three TRISC threads must call their specialization together, between ops. Only Tensix
- *       instructions are ordered: RISC code after the call is not held back. Not supported
+ * @note All three TRISC threads must call their specialization together, between ops. Not supported
  *       on Quasar.
  */
 template <ThreadId thread_id>
@@ -73,4 +76,6 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         t6_semaphore_post<fp32_dest_acc::THREAD_IDLE>(sem);
         t6_semaphore_wait_on_max<p_stall::STALL_THREAD>(sem);
     }
+
+    tensix_sync();
 }
