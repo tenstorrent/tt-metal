@@ -38,8 +38,26 @@ Capability sources (Blackhole p150b; Galaxy chips assumed identical):
     all_gather_async 22 GB/s per link (88 % of the link), reduce_scatter_minimal_async 13, all_to_all_async_generic
     12 (TP) - 15 (SP) against the injection formula below; 12-20 us per op. Galaxy rings reuse the LoudBox rates
     (assumption: not calibrated there).
-SFPU primitives (exp, rsqrt, sigmoid, softplus, sqrt, topk) have no documented throughput: they are
-counted, not timed, so compute time is FPU time only.
+SFPU primitives (exp, rsqrt, sigmoid, softplus, sqrt, the router's top-6) have no documented throughput: they are
+counted (elements), not timed. Exception: the indexer's top-k (``topk_large_indices``) is timed at its measured
+per-chip element rate (``TOPK_ELEMENTS_PER_NS``, bead F10, LoudBox 2x4, 640 rows per chip), because at long context
+it rivals the scoring FPU time. It runs on the Tensix math thread, so it adds to the op's FPU time
+(``compute_ns = fpu_ns + sfpu_ns``). Rows are spread one per core: the rate is scaled by the row imbalance
+ceil(rows / cores) / (rows / cores) (F10's convention). The top-k calls follow the implemented selection
+(``tt/v41/indexer.py`` ``select``), including its width thresholds.
+
+Scenarios (``SCENARIOS``, as DeepSeek-V3.2 / GLM ``tests/sparse_mla/test_sparse_mla_perf.py``): one 5120-token chunk
+at start 0 (empty cache), 51200 (50k cached) and 512000 (0.5M cached). ``galaxy_slice`` scales chunk and start by
+sp / 8 (V3.2's LoudBox per-chip Galaxy slice). V3.2 shards its caches block-cyclically over SP, so its slice keeps
+Galaxy's per-chip cache depth; V4.1 replicates its caches on every chip, so the slice keeps Galaxy's per-chip query
+count but only sp / 8 of its visible cache: it under-represents every cache-length term (indexer, top-k).
+
+Bounds with two sides. Per op, ``dram_bytes`` is the optimistic (reuse-maximal) traffic; ``dram_bytes_cons`` (when
+set) is the conservative traffic of an implementation without that reuse. Only ``sparse_attention`` has one: the
+optimistic side reads the union of its queries' selected KV rows once, the conservative side reads each query's
+``SLIDING_WINDOW + INDEX_TOPK`` (640) rows with no reuse across queries. A block's ``optimistic_ns`` =
+max(sum compute, sum optimistic DRAM, sum CCL); ``conservative_ns`` = sum over ops of max(compute, conservative DRAM)
++ sum CCL. G2 target = max(2 x optimistic, conservative) (``g2_target_ns``).
 """
 
 from __future__ import annotations
@@ -66,6 +84,17 @@ DEFAULT_FIDELITY = {"bfp4": "LoFi", "bfp8": "HiFi2", "bf16": "HiFi4", "fp32": "H
 WINDOW_SLOT = 128  # carried window rows per KV tensor (``cache.WINDOW_SLOT``)
 ENGRAM_PACKED_ROW_BYTES = 320  # ``engram.PACKED_WIDTH`` (160) uint16 containers: 256 FP8 values + 8 E8M0 scales, padded
 TILE = 32
+# ``topk_large_indices`` elements per ns per chip by k (F10 ``evidence/F10/targets_model.py``: k=512 from 3 points,
+# linear in T, P = 128K-1M; k=2048 from one point at 256K, less certain). Measured, not a hardware capability.
+TOPK_ELEMENTS_PER_NS = {512: 24.7, 2048: 7.1}
+# Selection thresholds of the implemented indexer (``tt/v41/indexer.py``; duplicated because that module imports
+# ttnn): the candidate source's own top-k runs among its candidate blocks above SUBSET_TOPK_MIN_WIDTH columns; a
+# candidate index source masks its whole row up to DENSE_MASK_MAX_WIDTH and gathers its candidates' rows above it.
+SUPERBLOCK = 32  # ``cache.SUPERBLOCK``
+SUBSET_TOPK_MIN_WIDTH = 1 << 19
+DENSE_MASK_MAX_WIDTH = 1 << 17
+# Galaxy chunk starts of the V3.2 / GLM perf scenarios (``tests/sparse_mla/test_sparse_mla_perf.py``)
+SCENARIOS = {"S0": 0, "S1": 51200, "S2": 512000}
 
 
 @dataclass(frozen=True)
@@ -141,14 +170,26 @@ class OpCost:
     sfpu: dict = field(default_factory=dict)
     dram_bytes: float = 0.0
     collectives: list = field(default_factory=list)
-    compute_ns: float = 0.0
+    # conservative DRAM bytes (no cross-query reuse); None = same as ``dram_bytes``
+    dram_bytes_cons: float | None = None
+    # timed top-k calls: (rows, width, k) per chip, at ``TOPK_ELEMENTS_PER_NS[k]``
+    topk_calls: list = field(default_factory=list)
+    fpu_ns: float = 0.0
+    sfpu_ns: float = 0.0
+    compute_ns: float = 0.0  # fpu_ns + sfpu_ns
     dram_ns: float = 0.0
+    dram_cons_ns: float = 0.0
     ccl_ns: float = 0.0
 
     @property
     def roofline_ns(self) -> float:
-        """Local compute/DRAM overlap; collectives are a separate resource (see compose)."""
+        """Local compute/DRAM overlap (optimistic DRAM); collectives are a separate resource (see compose)."""
         return max(self.compute_ns, self.dram_ns)
+
+    @property
+    def roofline_cons_ns(self) -> float:
+        """Local compute/DRAM overlap with the conservative DRAM traffic."""
+        return max(self.compute_ns, self.dram_cons_ns)
 
 
 @dataclass(frozen=True)
@@ -212,12 +253,27 @@ def collective_ns(coll: Collective, layout: Layout, hw: Hardware) -> float:
 def _finish(op: OpCost, layout: Layout, hw: Hardware) -> OpCost:
     phases = FIDELITY_PHASES[op.fidelity]
     per_ns = hw.cores * hw.clock_mhz / 1000.0
-    op.compute_ns = (
+    op.fpu_ns = (
         op.matmul_flop * phases / hw.matmul_flop_per_cycle_core + op.eltwise / hw.eltwise_per_cycle_core
     ) / per_ns
+    op.sfpu_ns = sum(topk_ns(rows, width, k, hw) for rows, width, k in op.topk_calls)
+    if op.topk_calls:
+        op.sfpu["topk"] = op.sfpu.get("topk", 0) + sum(rows * width for rows, width, _ in op.topk_calls)
+    op.compute_ns = op.fpu_ns + op.sfpu_ns
     op.dram_ns = op.dram_bytes / hw.dram_bytes_per_ns
+    op.dram_cons_ns = (op.dram_bytes if op.dram_bytes_cons is None else op.dram_bytes_cons) / hw.dram_bytes_per_ns
     op.ccl_ns = sum(collective_ns(c, layout, hw) for c in op.collectives)
     return op
+
+
+def topk_ns(rows: float, width: float, k: int, hw: Hardware = BLACKHOLE_P150B) -> float:
+    """``topk_large_indices`` over ``rows`` x ``width`` on one chip: elements / measured rate (k <= 512 uses the
+    k=512 rate), times the row imbalance of one row per core."""
+    if rows <= 0 or width <= 0:
+        return 0.0
+    rate = TOPK_ELEMENTS_PER_NS[512 if k <= 512 else 2048]
+    imbalance = -(-rows // hw.cores) / (rows / hw.cores)
+    return rows * width / rate * imbalance
 
 
 def _linear(node, name, tokens, k, n, wdtype, layout, *, k_sharded_tp, n_sharded_tp, act=("bf16", "bf16"), coll=()):
@@ -375,8 +431,10 @@ def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[
     selected = min(C.SLIDING_WINDOW, w.end) + (min(C.INDEX_TOPK, visible) if ratio else 0)
     a2a = [Collective("all_to_all", "tp", s * hl * d * 2 * (1 - 1 / layout.tp))] if layout.tp > 1 else []
     ops.append(OpCost("B14", "q_head_to_seq", dram_bytes=s * hl * d * 2 * 2, collectives=list(a2a)))
-    # every chip reads the KV rows its queries select once: their window span and the union of their top-k
+    # optimistic: every chip reads the KV rows its queries select once (their window span and the union of their
+    # top-k); conservative: every query reads its own selected rows, no reuse across queries
     kv_rows = qc + C.SLIDING_WINDOW - 1 + (min(visible, qc * C.INDEX_TOPK) if ratio else 0)
+    q_o_idx = qc * heads * d * 2 * 2 + qc * selected * 4
     ops.append(
         OpCost(
             "B14",
@@ -385,7 +443,8 @@ def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[
             fidelity="HiFi2",
             eltwise=qc * heads * selected * 3,
             sfpu={"exp": qc * heads * selected},
-            dram_bytes=qc * heads * d * 2 * 2 + kv_rows * d * kvb + qc * selected * 4,
+            dram_bytes=q_o_idx + kv_rows * d * kvb,
+            dram_bytes_cons=q_o_idx + qc * selected * d * kvb,
         )
     )
     ops.append(OpCost("B14", "o_seq_to_head", dram_bytes=s * hl * d * 2 * 2, collectives=list(a2a)))
@@ -457,21 +516,48 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
             dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score * 4,
         ),
     ]
+    candidate_calls, row_calls = selection_topk_calls(btype, qi, t)
     if btype == V41BlockType.CANDIDATE_SOURCE:
         ops.append(
             OpCost(
                 "B10",
                 "candidate_select",
                 eltwise=qi * t * 3,
-                sfpu={"topk": qi},
+                topk_calls=candidate_calls,
                 # block max over 8 strided slices, block top-k, scatter, repeat_interleave, where -> published mask
                 dram_bytes=score * 2 + score / C.CANDIDATE_BLOCK_SIZE * 4 + score * 2,
             )
         )
     if btype == V41BlockType.CANDIDATE_INDEX_SOURCE:
         ops.append(OpCost("B11", "candidate_mask", eltwise=qi * t, dram_bytes=score * 3))
-    ops.append(OpCost("B12", "topk", sfpu={"topk": qi}, dram_bytes=score + qi * C.INDEX_TOPK * 4))
+    ops.append(OpCost("B12", "topk", topk_calls=row_calls, dram_bytes=score + qi * C.INDEX_TOPK * 4))
     return ops
+
+
+def selection_topk_calls(btype, qi: float, t: int) -> tuple[list, list]:
+    """The ``topk_large_indices`` calls (rows, width, k) of the implemented selection (``TtV41Indexer.select``) for
+    ``qi`` query rows and a score ``t`` columns wide: (candidate-block calls of the candidate source, row top-k).
+
+    Candidate blocks exist once a row has more than ``CANDIDATE_TOPK_BLOCKS`` blocks of 8. The candidate source
+    ranks the block maxima of the whole row while it has at most 2048 superblocks of 32, else the superblock maxima
+    and then the block maxima of the 2048 gathered superblocks (8192 blocks). Row top-k: direct over the row, except
+    the candidate source above ``SUBSET_TOPK_MIN_WIDTH`` and a candidate index source above
+    ``DENSE_MASK_MAX_WIDTH``, which rank the 2048 x 32 gathered columns."""
+    kb, block, k = C.CANDIDATE_TOPK_BLOCKS, C.CANDIDATE_BLOCK_SIZE, C.INDEX_TOPK
+    has_candidates = t // block > kb
+    gathered = kb * SUPERBLOCK
+    candidate_calls, row_calls = [], [(qi, t, k)]
+    if btype == V41BlockType.CANDIDATE_SOURCE and has_candidates:
+        nsb = t // SUPERBLOCK
+        if nsb <= kb:
+            candidate_calls = [(qi, t // block, kb)]
+        else:
+            candidate_calls = [(qi, nsb, kb), (qi, gathered // block, kb)]
+        if t > SUBSET_TOPK_MIN_WIDTH:
+            row_calls = [(qi, gathered, k)]
+    if btype == V41BlockType.CANDIDATE_INDEX_SOURCE and has_candidates and t > DENSE_MASK_MAX_WIDTH:
+        row_calls = [(qi, gathered, k)]
+    return candidate_calls, row_calls
 
 
 def moe_dispatch_rows(w: Workload, layout: Layout) -> int:
@@ -492,7 +578,7 @@ def _moe_ops(s, w: Workload, layout: Layout) -> list[OpCost]:
             "gate",
             matmul_flop=2 * s * h * e / layout.tp,
             fidelity="HiFi4",
-            sfpu={"softplus": s * e / layout.tp, "sqrt": s * e / layout.tp, "topk": s / layout.tp},
+            sfpu={"softplus": s * e / layout.tp, "sqrt": s * e / layout.tp, "topk_router": s * e / layout.tp},
             dram_bytes=h * e * 2 / layout.tp + s * h / layout.tp * 2 + s * e * 4 / layout.tp,
             collectives=[Collective("all_reduce", "tp", s * e * 4 / layout.tp)],
         ),
@@ -595,10 +681,16 @@ class BlockEstimate:
     compute_ns: float
     dram_ns: float
     ccl_ns: float
-    conservative_ns: float  # every op serialized: sum(max(compute, dram)) + sum(ccl)
+    conservative_ns: float  # every op serialized: sum(max(compute, conservative dram)) + sum(ccl)
     optimistic_ns: float  # compute, DRAM and links each saturated in parallel across the block
     sfpu: dict
     ops: list
+    sfpu_ns: float = 0.0  # timed top-k, included in compute_ns
+    dram_cons_ns: float = 0.0
+
+    @property
+    def target_ns(self) -> float:
+        return g2_target_ns(self)
 
 
 def compose(ops: list[OpCost], layer: int = -1, block_type: str = "") -> BlockEstimate:
@@ -615,15 +707,103 @@ def compose(ops: list[OpCost], layer: int = -1, block_type: str = "") -> BlockEs
         compute_ns=compute,
         dram_ns=dram,
         ccl_ns=ccl,
-        conservative_ns=sum(o.roofline_ns for o in ops) + ccl,
+        conservative_ns=sum(o.roofline_cons_ns for o in ops) + ccl,
         optimistic_ns=max(compute, dram, ccl),
         sfpu=sfpu,
         ops=ops,
+        sfpu_ns=sum(o.sfpu_ns for o in ops),
+        dram_cons_ns=sum(o.dram_cons_ns for o in ops),
     )
+
+
+def g2_target_ns(e: BlockEstimate) -> float:
+    """G2 layer target: max(2 x optimistic, conservative)."""
+    return max(2 * e.optimistic_ns, e.conservative_ns)
 
 
 def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> BlockEstimate:
     return compose(block_ops(layer, w, layout, hw), layer, C.block_type(layer).value)
+
+
+# --- scenarios, op groups, full model ----------------------------------------------------------------------------
+# Op group of every block op (by op name), for the per-segment view of a layer
+OP_GROUPS = {
+    "mhc": ("hc_mixes_attn", "hc_pre_attn", "hc_post_attn", "hc_mixes_ffn", "hc_pre_ffn", "hc_post_ffn"),
+    "norms": ("attn_norm", "ffn_norm"),
+    "attn.proj": ("wq_a", "q_norm", "wq_b", "q_rope", "wkv", "kv_norm_rope_qdq", "inverse_rope", "wo_a", "wo_b"),
+    "attn.kv_write": ("window_kv_write", "compressor_r1", "compressor_r2", "index_keys", "compressed_kv_write"),
+    "attn.a2a": ("q_head_to_seq", "o_seq_to_head"),
+    "attn.sparse_sdpa": ("sparse_attention",),
+    "attn.indexer": ("index_wq_b", "index_weights_proj", "index_scores", "candidate_select", "candidate_mask", "topk"),
+    "moe.gate": ("gate",),
+    "moe.dispatch_combine": ("moe_input_gather", "dispatch", "combine", "routed_reduce"),
+    "moe.routed": ("routed_experts",),
+    "moe.shared": ("shared_expert",),
+    "engram": ("engram_lookup_host", "engram_lookup_device", "engram_wkv", "engram_gate_add"),
+}
+GROUP_OF = {name: group for group, names in OP_GROUPS.items() for name in names}
+CHECKPOINT_LAYERS = (0, 2, 3, 20, 21, 24)  # the measured sharing schedule (one layer of every block type)
+
+
+def scenario_workload(name: str, layout: Layout, *, galaxy_slice: bool = False, **kw) -> Workload:
+    """The 5120-token chunk of scenario ``name`` (``SCENARIOS``); ``galaxy_slice`` scales chunk and start by sp / 8
+    (V3.2's per-chip Galaxy slice on a smaller box, e.g. LoudBox 2x4: chunk 1280 at 0 / 12800 / 128000)."""
+    start, chunk = SCENARIOS[name], 5120
+    if galaxy_slice:
+        assert (chunk * layout.sp) % 8 == 0 and (start * layout.sp) % 8 == 0
+        chunk, start = chunk * layout.sp // 8, start * layout.sp // 8
+    return Workload(chunk=chunk, start=start, **kw)
+
+
+def group_estimates(ops: list[OpCost]) -> dict[str, BlockEstimate]:
+    """Each op group's own composition (optimistic / conservative over the group's ops only)."""
+    out = {}
+    for group in OP_GROUPS:
+        sel = [o for o in ops if GROUP_OF.get(o.name) == group]
+        if sel:
+            out[group] = compose(sel, block_type=group)
+    unknown = [o.name for o in ops if o.name not in GROUP_OF]
+    assert not unknown, f"ops without a group: {unknown}"
+    return out
+
+
+def chunk_estimate(
+    w: Workload, layout: Layout, *, layers=None, dspark: bool = True, hw: Hardware = BLACKHOLE_P150B
+) -> dict:
+    """One chunk through ``layers`` (default: all backbone layers, i.e. the full model; + DSpark seeding): blocks
+    run one after another, each composed on its own. Returns per-layer estimates, per block type (count, per-layer
+    and summed optimistic / conservative / target, ns) and per op group (summed over layers, ns)."""
+    layers = list(range(C.NUM_LAYERS)) if layers is None else list(layers)
+    blocks = [compose_block(layer, w, layout, hw) for layer in layers]
+    tail = compose(dspark_prefill_ops(w, layout, hw) if dspark else [], block_type="dspark_seed")
+    by_type: dict = {}
+    for b in blocks:
+        t = by_type.setdefault(
+            b.block_type, {"layers": [], "optimistic_ns": 0.0, "conservative_ns": 0.0, "target_ns": 0.0}
+        )
+        t["layers"].append(b.layer)
+        t["optimistic_ns"] += b.optimistic_ns
+        t["conservative_ns"] += b.conservative_ns
+        t["target_ns"] += b.target_ns
+    groups: dict = {}
+    for b in blocks:
+        for group, e in group_estimates(b.ops).items():
+            g = groups.setdefault(group, {"optimistic_ns": 0.0, "conservative_ns": 0.0, "sfpu_ns": 0.0})
+            g["optimistic_ns"] += e.optimistic_ns
+            g["conservative_ns"] += e.conservative_ns
+            g["sfpu_ns"] += e.sfpu_ns
+    if dspark:
+        groups["dspark_seed"] = {
+            "optimistic_ns": tail.optimistic_ns,
+            "conservative_ns": tail.conservative_ns,
+            "sfpu_ns": 0.0,
+        }
+    total = {
+        "optimistic_ns": sum(b.optimistic_ns for b in blocks) + tail.optimistic_ns,
+        "conservative_ns": sum(b.conservative_ns for b in blocks) + tail.conservative_ns,
+        "target_ns": sum(b.target_ns for b in blocks) + (g2_target_ns(tail) if dspark else 0.0),
+    }
+    return {"blocks": blocks, "tail": tail, "by_type": by_type, "groups": groups, "total": total}
 
 
 def prefill_estimate(

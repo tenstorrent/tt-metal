@@ -130,3 +130,94 @@ def test_galaxy_capacity_components(layout):
     assert cap["engram_tables"] == 12_000_194 * 320
     host = m.capacity_per_chip([1], m.Workload(), layout, context_tokens=0, dspark=False)
     assert host["engram_tables"] == 0
+
+
+# --- scenarios (bead 8y7.9.13) ---------------------------------------------------------------------------------
+
+
+def test_topk_time_at_measured_rate_with_row_imbalance():
+    # 220 rows on 100 cores: 3 rounds of rows, so as if 300 rows ran; 300 x 1000 elements at 24.7 /ns (k <= 512)
+    assert math.isclose(m.topk_ns(220, 1000, 512, HW), 300 * 1000 / 24.7)
+    # k = 2048 at 7.1 /ns; 200 rows on 100 cores are balanced
+    assert math.isclose(m.topk_ns(200, 1000, 2048, HW), 200 * 1000 / 7.1)
+
+
+@pytest.mark.parametrize(
+    "layer, t, candidate_calls, row_width",
+    [
+        (20, 5120, [], 5120),  # 640 blocks <= 2048: no candidates, direct top-512 over the row
+        (20, 56320, [(640, 7040, 2048)], 56320),  # 1760 superblocks <= 2048: one level over 7040 blocks
+        (20, 517120, [(640, 16160, 2048), (640, 8192, 2048)], 517120),  # two levels; row <= 2^19: direct
+        (20, 1 << 20, [(640, 32768, 2048), (640, 8192, 2048)], 65536),  # row > 2^19: among 2048 x 32 gathered
+        (24, 56320, [], 56320),  # masked to its candidates up to 2^17: top-512 over the whole row
+        (24, 517120, [], 65536),  # above 2^17: among the 2048 x 32 gathered columns
+        (2, 258560, [], 258560),  # ratio-2 index source: always direct
+    ],
+)
+def test_selection_topk_calls_follow_implemented_thresholds(layer, t, candidate_calls, row_width):
+    cand, row = m.selection_topk_calls(m.C.block_type(layer), 640, t)
+    assert cand == candidate_calls and row == [(640, row_width, 512)]
+
+
+def test_indexer_topk_is_timed_in_compute():
+    # LoudBox 2x4 at start 512000, L2 (ratio 2): 640 query rows x 258,560 visible columns, one direct top-512
+    ops = {o.name: o for o in m.block_ops(2, m.Workload(start=512000), m.LOUDBOX_2X4, HW)}
+    topk = ops["topk"]
+    assert topk.sfpu["topk"] == 640 * 258560
+    assert math.isclose(topk.sfpu_ns, 700 * 258560 / 24.7)  # 640 rows on 100 cores run as 700
+    assert topk.compute_ns == topk.fpu_ns + topk.sfpu_ns
+
+
+def test_sparse_attention_dram_bounds():
+    # LoudBox 2x4, 640 queries per chip, BF16 KV rows of 512 x 2 B. At start 512000 layer 21 (ratio 1) sees 517,120
+    # compressed rows; every query selects 128 window + 512 top-k rows.
+    w = m.Workload(start=512000)
+    op = {o.name: o for o in m.block_ops(21, w, m.LOUDBOX_2X4, HW)}["sparse_attention"]
+    union = 640 + 127 + min(517120, 640 * 512)  # window span + top-k union (capped by the query picks)
+    assert op.dram_bytes_cons - op.dram_bytes == (640 * 640 - union) * 1024
+    # layer 0 (ratio 0) selects its 128 window rows only: union = the chunk span, no reuse = 640 x 128
+    op0 = {o.name: o for o in m.block_ops(0, w, m.LOUDBOX_2X4, HW)}["sparse_attention"]
+    assert op0.dram_bytes_cons - op0.dram_bytes == (640 * 128 - (640 + 127)) * 1024
+
+
+def test_block_conservative_uses_conservative_dram_and_target():
+    ops = [m.OpCost("X", "a", dram_bytes=512e3, dram_bytes_cons=1024e3), m.OpCost("X", "b", matmul_flop=0)]
+    ops = [m._finish(o, m.LOUDBOX_2X4, HW) for o in ops]
+    e = m.compose(ops)
+    # 512 kB at 512 B/ns = 1000 ns optimistic; 2000 ns conservative; target = max(2 x 1000, 2000)
+    assert e.optimistic_ns == 1000 and e.conservative_ns == 2000 and m.g2_target_ns(e) == 2000
+
+
+def test_galaxy_slice_scales_chunk_and_start():
+    assert [
+        (w.chunk, w.start)
+        for w in (m.scenario_workload(s, m.LOUDBOX_2X4, galaxy_slice=True) for s in ("S0", "S1", "S2"))
+    ] == [(1280, 0), (1280, 12800), (1280, 128000)]
+    assert m.scenario_workload("S2", m.GALAXY_8X4, galaxy_slice=True).chunk == 5120
+    assert m.scenario_workload("S1", m.LOUDBOX_2X4).start == 51200
+
+
+def test_full_model_layer_types_and_totals():
+    e = m.chunk_estimate(m.scenario_workload("S0", m.LOUDBOX_2X4), m.LOUDBOX_2X4)
+    counts = {k: len(v["layers"]) for k, v in e["by_type"].items()}
+    assert counts == {
+        "swa_only": 2,
+        "kv_index_source": 3,
+        "consumer_ratio2": 15,
+        "candidate_source": 1,
+        "consumer_ratio1": 15,
+        "candidate_index_source": 4,
+    }
+    assert math.isclose(
+        e["total"]["optimistic_ns"], sum(b.optimistic_ns for b in e["blocks"]) + e["tail"].optimistic_ns
+    )
+    assert math.isclose(sum(g["conservative_ns"] for g in e["groups"].values()), e["total"]["conservative_ns"])
+
+
+def test_cache_length_changes_only_attention_side():
+    # the chunk start moves only the attention's selection and the indexer; MoE, mHC and projections are unchanged
+    g0 = m.chunk_estimate(m.scenario_workload("S0", m.LOUDBOX_2X4), m.LOUDBOX_2X4)["groups"]
+    g2 = m.chunk_estimate(m.scenario_workload("S2", m.LOUDBOX_2X4), m.LOUDBOX_2X4)["groups"]
+    for group in ("mhc", "attn.proj", "moe.routed", "moe.dispatch_combine", "moe.shared"):
+        assert g0[group] == g2[group]
+    assert g2["attn.indexer"]["conservative_ns"] > 10 * g0["attn.indexer"]["conservative_ns"]
