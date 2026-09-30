@@ -277,7 +277,7 @@ def write_md(a, spec, chosen, results, reviewed_names, shimmed, seconds):
         "limits vs the CPU step on the same inputs, `swap_<step>_out` = the block out with vs without the step's "
         "error, `_vs_cpu` / `_vs_golden` = the component compare mode and threshold).",
         "",
-        "Controls must pass old and new: `reference` (no change) and `bf16` (the step on bf16-rounded inputs, its "
+        "Controls must pass old and new: `reference` (no change) and, when run (`--kinds ... bf16`), `bf16` (the step on bf16-rounded inputs, its "
         "output rounded to bf16: a correct step's precision, not the device's; on the last step, and on every "
         "swapped step at once). The step limits are calibrated from the Hy4 device component gates "
         "(`bringup/results/C.<block>.<step>.json`, `pcc_<step>_L<layer>`), as they would be in a run.",
@@ -291,15 +291,21 @@ def write_md(a, spec, chosen, results, reviewed_names, shimmed, seconds):
         )
     ran = lambda rows, k: [r for r in rows if r[k]]  # noqa: E731
     passed = lambda rows, k: sum(1 for r in rows if r[k] and r[k]["passed"] is True)  # noqa: E731
+    ctrl_line = (
+        [
+            f"- bf16 controls pass: old {passed(ctrl, 'old')}/{len(ctrl)}, new {passed(ctrl, 'new')}/{len(ctrl)}, "
+            f"reviewed {passed(ctrl, 'reviewed')}/{len(ran(ctrl, 'reviewed'))}."
+        ]
+        if ctrl
+        else []
+    )
     lines += [
         "",
         "## Summary",
         "",
         f"- Unmutated reference runs pass: old {passed(refs, 'old')}/{len(refs)}, new {passed(refs, 'new')}/"
         f"{len(refs)}, reviewed {passed(refs, 'reviewed')}/{len(ran(refs, 'reviewed'))}.",
-        f"- bf16 controls pass: old {passed(ctrl, 'old')}/{len(ctrl)}, new {passed(ctrl, 'new')}/{len(ctrl)}, "
-        f"reviewed {passed(ctrl, 'reviewed')}/{len(ran(ctrl, 'reviewed'))} (the reviewed tests assume fp32 device "
-        "steps where the device was fp32).",
+        *ctrl_line,
         f"- Mutations: {len(muts)}; old catches {n(muts, 'old')}, new catches {n(muts, 'new')}.",
         f"- On the reviewed tests ({len(rev)} mutations): reviewed catches {n(rev, 'reviewed')}, old {n(rev, 'old')}, "
         f"new {n(rev, 'new')}; caught by reviewed but not by new: "
@@ -314,7 +320,9 @@ def write_md(a, spec, chosen, results, reviewed_names, shimmed, seconds):
         "|---|---|---|---|---|---|---|",
     ]
     for r in results:
-        fails = ", ".join(f for f in r["new"]["fails"] if f != "assert") or ("-" if r["new"]["passed"] else "")
+        trail = lambda f: f.startswith("pcc_swap_") and f != "pcc_swap_out"  # noqa: E731 (ungated diagnosis lines)
+        fails = ", ".join(f for f in r["new"]["fails"] if f != "assert" and not trail(f))
+        fails = fails or ("-" if r["new"]["passed"] else "")
         err = f" ({r['new']['error'][:80]})" if r["new"]["error"] else ""
         lines.append(
             f"| {r['task']} | {r['step']} | {r['kind']} | {verdict(r['old'])} | {verdict(r['new'])}{err} | "
