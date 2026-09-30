@@ -3,7 +3,6 @@
 
 import itertools
 import math
-import random
 import struct
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -1631,8 +1630,15 @@ def _bf16_tie_pairs(mathop, count, seed=0):
     LSB set and nothing under it. Random signs and exponents put about half the ties on an even
     LSB, the only lanes where round-to-nearest-even and round-half-away disagree.
     """
-    rng = random.Random(seed)
-    sign = lambda: -1.0 if rng.random() < 0.5 else 1.0
+    # Seeded torch draws: the same pairs every run, so a failure is reproducible.
+    gen = torch.Generator().manual_seed(seed)
+
+    def draw(low, high):
+        return torch.randint(low, high + 1, (count,), generator=gen).tolist()
+
+    def signs():
+        return (torch.randint(0, 2, (count,), generator=gen) * 2 - 1).tolist()
+
     pairs = []
     if mathop == MathOperation.SfpuElwmul:
         tie_significands = []
@@ -1644,18 +1650,24 @@ def _bf16_tie_pairs(mathop, count, seed=0):
                 dropped = p.bit_length() - (_BF16_FRAC_BITS + 1)
                 if p & ((1 << dropped) - 1) == 1 << (dropped - 1):
                     tie_significands.append((ma, mb))
-        for _ in range(count):
-            ma, mb = rng.choice(tie_significands)
-            a = sign() * math.ldexp(ma, rng.randint(-10, 10) - _BF16_FRAC_BITS)
-            b = sign() * math.ldexp(mb, rng.randint(-10, 10) - _BF16_FRAC_BITS)
+        for idx, ea, eb, sa, sb in zip(
+            draw(0, len(tie_significands) - 1),
+            draw(-10, 10),
+            draw(-10, 10),
+            signs(),
+            signs(),
+        ):
+            ma, mb = tie_significands[idx]
+            a = sa * math.ldexp(ma, ea - _BF16_FRAC_BITS)
+            b = sb * math.ldexp(mb, eb - _BF16_FRAC_BITS)
             pairs.append((a, b))
     else:
-        for _ in range(count):
-            exp = rng.randint(-20, 20)
+        for exp, m, sa, sb in zip(
+            draw(-20, 20), draw(1, _BF16_SIG_ONE - 1), signs(), signs()
+        ):
             # a = +/-(1 + m / 128) * 2^exp with m >= 1; b = half of a's bf16 ULP, 2^(exp - 8).
-            sig = _BF16_SIG_ONE + rng.randint(1, _BF16_SIG_ONE - 1)
-            a = sign() * math.ldexp(sig, exp - _BF16_FRAC_BITS)
-            b = sign() * math.ldexp(1.0, exp - (_BF16_FRAC_BITS + 1))
+            a = sa * math.ldexp(_BF16_SIG_ONE + m, exp - _BF16_FRAC_BITS)
+            b = sb * math.ldexp(1.0, exp - (_BF16_FRAC_BITS + 1))
             pairs.append((a, b))
 
     # Self-check on the host: every pair must be an exact fp32 tie, else the test proves nothing.

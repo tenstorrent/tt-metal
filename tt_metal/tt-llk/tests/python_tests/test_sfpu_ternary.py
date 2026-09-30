@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import random
 import struct
 
 import pytest
@@ -312,12 +311,14 @@ def _lerp_tie_operands(count, seed=0):
     the kernel's SFPMAD and for torch alike. Random signs and exponents put about half the
     lanes on an even LSB, the only ones where round-to-even and round-half-away disagree.
     """
-    rng = random.Random(seed)
+    # Seeded torch draws: the same lanes every run, so a failure is reproducible.
+    gen = torch.Generator().manual_seed(seed)
+    exps = torch.randint(-20, 21, (count,), generator=gen).tolist()
+    sigs = torch.randint(0, _BF16_SIG_ONE, (count,), generator=gen).tolist()
+    signs = (torch.randint(0, 2, (count,), generator=gen) * 2 - 1).tolist()
     a, b = [], []
-    for _ in range(count):
-        exp = rng.randint(-20, 20)
-        sig = _BF16_SIG_ONE + rng.randint(0, _BF16_SIG_ONE - 1)
-        sign = -1.0 if rng.random() < 0.5 else 1.0
+    for exp, sig, sign in zip(exps, sigs, signs):
+        sig += _BF16_SIG_ONE
         a.append(sign * math.ldexp(sig, exp - _BF16_FRAC_BITS))
         b.append(sign * math.ldexp(sig + 1, exp - _BF16_FRAC_BITS))
     # Self-check on the host: every lane must be an exact tie, else the test proves nothing.
