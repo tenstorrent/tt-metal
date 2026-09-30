@@ -1699,8 +1699,8 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(The last dimension of the input tensor must be even.)doc");
     bind_unary_operation_subcoregrids<"deg2rad">(
         mod,
