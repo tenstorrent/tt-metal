@@ -50,6 +50,8 @@ file(
     reshape_view/codegen/kernels/*.h
     scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
+    scatter/codegen/kernels/*.cpp
+    scatter/codegen/kernels/*.hpp
     sharded/device/kernels/*.cpp
     sharded/reshard/device/kernels/*.cpp
     sort/device/kernels/*.cpp
