@@ -139,7 +139,8 @@ public:
     }
 
     // ============ Tensix Config ============
-    void initialize_tensix_config();
+    // Call after routing tables are configured. No-op unless fabric tensix is enabled.
+    void initialize_tensix_config(const FabricTensixSessionInputs& inputs);
     FabricTensixDatamoverConfig& get_tensix_config() const;
     bool has_tensix_config() const { return tensix_config_ != nullptr; }
 
