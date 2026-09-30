@@ -1297,6 +1297,14 @@ tasks:
     kind: norm
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T15:18:06'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_norm.py: a83e23d84ce0559018026c8a7f49e81d060612aa8bdc99c926ad347e131e4509
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.09
   title: 'moe block with steps 1-9 on device (last: ffn_norm)'
   step: implement
