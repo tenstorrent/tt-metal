@@ -40,3 +40,10 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   box.mesh [4, 2] + owner rule in agents.rules (incl. "Plan role: think hard ..."); intake re-approved on their word.
   Draft plan moved out of the tree (scratchpad plan_attempt1_2x4); its known_issues entry (mhc_split_sinkhorn differs
   from Xing's Sinkhorn) kept. rerun --from B.1 (B.1 for the new mesh, PL.1 replanned); goldens unaffected (CPU).
+- 05:50 PL.1 attempt 1 on 4x2 (SP=4 rows x TP=2 columns, Kimi layout: ttMLA chunked ring_mla over axis 0, block-cyclic
+  latent cache, hy4 TtHcGates mHC, DeepSeek 2D dispatch in 4-chip columns, reduce_scatter over axis 1; 9.63 of 27.2 GiB
+  per chip, 0 CPU / OPGEN steps). Overseer checked: moe README 4x2 example, mla.py:980 chunked requires
+  is_balanced=False, TtHcGates, memory items. Owner approved ("ok approve"). approve plan; resumed.
+- Owner delegation (05:50): run autonomously from here; reset boards when needed (no other device job running);
+  investigate wrong-looking results myself, keeping in mind that swap (F49) and component (F56) tests freeze on built-in
+  checks without a review agent. Still the owner's: perf picks, op-gen launches, pushes.
