@@ -22,9 +22,17 @@ a 0/1 block matrix (deepseek_v3_d_p/tt/mhc/tt_mhc.py:_selection_row_col): row su
 = M @ CB. The row max uses three within-row cyclic column rotations (M @ ROT_k) and ttnn.maximum; the matmul reads
 fp32 as tf32, so the max is rounded, but it is only a shift inside exp and cancels in the first row normalisation
 (it only sizes hc_eps against the row sum, which stays >= ~1). All matmuls HiFi4 + fp32 accumulation (owner rule).
+
+XING_HC_IMPL selects what runs after the all_reduce (and tt/collapse.py's collapse):
+- fused (default, P.2b): ttnn.bringup.mhc_pre_xing (bring-up fork mhc_pre_ttnn): RMS scale, sigmoid gates, clamp,
+  exp(L - rowmax) and the 20 x (row, column) Sinkhorn in one program, lane-wise fp32 on the SFPU; the collapse is the
+  same entry with coefficients_given=True.
+- composed: the op chain below (~100 small programs per call; the P.2 baseline, 39 ms per chunk per hc step).
 """
 
 from __future__ import annotations
+
+import os
 
 import torch
 
@@ -36,6 +44,13 @@ W = 32  # one tile row: 24 coefficient columns, the sum of squares in column SS_
 NC = HC * HC  # comb entries
 NG = 2 * HC + NC  # 24 coefficient columns
 SS_COL = NG
+HC_IMPLS = ("fused", "composed")
+
+
+def hc_impl() -> str:
+    mode = os.environ.get("XING_HC_IMPL", "fused")
+    assert mode in HC_IMPLS, f"XING_HC_IMPL={mode!r}, want one of {HC_IMPLS}"
+    return mode
 
 
 def hifi4(mesh):
@@ -94,9 +109,11 @@ class TtHcWeights:
         hc_eps: float = 1e-6,
         iters: int = 20,
         clamp: tuple[float, float] = (-30.0, 30.0),
+        impl: str | None = None,
     ):
         assert fn.shape == (NG, HC * hidden), fn.shape
         self.mesh, self.hidden = mesh, hidden
+        self.impl = impl or hc_impl()
         self.inv_n = 1.0 / float(HC * hidden)
         self.norm_eps, self.hc_eps, self.iters = float(norm_eps), float(hc_eps), int(iters)
         self.clamp = (float(clamp[0]), float(clamp[1]))
@@ -114,6 +131,9 @@ class TtHcWeights:
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
         )
         scale = scale.float().reshape(-1)
+        # Load-time Python scalars of the fused entry (runtime args of its program; no per-call host tensor work).
+        self.scale3 = [float(v) for v in scale[:3]]
+        self.base24 = [float(v) for v in base.float().reshape(-1)[:NG]]
         one_hot, a, b, mag = torch.zeros(W), torch.zeros(W), torch.zeros(W), torch.zeros(W)
         one_hot[SS_COL] = 1.0
         a[:HC], a[HC : 2 * HC], a[2 * HC : NG] = scale[0], scale[1], scale[2]
@@ -168,7 +188,34 @@ class TtHcWeights:
             m = self._normalize(m, "CB")
         return m
 
+    def _fused(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Partial mixes (one HiFi4 fp32 matmul), sum x^2 into column 24 (mhc_pre_xing_pack, one exact pass over the
+        streams), the [S/4, 32] all_reduce over axis 1, then the coefficients (mhc_pre_xing)."""
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        mix = self._mm(x, self.fn_t)
+        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)
+        ttnn.deallocate(mix)
+        red = ttnn.all_reduce(packed, cluster_axis=1, memory_config=dram)
+        ttnn.deallocate(packed)
+        hc, _ = ttnn.bringup.mhc_pre_xing(
+            red,
+            None,
+            scale=self.scale3,
+            base=self.base24,
+            norm_width=float(HC * self.hidden),
+            n=HC,
+            norm_eps=self.norm_eps,
+            hc_eps=self.hc_eps,
+            sinkhorn_iters=self.iters,
+            clamp_min=self.clamp[0],
+            clamp_max=self.clamp[1],
+        )
+        ttnn.deallocate(red)
+        return hc
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.impl == "fused":
+            return self._fused(x)
         s4 = x.shape[-2]
         dram = ttnn.DRAM_MEMORY_CONFIG
         # Partial mixes [S/4, 32] (columns 24-31 zero) and partial sum of squares [S/4, 1] over this chip's columns.
