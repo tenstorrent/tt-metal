@@ -122,7 +122,6 @@ class ReduceCase:
             and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
             and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile")
-            and (self.dim != "REDUCE_SCALAR" or self.fp32_dest_acc_en)
             and reduced_tiles * self.calls >= cutoff
         )
         return "ACCUMULATE_VIA_ADD" if additive else "REDUCE_TILE"

@@ -54,9 +54,8 @@ def test_reduce_fidelity_crossover(device, fidelity, blackhole_cutoffs, wormhole
         hardware=hardware,
         input_policy=planner.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     )
-    native = offset < 0 or (dim == "scalar" and accum == "bf16")
     assert plan.algorithm == (
-        planner.ReduceAlgorithm.REDUCE_TILE if native else planner.ReduceAlgorithm.ACCUMULATE_VIA_ADD
+        planner.ReduceAlgorithm.REDUCE_TILE if offset < 0 else planner.ReduceAlgorithm.ACCUMULATE_VIA_ADD
     )
     result = ttnn.to_torch(
         example.run_op(source, variant="automatic", dim=dim, Ht=ht, Wt=wt, math_fidelity=fidelity, accum=accum)
