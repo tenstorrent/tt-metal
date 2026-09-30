@@ -1289,9 +1289,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return self._g4_router_reject("warmup call")
         if kwargs.get("sampling_params") is not None:
             return self._g4_router_reject("device sampling_params present")
-        # The plugin always merges multi_modal_kwargs, so text requests still
-        # carry the keys with empty values -- test values, not presence.
-        if any(kwargs.get(k) is not None for k in ("pixel_values", "images", "image_embeds")):
+
+        # The plugin always merges multi_modal_kwargs; for a multimodal-capable
+        # model class a TEXT batch still carries pixel_values=[None]*B, so an
+        # is-not-None test rejects everything. Route unless some entry is real.
+        def _mm_present(v):
+            if v is None:
+                return False
+            if isinstance(v, (list, tuple)):
+                return any(x is not None for x in v)
+            return True
+
+        if any(_mm_present(kwargs.get(k)) for k in ("pixel_values", "images", "image_embeds")):
             return self._g4_router_reject("multimodal kwargs")
         start_pos = kwargs.get("start_pos")
         if start_pos is not None and any(int(p) > 0 for p in torch.as_tensor(start_pos).reshape(-1)):
