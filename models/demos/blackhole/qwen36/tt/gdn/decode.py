@@ -102,7 +102,11 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             # qk_prenormed when the KDA conv produced normalized q/k (gated_deltanet.py _conv_qk_prenormed);
             # decay_sfpu on the P300 SP dies with a pinned fused geometry (gated_deltanet.py _fused_sp_die).
             **({"qk_prenormed": True} if getattr(gdn, "_conv_qk_prenormed", False) else {}),
-            **({"decay_sfpu": True} if getattr(gdn, "_fused_sp_die", False) else {}),
+            **(
+                {"decay_sfpu": True}
+                if getattr(gdn, "_fused_sp_die", False) and os.environ.get("QWEN36_GDN_DECAY_SFPU", "1") != "0"
+                else {}
+            ),
             **({"final_state_out": _rec_out} if _rec_out is not None else {}),
         )
 

@@ -242,7 +242,7 @@ class Qwen36GatedDeltaNet:
                     v_dim=config.v_dim,
                     native_fn=self._native_conv1d_fn,
                     head_k_dim=config.head_k_dim,
-                    fused_qk_l2_norm=self._fused_sp_die,
+                    fused_qk_l2_norm=self._fused_sp_die and os.environ.get("QWEN36_GDN_CONV_QKNORM", "1") != "0",
                 )
                 # q/k reach ChunkGdnFused already normalized (per-call qk_prenormed in gdn/decode.py).
                 self._conv_qk_prenormed = self._native_conv1d_fn.qk_prenormed
