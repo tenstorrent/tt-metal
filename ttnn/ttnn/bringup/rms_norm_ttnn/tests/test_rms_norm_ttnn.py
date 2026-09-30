@@ -33,7 +33,8 @@ def _device_params(c):
     return p
 
 
-_TORCH_DTYPE = {"BFLOAT16": torch.bfloat16, "FLOAT32": torch.float32}
+def _host_dtype(spec):
+    return torch.float32 if spec["dtype"] == "FLOAT32" else torch.bfloat16
 
 
 def _pcc(a, b):
@@ -56,11 +57,12 @@ def test_rms_norm_ttnn(mesh_device, device_params, case):
     g = torch.Generator().manual_seed(c["seed"])
     xs, ws = c["input"], c["weight"]
 
-    # device d gets x[d:d+1]; kept at the captured input dtype (a FLOAT32 input is not rounded to bf16)
-    x = torch.randn([n_dev, *xs["shape"][1:]], generator=g).to(_TORCH_DTYPE[xs["dtype"]])
-    w = (1.0 + 0.5 * torch.randn(ws["shape"], generator=g)).to(torch.bfloat16)
+    # Host values in the captured dtype: bf16-rounded for a BFLOAT16 tensor, full fp32 for a FLOAT32 one (the
+    # reference then sees exactly what the device holds). BFLOAT16 cases keep their original inputs.
+    x = torch.randn([n_dev, *xs["shape"][1:]], generator=g).to(_host_dtype(xs))  # device d gets x[d:d+1]
+    w = (1.0 + 0.5 * torch.randn(ws["shape"], generator=g)).to(_host_dtype(ws))
     rs = c.get("residual")  # optional residual_input_tensor, drawn after w so residual-free cases keep their inputs
-    r = torch.randn([n_dev, *rs["shape"][1:]], generator=g).to(torch.bfloat16) if rs else None
+    r = torch.randn([n_dev, *rs["shape"][1:]], generator=g).to(_host_dtype(rs)) if rs else None
 
     tt_x = ttnn.from_torch(
         x,

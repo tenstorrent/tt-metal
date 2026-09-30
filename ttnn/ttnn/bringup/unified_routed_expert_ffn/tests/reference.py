@@ -8,10 +8,9 @@ For every local expert slot le: g = global_expert_idx_table[le], n = expert_toke
 rows r .. r + n - 1 of the dispatched buffer x go through the expert's gated FFN
     y = act(x @ gate_proj[le]) * (x @ up_proj[le]) @ down_proj[le]      (gate/up [emb, hidden], down [hidden, emb])
 and land in the same rows of the output. Other rows (tile padding between regions, the tail) are don't-care.
-act: Silu (source), GeluTanh (fork change), or ClampedSiluGlu (source: silu(min(gate, 10)) * clamp(up, -10, 10), the
-limit baked in by the program factory, ClampedSiluGluConfigDsV4); high_precision (fork change) keeps x, the intermediates and the output in
-bf16 at the requested fidelity / fp32 dest, which the reference approximates in float32 on the bf16 x and the
-bfp8-rounded weights the device holds. The routing helpers (the dispatch fork's rules) build valid counts / regions.
+act: Silu (source), GeluTanh (fork change) or ClampedSiluGlu (source; clamps gate and up, see GLU); high_precision
+(fork change) keeps x, the intermediates and the output in bf16 at the requested fidelity / fp32 dest, which the
+reference approximates in float32 on the bf16 x and the bfp8-rounded weights the device holds. The routing helpers (the dispatch fork's rules) build valid counts / regions.
 """
 
 from __future__ import annotations
@@ -49,18 +48,25 @@ def offsets_counts_regions(indices: torch.Tensor, table_row: torch.Tensor, exper
     return regions.clone(), counts, regions
 
 
-CLAMPED_SILU_GLU_LIMIT = 10.0
-
 ACT = {
     "Silu": torch.nn.functional.silu,
     "GeluTanh": lambda v: torch.nn.functional.gelu(v, approximate="tanh"),
 }
 
 
+# Gated activations that also clamp the up projection: act(gate, up). ClampedSiluGlu (DeepSeek V4, Hy4) =
+# silu(min(gate, L)) * clamp(up, -L, L) with L = 10 (ClampedSiluGluConfigDsV4, baked in the kernel;
+# device/unified_routed_expert_ffn_types.hpp).
+CLAMP_LIMIT = 10.0
+GLU = {
+    "ClampedSiluGlu": lambda gt, up: torch.nn.functional.silu(gt.clamp(max=CLAMP_LIMIT))
+    * up.clamp(-CLAMP_LIMIT, CLAMP_LIMIT),
+}
+
+
 def expert_ffn(x: torch.Tensor, wg: torch.Tensor, wu: torch.Tensor, wd: torch.Tensor, activation: str) -> torch.Tensor:
     """x [n, emb]; wg, wu [emb, hidden]; wd [hidden, emb] -> [n, emb], float32."""
     x, wg, wu, wd = (t.float() for t in (x, wg, wu, wd))
-    if activation == "ClampedSiluGlu":
-        lim = CLAMPED_SILU_GLU_LIMIT
-        return (torch.nn.functional.silu((x @ wg).clamp(max=lim)) * (x @ wu).clamp(-lim, lim)) @ wd
+    if activation in GLU:
+        return GLU[activation](x @ wg, x @ wu) @ wd
     return (ACT[activation](x @ wg) * (x @ wu)) @ wd
