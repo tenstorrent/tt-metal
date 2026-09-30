@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -110,6 +111,71 @@ kda_factory_detail::KdaPrepWorkDist distribute_steps(tt::tt_metal::CoreCoord gri
     return distribution;
 }
 
+// fused_qk_l2_norm: a q/k step (taps + SiLU + the per-head L2 norm epilogue, fp32 out) costs more than a
+// v step (taps + SiLU, bf16 out) - see the kernel header. Equal step counts per core then leave the cores
+// that only got v steps idle for a third of the kernel. Split by cost instead: contiguous step ranges in
+// core order (q/k steps first, then v, as the steps are block-major), every core as light as possible
+// for the same maximum cost. A q/k step has cost 100, a v step v_cost_pct. Like distribute_steps, the
+// lightest range is the first one (the cores in the first grid rows get their first data last).
+// Measured on a P150 die (T=1024, C=6144): ~3.65 us per q/k step and ~2.05 us per v step on top of ~24 us of
+// fixed cost, i.e. a v step costs ~56% of a q/k step; any v cost in 55..61 gives the same split here (12 q/k
+// steps on 84 cores, 21 v steps on 24 cores).
+constexpr uint32_t v_step_cost_pct = 58;
+
+kda_factory_detail::KdaPrepWorkDist distribute_steps_weighted(
+    tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t qk_steps, uint32_t v_cost_pct) {
+    constexpr uint64_t qk_cost = 100;
+    const uint32_t max_cores = std::min(total, static_cast<uint32_t>(grid.x * grid.y));
+    TT_FATAL(max_cores > 0, "qkv_causal_conv1d_silu: tiled work distribution needs at least one step");
+    TT_FATAL(qk_steps <= total, "qkv_causal_conv1d_silu: q/k step count {} exceeds the {} steps", qk_steps, total);
+    const auto step_cost = [&](uint32_t step) -> uint64_t { return step < qk_steps ? qk_cost : v_cost_pct; };
+    // Ranges that fill the cores from the last step backwards, each up to `cap` cost: the ranges
+    // (last core first) as (start, count). The first range is the remainder.
+    const auto fill_backwards = [&](uint64_t cap, std::vector<std::pair<uint32_t, uint32_t>>& ranges) {
+        ranges.clear();
+        uint32_t end = total;
+        while (end > 0) {
+            uint32_t start = end;
+            uint64_t cost = 0;
+            while (start > 0 && cost + step_cost(start - 1) <= cap) {
+                cost += step_cost(start - 1);
+                --start;
+            }
+            ranges.emplace_back(start, end - start);
+            end = start;
+        }
+    };
+    uint64_t lo = std::max<uint64_t>(qk_cost, v_cost_pct);  // a range holds at least one step
+    uint64_t hi = static_cast<uint64_t>(qk_steps) * qk_cost + static_cast<uint64_t>(total - qk_steps) * v_cost_pct;
+    hi = std::max(hi, lo);
+    std::vector<std::pair<uint32_t, uint32_t>> ranges;
+    while (lo < hi) {  // smallest cap that fits in max_cores ranges
+        const uint64_t mid = lo + (hi - lo) / 2;
+        fill_backwards(mid, ranges);
+        if (ranges.size() <= max_cores) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    fill_backwards(lo, ranges);
+    TT_FATAL(ranges.size() <= max_cores, "qkv_causal_conv1d_silu: cost-weighted split needs {} cores", ranges.size());
+
+    const uint32_t count = static_cast<uint32_t>(ranges.size());
+    kda_factory_detail::KdaPrepWorkDist distribution;
+    distribution.cores.reserve(count);
+    distribution.wi_start.reserve(count);
+    distribution.wi_count.reserve(count);
+    for (uint32_t index = 0; index < count; ++index) {
+        const auto& [start, steps] = ranges[count - 1 - index];
+        distribution.cores.push_back(tt::tt_metal::CoreCoord{index % grid.x, index / grid.x});
+        distribution.wi_start.push_back(start);
+        distribution.wi_count.push_back(steps);
+    }
+    distribution.core_set = tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
+    return distribution;
+}
+
 }  // namespace
 
 QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
@@ -122,7 +188,8 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     bool has_history,
     bool return_conv_state,
     uint32_t tile_size,
-    bool conv_state_inplace) {
+    bool conv_state_inplace,
+    bool fused_qk_l2_norm) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
@@ -241,7 +308,13 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
 
     // Work split: contiguous block-major step ranges.
     plan.grid = grid;
-    plan.work = distribute_steps(grid, plan.num_steps);
+    const uint32_t qk_blocks_tiles = plan.Qt + plan.Kt;
+    if (fused_qk_l2_norm && qk_blocks_tiles % block_tiles == 0) {
+        plan.work =
+            distribute_steps_weighted(grid, plan.num_steps, (qk_blocks_tiles / block_tiles) * plan.Mt, v_step_cost_pct);
+    } else {
+        plan.work = distribute_steps(grid, plan.num_steps);
+    }
     plan.min_steps_per_core = std::numeric_limits<uint32_t>::max();
     plan.max_steps_per_core = 0;
     plan.max_tap_loads_per_core = 0;
@@ -319,6 +392,16 @@ std::string QkvCausalConv1dSiluTiledPlan::to_string() const {
         max_steps_per_core,
         100.0 * balance,
         max_tap_loads_per_core);
+    // The ranges as runs of cores with the same step count: "cores x steps".
+    text += "\n  step ranges (cores x steps):";
+    for (size_t i = 0; i < work.wi_count.size();) {
+        size_t j = i;
+        while (j < work.wi_count.size() && work.wi_count[j] == work.wi_count[i]) {
+            ++j;
+        }
+        text += fmt::format(" {}x{}", j - i, work.wi_count[i]);
+        i = j;
+    }
     return text;
 }
 
@@ -363,7 +446,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         has_history,
         return_state,
         tile_size,
-        attrs.conv_state_inplace);
+        attrs.conv_state_inplace,
+        attrs.fused_qk_l2_norm);
     if (const char* print_plan = std::getenv("TT_KDA_QKV_CONV1D_PRINT_PLAN");
         print_plan != nullptr && print_plan[0] != '\0' && print_plan[0] != '0') {
         std::fprintf(stderr, "%s\n", plan.to_string().c_str());

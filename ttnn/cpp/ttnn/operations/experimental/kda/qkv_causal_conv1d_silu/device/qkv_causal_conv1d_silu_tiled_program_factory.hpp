@@ -154,7 +154,8 @@ struct QkvCausalConv1dSiluTiledPlan {
     uint32_t dfb_bytes_per_core = 0;
     uint32_t l1_bytes_per_core = 0;  // DFBs + scratchpad
 
-    // Work split (distribute_prep over num_steps)
+    // Work split: contiguous step ranges; by step count, or by cost (q/k steps are dearer than v steps) with
+    // fused_qk_l2_norm
     tt::tt_metal::CoreCoord grid;
     kda_factory_detail::KdaPrepWorkDist work;  // wi_start = step_start, wi_count = step_count
     uint32_t min_steps_per_core = 0;
@@ -177,7 +178,8 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     bool has_history,
     bool return_conv_state,
     uint32_t tile_size,
-    bool conv_state_inplace = false);
+    bool conv_state_inplace = false,
+    bool fused_qk_l2_norm = false);
 
 struct QkvCausalConv1dSiluTiledProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
