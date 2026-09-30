@@ -59,9 +59,7 @@ void kernel_main() {
         uint32_t expected_atomic_value = i + 1;
 
         WAYPOINT("FPW");
-        while (expected_atomic_value != *atomic_poll_addr) {
-            invalidate_l1_cache();
-        }
+        noc_semaphore_wait_min(atomic_poll_addr, expected_atomic_value);
         WAYPOINT("FPD");
 
         if constexpr (

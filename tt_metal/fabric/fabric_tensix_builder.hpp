@@ -43,6 +43,8 @@ namespace tt::tt_fabric {
 
 class FabricTensixDatamoverConfig {
 public:
+    enum class TensixCoreRole { WORKER, FABRIC_MUX, DISPATCH_MUX, RESERVED };
+
     FabricTensixDatamoverConfig();
 
     // Getters for core and channel configuration
@@ -140,6 +142,9 @@ public:
     // Get worker assignment info (tensix core + channel index) for a specific worker (UDM mode only)
     WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const tt::tt_metal::CoreCoord& worker_coord) const;
 
+    // Classify an active Tensix core for UDM connection-info initialization.
+    TensixCoreRole get_tensix_core_role(ChipId device_id, const tt::tt_metal::CoreCoord& translated_core_coord) const;
+
 private:
     std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores_;
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores_;
@@ -218,6 +223,10 @@ private:
     // Maps each worker to its assigned tensix mux core and channel index
     std::unordered_map<ChipId, std::map<tt::tt_metal::CoreCoord, WorkerTensixInfo>> worker_to_tensix_info_map_;
 
+    // Active Tensix cores outside the runtime compute, fabric mux, and dispatch sets. These are descriptor dispatch
+    // positions that remain reserved when slow dispatch does not expand the compute grid (for example, simulation).
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> translated_reserved_cores_;
+
     // Helper methods for initialization
 
     /**
@@ -287,6 +296,9 @@ private:
         const std::vector<tt::tt_metal::CoreCoord>& workers_by_column,
         const std::vector<tt::tt_metal::CoreCoord>& tensix_cores_for_workers,
         uint32_t num_worker_channels);
+
+    // Complete and validate the mutually exclusive worker/mux/dispatch/reserved partition for a device.
+    void build_and_validate_reserved_cores(tt_metal::IDevice* device);
 };
 
 /**

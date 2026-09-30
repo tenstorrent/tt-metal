@@ -373,24 +373,73 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 }
 
 // UDM mode helper: builds list of workers sorted by column (x first, then y within each column)
-std::vector<tt::tt_metal::CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt_metal::IDevice* device) const {
+std::vector<tt::tt_metal::CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(
+    tt_metal::IDevice* device) const {
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t total_workers = compute_grid.x * compute_grid.y;
 
-    std::vector<tt::tt_metal::CoreCoord> workers_by_column(total_workers);
+    std::vector<tt::tt_metal::CoreCoord> workers_by_column;
+    workers_by_column.reserve(total_workers);
 
     // Sort by column: x first (outer loop), then y within each column (inner loop)
     // This ensures workers in the same column are contiguous and get assigned to the same tensix
-    size_t idx = 0;
     for (uint32_t x = 0; x < compute_grid.x; x++) {
         for (uint32_t y = 0; y < compute_grid.y; y++) {
             tt::tt_metal::CoreCoord logical_worker(x, y);
+            if (std::find(logical_fabric_mux_cores_.begin(), logical_fabric_mux_cores_.end(), logical_worker) !=
+                    logical_fabric_mux_cores_.end() ||
+                std::find(logical_dispatch_mux_cores_.begin(), logical_dispatch_mux_cores_.end(), logical_worker) !=
+                    logical_dispatch_mux_cores_.end()) {
+                continue;
+            }
             tt::tt_metal::CoreCoord translated_worker = device->worker_core_from_logical_core(logical_worker);
-            workers_by_column[idx++] = translated_worker;
+            workers_by_column.push_back(translated_worker);
         }
     }
 
     return workers_by_column;
+}
+
+void FabricTensixDatamoverConfig::build_and_validate_reserved_cores(tt_metal::IDevice* device) {
+    const ChipId device_id = device->id();
+    auto worker_map_it = worker_to_tensix_info_map_.find(device_id);
+    TT_FATAL(worker_map_it != worker_to_tensix_info_map_.end(), "Device {} has no UDM worker map", device_id);
+
+    auto num_hw_cqs = tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
+    const auto& dispatch_core_config =
+        tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    tt_metal::MetalEnvImpl& env_impl = tt_metal::MetalEnvAccessor(tt_metal::MetalContext::instance().get_env()).impl();
+    const auto& core_descriptor = env_impl.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    const auto tensix_grid = device->logical_grid_size();
+
+    auto& reserved_cores = translated_reserved_cores_[device_id];
+    reserved_cores.clear();
+    for (const auto& relative_core : core_descriptor.relative_dispatch_cores) {
+        const auto logical_core = tt::tt_metal::get_core_coord_from_relative(relative_core, tensix_grid);
+        const auto translated_core = device->worker_core_from_logical_core(logical_core);
+        if (!worker_map_it->second.contains(translated_core) &&
+            !translated_fabric_mux_cores_.contains(translated_core) &&
+            !translated_dispatch_mux_cores_.contains(translated_core)) {
+            reserved_cores.insert(translated_core);
+        }
+    }
+
+    const auto& active_tensix_cores =
+        env_impl.get_cluster().get_soc_desc(device_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+    for (const auto& active_core : active_tensix_cores) {
+        const tt::tt_metal::CoreCoord translated_core(active_core.x, active_core.y);
+        const uint32_t role_count = static_cast<uint32_t>(worker_map_it->second.contains(translated_core)) +
+                                    static_cast<uint32_t>(translated_fabric_mux_cores_.contains(translated_core)) +
+                                    static_cast<uint32_t>(translated_dispatch_mux_cores_.contains(translated_core)) +
+                                    static_cast<uint32_t>(reserved_cores.contains(translated_core));
+        TT_FATAL(
+            role_count == 1,
+            "Active Tensix core {} on device {} has {} UDM roles; expected exactly one of "
+            "worker, fabric mux, dispatch mux, or reserved",
+            translated_core,
+            device_id,
+            role_count);
+    }
 }
 
 // UDM mode helper: gets unique tensix cores for worker assignment
@@ -472,6 +521,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 
             // Assign workers to tensix cores in contiguous chunks for this device
             assign_workers_to_tensix_cores(device->id(), device_workers, device_tensix_cores, num_worker_channels);
+            build_and_validate_reserved_cores(device);
         }
 
         channel_counts[ChannelTypes::WORKER_CHANNEL] = num_worker_channels;
@@ -860,6 +910,30 @@ FabricTensixDatamoverConfig::WorkerTensixInfo FabricTensixDatamoverConfig::get_w
         worker_coord,
         device_id);
     return worker_it->second;
+}
+
+FabricTensixDatamoverConfig::TensixCoreRole FabricTensixDatamoverConfig::get_tensix_core_role(
+    ChipId device_id, const tt::tt_metal::CoreCoord& translated_core_coord) const {
+    if (translated_fabric_mux_cores_.contains(translated_core_coord)) {
+        return TensixCoreRole::FABRIC_MUX;
+    }
+    if (translated_dispatch_mux_cores_.contains(translated_core_coord)) {
+        return TensixCoreRole::DISPATCH_MUX;
+    }
+
+    auto worker_map_it = worker_to_tensix_info_map_.find(device_id);
+    TT_FATAL(worker_map_it != worker_to_tensix_info_map_.end(), "Device {} has no UDM worker map", device_id);
+    if (worker_map_it->second.contains(translated_core_coord)) {
+        return TensixCoreRole::WORKER;
+    }
+
+    auto reserved_it = translated_reserved_cores_.find(device_id);
+    TT_FATAL(
+        reserved_it != translated_reserved_cores_.end() && reserved_it->second.contains(translated_core_coord),
+        "Active Tensix core {} on device {} has no UDM role",
+        translated_core_coord,
+        device_id);
+    return TensixCoreRole::RESERVED;
 }
 
 // FabricTensixDatamoverBuilder implementation

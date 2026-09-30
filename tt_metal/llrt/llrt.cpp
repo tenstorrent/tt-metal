@@ -462,6 +462,12 @@ void wait_until_cores_done(
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
         if (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+            // The simulator only advances when the host clocks it, so a bare sleep here stalls the cores being
+            // polled; clock it through the delay instead.
+            if (is_simulator) {
+                constexpr uint32_t k_simulator_progress_cycles = 1000;
+                env.get_cluster().advance_device_execution(device_id, k_simulator_progress_cycles);
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
