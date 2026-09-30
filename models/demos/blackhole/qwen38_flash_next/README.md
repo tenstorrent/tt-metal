@@ -35,12 +35,14 @@ and resumes incomplete downloads. The checkpoint occupies 360 GB. Allow approxim
 remain in the host page cache for timing; the original source's smaller host-memory guidance does not guarantee
 this residency.
 
-Keep published cache artifacts immutable while readers use them: create a new file and publish it with atomic
-replacement, as the converter does. Do not overwrite or truncate a live file while loaded host tensors/views or
-device transfers still use it. Hash verification and retained descriptors do not create an immutable snapshot;
-stat checks cannot detect every writable-mmap modification. The model validates its cache identity and hashes
-before upload and releases loaded tensors on validation failure. Generic `ttnn.load_tensor` preserves ordinary
-pathname behavior and owns a duplicate only for a canonical `/proc/self/fd/<positive-int>` input.
+Keep the entire cache namespace and artifact contents immutable during loading and through loaded host
+tensor/view lifetimes and pending device transfers. Publish new files with the converter's temporary-file and
+atomic-replace transaction before readers start. Concurrent replacement, in-place writes and truncation are
+unsupported. The model passes canonical `.tensorbin` paths to the existing public `ttnn.load_tensor`; those
+loads open files separately from the retained verification descriptors, so same-inode loading across concurrent
+replacement is not guaranteed. Hash verification and stat checks do not create an immutable snapshot or detect
+every writable-mmap modification. Cache identity, checksum, header, metadata and topology checks remain in the
+model, and loaded tensors are released on validation failure. No shared descriptor-loader extension is required.
 
 For a shared read-only checkpoint, verify every file without network or cache writes:
 

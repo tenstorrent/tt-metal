@@ -18,13 +18,15 @@ conversion, not CPU inference.  The first qualified device run creates the
 multi-device cache with an explicit two-dimensional mesh mapper; later runs
 load that exact topology and fail closed if any qualifier differs.
 
-Provisioned artifacts must remain immutable while readers use them. Publish
-new files through the existing temporary-file/atomic-replace transaction;
-never overwrite or truncate a live inode. Native tensor loads retain mapped
-storage, so this applies through host tensor/view lifetimes and pending
-device transfers. Hashes verify the observed payload and retained descriptors
-bind the selected inode; stat signatures detect identity/metadata changes,
-not every in-place write (writable mmap stores may leave them unchanged).
+The entire cache namespace and artifact contents must remain immutable during
+loading and through host tensor/view lifetimes and pending device transfers.
+Provision new files through the existing temporary-file/atomic-replace
+transaction before readers start; concurrent replacement, writes and truncation
+are unsupported. Ordinary pathname loads open the canonical files separately
+from the verification descriptors. Hashes verify the observed payload, while
+retained descriptors and stat signatures detect some identity/metadata changes;
+they do not ensure same-inode loading across replacement or detect every
+in-place write (writable mmap stores may leave metadata unchanged).
 """
 
 from __future__ import annotations
@@ -471,7 +473,6 @@ class BF4Artifact:
 @dataclass(frozen=True)
 class _VerifiedBF4ArtifactFD:
     descriptor: int
-    proc_path: Path
     signature: tuple[int, int, int, int, int]
 
 
@@ -578,7 +579,6 @@ def _verified_artifact_fd(
 
         verified = _VerifiedBF4ArtifactFD(
             descriptor=descriptor,
-            proc_path=Path(f"/proc/self/fd/{descriptor}"),
             signature=verified_signature,
         )
         try:
@@ -1265,7 +1265,7 @@ class Qwen38BF4Cache:
         w2_path: Path,
         memory_configs,
     ) -> tuple[Any, Any]:
-        """Load and validate both artifacts while their verified FDs remain open."""
+        """Load immutable canonical paths while retaining their verification FDs."""
 
         cached = self._verified_layers.get((record.namespace, record.layer_index))
         if cached is None or cached[0] != record or len(cached[1]) != 2:
@@ -1279,15 +1279,15 @@ class Qwen38BF4Cache:
                     w01_path,
                     record.w0_w1,
                     expected_signature=w01_signature,
-                ) as retained_w01,
+                ),
                 _verified_artifact_fd(
                     w2_path,
                     record.w2,
                     expected_signature=w2_signature,
-                ) as retained_w2,
+                ),
             ):
-                tt_w01 = ttnn.load_tensor(retained_w01.proc_path, device=mesh_device)
-                tt_w2 = ttnn.load_tensor(retained_w2.proc_path, device=mesh_device)
+                tt_w01 = ttnn.load_tensor(w01_path, device=mesh_device)
+                tt_w2 = ttnn.load_tensor(w2_path, device=mesh_device)
                 self._validate_mesh_shapes(tt_w01, tt_w2, label="BF4 cache")
                 if tt_w01.memory_config() != memory_configs.w0_w1 or tt_w2.memory_config() != memory_configs.w2:
                     raise RuntimeError("BF4 cache memory configuration differs from the live Blackhole ring")
