@@ -1098,3 +1098,51 @@ def test_cbrt_bf16_compiled_contract(device):
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.cbrt(device_input, **{})).to(torch.bfloat16)
     assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_abs_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _RAW_TO_REFERENCE_INPUT = {
+        "pos_zero": "pos_zero",
+        "neg_zero": "pos_zero",
+        "pos_subnormal": "pos_zero",
+        "neg_subnormal": "pos_zero",
+        "finite_other": "finite_other",
+        "pos_inf": "pos_inf",
+        "neg_inf": "neg_inf",
+        "pos_nan": "pos_inf",
+        "neg_nan": "neg_inf",
+    }
+
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(-x, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((0.0,), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        return result
+
+    def _reference(values):
+        return torch.from_numpy(_declared_forward(values.numpy()))
+
+    def _real_domain_mask(values):
+        return np.ones(values.shape, dtype=bool)
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.abs(device_input, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
