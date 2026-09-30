@@ -62,7 +62,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
     const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
-    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -91,6 +90,21 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     // Number of tiles needed to store K top elements
     const uint32_t Ktiles = tt::div_up(args.k, tile_width);
+
+    // Rank-stamped stable mode: bf16-family values with 32-bit index CBs (wide rows / preallocated
+    // 32-bit indices) sort as [bf16 value | local-rank tag] keys on the plain UNSTABLE network while
+    // the true u32 indices ride the index-tracking swaps — replacing the 7-instruction-per-compare
+    // index-aware comparator. fp32 values keep the comparator (their words have no free low bits for
+    // a tag). Ktiles > 1 (the insertion CASCADE) is covered by chain-rank stamps: each level
+    // re-stamps its accumulator tile with that tile's round-start chain-position range while the
+    // loser tile's tags ride, so a displaced OLD element still outranks NEWER accumulator entries
+    // (see the stamp block in kernels/compute/topk.cpp). The value-side intermediates switch to raw
+    // Float32 transport so the tag bits (and exact bf16 bits) survive the pack/unpack round trips,
+    // exactly like the fused-key engine's packed CBs.
+    const bool rank_stamped_stable = args.stable && !is_fp32_input && !uint16_output;
+    const tt::DataFormat sort_val_cb_data_format =
+        rank_stamped_stable ? tt::DataFormat::Float32 : compute_cb_data_format;
+    const uint32_t sort_val_tile_size = tile_size(sort_val_cb_data_format);
 
     // Pipeline Flow:
     // Input DFB -> Reader Kernel -> Transposed DFBs -> Compute Kernel -> Result Prep DFBs -> Output DFBs -> Writer
@@ -148,9 +162,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = TRANSPOSED_VAL_DFB,
-        .entry_size = compute_tile_size,
+        .entry_size = sort_val_tile_size,
         .num_entries = transposed_cb_tile_count,
-        .data_format_metadata = compute_cb_data_format,
+        .data_format_metadata = sort_val_cb_data_format,
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -163,9 +177,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // Uses bf16 when input is bfp8/bfp4 (same rationale as TRANSPOSED_VAL_DFB).
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = RESULT_PREP_VAL_DFB,
-        .entry_size = compute_tile_size,
+        .entry_size = sort_val_tile_size,
         .num_entries = result_prep_cb_tile_count,
-        .data_format_metadata = compute_cb_data_format,
+        .data_format_metadata = sort_val_cb_data_format,
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -238,7 +252,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                  static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -269,7 +283,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"total_number_of_cores", total_number_of_cores},  // Total number of cores
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // fp32 input: unpack the value-holding buffers straight to a 32-bit dest register so the sort's
@@ -277,10 +291,18 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // buffer name, and an omitted entry means unpack-to-source, which is what every other buffer
     // wants. They are also the only 32-bit-float buffers the compute kernel consumes, and an
     // explicit choice is required for those whenever the dest register is 32-bit.
-    ComputeUnpackModes compute_unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes compute_unpack_modes;
     if (is_fp32_input) {
         compute_unpack_modes = {
             {INPUT_DFB, UnpackMode::UnpackToDest},
+            {TRANSPOSED_VAL_DFB, UnpackMode::UnpackToDest},
+            {RESULT_PREP_VAL_DFB, UnpackMode::UnpackToDest},
+        };
+    } else if (rank_stamped_stable) {
+        // The tagged value words travel as raw Float32 tiles; unpack them straight to the 32-bit
+        // dest so the tag bits are preserved. The INPUT buffer stays on the source path: the bf16
+        // datacopy exact-widens fresh values to [bf16|0x0000] (the fused engine's precondition).
+        compute_unpack_modes = {
             {TRANSPOSED_VAL_DFB, UnpackMode::UnpackToDest},
             {RESULT_PREP_VAL_DFB, UnpackMode::UnpackToDest},
         };
@@ -364,13 +386,14 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"output_tiles", Ktiles},                             // K value in tiles
                 {"largest", static_cast<uint32_t>(args.largest)},     // Sort order: largest (true) or smallest (false)
                 {"stable_sort", static_cast<uint32_t>(args.stable)},  // Stable sort: ties keep the lowest index
+                {"rank_stamped", static_cast<uint32_t>(rank_stamped_stable)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core"}},
         // A 32-bit dest register is needed in two independent cases: a UInt32 index output (wide
         // rows), so an index survives the sort intact, and an fp32 input, so values keep full
         // precision through it. double_buffer_dest is the inverse of the legacy dst_full_sync_en flag.
         .hw_config =
-            ComputeGen1Config{
+            ComputeHardwareConfig{
                 .enable_32_bit_dest = !uint16_output || is_fp32_input,
                 .double_buffer_dest = true,
                 .unpack_modes = std::move(compute_unpack_modes),

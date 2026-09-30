@@ -29,8 +29,8 @@
 //          stride the packer assumes (32 rows) disagrees with where the datacopy put the
 //          tiles (64 rows) on purpose.
 //
-//   uninit The function under test, replicated statement-for-statement from the compute
-//          API -- which is now just the conditional W-stride write.
+//   uninit Call the raw pack helper used by the compressed custom-mm compute API.
+//          It only restores the W-stride when dense_packing is enabled.
 //
 //   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
 //          packs through whatever state the uninit left.
@@ -133,16 +133,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "experimental/llk_pack_block.h"
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 using namespace ckernel;
-
-// The two W-stride values custom_mm_block_init / _uninit write. Spelled out here exactly
-// as the compute API spells them so a change to either side shows up as a diff.
-constexpr std::uint32_t DENSE_WSTRIDE   = (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2;
-constexpr std::uint32_t DEFAULT_WSTRIDE = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -154,11 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    if constexpr (UNINIT_DENSE_PACKING)
-    {
-        // custom_mm_block_init's dense_packing branch: 32 rows between tiles.
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(DENSE_WSTRIDE);
-    }
+    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING>();
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -180,10 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        if constexpr (UNINIT_DENSE_PACKING)
-        {
-            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(DEFAULT_WSTRIDE);
-        }
+        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING>();
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----

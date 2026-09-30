@@ -11,8 +11,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# `utils` lives one level up, in the shared examples/grpo directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The `grpo` package lives two levels up, in the examples directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import torch
@@ -21,10 +21,10 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, get_grpo_config
-from utils.llama_completer import LlamaCompletionCtx
-from utils.llama_completer import LlamaGRPOCompleter
-from utils.qwen3_completer import Qwen3CompletionCtx
-from utils.qwen3_completer import Qwen3GRPOCompleter
+from grpo.utils.llama_completer import LlamaCompletionCtx
+from grpo.utils.llama_completer import LlamaGRPOCompleter
+from grpo.utils.qwen3_completer import Qwen3CompletionCtx
+from grpo.utils.qwen3_completer import Qwen3GRPOCompleter
 
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 

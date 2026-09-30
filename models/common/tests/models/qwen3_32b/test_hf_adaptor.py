@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
 import torch
 
-from models.common.models.qwen3_32b import generator, hf_adaptor, weight_utils
+import ttnn
+from models.common.models.qwen3_32b import executor, generator, hf_adaptor
+from models.common.models.qwen3_32b import model as qwen3_model
+from models.common.models.qwen3_32b import weight_utils
 from models.common.models.qwen3_32b.hf_adaptor import Qwen3_32BForCausalLM, Qwen3_32BRuntimeConfig, _trace_seq_lens
 
 
@@ -36,17 +41,81 @@ def test_runtime_config_preserves_t3k_trace_and_batched_prefill_policy():
     assert runtime.batched_prefill_batched_extract
 
 
+def test_runtime_config_preserves_p150x4_q128_and_q1024_prefill_buckets():
+    runtime = replace(
+        _runtime_config(),
+        cluster_shape=[1, 4],
+        trace_prefill_supported_seq_lens=(128, 1024),
+        disable_batched_prefill=True,
+    )
+    assert runtime.can_enable_trace(128)
+    assert runtime.can_enable_trace(1024)
+    assert runtime.disable_batched_prefill
+
+    direct_runtime = qwen3_model.Qwen3_32BExecutorRuntimeConfig(
+        n_layers=64,
+        n_kv_heads=8,
+        head_dim=128,
+        max_batch_size=32,
+        max_seq_len=4096,
+        cluster_shape=[1, 4],
+        disable_batched_prefill=True,
+    )
+    assert direct_runtime.can_enable_trace(128)
+    assert direct_runtime.can_enable_trace(1024)
+    assert not direct_runtime.can_enable_trace(1024, num_cached_tokens=32)
+    assert direct_runtime.trace_prefill_supported_seq_lens == (128, 1024)
+    assert direct_runtime.disable_batched_prefill
+
+    compat = executor._compat_executor_config(
+        SimpleNamespace(model_args=direct_runtime, config=SimpleNamespace(max_seq_len=4096, max_batch_size=32)),
+        trace_mode="all",
+        device_sampling_enabled=True,
+    )
+    assert compat.warmup.prefill_seq_lens == (128, 1024)
+
+
 def test_pinned_revision_is_provider_and_generator_default():
     expected = "9216db5781bf21249d130ec9da846c4624c16137"
     assert hf_adaptor.DEFAULT_HF_REVISION == expected
     assert generator.Qwen3_32BGeneratorConfig.__dataclass_fields__["hf_revision"].default == expected
 
 
-def test_trace_policy_is_tp8_only_and_keeps_128_and_1024(expect_error):
+def test_trace_policy_supports_t3k_and_p150x4_and_keeps_128_and_1024(expect_error):
     assert _trace_seq_lens(8, 4096, 4096) == (128, 1024)
-    for devices in (1, 2, 4):
-        with expect_error(ValueError, "exactly 8 devices"):
+    assert _trace_seq_lens(4, 4096, 4096) == (128, 1024)
+    for devices in (1, 2, 32):
+        with expect_error(ValueError, "T3K.*P150x4"):
             _trace_seq_lens(devices, 4096, 4096)
+
+
+@pytest.mark.parametrize(
+    "cluster_type",
+    [ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2],
+)
+def test_supported_sku_resolution_is_physical_and_fail_closed(cluster_type, expect_error):
+    assert (
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.WORMHOLE_B0,
+            cluster_type=ttnn.cluster.ClusterType.T3K,
+            num_devices=8,
+        )
+        == "T3K"
+    )
+    assert (
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.BLACKHOLE,
+            cluster_type=cluster_type,
+            num_devices=4,
+        )
+        == "P150x4"
+    )
+    with expect_error(ValueError, "physical Wormhole T3K.*BlackHole P150_X4/P300_X2"):
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.BLACKHOLE,
+            cluster_type=ttnn.cluster.ClusterType.P150_X8,
+            num_devices=4,
+        )
 
 
 def test_product_binds_runtime_config_and_qwen_stop_tokens():

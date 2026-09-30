@@ -4,14 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <filesystem>
 #include <algorithm>
 #include <memory>
 #include <mutex>
-#include <future>
 #include <set>
 #include <vector>
-#include <unordered_set>
 
 #include <tracy/Tracy.hpp>
 
@@ -36,7 +33,6 @@
 
 #include <umd/device/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
@@ -169,12 +165,12 @@ void MetalContext::initialize(
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
 
-    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with DEFAULT_CONTEXT_ID
-    // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
-    // Workaround that by setting the dispatch core axis here and storing a resolved config.
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    DispatchCoreConfig resolved_config = dispatch_core_config;
-    resolved_config.set_dispatch_core_axis(
+    // Fill an unset axis before the re-init comparison below. A caller with no axis preference passes
+    // DispatchCoreConfig{}, and comparing that against the already-resolved stored config would read as a
+    // parameter change and tear down a context that in fact matches. Resolving first also leaves the stored
+    // snapshot complete, which get_dispatch_core_axis() now requires.
+    DispatchCoreConfig resolved_config(
+        dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {
@@ -567,6 +563,17 @@ const Hal& MetalContext::hal() const {
 
 // ─── Dispatch managers ────────────────────────────────────────────────────────
 
+DispatchCoreConfig MetalContext::resolve_dispatch_core_config(
+    std::optional<DispatchCoreType> type, std::optional<DispatchCoreAxis> axis) const {
+    TT_ASSERT(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    auto& env = MetalEnvAccessor(*env_).impl();
+    if (!type.has_value()) {
+        type = env.get_rtoptions().get_dispatch_core_type_override();
+    }
+    return tt::tt_metal::resolve_dispatch_core_config(
+        env.get_cluster().arch(), env.get_fabric_tensix_config(), type, axis);
+}
+
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
@@ -667,11 +674,6 @@ tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() con
 const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
-}
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {

@@ -100,6 +100,9 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB).
  *   For REDUCE_COL tiles are accessed in row-major order, same as WaitUpfrontNoPop.
+ *
+ * Output synchronization is independent of the input policy: each output tile is
+ * reserved and pushed individually.
  */
 enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
 
@@ -150,7 +153,7 @@ struct ReduceInputBlockShape {
  * Does not hold iteration state - that's provided via Accumulate wrapper.
  */
 struct AccumulationConfig {
-    // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
+    // CB holding the running output-tile stream across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
     uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
 
@@ -166,7 +169,8 @@ struct AccumulationConfig {
  *
  * The iteration index determines reload behavior:
  * - iteration == 0: skip reload (first call, no accumulated value yet)
- * - iteration > 0: reload from accumulator CB before reducing
+ * - iteration > 0: reload from the accumulator CB before reducing. The CB must expose one tile
+ *   per output, in output order; REDUCE_COL reloads and pops a complete DEST chunk at a time.
  *
  * Unsupported combinations (rejected by static_assert in reduce()):
  * - MAX + REDUCE_SCALAR: the running max cannot be reproduced by the copy_tile reload.

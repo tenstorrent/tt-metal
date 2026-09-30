@@ -30,7 +30,7 @@ import pytest
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 
-_OP = ttnn.transformer.paged_scaled_dot_product_attention_decode
+_OP = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode
 
 CASES = [
     {
@@ -52,14 +52,14 @@ CASES = [
             {
                 "k": "t",
                 "shape": [128, 8, 32, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [128, 8, 32, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },

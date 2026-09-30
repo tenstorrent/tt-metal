@@ -138,6 +138,19 @@ inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
 }
 
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+}
+
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
@@ -160,7 +173,7 @@ inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit, so gate on SRCA_VLD
     // before the row moves (mirrors move_d2b_fixed_face's SRCB_VLD wait). See llk_math_transpose_dest.h. tt-llk#1664.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 1, addrmod, p_movd2a::MOV_1_ROW, 0);
@@ -191,11 +204,11 @@ inline void wait_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     }
     else
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     }
 }
 

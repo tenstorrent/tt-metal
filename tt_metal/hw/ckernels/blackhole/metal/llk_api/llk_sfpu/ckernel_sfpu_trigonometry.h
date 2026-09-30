@@ -281,14 +281,11 @@ inline void calculate_cosine() {
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half = sfpi::sFloat16b(0.5f);
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat neg_one = -1.0f;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-
-        // sfpi::vFloat rounding_bias;
-        // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         j = j + ROUNDING_BIAS;
 
@@ -298,7 +295,8 @@ inline void calculate_cosine() {
 
         j = j + NEG_ROUNDING_BIAS;
 
-        j = j * 2.0f - 1.0f;
+        sfpi::vFloat two = sfpi::sFloat16b(2.0f);
+        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
@@ -337,9 +335,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
-    sfpi::vInt mantissa = sfpi::exman(val);
-    v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(sfpi::is_nan(val)) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
@@ -443,6 +439,8 @@ inline void calculate_atan() {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_asin_poly_bf16(sfpi::vFloat val) {
+    sfpi::lreg_pressure _;
+
     // asin(z) = z*P(z^2) for |z| <= 5/8.
     sfpi::vFloat z2 = val * val;
     // Single-precision fit to asin(sqrt(u))/sqrt(u). Regenerate with:
@@ -458,6 +456,8 @@ sfpi_inline sfpi::vFloat sfpu_asin_poly_bf16(sfpi::vFloat val) {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
+    sfpi::lreg_pressure _;
+
     // Range reduction near the endpoints:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
@@ -492,6 +492,8 @@ sfpi_inline sfpi::vFloat sfpu_acos_bf16(sfpi::vFloat val) {
 }
 
 sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
+    sfpi::lreg_pressure _;
+
     sfpi::vFloat r;
     sfpi::vFloat ax = sfpi::abs(x);
     sfpi::vFloat d = 1.0f - ax;

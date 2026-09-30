@@ -11,6 +11,7 @@ bundled reference return `None` and the comparison is skipped at the call
 site.
 """
 
+import inspect
 from copy import copy, deepcopy
 from typing import Optional
 
@@ -119,14 +120,34 @@ def run_reference_mla(
     attn.load_state_dict(weights, strict=False)
     attn = attn.eval().to(torch.bfloat16)
     causal = torch.triu(torch.full((q_len, q_len), float("-inf"), dtype=hidden_states.dtype), diagonal=1)
-    with torch.no_grad():
-        out = attn(
-            hidden_states=hidden_states,
-            attention_mask=causal[None, None],
-            position_ids=position_ids,
-            past_key_value=None,
-            use_cache=False,
+    # Bind by signature: vendored DeepSeek/Kimi attentions take `past_key_value` and derive rope
+    # internally; transformers >= 5 takes `past_key_values` and requires `position_embeddings`. The
+    # wrong cache name lands silently in **kwargs and captures no KV.
+    fwd_params = inspect.signature(attn.forward).parameters
+    kwargs = {
+        "hidden_states": hidden_states,
+        "attention_mask": causal[None, None],
+        "position_ids": position_ids,
+        "use_cache": False,
+    }
+    kwargs["past_key_values" if "past_key_values" in fwd_params else "past_key_value"] = None
+    if "position_embeddings" in fwd_params:
+        rotary_cls = getattr(variant, "reference_rotary_cls", None)
+        assert rotary_cls is not None, (
+            f"{type(attn).__name__} requires position_embeddings but {variant.name!r} exposes no "
+            "reference_rotary_cls to build (cos, sin) from"
         )
+        # Built from the CONFIG, not from the model: a reference instantiated in bf16 carries a bf16
+        # `inv_freq` buffer, and .float() cannot recover the lost bits. The resulting ~4.4e-4
+        # frequency error is a phase error that grows with position.
+        rotary = rotary_cls(config=config).float()
+        with torch.no_grad():
+            # `forward` reads this tensor only for device and dtype, so pass a small view rather
+            # than an fp32 copy of the whole [batch, seq, hidden] activation.
+            cos, sin = rotary(hidden_states[:1, :1].float(), position_ids)
+            kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
+    with torch.no_grad():
+        out = attn(**kwargs)
     # DeepseekV3Attention returns (out, attn_weights, past_kv); Kimi-K3's KimiMLAAttention returns a
     # bare tensor (upstream shape). Accept either.
     return out[0] if isinstance(out, tuple) else out
@@ -141,16 +162,26 @@ def _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, sha
     """
     sd = {
         "gate.weight": gate_weights["weight"],
-        "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"],
         "shared_experts.gate_proj.weight": shared_expert_weights["gate_proj"],
         "shared_experts.up_proj.weight": shared_expert_weights["up_proj"],
         "shared_experts.down_proj.weight": shared_expert_weights["down_proj"],
     }
-    src = ("gate_proj", "up_proj", "down_proj")
-    dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
-    for i, w in enumerate(routed_expert_weights):
-        for proj, name in zip(src, dst):
-            sd[f"experts.{i}.{name}.weight"] = w[proj]
+    # Softmax-router models (Mistral) have no correction bias; a strict load rejects the extra key.
+    if hasattr(getattr(moe, "gate", None), "e_score_correction_bias"):
+        sd["gate.e_score_correction_bias"] = gate_weights["e_score_correction_bias"]
+    if hasattr(moe.experts, "gate_up_proj"):
+        # Stacked experts (Mistral): one [n_experts, 2 * moe_intermediate, hidden] tensor with gate
+        # in the first half and up in the second, plus [n_experts, hidden, moe_intermediate] down.
+        sd["experts.gate_up_proj"] = torch.stack(
+            [torch.cat([w["gate_proj"], w["up_proj"]], dim=0) for w in routed_expert_weights]
+        )
+        sd["experts.down_proj"] = torch.stack([w["down_proj"] for w in routed_expert_weights])
+    else:
+        src = ("gate_proj", "up_proj", "down_proj")
+        dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
+        for i, w in enumerate(routed_expert_weights):
+            for proj, name in zip(src, dst):
+                sd[f"experts.{i}.{name}.weight"] = w[proj]
     if hasattr(moe, "routed_expert_down_proj"):
         sd["routed_expert_down_proj.weight"] = latent_weights["down_proj"]
         sd["routed_expert_up_proj.weight"] = latent_weights["up_proj"]

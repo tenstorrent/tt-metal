@@ -69,7 +69,7 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_post_rhs.get_id(), cb_post_lhs.get_id());
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
         copy_init(cb_post_lhs.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs.get_id(), i, i * 2);
@@ -89,6 +89,7 @@ ALWI void process_tile(
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(cb_post_rhs.get_id(), cb_post_lhs.get_id());
         tile_regs_commit();
 
         tile_regs_wait();
@@ -128,7 +129,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

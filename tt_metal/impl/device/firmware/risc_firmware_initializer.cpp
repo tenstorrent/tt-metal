@@ -267,14 +267,28 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
     auto all_devices = cluster_.all_chip_ids();
 
     if (!cluster_.is_mock_or_emulated()) {
+        // Teardown runs from ~MetalContext and from the atexit handler, both of which cannot let an
+        // exception escape (a throw from a noexcept destructor is std::terminate). When a device has
+        // already failed (for example a PCIe MMIO timeout during init), asserting its cores throws
+        // again here; log and move on so the process still exits cleanly instead of aborting under
+        // a profiler or crash handler and holding the CI step open.
         for (tt::ChipId device_id : all_devices) {
-            assert_cores(device_id);
-            cluster_.l1_barrier(device_id);
+            try {
+                assert_cores(device_id);
+                cluster_.l1_barrier(device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
+            }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
         if (get_control_plane_) {
-            cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            try {
+                cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            } catch (const std::runtime_error& e) {
+                log_warning(tt::LogMetal, "Skipping ethernet routing reset during teardown: {}", e.what());
+            }
         }
     }
 
@@ -379,7 +393,8 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         if (rtoptions_.get_enable_2_erisc_mode()) {
-            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(
+                descriptor_->env_impl(), device_id, virtual_core);
         }
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -491,7 +506,11 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
-                    id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
+                    descriptor_->metal_context(),
+                    id_and_cores.first,
+                    dev_msgs::RUN_MSG_GO,
+                    id_and_cores.second,
+                    timeout_ms);
             } catch (std::runtime_error&) {
                 log_warning(
                     tt::LogAlways,
@@ -808,7 +827,8 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
         launch_msg.data(), launch_msg.size(), {static_cast<size_t>(device_id), virtual_core}, launch_addr);
 
     launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
-    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
+    llrt::write_launch_msg_to_core(
+        descriptor_->env_impl(), device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
 
     if (!is_idle_eth) {
         std::vector<uint32_t> clear_flag_data = {0};
@@ -1101,7 +1121,7 @@ void RiscFirmwareInitializer::initialize_firmware(
         }
     };
     const auto write_initial_go_launch_msg = [&]() {
-        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        auto programmable_core_type = llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core);
         uint32_t launch_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
         uint32_t go_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint64_t launch_msg_buffer_read_ptr_addr =
@@ -1167,6 +1187,7 @@ void RiscFirmwareInitializer::initialize_firmware(
 
                     if (not rtoptions_.get_skip_loading_fw()) {
                         llrt::test_load_multicast_write_risc_binary(
+                            descriptor_->env_impl(),
                             binary_mem,
                             device_id,
                             start_core,
@@ -1191,7 +1212,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (const auto& logical_core : dispatch_core_manager_.get_all_logical_dispatch_cores(device_id)) {
                     auto virtual_dispatch_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::WORKER);
-                    auto programmable_core_type = llrt::get_core_type(device_id, virtual_dispatch_core);
+                    auto programmable_core_type =
+                        llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_dispatch_core);
                     cluster_.write_core(
                         init_launch_msg_data.data(),
                         init_launch_msg_data.size(),
@@ -1232,7 +1254,13 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
-                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, eriscv_id);
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            eriscv_id);
                     }
                 }
             }
@@ -1264,6 +1292,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
+                    descriptor_->env_impl(),
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
@@ -1284,7 +1313,13 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
-                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, drisc_id);
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            drisc_id);
                     }
                 }
             }
@@ -1331,7 +1366,13 @@ void RiscFirmwareInitializer::initialize_firmware(
                             dm_id,
                             fw_size);
                         llrt::test_load_write_read_risc_binary(
-                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, dm_id);
+                            descriptor_->env_impl(),
+                            binary_mem,
+                            device_id,
+                            virtual_core,
+                            core_type_idx,
+                            processor_class,
+                            dm_id);
                     }
                 }
             }
@@ -1374,7 +1415,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 core_info.data(),
                 core_info.size(),
                 {static_cast<size_t>(device_id), worker_core},
-                hal_.get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
+                hal_.get_dev_addr(
+                    llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core), HalL1MemAddrType::CORE_INFO));
             not_done_cores.insert(worker_core);
         }
     }
@@ -1449,7 +1491,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.data(),
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
-            hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            hal_.get_dev_addr(
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
@@ -1473,7 +1516,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.data(),
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
-            hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            hal_.get_dev_addr(
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
@@ -1489,11 +1533,14 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
+        const uint64_t core_info_addr =
+            hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
 
         for (const auto& virtual_dram_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
             dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
-            uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
+            // Firmware keeps these NIUs in NOC2AXI and puts the rest in stream mode.
+            dram_core_info.view().noc2axi_niu_mask() = soc_d.get_dram_endpoint_noc_mask(virtual_dram_core);
             cluster_.write_core(
                 dram_core_info.data(),
                 dram_core_info.size(),
@@ -1537,7 +1584,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = firmware_wait_timeout_ms();
     try {
-        llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
+        llrt::internal_::wait_until_cores_done(
+            descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
@@ -1546,7 +1594,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     if (!dram_not_done_cores.empty()) {
         log_debug(LogDevice, "Waiting for DRAM firmware init complete");
         try {
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
+            llrt::internal_::wait_until_cores_done(
+                descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
             TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
         }
@@ -1556,7 +1605,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     if (!dispatch_not_done_cores.empty()) {
         log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
         try {
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);
+            llrt::internal_::wait_until_cores_done(
+                descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
             TT_THROW("Device {} init: failed to initialize dispatch-engine FW!", device_id);
         }

@@ -55,6 +55,7 @@ set(SOURCES
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
+    ops/distributed/ring_sdpa_schedule_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -78,10 +79,11 @@ set(SOURCES
     ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
-    ops/mla_qkv_assemble_op_test.cpp
+    ops/mla_kv_assemble_op_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
+    ops/gumbel_sample_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -101,7 +103,7 @@ set_target_properties(
             TRUE
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
-target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(ttml_tests ttml_pch)
 
 # Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
 # At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.
@@ -163,7 +165,7 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(swiglu_fusion_benchmark REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(swiglu_fusion_benchmark ttml_pch)
 
 add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
 target_link_libraries(
@@ -172,7 +174,7 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(moe_ffn_swiglu_benchmark REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -187,7 +189,7 @@ if(TARGET benchmark::benchmark)
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
-        benchmark/mla_qkv_assemble_benchmark.cpp
+        benchmark/mla_kv_assemble_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
     )
 
@@ -202,6 +204,6 @@ if(TARGET benchmark::benchmark)
                 benchmark::benchmark
         )
         target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
-        target_precompile_headers(${BENCH_TARGET} REUSE_FROM ttml_pch)
+        tt_reuse_precompile_headers(${BENCH_TARGET} ttml_pch)
     endforeach()
 endif()

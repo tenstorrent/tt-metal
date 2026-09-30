@@ -184,8 +184,8 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -199,10 +199,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 if (ctx.enable_host_copy_with_kernels) {
                     // Host copy while waiting for program
@@ -249,11 +246,11 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto device_hugepage_size = get_hugepage_size(device->id());
+    auto device_hugepage_size = get_hugepage_size(device_id);
 
     // 2nd open device is not required
-    auto* host_hugepage = get_hugepage(device->id() + 1, 0);
-    auto host_hugepage_size = get_hugepage_size(device->id() + 1);
+    auto* host_hugepage = get_hugepage(device_id + 1, 0);
+    auto host_hugepage_size = get_hugepage_size(device_id + 1);
 
     for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
@@ -263,10 +260,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =
@@ -308,12 +302,12 @@ TestResult mem_bench_multi_mmio_devices(
                      .value()});
         }
 
+        std::vector<distributed::MeshWorkload> workloads;
         execute_work_synced_start(
             1,
-            [devices, &programs](int /*thread_idx*/) {
-                // Program
+            [devices, &programs, &workloads](int /*thread_idx*/) {
                 for (auto& [device_id, pgm] : programs) {
-                    LaunchProgram(*devices.at(device_id), std::move(pgm), false);
+                    workloads.push_back(LaunchProgramAsync(*devices.at(device_id), std::move(pgm)));
                 }
             },
             []() {});
@@ -398,8 +392,8 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto* hugepage = get_hugepage(device->id(), 0);
-    auto hugepage_size = get_hugepage_size(device->id());
+    auto* hugepage = get_hugepage(device_id, 0);
+    auto hugepage_size = get_hugepage_size(device_id);
 
     // Don't need to separate device results
     // Readers will have 0 bytes written
@@ -420,10 +414,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =

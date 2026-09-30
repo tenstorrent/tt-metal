@@ -71,24 +71,13 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-#ifdef ARCH_QUASAR
-    // On Quasar the data-format reconfig is a no-op, so copy_init alone reprograms the unpacker
-    // descriptor to point at each operand before its copy_tile loop. matches_metal_v2_slice requires
-    // lhs and rhs to share a data format, so no SrcA data-format reconfig is needed here.
+    // Startup and preprocessing preserve the physical-LHS SrcA format.
     copy_init(dfb_post_lhs_id);
-#else
-    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
-    copy_init(dfb_post_lhs_id);
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
-#ifdef ARCH_QUASAR
-    copy_init(dfb_post_rhs_id);
-#else
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
     copy_init(dfb_post_rhs_id);
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -101,6 +90,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -145,7 +135,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

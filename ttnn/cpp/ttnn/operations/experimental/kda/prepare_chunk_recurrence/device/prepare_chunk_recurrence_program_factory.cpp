@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/prepare_chunk_recurrence_program_factory.hpp"
 
 #include <algorithm>
@@ -26,66 +28,20 @@ using namespace tt::constants;
 namespace ttnn::experimental::prim {
 namespace m2 = tt::tt_metal::experimental;
 
-uint32_t prepare_chunk_recurrence_cb_size_bytes(
-    uint32_t chunk_size, uint32_t key_dim, uint32_t value_dim, DataType gate_dtype, uint32_t output_bf16_mask) {
-    const uint32_t Ct = chunk_size / TILE_HEIGHT;
-    const uint32_t Kt = key_dim / TILE_WIDTH;
-    const uint32_t Vt = value_dim / TILE_WIDTH;
-    const uint32_t cc = Ct * Ct;
-    const uint32_t ck = Ct * Kt;
-    const uint32_t cv = Ct * Vt;
-    const uint32_t kv = Kt * Vt;
-    const uint32_t kc = Kt * Ct;
-    const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
-    const auto format = [&](uint32_t index) {
-        return (output_bf16_mask & (1U << index)) ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
-    };
-    uint32_t bytes = 0;
-    const auto add = [&](uint32_t tiles, uint32_t buffers = 1, tt::DataFormat data_format = tt::DataFormat::Float32) {
-        bytes += tiles * buffers * tt::tile_size(data_format);
-    };
-    constexpr auto bf16 = tt::DataFormat::Float16_b;
-    add(ck, 2, bf16);
-    add(ck, 2, bf16);
-    add(cv, 2, bf16);
-    add(ck, 2, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
-    add(Ct, 2);
-    add(cc);
-    add(cc);
-    add(cc);
-    add(ck);
-    add(ck);
-    add(ck);
-    add(cc);
-    add(cc, 2, format(6));
-    add(cv, 2, format(0));
-    add(ck, 2, format(1));
-    add(ck, 2, format(2));
-    add(cc, 2, format(3));
-    add(kv, 2);
-    add(Kt, 2, format(5));
-    add(kc, 2, format(4));
-    add(kv);
-    add(kv);
-    add(kv);
-    add(scratch);
-    add(kv, 2);
-    return bytes;
-}
-
-ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::create_program_artifacts(
-    const PrepareChunkRecurrenceParams& attrs, const PrepareChunkRecurrenceInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFactory::create_mesh_workload_artifacts(
+    const PrepareChunkRecurrenceParams& attrs,
+    const PrepareChunkRecurrenceInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& q = in.q.mesh_tensor();
     const auto& k = in.k.mesh_tensor();
     const auto& v = in.v.mesh_tensor();
     const auto& g = in.g.mesh_tensor();
     const auto& beta = in.beta.mesh_tensor();
     const auto& device = q.device();
-    const auto arch = device.arch();
 
     const uint32_t num_heads = attrs.num_heads;
     const uint32_t num_chunks = attrs.num_chunks;
-    constexpr uint32_t chunk_size = TILE_HEIGHT;
     constexpr uint32_t Ct = 1;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
@@ -110,6 +66,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
+    const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
     const m2::DFBSpecName scan_decay_dfb{"scan_decay"};
     const m2::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
@@ -125,6 +82,10 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
+    const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
+    const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
+    const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
+
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
     const m2::TensorParamName Q_TENSOR{"q"};
@@ -164,6 +125,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
+        make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(scan_decay_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
@@ -173,27 +135,22 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(kd_dfb, 2 * ck, output_formats[1]),
         make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
         make_dfb(intra_dfb, 2 * cc, output_formats[3]),
-        make_dfb(workspace_1_dfb, kv * 2, fp32),
+        make_dfb(workspace_1_dfb, ck, fp32),
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
         make_dfb(anchor_decay_dfb, kv, fp32),
-        make_dfb(normalized_q_dfb, kv, fp32),
-        make_dfb(normalized_k_dfb, kv, fp32),
-        make_dfb(workspace_3_dfb, scratch, fp32),
-        make_dfb(workspace_2_dfb, kv * 2, fp32),
-    };
-    TT_FATAL(
-        prepare_chunk_recurrence_cb_size_bytes(
-            chunk_size, attrs.key_dim, attrs.value_dim, in.g.dtype(), attrs.output_bf16_mask) ==
-            [&] {
-                uint32_t bytes = 0;
-                for (const auto& spec : dfb_specs) {
-                    bytes += spec.entry_size * spec.num_entries;
-                }
-                return bytes;
-            }(),
-        "KDA prep CB size estimator is out of sync with its program factory");
+        make_dfb(normalized_q_dfb, ck, fp32),
+        make_dfb(normalized_k_dfb, ck, fp32),
+        // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
+        // inverse intermediates separate so no transaction can cross a ring end.
+        make_dfb(tile_workspace_0_dfb, 1, fp32),
+        // The nested inverse reads its current level while packing the next one.
+        make_dfb(tile_workspace_1_dfb, 2, fp32),
+        make_dfb(tile_workspace_2_dfb, 1, fp32),
 
+        make_dfb(workspace_3_dfb, scratch, fp32),
+        make_dfb(workspace_2_dfb, ck, fp32),
+    };
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -209,6 +166,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -220,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -249,12 +207,12 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     unpack_modes[q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[v_dfb] = UnpackMode::UnpackToSrc;
@@ -263,6 +221,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[scan_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[centered_inverse_decay_dfb] = UnpackMode::UnpackToSrc;
@@ -278,6 +237,10 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_1_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_2_dfb] = UnpackMode::UnpackToSrc;
+
     unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
@@ -296,6 +259,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::PRODUCER},
@@ -312,6 +276,13 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::CONSUMER},
+
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},
@@ -336,7 +307,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                   return bits;
               }()},
              {"EPS_BITS", 0x358637BDU}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -357,13 +328,15 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         m2::AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
-            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}});
-        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"work_item_count", work_item_count}});
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
+        m2::AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            core,
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
     }
 
     m2::ProgramSpec spec{
         .name = "prepare_chunk_recurrence",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfb_specs),
         .tensor_parameters =
             {
@@ -399,7 +372,28 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         {FINAL_DECAY_OUTPUT, outputs[5].mesh_tensor()},
         {T_INV_OUTPUT, outputs[6].mesh_tensor()},
     };
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    // The unbounded path needs no scalar allocation or read. Bind q as an unused
+    // accessor placeholder so the shared chronology channels retain their layout.
+    const auto& chronology_tensor = in.actual_start ? *in.actual_start : in.q;
+    reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});
+    kda_factory_detail::bind_chronology(spec, run_args, chronology_tensor, reader, compute);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
+    const m2::DFBSpecName writer_chronology{"chronology_writer"};
+    spec.dataflow_buffers.push_back(
+        {.unique_id = writer_chronology,
+         .entry_size = 32,
+         .num_entries = 1,
+         .data_format_metadata = tt::DataFormat::UInt32});
+    reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
+    writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        {.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.num_chunks * TILE_HEIGHT,
+        READER);
 }
 
 }  // namespace ttnn::experimental::prim

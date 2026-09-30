@@ -1,0 +1,86 @@
+---
+# Check options for kernel (device) code, for the local path only:
+#   build_kernel_clang_tidy_commands.py --run --config-file <this file>
+#
+# CI does not read this file. There, selection, options and scoping all come
+# from codechecker.json + skiplist, because a --config-file alongside the
+# -config CodeChecker builds makes clang-tidy fail with "--config-file and
+# --config are mutually exclusive". The options below are mirrored as
+# --checker-config entries in codechecker.json; keep the two in sync.
+#
+# Rationale for each value: tech_reports/code-indexing/kernel-clang-tidy.md.
+
+# Mirrors the --enable-all minus --disable selection in codechecker.json, so a
+# local run reports what the report does. It cannot be omitted: clang-tidy's own
+# default is an empty check list, which lints nothing but compiler diagnostics.
+# clang-analyzer-* is excluded because CI runs --analyzers clang-tidy only; it is
+# path-sensitive and much slower than the rest put together.
+Checks: >-
+  *,
+  -abseil-*,
+  -altera-*,
+  -android-*,
+  -boost-*,
+  -cert-*,
+  -clang-analyzer-*,
+  -clang-diagnostic-c++98-compat*,
+  -darwin-*,
+  -fuchsia-*,
+  -linuxkernel-*,
+  -llvmlibc-*,
+  -mpi-*,
+  -objc-*,
+  -openmp-*,
+  -zircon-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-diagnostic-documentation,
+  -clang-diagnostic-extra-semi-stmt,
+  -clang-diagnostic-reserved-identifier,
+  -clang-diagnostic-unsafe-buffer-usage,
+  -clang-diagnostic-unused-parameter,
+  -hicpp-no-assembler,
+  -modernize-avoid-c-arrays,
+  -modernize-use-trailing-return-type,
+  -performance-enum-size,
+  -portability-simd-intrinsics
+
+CheckOptions:
+  # clang-tidy's defaults, stated explicitly because the host .clang-tidy sets
+  # Threshold=312 with IgnoreMacros=true. That pairing suits a blocking host
+  # gate but yields 5 findings out of 62,710 here while hiding exactly the
+  # macro-driven complexity that dominates LLK and the SFPU headers. Do not
+  # "re-sync" these two from the host config.
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: false
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 25
+  # Base type name length, ignoring const/volatile/*, and it fires at >=. 9
+  # excludes `uint32_t x = get_arg_val<uint32_t>()` (the runtime-arg preamble,
+  # 89% of findings at the default of 5) and keeps genuinely long names such as
+  # sfpi::vFloat and RealtimeProfilerState.
+  - key: modernize-use-auto.MinTypeNameLength
+    value: 9
+  # This domain's vocabulary rather than laziness: NCDHW layout letters, tile
+  # dimensions (Wt/Ht), NOC coordinates, circular buffers, virtual channels.
+  # Asymmetric on purpose -- a counter's meaning comes from its bound three
+  # lines away, so 'h' passes as a counter but not as a function-scope variable,
+  # and 'a'/'b' pass as SFPU operands but not as locals.
+  - key: readability-identifier-length.IgnoredLoopCounterNames
+    value: "^[ijk_nchwdbtr]$"
+  - key: readability-identifier-length.IgnoredVariableNames
+    value: "^([NCHWD]|[xyz]|[ijk]|[WHCND]t|cb|id)$"
+  - key: readability-identifier-length.IgnoredParameterNames
+    value: "^(n|[xyzab]|[ijk]|id|cb|vc|[WHCND]t)$"
+  # The check exists because lowercase 'l' reads as '1'; 'u' and 'f' are not
+  # ambiguous and are all this codebase writes. Each entry is also the suggested
+  # replacement, hence fully uppercase.
+  - key: readability-uppercase-literal-suffix.NewSuffixes
+    value: "L;UL;LL;ULL"
+  - key: readability-simplify-boolean-expr.SimplifyDeMorgan
+    value: false
+  - key: readability-else-after-return.WarnOnUnfixable
+    value: false
+  - key: readability-else-after-return.WarnOnConditionVariables
+    value: false
+
+FormatStyle: 'file'

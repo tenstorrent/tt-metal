@@ -332,7 +332,6 @@ template <uint32_t tile_bytes>
 void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
     constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
-    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     CircularBuffer cb(cb_id);
@@ -605,10 +604,14 @@ void fill_sliding_window_edge_tiles(Noc noc, uint32_t start_tile_idx) {
  *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
- * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
- * @tparam joint_l_partial_col   Column within tile where joint_l padding starts (0 = tile-aligned, no partial)
+ * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no
+ *                               partial). Presence only: decides whether the tile exists in the CB layout.
+ * @tparam joint_l_partial_col   As above, for the joint tail.
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
  * @tparam is_causal_lw          Whether to include the causal diagonal tile
+ * @param global_n_partial_col_rt  Column actually stamped (defaults to the template value; tensor-path
+ *                                 callers pass the live one).
+ * @param joint_l_partial_col_rt   As above, for the joint tail.
  */
 template <
     uint32_t global_n_partial_col,
@@ -616,7 +619,10 @@ template <
     uint32_t cb_mask_in,
     bool is_causal_lw = false,
     uint32_t sliding_window_size = 0>
-void generate_lightweight_mask_tiles(Noc noc) {
+void generate_lightweight_mask_tiles(
+    Noc noc,
+    uint32_t global_n_partial_col_rt = global_n_partial_col,
+    uint32_t joint_l_partial_col_rt = joint_l_partial_col) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
@@ -643,10 +649,10 @@ void generate_lightweight_mask_tiles(Noc noc) {
     // Subsequent tiles: partial mask tiles for boundary conditions
     if constexpr (partial_mask_tiles > 0) {
         if constexpr (global_n_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col_rt);
         }
         if constexpr (joint_l_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col_rt);
         }
     }
 
@@ -903,8 +909,6 @@ void generate_causal_sliding_window_mask(
 
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
-    int triu_diag_tile_idx = -1;
-    int tril_diag_tile_idx = -1;
 
     int32_t min_window_start, max_window_start, min_window_end, max_window_end;
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {

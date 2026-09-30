@@ -14,6 +14,8 @@ set(UNIT_TESTS_LEGACY_SRC
     test_datacopy_bfp8b.cpp
     test_datacopy_output_in_l1.cpp
     test_dm_loopback.cpp
+    test_dm_stateful_loopback.cpp
+    test_dm_worker_multicast.cpp
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
     test_eltwise_binary.cpp
@@ -40,5 +42,8 @@ set(UNIT_TESTS_LEGACY_SRC
     test_transpose_hc.cpp
     test_unaligned_read_write_core.cpp
     test_riscv_atomics.cpp
+    test_noc_self_atomic.cpp
+    test_noc_atomic_ops.cpp
+    test_sem_scope.cpp
     test_globals_tls.cpp
 )

@@ -3,6 +3,7 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
@@ -52,8 +53,25 @@ def test_trace_matrix_is_device_specific_and_bounded():
     assert _trace_seq_lens(8, 2048, 4096) == (128, 1024)
 
 
-def test_generator_downgrades_n150_all_trace_to_decode_only(monkeypatch):
-    runtime_config = SimpleNamespace(trace_prefill_supported_seq_lens=(), model_cache_path=None)
+@pytest.mark.parametrize(
+    ("prefill_trace_lengths", "requested_mode", "expected_mode"),
+    [
+        ((), "all", "decode_only"),
+        ((128,), "all", "all"),
+        ((), "decode_only", "decode_only"),
+        ((), "none", "none"),
+    ],
+)
+def test_generator_resolves_trace_mode_from_lane_capability(
+    monkeypatch,
+    prefill_trace_lengths,
+    requested_mode,
+    expected_mode,
+):
+    runtime_config = SimpleNamespace(
+        trace_prefill_supported_seq_lens=prefill_trace_lengths,
+        model_cache_path=None,
+    )
     product = SimpleNamespace(model=SimpleNamespace(), runtime_config=runtime_config)
     captured = []
     lane = SimpleNamespace(cleanup=lambda: None)
@@ -73,12 +91,12 @@ def test_generator_downgrades_n150_all_trace_to_decode_only(monkeypatch):
             mesh_device=object(),
             max_batch_size=1,
             max_seq_len=4096,
-            trace_mode="all",
+            trace_mode=requested_mode,
         )
     )
 
     assert result.target is lane
-    assert captured[0].trace.mode == "decode_only"
+    assert captured[0].trace.mode == expected_mode
 
 
 def test_prefill_tuning_preserves_3b_device_cutoffs(monkeypatch):

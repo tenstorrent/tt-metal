@@ -64,8 +64,8 @@ inline void _llk_math_sdpa_bcast_col_srcb_reuse_preamble_()
 {
     TTI_STALLWAIT(
         p_stall::STALL_MATH,
-        p_stall::WAIT_SFPU | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
-                                                 // data_valid, so we want to wait on that
+        p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
+                                                                 // data_valid, so we want to wait on that
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);

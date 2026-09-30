@@ -4,66 +4,47 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // MulUnary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
+    constexpr auto dfb_in0_id = tt::CBIndex::c_0;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_in2_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out_id = tt::CBIndex::c_3;
+
+    // output = input_a + value * input_b * input_c
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(num_tiles),
+        // (input_b * input_c)
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Mul,
+            ckl::input(
+                dfb_in1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{},
+        // Step 2: (input_b * input_c) * value -> DST[0]
+        ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),  // DST[0] * scalar -> DST[0]
+        // Now wait for input_a (only when we need it)
+        // Step 3: Load A and add with result DST[0] + dfb_in0_id -> DST[0]
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(dfb_in0_id), ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::PackTile<ckl::output(
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+}
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_in2_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out_id = tt::CBIndex::c_3;
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
-    const bool scalar_is_not_1 = scalar_arg != 1u;
+    compute_kernel_hw_startup(dfb_in1_id, dfb_in2_id, dfb_out_id);
 
-    DataflowBuffer dfb_in0(tt::CBIndex::c_0);  // input_a
-    DataflowBuffer dfb_in1(tt::CBIndex::c_1);  // input_b
-    DataflowBuffer dfb_in2(tt::CBIndex::c_2);  // input_c
-    DataflowBuffer dfb_out(tt::CBIndex::c_3);
-
-    // output = input_a + value * input_b * input_c
-    compute_kernel_hw_startup(dfb_in1.get_id(), dfb_in2.get_id(), dfb_out.get_id());
-
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // Wait for input_b and input_c first (needed for first computation)
-        dfb_in1.wait_front(num_tiles_per_cycle);
-        dfb_in2.wait_front(num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        // (input_b * input_c)
-        mul_init(dfb_in1.get_id(), dfb_in2.get_id());
-        mul_tiles(dfb_in1.get_id(), dfb_in2.get_id(), 0, 0, 0);
-
-        // Done with dfb_in1 and dfb_in2, pop them early for pipeline efficiency
-        dfb_in1.pop_front(num_tiles_per_cycle);
-        dfb_in2.pop_front(num_tiles_per_cycle);
-
-        // Step 2: (input_b * input_c) * value -> DST[0]
-        if (scalar_is_not_1) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, scalar_arg);  // DST[0] * scalar -> DST[0]
-        }
-
-        // Now wait for input_a (only when we need it)
-        dfb_in0.wait_front(num_tiles_per_cycle);
-
-        // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id());
-        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-            dfb_in0.get_id(), 0, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        // Reserve output buffer only when ready to write
-        dfb_out.reserve_back(num_tiles_per_cycle);
-
-        // Pack the result from DST[0] to output
-        pack_tile(0, dfb_out.get_id());
-
-        tile_regs_release();
-
-        dfb_out.push_back(num_tiles_per_cycle);
-        dfb_in0.pop_front(num_tiles_per_cycle);
-    }
+    run_addcmul(num_tiles, scalar_arg);
 }

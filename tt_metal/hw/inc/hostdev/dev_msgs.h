@@ -25,9 +25,10 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/debug_ring_buffer_common.h"
 
@@ -166,13 +167,13 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
     // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
-    // CROSS_NODE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
+    // REMOTE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
     // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
     //   word[0] = num_slots; then dense [config_page_addr, entry_size, relay_dfb_id] slots.
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
-    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4];  // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -183,12 +184,19 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if the program does not
+    // reload. Written by the host with the rest of the launch message.
+    volatile uint32_t reload_table_addr;
     volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 10) + 4];  // CODEGEN:skip
+    // Byte offset of PrefetcherPipe kernel-config region from kernel_config_base.
+    // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
+    // Placed after the 2-byte origin pair so the field is uint16-aligned.
+    volatile uint16_t prefetcher_pipe_offset;
+    volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -205,9 +213,11 @@ static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0)
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, cross_node_dfb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, prefetcher_pipe_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
@@ -410,7 +420,10 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
     volatile CoreMagicNumber core_magic_number;
-    uint8_t pad;  // CODEGEN:skip
+    // DRAM cores only (0 elsewhere). Bit N is set when this core is a DRAM view's preferred
+    // endpoint on NOC N, i.e. that NIU forwards DRAM accesses over AXI and must stay in NOC2AXI
+    // mode. DRISC firmware puts every other NIU in stream mode. See experimental/drisc_mode.h.
+    volatile uint8_t noc2axi_niu_mask;
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
@@ -440,7 +453,9 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
-static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+#ifdef DEVICE_PRINT_BUFFER_SIZE
+static_assert(sizeof(DevicePrintMemoryLayout) == DEVICE_PRINT_BUFFER_SIZE);
+#endif
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);

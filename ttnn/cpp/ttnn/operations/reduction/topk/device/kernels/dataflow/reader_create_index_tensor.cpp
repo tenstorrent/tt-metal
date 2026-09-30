@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -34,7 +34,7 @@ void kernel_main() {
     // Tensor accessor
     const auto inout_tensor_accessor = TensorAccessor(tensor::input);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::input);
     DataflowBuffer dfb_index(dfb::index);
     const uint32_t tile_bytes_in0 = dfb_in0.get_entry_size();
@@ -44,19 +44,19 @@ void kernel_main() {
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
-        const uint32_t row = id + core_loop * total_number_of_cores;
+        const uint32_t row = id + (core_loop * total_number_of_cores);
         for (uint32_t w = 0; w < Wt; ++w) {
             dfb_in0.reserve_back(onetile);
             noc.async_read(
-                inout_tensor_accessor, dfb_in0, tile_bytes_in0, {.page_id = row * Wt + w}, {.offset_bytes = 0});
+                inout_tensor_accessor, dfb_in0, tile_bytes_in0, {.page_id = (row * Wt) + w}, {.offset_bytes = 0});
             noc.async_read_barrier();
 
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES
             if (uint16_output) {
-                generate_index_tile<uint16_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, w);
             } else {
-                generate_index_tile<uint32_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, w);
             }
 #else
             // Read precomputed indices to dataflow buffer

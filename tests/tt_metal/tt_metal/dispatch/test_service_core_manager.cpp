@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -28,6 +29,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
@@ -238,9 +240,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
             prog, kernel, svc_core, {(uint32_t)stop_addr, (uint32_t)counter_addr, (uint32_t)service_done_addr});
 
         prog.impl().compile(device, /*force_slow_dispatch=*/true);
-        tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
-        tt::tt_metal::detail::LaunchProgram(
-            device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(*device, prog, /*force_slow_dispatch=*/true);
+        tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, prog, /*force_slow_dispatch=*/true);
 
         auto read_counter = [&]() -> uint32_t {
             uint32_t val = 0;
@@ -370,14 +371,22 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
             {1, kPageSize / sizeof(uint32_t)})};
 
     // Unclaimed, it is just a core the allocator knows nothing about.
-    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+    auto create_buffer = [&] {
+        return BufferImpl::create(
+            config.device,
+            config.size,
+            config.page_size,
+            config.buffer_type,
+            BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+    };
+    EXPECT_ANY_THROW(create_buffer());
 
     MetalContext::instance().get_service_core_manager().claim(device, {core});
-    EXPECT_NO_THROW(tt::tt_metal::CreateBuffer(config));
+    EXPECT_NO_THROW(create_buffer());
     MetalContext::instance().get_service_core_manager().release(device, {core});
 
     // Released, it is rejected again -- the exception is the claim, not the coordinate.
-    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+    EXPECT_ANY_THROW(create_buffer());
 }
 
 // The same exception reached through MeshBuffer::create(), which is how every socket path actually

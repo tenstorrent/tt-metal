@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -110,9 +109,7 @@ inline void initialize_local_memory() {
     uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
-    const uint32_t ldm_data_size = (uint32_t)__ldm_data_end - (uint32_t)__ldm_data_start;
-    // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
-    l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
+    l1_to_local_mem_copy(__ldm_data_start, data_image, l1_word_count_from_range(__ldm_data_start, __ldm_data_end));
 }
 
 #define STR(x) #x
@@ -208,8 +205,9 @@ int __attribute__((noinline)) main(void) {
 
     disable_interrupts();
     update_next_link_status_check_timestamp();
+    aerisc_ptp_trace_entry();
 
-    noc_index = 0;
+    noc_index = PHYSICAL_AERISC_ID;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
@@ -230,13 +228,22 @@ int __attribute__((noinline)) main(void) {
     set_deassert_addresses();
 
     kg_noc_mode = DM_DEDICATED_NOC;
+#if defined(ENABLE_2_ERISC_MODE)
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
     noc_clear_all_packet_tags();
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
+#else
+    static_assert(PHYSICAL_AERISC_ID == 1);
+    // Base FW on ERISC0 uses NoC0 concurrently, so only touch our own NoC.
+    noc_init_one(PHYSICAL_AERISC_ID, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    noc_local_state_init(PHYSICAL_AERISC_ID);
+    noc_clear_packet_tags(PHYSICAL_AERISC_ID);
+    ncrisc_noc_sync(PHYSICAL_AERISC_ID);
+#endif
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 #if defined(ENABLE_2_ERISC_MODE)
     deassert_all_reset();
@@ -265,6 +272,7 @@ int __attribute__((noinline)) main(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
+                aerisc_ptp_trace_exit();
                 return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||

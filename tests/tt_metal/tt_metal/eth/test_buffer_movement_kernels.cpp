@@ -90,7 +90,7 @@ bool chip_to_chip_dram_buffer_transfer(
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    log_info(
+    log_debug(
         tt::LogTest,
         "Sending {} bytes from device {} dram bank 0 addr {} to device {} dram bank 0 addr {}, using eth core {} {} "
         "and "
@@ -221,7 +221,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const DataMovementProcessor& processor) {
     bool pass = true;
 
-    log_info(
+    log_debug(
         tt::LogTest,
         "chip_to_chip_interleaved_buffer_transfer num_pages: {}, page_size_bytes: {}, size_bytes: {}, "
         "max_transfer_size: {}, processor {}",
@@ -486,7 +486,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
-        log_info(
+        log_debug(
             tt::LogTest,
             "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
             sender_device->id(),
@@ -576,7 +576,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                     HalProgrammableCoreType::ACTIVE_ETH);
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
                         sender_device->id(),
@@ -665,7 +665,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending dram buffer from device {} to device {}, using eth core {} DM{} and {}",
                         sender_device->id(),
@@ -741,7 +741,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
+                    log_debug(
                         tt::LogTest,
                         "Sending interleaved buffer from device {} to device {}, using eth core {} DM{} and {}",
                         sender_device->id(),

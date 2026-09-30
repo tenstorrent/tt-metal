@@ -171,10 +171,19 @@ GPR_WRITE_KINDS = {"regfile_gpr"}
 # Consumers must be genuine instruction macros; require a TTI_/TT_ prefix so that
 # address macros (TENSIX_MOP_CFG_BASE) are never mistaken for a MOP run.
 INSTR_PREFIXES = ("TTI_", "TT_")  # a genuine Tensix instruction macro
+#: An opcode VALUE, not an issued instruction — it shares the `TT_` prefix but is
+#: destined for a MOP slot / replay buffer and executes where the expander issues
+#: it. It must never earn an instruction ROLE (stall / ordered_write / consumer_*),
+#: because every consumer of those roles reasons about the fact's own LINE.
+OPCODE_VALUE_PREFIX = "TT_OP_"
+#: Extractor fact family carrying those words. Kept OUT of the "macro" family so
+#: the instruction-consuming checks cannot see one at all; only mop-replay reads
+#: it. Must match `f.family` in extractor/llk_extract.cpp's MacroPass.
+OPCODE_VALUE_FAMILY = "opcode_value"
 
 
 def _instr(name: str) -> bool:
-    return name.startswith(INSTR_PREFIXES)
+    return name.startswith(INSTR_PREFIXES) and not is_mop_word(name)
 
 
 def is_thread_config_write(macro_name: str) -> bool:
@@ -254,6 +263,161 @@ DRAIN_CALLS = {
     "mop_sync": "mop_sync",  # drains in-flight MOPs
     "tensix_sync": "tensix_sync",  # drains the whole Tensix thread
 }
+
+# --- MOP Expander / Replay Expander: a word's SLOT, not its line --------------
+# A `TT_OP_*` value is an opcode VALUE installed into a MOP slot or a replay
+# buffer and issued by an expander, so its execution position, its repeat count
+# and its neighbours come from the MOP/replay program, never from source order.
+# Both expanders sit in the frontend (MOP first, then Replay, then the Wait
+# Gate): a MOP may emit REPLAY, but a REPLAY expansion may not contain MOP.
+
+#: Replay buffer depth per Tensix thread, in instructions. The expander indexes
+#: it as `(Index + i) % REPLAY_BUF_SIZE`, so an over-long load wraps and
+#: overwrites its own earlier entries (see ckernel_structs.h REPLAY_BUF_SIZE).
+REPLAY_BUF_SIZE = 32
+
+#: ckernel_template (MOP template 1) slot setters -> the expander slot filled.
+#: Per outer iteration the expander issues START_OP, then the inner loop, then
+#: END_OP0, then END_OP1 — the latter only when END_OP0 is not a plain NOP. So
+#: whichever of those is the last live word is immediately followed by the NEXT
+#: outer iteration's START_OP, an adjacency that exists nowhere in the source
+#: text. set_end_op installs a plain-NOP END_OP1, leaving END_OP0 that word.
+#: LOOP0_LAST / LOOP1_LAST override the LAST inner iteration (LOOP0_LAST when it
+#: is also the last outer iteration, LOOP1_LAST when it is not), so the executed
+#: stream is not uniform across iterations.
+MOP_SLOT_SETTERS = {
+    "set_start_op": "START_OP",
+    "set_end_op": "END_OP0",
+    "set_end_ops": "END_OP0/END_OP1",
+    "set_loop_op0": "LOOP_OP0",
+    "set_loop_op1": "LOOP_OP1",
+    "set_last_inner_loop_instr": "LOOP1_LAST",
+    "set_last_outer_loop_instr": "LOOP0_LAST",
+}
+
+#: Replay Expander entry points. A record LOADS the following `Count`
+#: instructions into the buffer and issues them only when Exec is set; both
+#: `lltt::record` and `load_replay_buf` default to NoExec, i.e. the instructions
+#: written after the call do NOT execute there.
+REPLAY_RECORD_CALLS = ("record", "load_replay_buf")
+#: `replay` issues an expansion inline; `replay_insn` BUILDS the REPLAY word for
+#: a MOP slot, so its expansion happens wherever that slot is issued.
+REPLAY_EXPAND_CALLS = ("replay", "replay_insn")
+#: A bare `record` / `replay` is too generic to match on the callee name alone
+#: (cf. KNOWN_GAPS X4); require the lltt namespace or the ckernel wrapper name.
+_REPLAY_CALL_QUALIFIERS = ("lltt", "load_replay_buf")
+
+#: Matrix-Unit ops whose clear/CLR operand hands a Src bank back to the
+#: unpackers (`MatrixUnit.Src?Bank ^= 1`), per CLEARDVALID's functional model.
+SRC_FLIP_OP_SUBSTR = (
+    "SETRWC",
+    "MVMUL",
+    "ELWADD",
+    "ELWSUB",
+    "ELWMUL",
+    "GAPOOL",
+    "GMPOOL",
+    "DOTPV",
+)
+#: A clear selector that hands a Src bank back, matched on word boundaries. The
+#: in-tree alias `CLR_SRC` resolves to `CLR_A` or `CLR_AB` and must match; the
+#: longer `CLR_SRC_*` / `CLR_SRC?_VLD` spellings name a clear VALUE or a dvalid
+#: clear, not a bank hand-back, and must not. `CLR_NONE` flips nothing.
+SRC_FLIP_CLR_RE = re.compile(r"\bCLR_(?:A|B|AB|SRC)\b")
+
+#: Opcode-value words whose SLOT changes another audit's verdict: a Src bank
+#: flip, an inter-thread sync op (balance is per MOP ITERATION, not per source
+#: line), or a wait. Deliberately NOT every `TT_OP_*` — an arithmetic word only
+#: matters to instruction-latency, which widens its own enumeration instead.
+MOP_WORD_SYNC_SUBSTR = (
+    "SEMPOST",
+    "SEMWAIT",
+    "SEMGET",
+    "SEMINIT",
+    "ATGETM",
+    "ATRELM",
+    "STALLWAIT",
+)
+
+
+def mop_slot_of(fact: dict):
+    """Return (slot, word_text) for a MOP slot-setter call, else (None, None).
+
+    `word_text` is the instruction word being installed (arg0 source text); it
+    is what executes at `slot`, not at this call's line.
+    """
+    if fact.get("family") != "call":
+        return None, None
+    slot = MOP_SLOT_SETTERS.get(fact.get("name", ""))
+    if not slot:
+        return None, None
+    return slot, fact.get("arg0", "")
+
+
+def replay_op_of(fact: dict):
+    """Return (op, exec_mode) for a Replay Expander call, else (None, None).
+
+    `op` is "record" (Load=1) or "expand" (Load=0). `exec_mode` applies to a
+    record only: "NOEXEC" (the default — the following instructions are captured
+    but not issued here), "EXEC", or "UNRESOLVED" when the Exec template
+    argument is itself dependent (`lltt::ExecBool(Exec)` inside a wrapper).
+    """
+    if fact.get("family") != "call":
+        return None, None
+    name = fact.get("name", "")
+    text = fact.get("text", "") or ""
+    if not any(q in text for q in _REPLAY_CALL_QUALIFIERS):
+        return None, None
+    if name in REPLAY_RECORD_CALLS:
+        return "record", _record_exec_mode(text)
+    if name in REPLAY_EXPAND_CALLS:
+        return "expand", ""
+    return None, None
+
+
+def _record_exec_mode(text: str) -> str:
+    """Exec mode of a record call from its callee source text.
+
+    Order matters: "NoExec" CONTAINS "Exec", so the negative form is tested
+    first, and a dependent `ExecBool(...)` argument is unresolvable either way.
+    """
+    if "NoExec" in text:
+        return "NOEXEC"
+    if "ExecBool" in text:
+        return "UNRESOLVED"
+    if "Exec" in text:
+        return "EXEC"
+    if "<" not in text:
+        return "NOEXEC"  # no explicit template argument -> lltt/ckernel default
+    return "UNRESOLVED"
+
+
+def is_mop_word(macro_name: str) -> bool:
+    """True if `macro_name` is an opcode-VALUE macro (`TT_OP_*`) rather than an
+    issued instruction — the form that gets slotted into a MOP or a replay
+    buffer. Anchored, not a substring test.
+
+    This is the Python half of a contract with the extractor: it selects the same
+    prefix the C++ MacroPass files under `OPCODE_VALUE_FAMILY`. If one side stops
+    matching what the other emits, the hint goes silently dead — enforced by a
+    test, since a name-level tool/skill sync check cannot see it.
+    """
+    return (macro_name or "").startswith(OPCODE_VALUE_PREFIX)
+
+
+def mop_word_flips_src(text: str) -> bool:
+    """True if a slotted word hands a Src bank back / flips the bank pointer.
+
+    A flip in the last live END slot lands immediately before the next outer
+    iteration's START_OP, which is what makes a textual reading of the flip's
+    position wrong.
+    """
+    up = (text or "").upper()
+    if "CLEARDVALID" in up:
+        return True
+    if not any(t in up for t in SRC_FLIP_OP_SUBSTR):
+        return False
+    return bool(SRC_FLIP_CLR_RE.search(up))
 
 
 def classify_macro(name: str):
@@ -716,6 +880,272 @@ SRCREG_DVALID_OPS = {
     "SETDVALID": "DVALID_SET",
     "CLEARDVALID": "DVALID_CLEAR",
 }
+
+# Dest->Src moves. These WRITE a Src bank from Dest, so the Wait Gate's automatic
+# `AllowedClient == MatrixUnit` wait — which covers only Matrix Unit instructions
+# that READ Src — does not apply to them (MOVD2A.md / MOVD2B.md say so explicitly
+# and direct software to STALLWAIT). MOVA2D/MOVB2D are the opposite direction
+# (Src->Dest, i.e. Src READERS) and are deliberately NOT listed.
+DEST_TO_SRC_MOVE_SUBSTR = ("MOVD2A", "MOVD2B")
+
+# STALLWAIT wait-condition tokens for "the target Src bank is owned by the Matrix
+# Unit" (C10/C11 on WH; the same named constants encode different bit VALUES per
+# arch, which is why this matches by NAME and never by number).
+SRC_BANK_VLD_TOKENS = ("SRCA_VLD", "SRCB_VLD")
+
+
+# STALLWAIT wait-condition tokens for "the UNPACKER owns the bank" (C8/C9 on WH):
+# Src?[Unpackers[i].SrcBank].AllowedClient != Unpackers.
+SRC_BANK_CLR_TOKENS = ("SRCA_CLR", "SRCB_CLR")
+
+# Functions whose PURPOSE is publishing a dummy Src bank for a Dest->Src consumer.
+# Scoping the unguarded-publication recall to these keeps it a worklist: unscoped,
+# ~90% of ALL UNPACR_NOP publications in the tree lack the wait (most are ordinary
+# tilize/untilize/matmul publications with no MOVD2A/MOVD2B consumer), which carries
+# no signal.
+# Both word orders and both nouns occur in-tree: the canonical helper is named
+# dest_reuse_dummy_unpack() (llk_unpack_A.h), while the per-op publishers are
+# *_dummy_valid_ / *_reuse_dest_*. Listing only one spelling of each left the
+# reference implementation of this very fix outside the tool's scope.
+DEST_REUSE_PUBLISHER_FN_SUBSTR = (
+    "dummy_valid",
+    "dummy_unpack",
+    "switch_to_reduce",
+    "reuse_dest",
+    "dest_reuse",
+)
+
+
+def is_dest_reuse_publisher_fn(name: str) -> bool:
+    low = name.lower()
+    return any(t in low for t in DEST_REUSE_PUBLISHER_FN_SUBSTR)
+
+
+def macro_args(text: str) -> list:
+    """Top-level, comma-separated macro arguments, nesting-aware."""
+    lp, rp = text.find("("), text.rfind(")")
+    if lp < 0 or rp <= lp:
+        return []
+    inner, depth, start, args = text[lp + 1 : rp], 0, 0, []
+    for i, ch in enumerate(inner):
+        if ch in "([<{":
+            depth += 1
+        elif ch in ")]>}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(inner[start:i])
+            start = i + 1
+    args.append(inner[start:])
+    return [a.strip() for a in args]
+
+
+# UNPACR_NOP's first operand is Unpacker_Select on every arch, but it is spelled
+# three different ways in-tree: the Src register (SrcA / SrcB), the unpacker that
+# feeds it (UNP0 / UNP_A -> SrcA, UNP1 / UNP_B -> SrcB), or a bare 0 / 1. Quasar
+# uses only the unpacker spelling and several WH/BH sites use UNP0, so keying on
+# SrcA/SrcB alone left those publications unattributed - and an unattributed
+# publication is silently skipped rather than reported. Anchored, not substring:
+# UNP_AB (p_setadc) must not read as UNP_A.
+_SRC_A_OPERAND_RE = re.compile(r"\b(?:SRCA|UNP0|UNP_A)\b")
+_SRC_B_OPERAND_RE = re.compile(r"\b(?:SRCB|UNP1|UNP_B)\b")
+
+
+def src_reg_of(text: str):
+    """ "A" / "B" from a macro's first operand (e.g. TTI_UNPACR_NOP(SrcA, ...)), else None."""
+    args = macro_args(text)
+    if not args:
+        return None
+    a0 = args[0].upper()
+    if _SRC_A_OPERAND_RE.search(a0):
+        return "A"
+    if _SRC_B_OPERAND_RE.search(a0):
+        return "B"
+    if a0 == "0":
+        return "A"
+    if a0 == "1":
+        return "B"
+    return None
+
+
+# UNPACR_NOP's operand list is per-arch, and the wait-bank select does NOT sit at
+# the same operand index on every arch, so the index cannot be applied blind:
+#   Blackhole  9 operands: Stall_Clr_Cntrl at index 5, Bank_Clr_Ctrl at index 6.
+#   Quasar     6 operands: Stall_Cntrl     at index 2, Bank_Clr_Ctrl at index 3.
+#   Wormhole   2 operands: no such operands at all - both controls are packed into
+#              the single NoOp immediate (WaitLikeUnpacr<<4, BothBanks<<3) and are
+#              named only by the UNP_ZEROSRC_* constants.
+# Blackhole's index 5 is Quasar's Nop_type, so reusing it there reads an unrelated
+# operand. Both arches happen to place the two bits at <<5 and <<4 in the encoded
+# word; it is the OPERAND POSITION that differs.
+_UNPACR_NOP_OPERAND_IDX = {
+    # arch: (wait-own-bank operand index, clear-both-banks operand index)
+    "blackhole": (5, 6),
+    "quasar": (2, 3),
+}
+
+# These packed constants are WORMHOLE-ONLY BY CONSTRUCTION: Wormhole's UNPACR_NOP takes
+# one NoOp immediate, so its controls must be packed into a single value. Blackhole
+# takes nine separate operands and Quasar six, and NEITHER header defines the packed
+# constants - Blackhole's p_unpacr_nop did carry all three at their Wormhole values,
+# under a "bits do not match for UNPACR_NOP" TODO, until the constants and that TODO
+# were both dropped for an explicit per-operand contract; Quasar has no p_unpacr_nop at all (it uses p_unpacr).
+# So a hit here does not compile today and the check is a RE-INTRODUCTION guard (a
+# Wormhole kernel ported across, or Quasar growing a p_unpacr_nop). Were
+# UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) passed as Blackhole's Unpack_Pop it would
+# put bit 0 and bit 4 = Bank_Clr_Ctrl into the word - an unintended BOTH-BANKS clear -
+# while the wait bit (bit 5) stayed clear, and TT_UNPACR_NOP / TTI_UNPACR_NOP expand
+# straight to TT_OP_UNPACR_NOP without calling TT_UNPACR_NOP_VALID (Quasar has no
+# _VALID macro at all), so the overflow would be silent. Stays keyed on the
+# operand-form arches rather than naming Blackhole, so Quasar is covered too.
+_WH_PACKED_WAIT = "UNP_ZEROSRC_STALL_RESET_WR_RDY"
+_WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
+# All three Wormhole-packed p_unpacr_nop constants, with what each WOULD encode if
+# dropped into Blackhole's 2-bit Unpack_Pop slot - the natural slot, since the
+# legitimate UNP_ZEROSRC lives there:
+#   ..._RESET_ALL_BANKS    (0b1001)    -> Src_ClrVal_Ctrl=0b10, i.e. clear to ONE,
+#                                         not "reset all banks" (that is Bank_Clr_Ctrl)
+#   ..._STALL_RESET_WR_RDY (0b10001)   -> Bank_Clr_Ctrl=1, i.e. clear BOTH banks,
+#                                         not "wait like UNPACR" (that is bit 5)
+#   ..._SET_DVALID         (0b1000001) -> Clr_to1_fmt_Ctrl=0b01 and Set_Dvalid=0, i.e.
+#                                         the DVALID is NEVER published (Set_Dvalid is
+#                                         at <<8) - the worst of the three
+# UNP_NEGINFSRC (0b101) is deliberately NOT listed: it would land as
+# Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, bit-identical to Blackhole's own
+# idiomatic neginf clear, so it is harmless. Blackhole no longer defines it either.
+_WH_PACKED_ANY = (
+    _WH_PACKED_WAIT,
+    _WH_PACKED_BOTH,
+    "UNP_ZEROSRC_SET_DVALID",
+)
+
+_OPERAND_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+
+def operand_value(arg: str) -> str:
+    """An operand's value with inline comments and whitespace stripped.
+
+    In-tree operands are routinely annotated - `1 /* wait like UNPACR */` is the
+    canonical guarded form emitted by dest_reuse_dummy_unpack(), and
+    `0 /* Stall_Clr_Cntrl */` the annotated default. A raw compare against "1"
+    silently fails on the annotated forms, so it read the correct fix as unguarded."""
+    return _OPERAND_COMMENT_RE.sub("", arg).strip()
+
+
+# Set_Dvalid is a named operand on the arches that take separate operands, so a
+# publication written with a bare literal (`1 /*Dvalid*/`, common on Quasar) is
+# still detectable even though it carries no SET_DVALID token.
+_UNPACR_NOP_DVALID_IDX = {"blackhole": 3, "quasar": 1}
+
+
+def publication_sets_dvalid(text: str, arch: str) -> bool:
+    """True if this UNPACR_NOP hands a bank over via a non-zero Set_Dvalid operand."""
+    i = _UNPACR_NOP_DVALID_IDX.get(arch)
+    if i is None:
+        return False
+    a = macro_args(text)
+    if len(a) <= i:
+        return False
+    v = operand_value(a[i])
+    return bool(v) and v != "0"
+
+
+_CLEAR_TOKENS = ("ZEROSRC", "CLR_SRC", "CLRSRC", "NEGINFSRC")
+
+
+def publication_clears_bank(text: str) -> bool:
+    """True if this UNPACR_NOP writes the clear value into Unpackers[i].SrcBank.
+
+    Only the ZEROSRC / CLR_SRC family clears data. SET_DVALID does NOT: per
+    UNPACR_NOP_SETDVALID.md it sets AllowedClient = MatrixUnit, flips
+    Unpackers[i].SrcBank and sets SrcRow, writing no data at all."""
+    return any(t in text for t in _CLEAR_TOKENS)
+
+
+def publication_is_bare_setdvalid(text: str) -> bool:
+    """A hand-over with no clear in the same instruction.
+
+    Per UNPACR_NOP_SETDVALID.md this form performs NO wait of its own, so the
+    wait-like-UNPACR bit has nothing to select and the pipelined/serializing
+    distinction does not apply to it. It must instead INHERIT a wait by sequencing,
+    from a preceding real UNPACR or an UNPACR_NOP that does ZEROSRC (either form of
+    the wait bit -- the ISA only requires that the predecessor performed a wait), or
+    be preceded by an explicit STALLWAIT on the unpacker-owned-bank conditions."""
+    return "SET_DVALID" in text and not publication_clears_bank(text)
+
+
+def publication_bank_controls(text: str, arch: str):
+    """(waits_own_bank, clears_both_banks) for one UNPACR_NOP publication.
+
+    Either element is None when this arch or encoding is not modeled; callers must
+    treat that as UNKNOWN, never as safe.
+
+    waits_own_bank - the instruction gates on Unpackers[i].SrcBank (the bank it
+    actually clears) instead of MatrixUnit.Src?Bank. This is the PIPELINED mode: it
+    lets unpack prepare the next bank while math consumes the current one. The
+    default (bit clear) waits until MatrixUnit.Src?Bank is back with the unpackers,
+    which under the bank-pointer lockstep invariant means no bank is outstanding at
+    all - a strictly STRONGER, serializing wait.
+
+    clears_both_banks - the instruction clears BOTH banks of the register, so
+    waiting on the unpacker's own bank alone is NOT sufficient: the other bank may
+    still belong to the Matrix Unit. The two controls are a matched pair and must
+    never both be set."""
+    if arch == "wormhole":
+        return (_WH_PACKED_WAIT in text, _WH_PACKED_BOTH in text)
+    idx = _UNPACR_NOP_OPERAND_IDX.get(arch)
+    if idx is None:
+        return (None, None)
+    wait_i, both_i = idx
+    a = macro_args(text)
+    if len(a) <= both_i:
+        return (None, None)
+    return (
+        operand_value(a[wait_i]) == "1",
+        operand_value(a[both_i]) == "1",
+    )
+
+
+def publication_misuses_packed_wait(text: str, arch: str) -> bool:
+    """A Wormhole-shaped packed NoOp constant on an arch whose UNPACR_NOP takes the
+    controls as separate operands - the value would land in the wrong bit field. Only
+    Wormhole defines these constants today, so this is a re-introduction guard."""
+    return arch in _UNPACR_NOP_OPERAND_IDX and any(c in text for c in _WH_PACKED_ANY)
+
+
+def required_vld_token(name: str):
+    """The bank-valid condition a Dest->Src move must be gated on: MOVD2A writes
+    SrcA and needs SRCA_VLD; MOVD2B writes SrcB and needs SRCB_VLD. A stall naming
+    only the OTHER register proves nothing about the bank being written."""
+    up = name.upper()
+    if "MOVD2A" in up:
+        return "SRCA_VLD"
+    if "MOVD2B" in up:
+        return "SRCB_VLD"
+    return None
+
+
+# A Src bank flip re-arms the hazard the MATH drain was taken to settle: the drain
+# proves the FPU pipe was empty AT THE STALL, so a flipping op issued after it
+# re-introduces exactly the in-flight-epilogue race. SETRWC with CLR_A/CLR_B/CLR_AB
+# (or the in-tree CLR_SRC alias for one of them) and a matrix op with clr_src both
+# flip; CLR_NONE does not (and is the common case in-tree, so it must not be
+# mistaken for one). Non-flipping FPU ops - including the MOVD2A/MOVD2B of the
+# same burst - do NOT re-arm it.
+def is_bank_flip_macro(text: str) -> bool:
+    return bool(SRC_FLIP_CLR_RE.search(text))
+
+
+def is_dest_to_src_move(name: str) -> bool:
+    """True for an ISSUED Dest->Src move macro (TTI_MOVD2A / TT_MOVD2B / ...).
+
+    Excludes ``TT_OP_*`` (opcode-VALUE constants, not an issued instruction) —
+    consistent with classify_srcreg_macro."""
+    if not (name.startswith("TTI_") or name.startswith("TT_")) or name.startswith(
+        "TT_OP_"
+    ):
+        return False
+    up = name.upper()
+    return any(tok in up for tok in DEST_TO_SRC_MOVE_SUBSTR)
 
 
 def classify_srcreg_macro(name: str):

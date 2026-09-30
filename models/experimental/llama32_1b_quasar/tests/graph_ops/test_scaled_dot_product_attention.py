@@ -29,7 +29,7 @@ import pytest
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 
-_OP = ttnn.transformer.scaled_dot_product_attention
+_OP = ttnn.experimental.quasar.transformer.scaled_dot_product_attention
 
 CASES = [
     {

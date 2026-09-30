@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Test(BaseModel):
@@ -80,6 +80,28 @@ class TTSmiReset(BaseModel):
     )
 
 
+class JitTelemetry(BaseModel):
+    """
+    One JIT build-telemetry metric record scraped from a CI/CD job log.
+
+    Each job emits a block of these at the end of its run (compile/link timing,
+    kernel ELF sizes, program config sizes). The aggregates are emitted in the JIT
+    telemetry log; this model stores them verbatim, one record per metric.
+
+    ``github_job_id`` lives on the parent :class:`Job`; the wrangler copies it when
+    inserting into ``jit_telemetry``.
+    """
+
+    workflow_attempt: int = Field(description="Workflow run attempt number.")
+    metric_name: str = Field(description="Metric identifier, e.g. 'JitBuildState::compile'.")
+    unit: Optional[str] = Field(None, description="Unit the values are expressed in, e.g. 'ms' or 'B'.")
+    sample_count: int = Field(description="Number of samples the aggregates were computed over.")
+    total_value: float = Field(description="Sum of all samples, in unit.")
+    min_value: float = Field(description="Smallest sample, in unit.")
+    max_value: float = Field(description="Largest sample, in unit.")
+    mean_value: float = Field(description="Mean of all samples, in unit.")
+
+
 class Job(BaseModel):
     """
     Contains information about the execution of CI/CD jobs, each one associated with a
@@ -131,6 +153,10 @@ class Job(BaseModel):
     tt_smi_reset: Optional[List[TTSmiReset]] = Field(
         None,
         description="tt-smi reset attempts for this job, if any.",
+    )
+    jit_telemetry: Optional[List[JitTelemetry]] = Field(
+        None,
+        description="JIT build-telemetry metric records for this job, if any.",
     )
 
     # Model validator to check the unique combination constraint
@@ -472,8 +498,7 @@ class PerfMetric(BaseModel):
     metric_name: str = Field(description="Metric name.")
     metric_value: float = Field(description="Metric value.")
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpParam(BaseModel):
@@ -492,8 +517,7 @@ class OpParam(BaseModel):
         default=None, description="Test parameter value as JSON (object or array)."
     )
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class OpTest(BaseModel):
@@ -501,6 +525,10 @@ class OpTest(BaseModel):
     Contains information about ML kernel operation tests, such as test execution,
     results, configuration.
     """
+
+    # model_name below is a genuine field name, not pydantic's protected `model_` config
+    # namespace; disable the reserved-namespace check to silence pydantic's warning.
+    model_config = ConfigDict(protected_namespaces=())
 
     # Made this optional since TTNN (Steven) or Forge (Collin) side may have tests that
     # are not executed by CI runners.

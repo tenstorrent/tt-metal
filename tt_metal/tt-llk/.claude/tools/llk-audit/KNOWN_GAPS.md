@@ -245,6 +245,98 @@ gate — the credit quartet is now recalled via `_CB_RECV_TYPES`; this is the No
 - **Fix hazard:** `write_barrier` is a GENERIC name — it must be gated on the DataflowBuffer/DFBInterface
   recv_type, NOT added to `NOC_METHOD_FLUSH` globally, or it would over-match unrelated `.write_barrier()`.
 
+### L11 — dummy-publication scope is a function-NAME predicate, so MOP-config publishers are missed
+`_dummy_publication_guard` only visits functions whose name marks them as dest-reuse publishers
+(`*dummy_valid*`, `*dummy_unpack*`, `*switch_to_reduce*`, `*reuse_dest*`, `*dest_reuse*`). A
+publisher named otherwise is never visited — the live example is
+`_llk_unpack_A_rmsnorm_mop_config_`, which builds its publications as `static constexpr`
+`TT_OP_UNPACR_NOP` words for a MOP `set_start_op`.
+- **Risk:** CAP-REDUCTION — a real serializing publication (and, in principle, a both-banks or
+  wrong-arch encoding defect) in such a function is not reported.
+- **Live today:** the two rmsnorm sites, plus any future `*_mop_config_` publisher.
+- **Fix hazard:** widening to `*mop_config*` pulls in every MOP-config function in the tree, and
+  the overwhelming majority of their publications are ordinary unpack setup with no Dest->Src
+  consumer — a large FALSE-FLAG bucket that would bury the real ones. The scope predicate is the
+  wrong axis; the right fix is to pair a publication with a `MOVD2A`/`MOVD2B` consumer, which is
+  cross-thread and usually cross-file (see the `srcreg-bank` `blind_spots`). Until then the
+  `/srcreg-bank-sync-audit` skill tells the auditor to widen manually.
+
+### L12 — UNPACR_NOP control operands are read only as literal `0`/`1`
+`publication_bank_controls` compares the wait-bank and both-banks operands against `"0"`/`"1"`
+after stripping inline comments. A control passed as a variable, an enum, or an arithmetic
+expression reads as neither set nor clear.
+- **Risk:** CAP-REDUCTION — such a publication is treated as the default form (reported as
+  `DUMMY_PUBLISH_SERIALIZING`) and, more importantly, a both-banks/wait-like pairing built from
+  non-literal operands is not flagged.
+- **Live today:** none — every in-tree UNPACR_NOP passes these two controls as literals.
+- **Fix hazard:** resolving enums/expressions needs constant folding the extractor does not do;
+  guessing (e.g. treating any non-`0` token as set) would FALSE-FLAG on `p_unpacr_nop::` selector
+  constants that legitimately occupy other operands.
+
+### L13 — a replay record/expand `Count` is never captured, so the ISA's buffer-occupancy checks cannot run
+`VisitCallExpr` records only `arg0` (`f.arg0 = srcText(CE->getArg(0)...)`), so a
+`lltt::record(Index, Count)` / `lltt::replay(Index, Count)` reaches the fact base with its
+start INDEX but no COUNT. Two buffer-occupancy checks are therefore NOT performed by
+`mop-replay`: a `Count` field of **0 issues a full-length replay, not nothing** — 64 on BH, 32 on
+WH (the WH `REPLAY.md` model's `range(Instruction.Count or 64)` does not match the WH hardware,
+which also does not honour a `Count` above 32) — and the expander indexes `(Index + i) % 32`, so
+an `Index + Count` past `REPLAY_BUF_SIZE` silently wraps over another user's slots. The same one-argument limit hides `set_end_ops(a, b)`'s
+SECOND word, so a Src flip installed as `END_OP1` draws no `MOP_SLOTTED_SRC_FLIP`.
+- **Risk:** CAP-REDUCTION — a zero/oversized replay length and an END_OP1 flip are invisible.
+- **Live today:** unclear whether any is a live defect, but the shape is present and the LLK
+  authors already guard it by hand in one place: `llk_pack.h` computes `replay_buf_len =
+  face_r_dim - 1` and comments that `= 0` "is an invalid replay length", asserting `face_r_dim`
+  instead. Reproduced counts (WH+BH+QSR, tests excluded): 191 `lltt::replay` sites, 109 record
+  sites, 15 computed (non-literal) `replay_buf_len` expressions, 33 `set_end_ops(` sites.
+  Indices are a CONVENTION, not an enforced allocation — `replay_buf_offset = 16` splits
+  FPU/SFPU usage by agreement, and only `ckernel_code_sequence.h` static_asserts the bound.
+- **Fix:** capture `arg1` (and ideally all args) for a call, then bound-check literal
+  `Index`/`Count` pairs against `registry.REPLAY_BUF_SIZE` and flag a literal `Count == 0`.
+- **Fix hazard:** most counts here are runtime expressions, so a bound check can only ever
+  cover the literal subset; emitting `REPLAY_INDEX_UNRESOLVED`-style candidates for the rest is
+  already what the checker does. Widening the extractor's per-call capture also grows every
+  fact base, so it needs a baseline refresh (L3) in the same change.
+
+### L14 — MOP loop ops passed to the CONSTRUCTOR get no slot attribution
+`mop-replay` attributes a word to a MOP slot only from the `set_*_op` /
+`set_last_*_loop_instr` SETTERS. A loop op passed POSITIONALLY to
+`ckernel_template(outer, inner, loop_op0[, loop_op1])` or to `ckernel_unpack_template(...)`
+is a `CXXConstructExpr`, which the extractor does not visit (only `VisitFunctionDecl`,
+`VisitBinaryOperator`, `VisitCallExpr`, `VisitImplicitCastExpr`), so the construction emits no
+call fact and the word carries no slot.
+- **Risk:** CAP-REDUCTION — the word surfaces only as `MOP_WORD_SLOT_UNATTRIBUTED`, without a
+  slot, and only if it is a Src flip or a sync op; an arithmetic loop op draws nothing here
+  (instruction-latency widens its own `TT_OP_*` enumeration instead).
+- **Live today:** 246 `ckernel_(unpack_)template` constructions across WH+BH+QSR versus 16
+  `set_loop_op0/1` calls, so nearly every loop op is constructor-passed. Not a wrong answer —
+  the checker never claims a slot it did not resolve — but it means the slot inventory is
+  deliberately partial, which is why the skills tell the LLM to resolve at the `run()` site.
+  The unattributed hint does now carry these: `MOP_WORD_SLOT_UNATTRIBUTED` fires 53 (BH) /
+  22 (WH) / 17 (QSR), e.g. the two `TT_OP_MVMUL(p_setrwc::CLR_A|CLR_AB, …)` flips bound to
+  named constants in `experimental/llk_math_custom_mm.h` and fed to a MOP program.
+- **Fix:** add a `VisitCXXConstructExpr` branch emitting a `call`-shaped fact for these types
+  (name = the type, args = the ctor args), then map positional args 3/4 to `LOOP_OP0`/`LOOP_OP1`.
+- **Fix hazard:** the positional→slot mapping differs between the two template types and
+  between the 3- and 4-argument `ckernel_template` overloads, so a blunt mapping would
+  MIS-attribute a slot — worse than not attributing one. Needs the overload resolved (`argc`).
+
+### L15 — record↔replay pairing and MOP program-vs-run staleness are not tracked
+Neither expander is modeled across functions. A `lltt::replay(i, n)` whose matching record ran
+on a different path — or never ran — issues whatever words the 32-entry buffer last held; and
+because `ckernel_template::program()` (the `MopCfg` write) and `ckernel_template::run()` are
+separated in time, a `run()` executes whichever program was written last. `mmio-race` owns the
+adjacent but distinct hazard (a RISC MMIO write to `MopCfg` racing an in-flight expansion,
+guarded by `mop_sync()`); nothing owns "which program is live at this `run()`".
+- **Risk:** CAP-REDUCTION — a stale-buffer or stale-program execution is not recalled at all.
+- **Live today:** none identified. Records and replays are conventionally paired within one
+  init/execute LLK pair, and the ISA notes software "should not change `MopCfg` while an
+  expansion is in progress" with `mop_sync()`/TTSync as the guard — which `mmio-race` recalls.
+- **Fix:** an interprocedural record→replay reachability pass keyed on (thread, buffer range),
+  and a program→run pairing keyed on the enclosing init/execute pair.
+- **Fix hazard:** both are genuinely interprocedural and template-instantiation sensitive; a
+  same-name/one-body approximation would produce exactly the false clears L5 and the
+  `noc-l1-invalidate` same-name MERGE already document. Deferred as a design item, not a patch.
+
 ## How to add an entry
 Append a `### <id> — <one-line title>` block with **Risk** (CAP-REDUCTION / FALSE-FLAG), **Live
 today**, **Fix**, and any **Fix hazard**. Link the relevant checker `blind_spots` rather than

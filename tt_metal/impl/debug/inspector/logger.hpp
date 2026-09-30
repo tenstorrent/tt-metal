@@ -33,6 +33,7 @@ private:
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
     std::ofstream mesh_buffers_ostream;
+    std::ofstream mesh_sockets_ostream;
     bool initialized{false};
     std::filesystem::path logging_path;
 
@@ -57,6 +58,11 @@ public:
 
     void log_mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
     void log_mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
+
+    void log_mesh_socket_created(
+        const distributed::MeshBuffer* config_buffer, const MeshSocketData& socket_data) noexcept;
+    void log_mesh_socket_destroyed(
+        const distributed::MeshBuffer* config_buffer, const MeshSocketData& socket_data) noexcept;
 
     void log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept;
     void log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) noexcept;

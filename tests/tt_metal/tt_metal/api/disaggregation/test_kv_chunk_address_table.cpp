@@ -245,17 +245,18 @@ TEST(KvChunkAddressTable, CPU_SetAndLookupMultipleSlotsAndLayersAndPositions) {
         }
     }
 
-    // Also verify via lookup_range that spans are correct per (slot, layer).
+    // Also verify via visit_range that ranges are correct per (slot, layer).
     for (uint32_t slot = 0; slot < kNumSlots; slot++) {
         for (uint32_t layer = 0; layer < kNumLayers; layer++) {
-            auto range = table.lookup_range(layer, 0, kSeqLen, slot);
-            ASSERT_EQ(range.size(), kSeqLen / kChunkSize);
-            for (uint32_t chunk = 0; chunk < range.size(); chunk++) {
-                uint32_t pos = chunk * kChunkSize;
-                uint64_t expected_addr = (static_cast<uint64_t>(slot) << 40) | (static_cast<uint64_t>(layer) << 24) |
-                                         static_cast<uint64_t>(pos);
-                EXPECT_EQ(range[chunk].noc_addr, expected_addr);
-            }
+            table.visit_range(layer, 0, kSeqLen, slot, 0, [&](auto range) {
+                ASSERT_EQ(range.size(), kSeqLen / kChunkSize);
+                for (uint32_t chunk = 0; chunk < range.size(); chunk++) {
+                    uint32_t pos = chunk * kChunkSize;
+                    uint64_t expected_addr = (static_cast<uint64_t>(slot) << 40) |
+                                             (static_cast<uint64_t>(layer) << 24) | static_cast<uint64_t>(pos);
+                    EXPECT_EQ(range[chunk].noc_addr, expected_addr);
+                }
+            });
         }
     }
 }
@@ -303,12 +304,13 @@ TEST(KvChunkAddressTable, CPU_LookupRangeContiguous) {
     }
 
     // Lookup range [64, 192) — should get chunks at positions 64, 96, 128, 160
-    auto range = table.lookup_range(0, 64, 192, 0);
-    EXPECT_EQ(range.size(), 4u);
-    EXPECT_EQ(range[0].noc_addr, 64u);
-    EXPECT_EQ(range[1].noc_addr, 96u);
-    EXPECT_EQ(range[2].noc_addr, 128u);
-    EXPECT_EQ(range[3].noc_addr, 160u);
+    table.visit_range(0, 64, 192, 0, 0, [](auto range) {
+        EXPECT_EQ(range.size(), 4u);
+        EXPECT_EQ(range[0].noc_addr, 64u);
+        EXPECT_EQ(range[1].noc_addr, 96u);
+        EXPECT_EQ(range[2].noc_addr, 128u);
+        EXPECT_EQ(range[3].noc_addr, 160u);
+    });
 }
 
 TEST(KvChunkAddressTable, CPU_LookupRangeFullSequence) {
@@ -320,16 +322,14 @@ TEST(KvChunkAddressTable, CPU_LookupRangeFullSequence) {
         table.set(0, pos, 0, make_location(pos, 100, grp));
     }
 
-    auto range = table.lookup_range(0, 0, 128, 0);
-    EXPECT_EQ(range.size(), 4u);
+    table.visit_range(0, 0, 128, 0, 0, [](auto range) { EXPECT_EQ(range.size(), 4u); });
 }
 
 TEST(KvChunkAddressTable, CPU_LookupRangeEmptyWhenStartEqualsEnd) {
     KvChunkAddressTableConfig config{.num_layers = 1, .max_sequence_length = 128, .num_slots = 1, .chunk_n_tokens = 32};
     KvChunkAddressTable table(config);
 
-    auto range = table.lookup_range(0, 64, 64, 0);
-    EXPECT_TRUE(range.empty());
+    table.visit_range(0, 64, 64, 0, 0, [](auto range) { EXPECT_TRUE(range.empty()); });
 }
 
 TEST(KvChunkAddressTable, CPU_LookupRangeIsZeroCopy) {
@@ -339,10 +339,15 @@ TEST(KvChunkAddressTable, CPU_LookupRangeIsZeroCopy) {
 
     table.set(0, 32, 0, make_location(0xAAAA, 100, grp));
 
-    auto range = table.lookup_range(0, 32, 64, 0);
-    ASSERT_EQ(range.size(), 1u);
-    // The span should point into the same memory as a direct lookup.
-    EXPECT_EQ(range.data(), &table.lookup(0, 32, 0));
+    table.visit_map(0, [&](const auto& map) {
+        // Zero-copy is the UNROLLED grid's property (the compressed view computes on
+        // dereference — there is no storage to point into).
+        if constexpr (std::is_same_v<std::decay_t<decltype(map)>, KvChunkAddressTable::UnrolledGrid>) {
+            auto range = map.lookup_range(0, 1, 2, 0);
+            ASSERT_EQ(range.size(), 1u);
+            EXPECT_EQ(range.data(), &map.lookup(0, 1, 0));
+        }
+    });
 }
 
 // --- Boundary / Error Tests ---
@@ -381,7 +386,7 @@ TEST(KvChunkAddressTable, CPU_LookupRangeEndPosBeyondMaxThrows) {
     KvChunkAddressTableConfig config{.num_layers = 1, .max_sequence_length = 128, .num_slots = 1, .chunk_n_tokens = 32};
     KvChunkAddressTable table(config);
 
-    EXPECT_ANY_THROW(table.lookup_range(0, 0, 129, 0));
+    EXPECT_ANY_THROW(table.visit_range(0, 0, 129, 0, 0, [](auto range) { (void)range.size(); }));
 }
 
 // --- FabricNodeId -> Host Mapping Tests ---
@@ -456,10 +461,11 @@ TEST(KvChunkAddressTable, CPU_RealisticPrefillScale) {
     }
 
     // Verify a range lookup.
-    auto range = table.lookup_range(layer, 0, kSeqLen, slot);
-    EXPECT_EQ(range.size(), kSeqLen / kChunkSize);
-    EXPECT_EQ(range[0].noc_addr, 0x8000'0000u);
-    EXPECT_EQ(range[1].noc_addr, 0x8000'0000u + kPageSizeBytes);
+    table.visit_range(layer, 0, kSeqLen, slot, 0, [](auto range) {
+        EXPECT_EQ(range.size(), kSeqLen / kChunkSize);
+        EXPECT_EQ(range[0].noc_addr, 0x8000'0000u);
+        EXPECT_EQ(range[1].noc_addr, 0x8000'0000u + kPageSizeBytes);
+    });
 }
 
 // --- Decode Scale Test ---
@@ -494,16 +500,17 @@ TEST(KvChunkAddressTable, CPU_DecodeAccessPattern) {
     uint32_t start_pos = 1024;
     uint32_t end_pos = 4096;
 
-    auto range = table.lookup_range(layer, start_pos, end_pos, slot);
-    uint32_t expected_chunks = (end_pos - start_pos) / kChunkSize;
-    EXPECT_EQ(range.size(), expected_chunks);
+    table.visit_range(layer, start_pos, end_pos, slot, 0, [&](auto range) {
+        uint32_t expected_chunks = (end_pos - start_pos) / kChunkSize;
+        EXPECT_EQ(range.size(), expected_chunks);
 
-    // Verify first and last entry addresses.
-    uint64_t expected_first = (static_cast<uint64_t>(slot) << 40) | (static_cast<uint64_t>(layer) << 24) | start_pos;
-    uint64_t expected_last =
-        (static_cast<uint64_t>(slot) << 40) | (static_cast<uint64_t>(layer) << 24) | (end_pos - kChunkSize);
-    EXPECT_EQ(range.front().noc_addr, expected_first);
-    EXPECT_EQ(range.back().noc_addr, expected_last);
+        // Verify first and last entry addresses.
+        uint64_t expected_first = (static_cast<uint64_t>(slot) << 40) | (static_cast<uint64_t>(layer) << 24) | start_pos;
+        uint64_t expected_last =
+            (static_cast<uint64_t>(slot) << 40) | (static_cast<uint64_t>(layer) << 24) | (end_pos - kChunkSize);
+        EXPECT_EQ(range.front().noc_addr, expected_first);
+        EXPECT_EQ(range.back().noc_addr, expected_last);
+    });
 }
 
 // --- Multi-Config Tests ---
@@ -597,12 +604,14 @@ TEST(KvChunkAddressTable, CPU_ConfigsWithDifferentChunkSizesIndexIndependently) 
         table.set(0, pos, 0, make_location(pos + 1, 10, grp), 1u);
     }
 
-    auto r0 = table.lookup_range(0, 0, 256, 0, 0u);
-    auto r1 = table.lookup_range(0, 0, 256, 0, 1u);
-    EXPECT_EQ(r0.size(), 256u / 32u);
-    EXPECT_EQ(r1.size(), 256u / 64u);
-    EXPECT_EQ(r0[1].noc_addr, 32u);
-    EXPECT_EQ(r1[1].noc_addr, 64u + 1u);
+    table.visit_range(0, 0, 256, 0, 0u, [](auto r0) {
+        EXPECT_EQ(r0.size(), 256u / 32u);
+        EXPECT_EQ(r0[1].noc_addr, 32u);
+    });
+    table.visit_range(0, 0, 256, 0, 1u, [](auto r1) {
+        EXPECT_EQ(r1.size(), 256u / 64u);
+        EXPECT_EQ(r1[1].noc_addr, 64u + 1u);
+    });
 
     // position 32 is not chunk-aligned for config 1 -> must throw.
     EXPECT_ANY_THROW(table.set(0, 32, 0, KvCacheLocation{}, 1u));

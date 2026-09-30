@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "llrt/core_descriptor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -90,9 +91,10 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDevicePrintBufAddr(const Hal& hal, ChipId device_id, const CoreCoord& virtual_core) {
+inline uint64_t GetDevicePrintBufAddr(MetalEnvImpl& env, ChipId device_id, const CoreCoord& virtual_core) {
+    const auto& hal = env.get_hal();
     return hal.get_dev_noc_addr(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+        llrt::get_core_type(env, device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
@@ -365,7 +367,7 @@ inline EnableSymbolsInfo get_enable_symbols_info(const Hal& hal, HalProgrammable
             info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
         }
         for (uint32_t i = 0; i < num; ++i) {
-            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            const std::string& abbrev = hal.get_processor_class_name(core_type, i, true);
             add_legacy_entry(abbrev, info.processor_names[i]);
         }
     } else if (core_type == HalProgrammableCoreType::DISPATCH) {
