@@ -29,7 +29,7 @@ from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
-from ...utils.video import export_video_audio, export_video_audio_yuv
+from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
@@ -1992,12 +1992,28 @@ class LTXDistilledPipeline(LTXPipeline):
         # The vocoder decodes s2_audio, a latent distinct from the s2_video that produced video_pixels
         # above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the eager vocoder
         # decode, which is trace-hidden in production but costs minutes untraced.
+        video_only = os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True")
+        # The host libx264 encode of the video track (~0.7 s at 1080p/145f) runs on a worker thread
+        # under the device audio decode; the mp4 is byte-identical to the serial export.
+        # LTX_ASYNC_EXPORT=0 restores the serial export.
+        video_export = None
+        if yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0":
+            rate = None if video_only else self.tt_vocoder_with_bwe.output_sampling_rate
+            video_export = YuvVideoExport(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
         t0 = time.time()
-        if os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
-            audio_obj = None
-            logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
-        else:
-            audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to length
+        try:
+            if video_only:
+                audio_obj = None
+                logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
+            else:
+                audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to length
+        except BaseException:
+            if video_export is not None:
+                try:
+                    video_export.finish(None)
+                except Exception:
+                    pass  # surface the decode error, not the aborted export's
+            raise
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
@@ -2013,7 +2029,9 @@ class LTXDistilledPipeline(LTXPipeline):
             return video_pixels, audio_obj
 
         t0 = time.time()
-        if yuv_export:
+        if video_export is not None:
+            video_export.finish(audio_obj)
+        elif yuv_export:
             export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
         else:
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
