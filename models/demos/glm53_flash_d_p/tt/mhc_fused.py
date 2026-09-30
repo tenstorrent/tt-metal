@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""mHC with the fused bring-up ops (GLM_MHC_IMPL=fused): ttnn.bringup.mhc_pre / mhc_post.
+"""mHC with the fused bring-up ops (GLM_MHC_IMPL=fused, the default; composite = the op chains): ttnn.bringup.mhc_pre / mhc_post.
 
 The composite path (tt/mhc.py, tt/collapse.py, tt/residual.py) runs attn_hc -> [S, 24] (pre | post | comb), then
 attn_collapse (sum_n pre_n x_n) and attn_residual (post * y + comb^T x) as separate op chains. Fused, the hc step runs
@@ -24,7 +24,7 @@ IMPLS = ("composite", "fused")
 
 
 def mhc_impl() -> str:
-    mode = os.environ.get("GLM_MHC_IMPL", "composite")
+    mode = os.environ.get("GLM_MHC_IMPL", "fused")
     assert mode in IMPLS, f"GLM_MHC_IMPL={mode!r}, want one of {IMPLS}"
     return mode
 
