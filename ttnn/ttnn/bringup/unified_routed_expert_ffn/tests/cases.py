@@ -119,27 +119,27 @@ CASES = [
         "rel": 0.008,
     },
     {
-        # GLM-5.3-Flash routed experts (ClampedSiluGlu = silu(min(gate, 10)) * clamp(up, +/-10)) on a 2x2 mesh:
-        # dispatch groups are the 2 columns (2 chips each), chip (r, c) holds the 72 experts (2c + r) * 72 .. + 71
-        # (ExpertMapping col-major), bfp8 weights (the checkpoint is FP8), HiFi4 + fp32 dest, high_precision.
-        "id": "glm53_flash_d_p-2x2-clampedsiluglu-hp-hifi4-h4096-i2048-epc72",
-        "model": "glm53_flash_d_p",
+        # Hy4 (preview) routed experts (SwiGLU clamped at 10: ClampedSiluGlu) on a 2x2 mesh: dispatch groups are the 2
+        # columns (2 chips each), chip (r, c) holds the 64 experts (2c + r) * 64 .. + 63 (ExpertMapping col-major),
+        # bfp8 weights.
+        "id": "hy4_preview_d_p-2x2-clampedsiluglu-hp-hifi4-h6144-i2048-epc64",
+        "model": "hy4_preview_d_p",
         "task": "O.1",
-        "sig": "820d12513b",
+        "sig": "4fe753a443",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
-        # dispatched buffer [43232, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 288] UINT32 ROW_MAJOR;
-        # global_expert_idx_table [72] UINT32 ROW_MAJOR; all DRAM interleaved
-        "buffer_rows": 43232,
-        "emb_dim": 4096,
+        # dispatched buffer [42976, 6144] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
+        # global_expert_idx_table [64] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer_rows": 42976,
+        "emb_dim": 6144,
         "hidden_dim": 2048,
-        "num_routed_experts": 288,
-        "experts_per_chip": 72,
-        # The routing the buffer comes from: a dispatch group's 2 x 2560 = 5120 tokens x top-8 over its 144 experts.
+        "num_routed_experts": 256,
+        "experts_per_chip": 64,
+        # The routing the buffer comes from: a dispatch group's 2 x 2560 = 5120 tokens x top-8 over its 128 experts.
         "seq_len_per_chip": 5120,
         "num_experts_per_tok": 8,
         "buffer": {"dtype": "BFLOAT16", "layout": "ROW_MAJOR"},
-        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [4096, 2048], down [2048, 4096] per expert
+        "weights": {"dtype": "BFLOAT8_B", "layout": "TILE"},  # gate/up [6144, 2048], down [2048, 6144] per expert
         "max_dispatched_tokens_per_expert": 8192,
         "compute_kernel_config": {
             "math_fidelity": "HiFi4",
@@ -150,12 +150,12 @@ CASES = [
         },
         "activation": "ClampedSiluGlu",
         "high_precision": True,
-        # gate / up weights ~ N(0, 16 / fan_in): gate and up ~ N(0, 16), so ~0.6% of gates and ~1.2% of ups hit the
-        # +/-10 clamp; the reference without the clamp is off by rel 0.073 (CPU, 512 rows), so a missing clamp fails.
-        "gate_up_scale": 4.0,
+        # x ~ N(0, 16): the gate / up projections are ~N(0, 16), so about 0.6% of the gate values sit above the limit
+        # 10 and 1.2% of the up values outside +-10; dropping the clamps moves the output by rel 0.075 (host check).
+        "x_scale": 4.0,
         "seed": 0,
-        # Measured (seed 0, 4 chips, 10.0-10.5k routed rows each): pcc 0.999997, rel 0.00250 on every chip. Limits
-        # leave ~3x on rel; a 1.01 output scale fails (checked by hand), and so would a missing clamp (rel ~0.07).
+        # x ~ N(0, 16), weights ~ N(0, 1/fan_in). Measured (seed 0, 4 chips, 10.2-10.4k routed rows each): pcc
+        # 0.999997, rel 0.00250; limits as the other 2x2 case. An output scaled by 1.01 fails (checked by hand).
         "pcc": 0.9999,
         "rel": 0.008,
     },
