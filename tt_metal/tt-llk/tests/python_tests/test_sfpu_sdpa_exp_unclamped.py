@@ -61,7 +61,10 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import skip_for_wormhole
+import os as _os
+
 from helpers.format_config import DataFormat, InputOutputFormat
+from test_sfpu_unary import _lanemk_run_fp32_stream  # shared streamer
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     SdpaExpUnclampedGolden,
@@ -166,6 +169,14 @@ def test_sfpu_sdpa_exp_unclamped(
         dest_acc=DestAccumulation.No,
         unpack_to_dest=False,
     )
+
+    # laneMU raw-band streaming hook (env-gated, inert when unset). This row IS
+    # pointwise -- exp(x * scale) over the whole tile, no column selection and no
+    # second operand -- so a raw bf16 band grades it exhaustively.
+    _stream = _os.environ.get("SFPU_STREAM")
+    if _stream:
+        _lanemk_run_fp32_stream(configuration, _stream)
+        return
 
     res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])

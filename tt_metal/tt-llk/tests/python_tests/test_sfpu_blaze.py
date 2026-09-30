@@ -30,6 +30,8 @@ import struct
 
 import pytest
 import torch
+import os as _os
+
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -73,6 +75,8 @@ _SKF_GLOBAL_BANK_SHIFT = 10
 _SKF_WITHIN_BANK_MASK = 0x3FF
 _SKF_OUT_SHIFT = 0
 _ZERO_PAD_VALID_ROWS = 24
+
+from test_sfpu_unary import _lanemk_run_fp32_stream  # noqa: E402  (shared streamer)
 
 _BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
@@ -211,6 +215,24 @@ def _run_blaze(
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    # laneMU raw-band streaming hook. Same contract as test_sfpu_unary.py's:
+    # env-gated, inert when unset, and it drives THIS exact `configuration` (same
+    # ELF, same templates, same param bits), so the band grades the certified
+    # kernel rather than a re-derived one.
+    #
+    # Scope, stated rather than assumed: a band sweeps operand A over the raw
+    # input space and grades element i of the output against golden(element i of
+    # the input). That is the contract of a POINTWISE op. Of the blaze family,
+    # the eleven elementwise ops qualify (their goldens all ignore operand B --
+    # `_g_*(a, _b)`); `zeropad` does not, because its output depends on the
+    # element's ROW INDEX rather than its value, and `rope` / `sdpareducerow` do
+    # not, because one output element is a function of several input elements.
+    # Those are refused by name in threeway_golden rather than silently mis-graded.
+    _blaze_stream = _os.environ.get("SFPU_STREAM")
+    if _blaze_stream:
+        _lanemk_run_fp32_stream(configuration, _blaze_stream)
+        return
 
     res_from_L1 = configuration.run().result
     res_from_L1 = res_from_L1[: 1024 * tile_cnt]

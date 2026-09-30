@@ -236,6 +236,397 @@ def case_faithful():
         )
 
 
+# ── case 1c: the 16-bit band mode's goldens, over the WHOLE input space ──────
+# A Float16_b row has 65536 distinct inputs, so the band the device runs is
+# exhaustive -- and so is this check. No sampling, no edge tile: every op's
+# vectorized golden is compared against the scalar in-repo oracle at every bf16
+# pattern that exists. A mis-wired golden looks exactly like a mass device
+# failure, which is the reason this runs before any result is believed.
+_BF16_OP_TO_MATHOP_NAME = {
+    "abs": "Abs",
+    "negative": "Neg",
+    "ceil-fresh": "Ceil",
+    "relu": "ReluMax",
+    "unarymaxmin-max": "UnaryMax",
+    "unarymaxmin-min": "UnaryMin",
+    "threshold": "Threshold",
+    "threshold-fresh": "Threshold",
+    "threshold-fitted": "Threshold",
+    "fill": "Fill",
+    "fill-fresh": "Fill",
+    "activations": "Hardsigmoid",
+    "hardsigmoid-fresh": "Hardsigmoid",
+    "square": "Square",
+    "square-fresh": "Square",
+    "tanh": "Tanh",
+    "tanh-fresh": "Tanh",
+    "tanh-fitted": "Tanh",
+    "tanhlut-fresh": "Tanh",
+    "tanhshrink": "Tanhshrink",
+    "tanhshrink-fresh": "Tanhshrink",
+    "tanhderivative-fitted": "TanhDerivative",
+    "sigmoid-fitted": "Sigmoid",
+    "sigmoidappx": "SigmoidAppx",
+    "sigmoidappx-tree": "SigmoidAppx",
+    "silu": "Silu",
+    "silu-fresh": "Silu",
+    "gelu": "Gelu",
+    "gelu-fresh": "Gelu",
+    "gelu-fitted": "Gelu",
+    "gelu-licensed": "Gelu",
+    "exp": "Exp",
+    "exp-fitted": "Exp",
+    "exp2": "Exp2",
+    "exp2-fresh": "Exp2",
+    "expm1-fitted": "Expm1",
+    "celu": "Celu",
+    "celu-fitted": "Celu",
+    "elu": "Elu",
+    "elu-fresh": "Elu",
+    "elu-fitted": "Elu",
+    "selu-fitted": "Selu",
+    "mish-fitted": "Mish",
+    "i0-fitted": "I0",
+    "i1-fitted": "I1",
+    "digamma-fitted": "Digamma",
+    "polygamma-fitted": "Polygamma",
+    "log": "Log",
+    "log-fresh": "Log",
+    "log-fitted": "Log",
+    "log1p": "Log1p",
+    "log1p-fresh": "Log1p",
+    "log1p-fitted": "Log1p",
+    "sqrt": "Sqrt",
+    "sqrt-fresh": "Sqrt",
+    "rsqrt-fresh": "Rsqrt",
+    "rsqrt-fitted": "Rsqrt",
+    "acosh-fitted": "Acosh",
+    "trigonometry": "Acosh",
+    "trigonometry-fresh": "Acosh",
+    "recip": "Reciprocal",
+    "recip-ilv2": "Reciprocal",
+}
+
+
+def _scalar_golden_bf16(mathop, u16):
+    """The in-repo oracle on the Float16_b -> Float16_b, dest_acc=No row."""
+    from helpers.format_config import DataFormat
+    from helpers.golden_generators import UnarySFPUGolden
+    from helpers.llk_params import DestAccumulation
+    import torch
+
+    operand = (u16.astype(np.uint32) << np.uint32(16)).view(np.float32).copy()
+    g = UnarySFPUGolden()(
+        mathop,
+        torch.from_numpy(operand),
+        DataFormat.Float16_b,
+        DestAccumulation.No,
+        DataFormat.Float16_b,
+        (256, 256),
+        iterations=None,
+        skip_tilize=True,
+    )
+    return g.detach().float().numpy().astype(np.float32)
+
+
+def _bf16_faithful_one(op, mathop_name, u16):
+    """Compare one op's vectorized golden to the oracle over `u16`. Returns a note."""
+    from helpers.llk_params import MathOperation
+
+    mathop = getattr(MathOperation, mathop_name)
+    spec = tg.get_spec(op)
+    xs = tg._bf16_bits_to_f32(u16.astype(np.uint32))
+    mine = tg.format_golden_f32_noacc(spec.math(xs))
+    ref = _scalar_golden_bf16(mathop, u16)
+
+    graded = np.ones(u16.shape, dtype=bool)
+    if spec.domain is not None:
+        graded &= ~tg.unary_input_classes(xs, spec.domain)[
+            "out_of_domain_finite_normal"
+        ]
+    if op in tg.GAMMA_POLE_OPS or op in tg.RECIPROCAL_POLE_OPS:
+        graded &= ~np.array([tg.at_pole(op, float(v)) for v in xs])
+    n_ungraded = int(np.count_nonzero(~graded))
+
+    mine_bits = mine.view(np.uint32).copy()
+    ref_bits = ref.astype(np.float32).view(np.uint32).copy()
+    mine_bits[mine_bits == 0x80000000] = 0  # +0 == -0 to the ULP path
+    ref_bits[ref_bits == 0x80000000] = 0
+    d = np.where((mine_bits != ref_bits) & graded)[0]
+    n_graded = int(np.count_nonzero(graded))
+    tail = f"; {n_ungraded}/{u16.size} undefined (out-of-domain or pole) not graded"
+    if d.size == 0:
+        return True, f"{n_graded}/{n_graded} bit-identical over the WHOLE bf16 space{tail}"
+    # Where they differ, exactly two explanations are admissible, and a diff that
+    # is neither is a FAIL.
+    #
+    #   (a) SUB-TOLERANCE ROUNDING. The oracle evaluates in the bf16 DST dtype
+    #       (torch.tensor(x, dtype=Float16_b)) while this module deliberately uses
+    #       fp64 true math, so the two can land on adjacent bf16 codes. Admissible
+    #       only when |mine - oracle| is inside the row's own accuracy contract.
+    #
+    #   (b) ORACLE fp32 OVERFLOW. UnarySFPUGolden._torch_unary evaluates in
+    #       torch.float32, so torch.special.i1(89.0) comes back +inf although the
+    #       true value 1.89e37 is comfortably inside fp32's range. The fp64 golden
+    #       is then STRICTLY more faithful than the oracle, and this is recorded
+    #       rather than tolerated: it means the harness's own i0/i1 row cannot see
+    #       a device defect at those inputs, because its reference is already inf.
+    #       Admissible only when the fp64 value is finite AND representable in
+    #       fp32 AND the oracle's value is an infinity of the same sign.
+    g = ref[d].astype(np.float64)
+    m = mine[d].astype(np.float64)
+    finite = np.isfinite(g) & np.isfinite(m)
+    F32MAX = float(np.finfo(np.float32).max)
+    oracle_overflow = (
+        np.isinf(g)
+        & np.isfinite(m)
+        & (np.abs(m) <= F32MAX)
+        & (np.signbit(g) == np.signbit(m))
+    )
+    rounding = finite & (
+        np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g))
+    )
+    matched_inf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+    explained = rounding | oracle_overflow | matched_inf
+    ok = bool(np.all(explained))
+    parts = []
+    if rounding.any():
+        worst = float(np.max(np.abs(m[rounding] - g[rounding])))
+        parts.append(
+            f"{int(rounding.sum())} sub-tolerance bf16-vs-fp64 rounding "
+            f"(worst |d|={worst:.3e} <= {spec.atol}+{spec.rtol}|g|)"
+        )
+    if oracle_overflow.any():
+        xo = xs[d][oracle_overflow]
+        parts.append(
+            f"{int(oracle_overflow.sum())} where the ORACLE overflowed fp32 to "
+            f"+-inf but the true value is finite and fp32-representable "
+            f"(|x| in [{float(np.min(np.abs(xo)))!r},{float(np.max(np.abs(xo)))!r}]) "
+            "-- the fp64 golden here is strictly better than the in-repo oracle"
+        )
+    if not ok:
+        bad = ~explained
+        parts.append(
+            f"{int(bad.sum())} UNEXPLAINED, e.g. x={float(xs[d][bad][0])!r} "
+            f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
+        )
+    return ok, f"{d.size}/{n_graded} differ: " + "; ".join(parts) + tail
+
+
+def case_faithful_bf16(ops=None, n=None):
+    print("case 1c: 16-bit band goldens == scalar oracle over the whole bf16 space")
+    corpus = {spec.op for spec in tg._CORPUS_BF16}
+    check(
+        "bf16-corpus-coverage",
+        corpus <= set(_BF16_OP_TO_MATHOP_NAME),
+        f"unverified bf16 specs: {sorted(corpus - set(_BF16_OP_TO_MATHOP_NAME))}",
+    )
+    u16 = np.arange(0, n or 65536, dtype=np.uint32)
+    todo = ops or sorted(_BF16_OP_TO_MATHOP_NAME)
+    for op in todo:
+        try:
+            ok, note = _bf16_faithful_one(op, _BF16_OP_TO_MATHOP_NAME[op], u16)
+        except Exception as e:
+            ok, note = False, f"raised: {type(e).__name__}: {e}"
+        check(f"faithful-bf16[{op}]", ok, note)
+
+# ── case 1d: the blaze / coverage vehicle goldens ────────────────────────────
+# These rows are NOT graded by UnarySFPUGolden -- each carries its own golden
+# closure inside its own test file. So that closure is the oracle here, and it is
+# the one this compares against, over the whole bf16 space. The blaze `_g_*`
+# functions are module-level and imported directly; the coverage goldens are
+# local closures, so they are captured by intercepting _run_coverage's golden_fn
+# argument -- the real closure the row grades against, not a re-typed copy.
+_BLAZE_ORACLE = {
+    "clampedsilu-gate": "_g_csilu_gate",
+    "clampedsilu-up": "_g_csilu_up",
+    "clampedsilu-clamped": "_g_csilu_clamped",
+    "situ-gate": "_g_situ_gate",
+    "scaledtanh": "_g_scaledtanh",
+    "logitsoftcap": "_g_logitsoftcap",
+    "siluscaled": "_g_siluscaled",
+    "addrsqrt": "_g_addrsqrt",
+    "sdpaexp": "_g_sdpaexp",
+}
+
+
+def _capture_coverage_goldens():
+    """Run each coverage test with the device call stubbed, keeping golden_fn."""
+    import test_sfpu_coverage as cov
+
+    captured = {}
+    real = cov._run_coverage
+
+    class _Stop(Exception):
+        pass
+
+    def fake(op, fresh_cpp_impl, golden_fn, formats, dest_acc, **kw):
+        captured["fn"] = golden_fn
+        captured["formats"] = formats
+        raise _Stop()
+
+    cov._run_coverage = fake
+    out = {}
+    for row, call in (
+        ("addrsqrt-fresh", lambda: cov.test_sfpu_coverage_add_rsqrt(1)),
+        ("smoothstep-fresh", lambda: cov.test_sfpu_coverage_smoothstep(1)),
+        ("copydest-fresh", lambda: cov.test_sfpu_coverage_copy_dest(1)),
+    ):
+        captured.clear()
+        try:
+            call()
+        except _Stop:
+            pass
+        if "fn" in captured:
+            out[row] = captured["fn"]
+    cov._run_coverage = real
+    return out
+
+
+def case_faithful_blaze():
+    print("case 1d: blaze/coverage goldens == their OWN test-file closures")
+    import torch
+
+    import test_sfpu_blaze as bz
+
+    u16 = np.arange(65536, dtype=np.uint32)
+    xs = tg._bf16_bits_to_f32(u16)
+    xt = torch.from_numpy(xs.astype(np.float32)).to(torch.bfloat16)
+    dummy_b = torch.zeros(1024, dtype=torch.bfloat16)
+
+    oracles = {}
+    for base, attr in _BLAZE_ORACLE.items():
+        oracles[f"blaze-{base}"] = getattr(bz, attr)
+    oracles.update(
+        {k: v for k, v in _capture_coverage_goldens().items()}
+    )
+    # Every graded blaze/coverage spec must have an oracle here, or it ships
+    # unverified -- the same rule case 1c enforces for the bf16 corpus.
+    graded = {
+        spec.op
+        for spec in (tg._CORPUS_BLAZE + tg._CORPUS_COVERAGE)
+    }
+    # t8/t32 twins are the same math as their 1-tile row; verifying the math once
+    # per op verifies them, so they map onto the base row's oracle.
+    def base_of(op):
+        for suffix in ("-t32", "-t8"):
+            if op.endswith(suffix):
+                return op[: -len(suffix)]
+        return op
+
+    missing = sorted(o for o in graded if base_of(o) not in oracles)
+    check("blaze-oracle-coverage", not missing, f"unverified: {missing}")
+
+    for op in sorted({base_of(o) for o in graded}):
+        spec = tg.get_spec(op)
+        fn = oracles.get(op)
+        if spec is None or fn is None:
+            check(f"faithful-blaze[{op}]", False, "no spec/oracle")
+            continue
+        try:
+            ref_hp = fn(xt, dummy_b)
+            ref = tg.format_golden_f32_noacc(
+                np.asarray(ref_hp.to(torch.float32).numpy(), dtype=np.float64)
+            )
+            mine = tg.format_golden_f32_noacc(spec.math(xs))
+        except Exception as e:
+            check(f"faithful-blaze[{op}]", False, f"raised: {type(e).__name__}: {e}")
+            continue
+        mb = mine.view(np.uint32).copy()
+        rb = ref.view(np.uint32).copy()
+        mb[mb == 0x80000000] = 0
+        rb[rb == 0x80000000] = 0
+        d = np.where(mb != rb)[0]
+        if d.size == 0:
+            check(f"faithful-blaze[{op}]", True, "65536/65536 bit-identical to the row's own golden")
+            continue
+        g = ref[d].astype(np.float64)
+        m = mine[d].astype(np.float64)
+        fin = np.isfinite(g) & np.isfinite(m)
+        matched_inf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+        # The test-file closures evaluate in fp32; this module uses fp64. Admit a
+        # diff only inside the row's own contract, and admit an fp32-overflow-only
+        # diff the same way case 1c does.
+        F32MAX = float(np.finfo(np.float32).max)
+        ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
+        tol = spec.atol + spec.rtol * np.abs(g)
+        near = fin & (np.abs(m - g) <= np.maximum(tol, 0.0))
+        ok = bool(np.all(near | ovf | matched_inf))
+        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
+        bad = ~(near | ovf | matched_inf)
+        note = (
+            f"{d.size}/65536 differ: {int(near.sum())} inside the row's own contract "
+            f"(worst |d|={worst:.3e} <= {spec.atol}+{spec.rtol}|g|), "
+            f"{int(ovf.sum())} oracle fp32 overflow"
+        )
+        if not ok:
+            note += (
+                f", {int(bad.sum())} UNEXPLAINED e.g. x={float(xs[d][bad][0])!r} "
+                f"mine={float(m[bad][0])!r} oracle={float(g[bad][0])!r}"
+            )
+        check(f"faithful-blaze[{op}]", ok, note)
+
+
+# ── case 1e: the two single-row vehicles (sdpa, binopscalar) ─────────────────
+# Both have a registered in-repo golden CLASS, so that class is the oracle and
+# the comparison is over the whole bf16 space, like case 1c.
+def case_faithful_vehicles():
+    print("case 1e: sdpa / binopscalar goldens == their in-repo golden classes")
+    import torch
+    from helpers.format_config import DataFormat
+    from helpers.golden_generators import (
+        ScalarBinopGolden,
+        SdpaExpUnclampedGolden,
+    )
+    from helpers.llk_params import MathOperation
+
+    u16 = np.arange(65536, dtype=np.uint32)
+    xs = tg._bf16_bits_to_f32(u16)
+    xt = torch.from_numpy(xs.astype(np.float32)).to(torch.bfloat16)
+
+    cases = {
+        # The node id pins scale bits 16256 = 0x3F80 = bf16 1.0.
+        "sdpa": lambda: SdpaExpUnclampedGolden()(xt, 16256, DataFormat.Float16_b),
+        "binopscalar": lambda: ScalarBinopGolden()(
+            MathOperation.ScalarAdd,
+            xt,
+            int(
+                np.array([np.float32(tg.BINOP_SCALAR_ADD)]).view(np.uint32)[0]
+            ),
+            DataFormat.Float16_b,
+        ),
+    }
+    for op, make in cases.items():
+        spec = tg.get_spec(op)
+        try:
+            ref = tg.format_golden_f32_noacc(
+                np.asarray(make().to(torch.float32).numpy(), dtype=np.float64)
+            )
+            mine = tg.format_golden_f32_noacc(spec.math(xs))
+        except Exception as e:
+            check(f"faithful-vehicle[{op}]", False, f"raised: {type(e).__name__}: {e}")
+            continue
+        mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
+        mb[mb == 0x80000000] = 0; rb[rb == 0x80000000] = 0
+        d = np.where(mb != rb)[0]
+        if d.size == 0:
+            check(f"faithful-vehicle[{op}]", True, "65536/65536 bit-identical to the in-repo golden class")
+            continue
+        g = ref[d].astype(np.float64); m = mine[d].astype(np.float64)
+        fin = np.isfinite(g) & np.isfinite(m)
+        minf = np.isinf(g) & np.isinf(m) & (np.signbit(g) == np.signbit(m))
+        F32MAX = float(np.finfo(np.float32).max)
+        ovf = np.isinf(g) & np.isfinite(m) & (np.abs(m) <= F32MAX) & (np.signbit(g) == np.signbit(m))
+        near = fin & (np.abs(m - g) <= (spec.atol + spec.rtol * np.abs(g)))
+        ok = bool(np.all(near | ovf | minf))
+        worst = float(np.max(np.abs(m[fin] - g[fin]))) if fin.any() else 0.0
+        check(
+            f"faithful-vehicle[{op}]", ok,
+            f"{d.size}/65536 differ: {int(near.sum())} inside contract "
+            f"(worst |d|={worst:.3e}), {int(ovf.sum())} oracle fp32 overflow",
+        )
+
+
 def case_fitter_ulp():
     print("case 2b: bf16_bitdistance == fitter compute_ulp_bitdistance")
     try:
@@ -470,6 +861,9 @@ def case_binarypow():
 def main():
     print("laneMR three-way golden selftest")
     case_faithful()
+    case_faithful_bf16()
+    case_faithful_blaze()
+    case_faithful_vehicles()
     case_fitter_ulp()
     case_special_numeric_policy()
     case_known_correct()

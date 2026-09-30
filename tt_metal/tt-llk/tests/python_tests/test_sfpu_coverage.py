@@ -31,6 +31,7 @@ Row-structured goldens therefore use _vector_rows()/_from_vector_rows()
 below.  Lane-uniform (elementwise) goldens are layout-independent.
 """
 
+import os as _os
 import struct
 
 import pytest
@@ -48,6 +49,7 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
 )
 from helpers.utils import passed_test
+from test_sfpu_unary import _lanemk_run_fp32_stream  # shared streamer, not a copy
 
 
 def _bits(value: float) -> int:
@@ -154,6 +156,21 @@ def _run_coverage(
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    # laneMU raw-band streaming hook, in _run_coverage -- the single funnel every
+    # coverage correctness row passes through -- so the whole family gains it in
+    # one place. Env-gated and inert when unset; drives THIS `configuration`, so
+    # the band grades the certified kernel.
+    #
+    # Five of the ten coverage rows have a pointwise contract a value-indexed band
+    # can express (add_rsqrt, smoothstep, copy_dest, and the two exact-integer
+    # ones); rotate90 / tiled_prod / zero_pad / custom_add / int_sum do not, and
+    # threeway_golden refuses them BY NAME with the mechanism rather than letting
+    # a band mis-grade them.
+    _cov_stream = _os.environ.get("SFPU_STREAM")
+    if _cov_stream:
+        _lanemk_run_fp32_stream(configuration, _cov_stream)
+        return
 
     res_from_L1 = configuration.run().result
     res_from_L1 = res_from_L1[:1024]

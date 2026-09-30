@@ -6,7 +6,10 @@ import struct
 import pytest
 import torch
 from helpers.format_config import DataFormat
+import os as _os
+
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
+from test_sfpu_unary import _lanemk_run_fp32_stream  # shared streamer
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -129,6 +132,14 @@ def _run_sfpu_binop_scalar(
         from pathlib import Path as _Path
 
         configuration.variant_stimuli.lanejn_raw_a = _Path(_lanejn_raw_a).read_bytes()
+
+    # laneMU raw-band streaming hook (env-gated, inert when unset). Pointwise:
+    # out[i] = f(in[i], s) with s a compile-time scalar, so the row is a
+    # one-operand family and a raw bf16 band is exhaustive over it.
+    _stream = _os.environ.get("SFPU_STREAM")
+    if _stream:
+        _lanemk_run_fp32_stream(configuration, _stream)
+        return
 
     res_from_L1 = configuration.run().result
 
