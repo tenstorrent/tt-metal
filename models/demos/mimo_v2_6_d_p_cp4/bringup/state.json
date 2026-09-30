@@ -381,6 +381,42 @@
   "started": "2026-09-30T23:02:31",
   "status": "PASS"
  },
+ "S.full_dense.01": {
+  "attempts": 0,
+  "duration_s": 33.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T23:29:09"
+   }
+  ],
+  "last_run": "2026-09-30T23:29:09",
+  "log": "/home/sjovic/bringup/mimo_v2_6_d_p_cp4/runs/run1/logs/S.full_dense.01.log",
+  "metrics": {
+   "pcc_swap_attn_norm": 0.9999994021219792,
+   "pcc_swap_attn_out": 0.9999985518313069,
+   "pcc_swap_ffn_norm": 0.9999987943795562,
+   "pcc_swap_h_mid": 0.9999985786922129,
+   "pcc_swap_mlp_out": 0.999998624305705,
+   "pcc_swap_out": 0.9999985797642592,
+   "swap_attn_norm_bias": -0.0001385807991027832,
+   "swap_attn_norm_component_err": 0.0010935063061165034,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_out_rel": 7.972192543093115e-05,
+   "swap_attn_norm_out_row": 0.00037769562914036214,
+   "swap_attn_norm_ratio_max": 1.0020623207092285,
+   "swap_attn_norm_ratio_min": 0.9975440502166748,
+   "swap_attn_norm_rel": 0.0016236488008871675,
+   "swap_attn_norm_rel_limit": 0.005,
+   "swap_attn_norm_row": 0.002922727493569255,
+   "swap_attn_norm_vs_cpu": 0.9999986901508232,
+   "swap_attn_norm_vs_golden": 0.9999994021219792
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T23:28:36",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "sjovic/mimo-llm-perf",
   "created": "2026-09-30T22:59:41",
