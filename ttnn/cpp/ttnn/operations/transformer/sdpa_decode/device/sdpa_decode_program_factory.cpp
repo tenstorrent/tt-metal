@@ -400,7 +400,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // out_out_subblock_w must evenly divide vDHt: out_in1_num_subblocks = vDHt / out_out_subblock_w
+    // truncates otherwise, so the trailing output tile(s) are never computed and come back NaN.
+    // With fp32_dest_acc_en dst_size is 4, so for vDHt in {5, 6, 7} (head_dim 160/192/224)
+    // min(vDHt, 4) = 4 does not divide vDHt. Step the width down to a divisor of vDHt. Every
+    // shape that worked before keeps the same value (4 divides 2/4/8, 3 divides 3, etc.).
+    uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    while (out_out_subblock_w > 1 && vDHt % out_out_subblock_w != 0) {
+        out_out_subblock_w--;
+    }
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
@@ -411,6 +419,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
     if (dht_granularity != (1u << log2_dht_granularity)) {
         dht_granularity = 1;
+    }
+    // dht_granularity must also evenly divide DHt. mul_block_bcast_cols(_inplace) iterate
+    // granularity = cols / DHT_GRANULARITY times (cols = vDHt in the decode kernel), and a
+    // non-divisor silently drops the trailing tile(s) in the vDHt-wide rescale. For non-MLA
+    // DHt == vDHt so this fixes head_dim 160/192/224 with fp32 accumulation; for MLA the
+    // power-of-two cap keeps granularity >= vDHt so the kernel's (cols < DHT_GRANULARITY)
+    // branch already handles it. Halve the power-of-two value until it divides DHt.
+    while (dht_granularity > 1 && DHt % dht_granularity != 0) {
+        dht_granularity /= 2;
     }
 
     // ========== Tile Counts for Circular Buffers ==========

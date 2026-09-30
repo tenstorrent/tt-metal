@@ -517,3 +517,65 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("head_dim", [160, 192, 224], ids=["d160", "d192", "d224"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_acc", "no_fp32_acc"])
+def test_sdpa_decode_fp32_dest_acc_non_divisible_head_dim(device, head_dim, fp32_dest_acc_en):
+    """Regression test for sdpa_decode garbage at head_dim 160/192/224 with fp32_dest_acc_en.
+
+    With fp32_dest_acc_en=True the dst register holds 4 tiles, so out_out_subblock_w =
+    min(vDHt, 4) = 4 and DHT_GRANULARITY = min(DHt, 4) = 4. For vDHt in {5, 6, 7} (head_dim
+    160/192/224) neither value divides vDHt: out_in1_num_subblocks = vDHt / 4 truncates to 1
+    so the trailing output tile(s) are never computed (NaN), and the vDHt-wide rescale
+    (mul_block_bcast_cols_inplace) drops the trailing tile as well. head_dim 64/96/128/256 are
+    unaffected because 4 divides their tile count (or the granularity already collapses to 1).
+
+    This is the tt_transformers default decode config (compute_kernel_config_hifi2 sets
+    fp32_dest_acc_en=True for every non-Gemma model); reported on llm-jp-3-980m (d192) and
+    sarashina2.2-3b (d160) on N150. The no_fp32_acc variant guards against regressing the
+    working dst_size=8 path.
+    """
+    torch.manual_seed(0)
+    heads, kv_heads, cache_len = 16, 8, 512
+    q = torch.randn(1, 1, heads, head_dim)
+    k = torch.randn(1, kv_heads, cache_len, head_dim)
+    v = torch.randn(1, kv_heads, cache_len, head_dim)
+    tq = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tk = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tv = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Two cores per KV head on an 8x8 grid -> cross-core tree reduction + multi-chunk
+    # correction, which exercise the vDHt-wide rescale paths in sdpa_flash_decode.cpp.
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=32,
+        k_chunk_size=64,
+        max_cores_per_head_batch=2,
+        exp_approx_mode=False,
+    )
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
+    cur_pos = 256
+    out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tq,
+        tk,
+        tv,
+        cur_pos=[cur_pos],
+        is_causal=True,
+        scale=head_dim**-0.5,
+        program_config=program_config,
+        compute_kernel_config=compute_config,
+    )
+    valid_k = k[:, :, : cur_pos + 1].repeat_interleave(heads // kv_heads, dim=1)
+    valid_v = v[:, :, : cur_pos + 1].repeat_interleave(heads // kv_heads, dim=1)
+    ref = torch.nn.functional.scaled_dot_product_attention(
+        q.permute(0, 2, 1, 3), valid_k, valid_v, scale=head_dim**-0.5
+    )
+    actual = ttnn.to_torch(out)[:, :, :heads]
+    assert_with_pcc(ref.permute(0, 2, 1, 3), actual, 0.999)
+    ttnn.deallocate(out)
