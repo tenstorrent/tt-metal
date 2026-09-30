@@ -1376,6 +1376,14 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else "-DLLK_BOOT_MODE_BRISC "
         )
+        # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
+        sim_path = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
+            OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
