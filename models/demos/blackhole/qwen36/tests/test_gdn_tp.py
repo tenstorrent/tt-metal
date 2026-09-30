@@ -17,6 +17,7 @@ Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+
 import os
 
 import pytest
@@ -269,7 +270,10 @@ def _retag_packed_parity(tile):
 @parametrize_mesh_tp()
 @parametrize_batch(batches=(8,))
 @pytest.mark.parametrize("fused_conv", [False, True], ids=["composite", "fusedconv"])
-def test_gdn_tp_write_slot_and_remap(mesh_device, B, fused_conv, monkeypatch, reset_seeds, ensure_gc, request):
+@pytest.mark.parametrize("remap_path", ["slice", "fast"])
+def test_gdn_tp_write_slot_and_remap(
+    mesh_device, B, fused_conv, remap_path, monkeypatch, reset_seeds, ensure_gc, request
+):
     """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots, in both decode modes
     (composite conv, and QWEN36_GDN_DECODE_FUSED=2 = fused-conv gdn_decode_step with the packed, parity-tagged
     conv history -- the PD decode node's M2 mode).
@@ -285,6 +289,8 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, fused_conv, monkeypatch, re
           parity changed (bit-exact), and the plain gather (old code path) differs for every cross-parity move;
       (c) the decode step AFTER the remap: row i's output matches user remap[i]'s next B=1 decode step
           (this is where a wrong-parity packed row decodes with an empty conv shift register);
+          remap_path "slice" = the slice/concat path (no ctx), "fast" = QWEN36_GDN_REMAP_FAST (a RemapCtx: moved rows
+          only, device-side parity re-tag; the TP=2 serving default) -- (b)-(d) must hold for both;
       (d) fused-conv negative control: re-tagging one cross-parity row to the WRONG parity (what the plain
           gather left behind) and decoding again breaks that row while every other row still matches.
     """
@@ -355,7 +361,16 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, fused_conv, monkeypatch, re
     comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)  # per-device blocks stacked on dim 0
     pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()  # [nd*B, Nv, Dk, Dv]
     pre_hist = ttnn.to_torch(gb.conv_hist_packed, mesh_composer=comp0).float() if fused_conv else None
-    gb.remap_slots(remap)
+    if remap_path == "fast":
+        from models.demos.blackhole.qwen36.tt.gdn.tp import RemapCtx
+
+        ctx = RemapCtx(mesh_device, remap)
+        try:
+            gb.remap_slots(remap, ctx=ctx)
+        finally:
+            ctx.close()
+    else:
+        gb.remap_slots(remap)
     post = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()
     ndev = pre.shape[0] // B
     max_diff = 0.0

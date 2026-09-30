@@ -1805,10 +1805,14 @@ class TPGatedDeltaNet:
 
     def _remap_slots_fast(self, idx, ctx, _phase=None):
         """remap_slots with only the moved rows touched (QWEN36_GDN_REMAP_FAST). Bit-identical to the slice/concat path
-        on EVERY row (identity rows are never read or written; every op is a pure data move, or a 0/1 selector matmul
-        that is exact in bf16). Every program has ONE shape whatever the remap (single-row slices, fill_cache, the
-        whole-buffer swap and the [1, B, C] gather), so warmup_remap_programs compiles all of them before any decode
-        trace is captured and a served remap never compiles (a first-seen shape cost ~300 ms of JIT per remap):
+        on EVERY row (tests/test_gdn_remap_fast_tp2_scratch.py). rec_state and the packed history read and write only
+        the moved rows; the conv-tap gather reads every row and its copy rewrites every row, identity rows included,
+        with the same bits. Every op is a data move, except the parity swap's 0/1 selector matmul (see
+        _swap_packed_parity_dev for why that is exact). Every program has ONE shape whatever the remap (single-row
+        slices, fill_cache, the whole-buffer swap and the [1, B, C] gather), so model.warmup_gdn_remap compiles all of
+        them at boot and a served remap never compiles (a first-seen shape cost ~300 ms of JIT per remap). Like
+        warmup_gdn_slot_write it runs in warmup_model_prefill, i.e. after the decode traces are captured; that is safe
+        because every remap temporary is freed before the next trace replay:
           * rec_state [B, Nv, Dk, Dv] fp32 (slot = dim 0, whole tiles): per moved row one slice, then one in-place
             ttnn.fill_cache per moved row (every source is sliced, i.e. materialized, before the first write, so cycles
             are safe; no whole-buffer traffic);
@@ -1853,8 +1857,12 @@ class TPGatedDeltaNet:
 
     def _swap_packed_parity_dev(self, x, ctx):
         """Device twin of _swap_packed_parity for [n, Nv*4, 32, 32] packed rows: tile rows 2c <-> 2c+1 swapped.
-        rows(X) swapped = (X^T @ S)^T with S the symmetric 32x32 pair-swap permutation; a 0/1 selector matmul is exact
-        in bf16 with HiFi4 + fp32 accumulation (_cfg_onehot), transposes are data moves."""
+        rows(X) swapped = (X^T @ S)^T with S the symmetric 32x32 pair-swap permutation; transposes are data moves.
+        The matmul is exact EMPIRICALLY on Blackhole (HiFi4 + fp32 accumulation, _cfg_onehot), including -0.0,
+        subnormals, +-inf and NaN: test_remap_fast_buffers plants those in every slot and compares every row as int
+        bits. It is not exact in principle: under IEEE rules the 31 0*x terms per output element would turn a tile
+        column holding inf/NaN into NaN and -0.0 into +0.0 (still only inside one slot's own tile, i.e. only in a
+        row whose history is already non-finite). Re-run that test after any tt-metal/LLK uplift."""
         shp = tuple(x.shape)
         xt = ttnn.transpose(x, -2, -1)
         # one tall [n*Nv*4*32, 32] @ [32, 32] matmul (a view: whole tiles stacked); ~25x faster than the batched form

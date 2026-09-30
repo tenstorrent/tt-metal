@@ -112,7 +112,7 @@ def _remaps():
     plugin = [4, 0, 1, 2, 7, 5, 6, 3] + list(range(8, B))  # a 5-move mix of same- and cross-parity rows
     cycle = list(range(B))
     cycle[10], cycle[12], cycle[21] = 12, 21, 10  # a same-parity cycle and one cross-parity hop
-    rev16 = list(range(15, -1, -1)) + list(range(16, B))  # 16 moved (the fill_cache limit), all cross parity
+    rev16 = list(range(15, -1, -1)) + list(range(16, B))  # 16 moved, all cross parity
     return {"rev16": rev16, "condense": condense, "random": perm, "shift": shift, "plugin": plugin, "cycle": cycle}
 
 
@@ -411,7 +411,8 @@ def test_remap_fast_model(mesh_device, reset_seeds, ensure_gc):
         cross = sum(1 for i, s in enumerate(idx) if (i ^ s) & 1)
         logger.info(
             f"[remap_model] remap moved {moved} cross {cross}: {len(diff)} of {len(d_old)} row digests differ old vs "
-            f"fast {diff[:4]}; continued-state mismatches {len(cont)}; old {1e3 * t_old:.0f} ms fast {1e3 * t_fast:.0f} ms"
+            f"fast {diff[:4]}; continued-state mismatches {len(cont)}; "
+            f"old {1e3 * t_old:.0f} ms fast {1e3 * t_fast:.0f} ms"
         )
         return {"idx": idx, "moved": moved, "cross": cross, "rows_differ": len(diff), "cont_differ": len(cont)}
 
@@ -458,7 +459,8 @@ def _compare_runs(a_path, b_path):
         lg = sa.get("logits") != sb.get("logits")
         bad += len(dl) + len(ds) + int(lg) + int(len(sa["decode_logits"]) != len(sb["decode_logits"]))
         print(
-            f"step {i} {sa['op']} {sa.get('slots', sa.get('idx', [])[:8])}: prefill logits {'DIFFER' if lg else 'equal'}; "
+            f"step {i} {sa['op']} {sa.get('slots', sa.get('idx', [])[:8])}: "
+            f"prefill logits {'DIFFER' if lg else 'equal'}; "
             f"{len(sa['decode_logits'])} decode steps @w{sa['decode_width']} logits differ {dl or 'none'}; "
             f"live-row state {len(ds)}/{len(sa['state_live'])} differ"
         )
