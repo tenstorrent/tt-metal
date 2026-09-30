@@ -7,7 +7,8 @@ Partial = subject_consistency, motion_smoothness, aesthetic_quality, imaging_qua
 Full adds background_consistency, temporal_flickering, dynamic_degree, overall_consistency (needs the
 prompt; read from seedN_timings.json or --prompt). Videos are re-encoded to --short-side first
 (0 = native); VBench's CLIP/DINO/MUSIQ inputs are 224-512 px anyway, only AMT/RAFT see more pixels.
---frame-stride K (default 4) scores every Kth frame for the two per-frame-mean dims.
+--frame-stride K (default 4) scores every Kth frame for the two per-frame-mean dims, and DINO for
+subject_consistency runs batched (same score); --stock turns both off.
 Scores at different --short-side / --frame-stride values are not comparable; compare at one setting.
 """
 
@@ -77,6 +78,32 @@ def subsample(stride: int):
         module.load_video = lambda *a, _load=load, **k: _load(*a, **k)[::stride]
 
 
+def batch_subject_consistency(batch: int = 32):
+    """Stock VBench runs DINO one frame at a time, which leaves most CPU cores idle; same scores, batched."""
+    import torch
+    import torch.nn.functional as F
+    import vbench.subject_consistency as sc
+
+    def subject_consistency(model, video_list, device, read_frame):
+        assert not read_frame
+        transform = sc.dino_transform(224)
+        sim, cnt, video_results = 0.0, 0, []
+        for video_path in video_list:
+            images = transform(sc.load_video(video_path))
+            with torch.no_grad():
+                feats = torch.cat([model(images[i : i + batch].to(device)) for i in range(0, len(images), batch)])
+            feats = F.normalize(feats, dim=-1, p=2)
+            sim_pre = F.cosine_similarity(feats[:-1], feats[1:]).clamp(min=0.0)
+            sim_fir = F.cosine_similarity(feats[:1], feats[1:]).clamp(min=0.0)
+            video_sim = float(((sim_pre + sim_fir) / 2).sum())
+            sim += video_sim
+            cnt += len(images) - 1
+            video_results.append({"video_path": video_path, "video_results": video_sim / (len(images) - 1)})
+        return sim / cnt, video_results
+
+    sc.subject_consistency = subject_consistency
+
+
 def prompt_for(video: Path, override: str | None) -> str:
     if override:
         return override
@@ -102,6 +129,7 @@ def main():
         default=4,
         help="score every Kth frame for aesthetic/imaging quality (1 = stock VBench)",
     )
+    parser.add_argument("--stock", action="store_true", help="unmodified VBench code paths (slow)")
     parser.add_argument("--threads", type=int, default=min(32, os.cpu_count() or 1))
     args = parser.parse_args()
 
@@ -110,6 +138,10 @@ def main():
     torch.set_num_threads(args.threads)
     from vbench import VBench
 
+    if args.stock:
+        args.frame_stride = 1
+    else:
+        batch_subject_consistency()
     if args.frame_stride > 1:
         subsample(args.frame_stride)
 
