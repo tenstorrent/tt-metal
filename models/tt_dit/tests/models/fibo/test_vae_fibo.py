@@ -60,7 +60,6 @@ def test_vae(
         ccl_manager=ccl_manager,
         use_torch=False,
     )
-    tt_vae.reload_weights()
 
     logger.info("constructing torch VAE...")
     torch_vae = WanVaeDecoder2DAdapter(
@@ -110,7 +109,6 @@ def test_vae_encoder(
         ccl_manager=ccl_manager,
         use_torch=False,
     )
-    tt_vae.reload_weights()
 
     logger.info("constructing torch VAE encoder...")
     torch_vae = WanVaeEncoder2DAdapter(

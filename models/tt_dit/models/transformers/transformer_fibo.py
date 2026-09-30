@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import torch
@@ -21,7 +22,7 @@ from models.tt_dit.models.transformers.transformer_flux1 import Flux1SingleTrans
 from models.tt_dit.utils import cache
 from models.tt_dit.utils.padding import PaddingConfig
 from models.tt_dit.utils.substate import rename_substate
-from models.tt_dit.utils.tensor import bf16_tensor
+from models.tt_dit.utils.tensor import bf16_tensor, from_torch
 
 if TYPE_CHECKING:
     from models.tt_dit.parallel.config import DiTParallelConfig
@@ -243,6 +244,7 @@ class FiboTransformer(Module):
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,  # noqa: ARG002 — sized by block via prompt shape
+        reference: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -253,13 +255,30 @@ class FiboTransformer(Module):
             text_encoder_layers: SmolLM3 hidden states, one per block in order, each of shape
                 [batch, prompt_sequence_length, text_encoder_dim].
             timestep: Tensor with shape [batch, 1].
-            spatial_rope, prompt_rope: Cos/sin tuples for 3-axis RoPE.
+            spatial_rope, prompt_rope: Cos/sin tuples for 3-axis RoPE. With ``reference``, the
+                spatial RoPE covers each device's target tokens followed by its reference tokens.
+            reference: Optional reference-image tokens that FIBO Edit conditions on, with shape
+                [batch, reference_sequence_length / sp_factor, in_channels].
+
+        Returns:
+            The velocity of the target tokens, with shape [batch, spatial_sequence_length /
+            sp_factor, in_channels].
         """
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         num_blocks = len(self.transformer_blocks) + len(self.single_transformer_blocks)
         if not 0 < len(text_encoder_layers) <= num_blocks:
             msg = f"text_encoder_layers must have 1 to {num_blocks} entries, got {len(text_encoder_layers)}"
             raise ValueError(msg)
+
+        local_target_length = spatial.shape[1]
+        if reference is not None:
+            sp_factor = self.parallel_config.sequence_parallel.factor
+            if local_target_length * sp_factor != spatial_sequence_length:
+                msg = "sequence padding is not supported when a reference image is given"
+                raise ValueError(msg)
+
+            spatial = ttnn.concat([spatial, reference], dim=1)
+            spatial_sequence_length += reference.shape[1] * sp_factor
 
         time_embed = self.time_embed(timestep=timestep)
         ttnn.silu(time_embed, output_tensor=time_embed)
@@ -303,6 +322,9 @@ class FiboTransformer(Module):
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
             )
+
+        if reference is not None:
+            spatial = spatial[:, :local_target_length, :]
 
         spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
 
@@ -356,6 +378,40 @@ class FiboTransformer(Module):
         return spatial.permute(0, 1, 4, 2, 5, 3).flatten(3, 4).flatten(1, 2)
 
 
+def _sequence_parallel_concat(parts: Sequence[torch.Tensor], *, sp_factor: int, dim: int) -> torch.Tensor:
+    """Concatenate ``parts`` so that sequence-parallel sharding keeps them concatenated per device.
+
+    Splits each part into ``sp_factor`` chunks along ``dim`` and orders the chunks by device, so
+    that sharding the result contiguously along ``dim`` gives device ``i`` the ``i``-th chunk of
+    every part, in order.
+    """
+    chunks = [part.chunk(sp_factor, dim=dim) for part in parts]
+    if any(len(c) != sp_factor for c in chunks):
+        msg = f"every part must split into {sp_factor} chunks along dim {dim}"
+        raise ValueError(msg)
+
+    return torch.cat([c[i] for i in range(sp_factor) for c in chunks], dim=dim)
+
+
+def image_ids(*, latents_height: int, latents_width: int, with_reference: bool) -> torch.Tensor:
+    """Return the (index, y, x) RoPE positions of the image tokens, as the diffusers pipelines do.
+
+    With a reference, the target's positions are followed by the reference's, which FIBO Edit gives
+    index 1.
+    """
+    ids = torch.zeros(latents_height, latents_width, 3)
+    ids[..., 1] = torch.arange(latents_height)[:, None]
+    ids[..., 2] = torch.arange(latents_width)[None, :]
+    ids = ids.reshape(latents_height * latents_width, 3)
+
+    if with_reference:
+        reference_ids = ids.clone()
+        reference_ids[:, 0] = 1
+        ids = torch.cat([ids, reference_ids], dim=0)
+
+    return ids
+
+
 class FiboCheckpoint:
     """A FIBO transformer checkpoint: fetches weights and builds a loaded ``FiboTransformer``.
 
@@ -380,6 +436,43 @@ class FiboCheckpoint:
 
         self.num_blocks: int = config.num_layers + config.num_single_layers
         self.latent_channels: int = config.in_channels
+
+    def rope_tables(
+        self,
+        *,
+        latents_height: int,
+        latents_width: int,
+        prompt_sequence_length: int,
+        with_reference: bool,
+        device: ttnn.MeshDevice,
+        sp_axis: int,
+    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Compute the RoPE inputs of ``FiboTransformer.forward`` and upload them to ``device``.
+
+        Returns:
+            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are sharded
+            along ``sp_axis`` in the token order ``FiboTransformer.forward`` expects, and the
+            prompt ones are replicated.
+        """
+        sp_factor = tuple(device.shape)[sp_axis]
+
+        img_ids = image_ids(latents_height=latents_height, latents_width=latents_width, with_reference=with_reference)
+        txt_ids = torch.zeros(prompt_sequence_length, 3)
+        cos, sin = self.pos_embed(torch.cat([txt_ids, img_ids], dim=0))
+
+        prompt_cos, spatial_cos = cos[:prompt_sequence_length], cos[prompt_sequence_length:]
+        prompt_sin, spatial_sin = sin[:prompt_sequence_length], sin[prompt_sequence_length:]
+
+        if with_reference:
+            spatial_cos = _sequence_parallel_concat(spatial_cos.chunk(2), sp_factor=sp_factor, dim=0)
+            spatial_sin = _sequence_parallel_concat(spatial_sin.chunk(2), sp_factor=sp_factor, dim=0)
+
+        spatial_rope = (
+            from_torch(spatial_cos, device=device, mesh_axes=[sp_axis, None]),
+            from_torch(spatial_sin, device=device, mesh_axes=[sp_axis, None]),
+        )
+        prompt_rope = (from_torch(prompt_cos, device=device), from_torch(prompt_sin, device=device))
+        return spatial_rope, prompt_rope
 
     def build(
         self,

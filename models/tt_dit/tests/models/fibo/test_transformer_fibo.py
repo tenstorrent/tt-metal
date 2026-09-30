@@ -8,32 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.transformers.transformer_fibo import FiboCheckpoint
+from models.tt_dit.models.transformers.transformer_fibo import FiboCheckpoint, image_ids
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tracing import Tracer
-
-_PATCH_SIZE = 2  # pipeline-level 2x2 packing; FIBO's transformer itself uses patch_size=1
-
-
-def _build_ids(*, prompt_seq_len: int, latents_height: int, latents_width: int) -> torch.Tensor:
-    """Construct the [text_ids; img_ids] tensor that FIBO feeds to its 3-axis RoPE.
-
-    Mirrors the diffusers FIBO pipeline: text positions are all-zero (no rotation); image
-    positions encode (0, h, w) where ``h`` and ``w`` are post-packing latent grid coordinates.
-    """
-    h = latents_height // _PATCH_SIZE
-    w = latents_width // _PATCH_SIZE
-
-    img_ids = torch.zeros(h, w, 3)
-    img_ids[..., 1] = torch.arange(h)[:, None]
-    img_ids[..., 2] = torch.arange(w)[None, :]
-    img_ids = img_ids.reshape(h * w, 3)
-
-    text_ids = torch.zeros(prompt_seq_len, 3)
-    return torch.cat([text_ids, img_ids], dim=0)
 
 
 @pytest.mark.parametrize(
@@ -47,7 +27,7 @@ def _build_ids(*, prompt_seq_len: int, latents_height: int, latents_width: int) 
 @pytest.mark.parametrize(
     ("batch_size", "latents_height", "latents_width", "prompt_seq_len"),
     [
-        (1, 64, 64, 3008),
+        (1, 32, 32, 3008),
     ],
 )
 @pytest.mark.parametrize(
@@ -55,6 +35,7 @@ def _build_ids(*, prompt_seq_len: int, latents_height: int, latents_width: int) 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 34000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("with_reference", [False, True], ids=["without_reference", "with_reference"])
 def test_transformer(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -65,6 +46,7 @@ def test_transformer(
     latents_height: int,
     latents_width: int,
     prompt_seq_len: int,
+    with_reference: bool,
 ) -> None:
     torch.manual_seed(0)
 
@@ -95,7 +77,7 @@ def test_transformer(
     checkpoint = FiboCheckpoint(checkpoint_name)
     tt_model = checkpoint.build(ccl_manager=ccl_manager, parallel_config=parallel_config)
 
-    spatial_seq_len = (latents_height // _PATCH_SIZE) * (latents_width // _PATCH_SIZE)
+    spatial_seq_len = latents_height * latents_width
 
     tracer = Tracer(tt_model.forward, device=mesh_device)
 
@@ -106,22 +88,27 @@ def test_transformer(
     text_encoder_layers = [torch.randn([batch_size, prompt_seq_len, text_encoder_dim]) for _ in range(37)]
     timestep = torch.full([batch_size], fill_value=500.0)
 
-    ids = _build_ids(prompt_seq_len=prompt_seq_len, latents_height=latents_height, latents_width=latents_width)
-    torch_rope_cos, torch_rope_sin = torch_model.pos_embed(ids)
-    prompt_rope_cos = torch_rope_cos[:prompt_seq_len]
-    prompt_rope_sin = torch_rope_sin[:prompt_seq_len]
-    spatial_rope_cos = torch_rope_cos[prompt_seq_len:]
-    spatial_rope_sin = torch_rope_sin[prompt_seq_len:]
+    # FIBO Edit appends the reference image's tokens to the target's, at the same resolution.
+    reference_tokens = torch.randn([batch_size, spatial_seq_len, in_channels])
+
+    tt_spatial_rope, tt_prompt_rope = checkpoint.rope_tables(
+        latents_height=latents_height,
+        latents_width=latents_width,
+        prompt_sequence_length=prompt_seq_len,
+        with_reference=with_reference,
+        device=mesh_device,
+        sp_axis=sp_axis,
+    )
 
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
+    tt_reference = (
+        tensor.from_torch(reference_tokens, device=mesh_device, mesh_axes=[None, sp_axis, None])
+        if with_reference
+        else None
+    )
     tt_prompt = tensor.from_torch(prompt, device=mesh_device)
     tt_text_encoder_layers = [tensor.from_torch(layer, device=mesh_device) for layer in text_encoder_layers]
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
-
-    tt_spatial_rope_cos = tensor.from_torch(spatial_rope_cos, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_spatial_rope_sin = tensor.from_torch(spatial_rope_sin, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
 
     logger.info("running TT model...")
     tt_output = tracer(
@@ -129,10 +116,11 @@ def test_transformer(
         prompt=tt_prompt,
         text_encoder_layers=tt_text_encoder_layers,
         timestep=tt_timestep,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_rope=tt_spatial_rope,
+        prompt_rope=tt_prompt_rope,
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
+        reference=tt_reference,
     )
 
     logger.info("running torch reference...")
@@ -143,25 +131,20 @@ def test_transformer(
         padded_text_encoder_layers = text_encoder_layers + [text_encoder_layers[-1]] * (
             total_num_blocks - len(text_encoder_layers)
         )
-        h = latents_height // _PATCH_SIZE
-        w = latents_width // _PATCH_SIZE
-        img_ids = torch.zeros(h, w, 3)
-        img_ids[..., 1] = torch.arange(h)[:, None]
-        img_ids[..., 2] = torch.arange(w)[None, :]
-        img_ids = img_ids.reshape(h * w, 3)
-        txt_ids = torch.zeros(prompt_seq_len, 3)
 
         torch_output = torch_model.forward(
-            hidden_states=spatial,
+            hidden_states=torch.cat([spatial, reference_tokens], dim=1) if with_reference else spatial,
             encoder_hidden_states=prompt,
             text_encoder_layers=padded_text_encoder_layers,
             pooled_projections=None,
             timestep=timestep,
-            img_ids=img_ids,
-            txt_ids=txt_ids,
+            img_ids=image_ids(
+                latents_height=latents_height, latents_width=latents_width, with_reference=with_reference
+            ),
+            txt_ids=torch.zeros(prompt_seq_len, 3),
             guidance=None,
             return_dict=False,
-        )[0]
+        )[0][:, :spatial_seq_len]
 
     tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])
     assert_quality(torch_output, tt_output_torch, pcc=0.998, relative_rmse=0.06)

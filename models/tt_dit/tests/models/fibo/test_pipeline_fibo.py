@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0
@@ -78,6 +80,43 @@ def test_fibo_pipeline(
             )
 
         output_filename = f"fibo_{width}_{height}_{i}.png"
+        images[0].save(output_filename)
+        logger.info(f"Image saved to {output_filename}")
+
+        log_section_durations(benchmark_profiler, i, per_step={"denoising": NUM_INFERENCE_STEPS})
+
+
+@DEVICE_PARAMS
+@MESH_DEVICE
+def test_fibo_edit_pipeline(*, mesh_device: ttnn.MeshDevice, model_location_generator) -> None:
+    width, height = 1024, 1024
+    pipeline = FiboPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        height=height,
+        width=width,
+        checkpoint_name=model_location_generator("briaai/fibo-edit"),
+        vlm_checkpoint_name=None,
+        edit=True,
+    )
+
+    # A placeholder until the prompts carry an edit instruction.
+    gradient = torch.linspace(0, 255, width, dtype=torch.uint8).expand(height, width)
+    reference_image = Image.fromarray(torch.stack([gradient, gradient.T, 255 - gradient], dim=-1).numpy())
+
+    benchmark_profiler = BenchmarkProfiler()
+
+    for i, prompt in enumerate(STRUCTURED_PROMPTS):
+        with benchmark_profiler("run", iteration=i):
+            images = pipeline(
+                prompts=[prompt],
+                reference_images=[reference_image],
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                seed=0,
+                use_vlm=False,
+                on_event=profiler_event_callback(benchmark_profiler, i),
+            )
+
+        output_filename = f"fibo_edit_{i}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved to {output_filename}")
 

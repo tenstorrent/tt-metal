@@ -431,22 +431,15 @@ class WanVaeDecoder2DAdapter:
             self._tt_latents_std = tensor.from_torch(torch.tensor(hf_config["latents_std"]), device=self._device)
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
-    def is_loaded(self) -> bool:
-        return self._torch_vae is not None or any(p.is_loaded() for p in self._decoder.parameters())
-
-    def reload_weights(self) -> None:
-        if self._decoder is None:
-            return
-
-        cache.load_model(
-            self._decoder,
-            get_torch_state_dict=self._load_torch_state_dict,
-            model_name=self._name.split("/")[-1],
-            subfolder="vae",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._device.shape),
-            mesh_device=self._device,
-        )
+            cache.load_model(
+                self._decoder,
+                get_torch_state_dict=self._load_torch_state_dict,
+                model_name=self._name.split("/")[-1],
+                subfolder="vae",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(self._device.shape),
+                mesh_device=self._device,
+            )
 
     def _load_torch_state_dict(self) -> dict[str, torch.Tensor]:
         torch_vae = AutoencoderKLWan.from_pretrained(self._name, subfolder="vae")
@@ -527,22 +520,15 @@ class WanVaeEncoder2DAdapter:
             self._tt_latents_mean = tensor.from_torch(self._latents_mean, device=self._device)
             self._tt_latents_scaling = tensor.from_torch(1.0 / self._latents_std, device=self._device)
 
-    def is_loaded(self) -> bool:
-        return self._torch_vae is not None or any(p.is_loaded() for p in self._encoder.parameters())
-
-    def reload_weights(self) -> None:
-        if self._encoder is None:
-            return
-
-        cache.load_model(
-            self._encoder,
-            get_torch_state_dict=self._load_torch_state_dict,
-            model_name=self._name.split("/")[-1],
-            subfolder="vae_encoder",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._device.shape),
-            mesh_device=self._device,
-        )
+            cache.load_model(
+                self._encoder,
+                get_torch_state_dict=self._load_torch_state_dict,
+                model_name=self._name.split("/")[-1],
+                subfolder="vae_encoder",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(self._device.shape),
+                mesh_device=self._device,
+            )
 
     def _load_torch_state_dict(self) -> dict[str, torch.Tensor]:
         torch_vae = AutoencoderKLWan.from_pretrained(self._name, subfolder="vae")
