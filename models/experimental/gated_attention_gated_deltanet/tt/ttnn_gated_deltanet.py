@@ -748,11 +748,12 @@ def gated_deltanet_forward_ttnn(
                     memory_config=mc if (mc is not None or not _m1_x_l1) else ttnn.DRAM_MEMORY_CONFIG,
                 )
             # P10_GDNGATE (QWEN36_GDN_GATES_OP, code default 0): fused beta/g op, only in the M1 S4 gab branch
-            # (gab L1/DRAM [g | a | 0 | b | 0]) of an unmasked-or-masked chunk prefill on the fused FLA path.
+            # (gab L1/DRAM [g | a | 0 | b | 0]) of an unmasked-or-masked chunk prefill on the fused FLA path;
+            # also on the P300 L1-gab path (_p300_gab_l1), which takes the same gab branch.
             _gg_gab = None
             _gg_op = (
                 os.environ.get("QWEN36_GDN_GATES_OP", "0") != "0"
-                and _m1_gab_pc is not None
+                and (_m1_gab_pc is not None or _p300_gab_l1)
                 and A_neg_precomputed is not None
                 and chunk_delta_fn is not None
                 and mode == "chunk"
