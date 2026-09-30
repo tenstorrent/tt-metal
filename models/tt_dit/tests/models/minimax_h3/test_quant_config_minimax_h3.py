@@ -184,3 +184,37 @@ def test_the_profile_reaches_the_parameters(mesh_device, sp_axis, tp_axis, num_l
 
     bf8_out = MiniMaxH3TransformerBlock(**kwargs, quant_config=MiniMaxH3QuantProfile.bf8_weights_bf8_out())
     assert bf8_out.attn.to_out.weight.dtype == ttnn.bfloat8_b
+
+
+def test_bf4_ff_narrows_only_the_feed_forward():
+    """``bf4_ff`` drops ff1/ff2 to bf4 and leaves attention at bf8.
+
+    The split is the point. Stage 05 measured this profile against ``bf8_weights_bf8_out`` on one
+    chip at 1344x768 x124, same adapter and seed: 177.8 s against 178.7 s -- no speed at all -- for
+    21.92 GiB down to 16.54. So it is a memory lever, and the only reason to reach for it is a
+    canvas that does not otherwise fit. If it ever silently narrowed attention too it would be
+    spending the accuracy that stage 02's pad-row window bought, for nothing.
+    """
+    profile = MiniMaxH3QuantProfile.bf4_ff()
+    assert profile.ff_dtype == ttnn.bfloat4_b
+    assert profile.qkv_dtype == ttnn.bfloat8_b
+    assert profile.out_dtype == ttnn.bfloat8_b
+    assert profile.activation_dtype is None
+    assert resolve_quant_profile("bf4_ff") == profile
+    # A distinct cache directory, or a bf4 build reads bf8 tensorbins into a bf4 Parameter.
+    assert profile.cache_tag == "qbf8-obf8-fbf4"
+    assert profile.cache_tag != MiniMaxH3QuantProfile.bf8_weights_bf8_out().cache_tag
+
+
+def test_bf4_ff_keep_ends_pins_the_first_and_last_block():
+    """The sweep's accuracy escape hatch keeps block 0 and the last block bf16, and says so in the
+    cache tag -- a pinned build and an unpinned one are different weights."""
+    profile = resolve_quant_profile("bf4_ff_keep_ends")
+    assert profile.bf16_blocks == (0, -1)
+    assert profile.keeps_block_bf16(0, 50)
+    assert profile.keeps_block_bf16(49, 50)
+    assert not profile.keeps_block_bf16(25, 50)
+    assert profile.for_block(0, 50).ff_dtype == ttnn.bfloat16
+    assert profile.for_block(25, 50).ff_dtype == ttnn.bfloat4_b
+    assert profile.cache_tag != MiniMaxH3QuantProfile.bf4_ff().cache_tag
+    assert "bf4_ff_keep_ends" in PRESETS

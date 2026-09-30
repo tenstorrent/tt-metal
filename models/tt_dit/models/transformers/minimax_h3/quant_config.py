@@ -174,6 +174,28 @@ class MiniMaxH3QuantProfile:
         )
 
     @staticmethod
+    def bf4_ff(bf16_blocks: tuple[int, ...] = ()) -> MiniMaxH3QuantProfile:
+        """``bf8_weights_bf8_out`` with the two feed-forward linears dropped to bf4: 12.0 GB.
+
+        The feed-forward pair is where the bytes are -- ff1 is 5376x28672 packed [gate|up] and ff2
+        14336x5376, so together they are 71 % of a block's 385.3 M parameters and dropping them from
+        bf8 to bf4 takes 8.5 GB off the stack. Attention stays bf8: to_qkv and to_out are the
+        remaining 29 % (2.5 GB to be had) and they feed the SDPA and the fused addcmul epilogue,
+        where stage 02 already had to add a pad-row window to get the attention numerics right.
+
+        This is the datatype sweep's lever, not a default: a bf4 tile carries a 4-bit mantissa
+        against a shared exponent per 16 values, so it has to earn its place on measured component
+        PCC and end-to-end CLIP before anything serves it.
+        """
+        return MiniMaxH3QuantProfile(
+            name="bf4_ff",
+            qkv_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat8_b,
+            ff_dtype=ttnn.bfloat4_b,
+            bf16_blocks=bf16_blocks,
+        )
+
+    @staticmethod
     def bf16() -> MiniMaxH3QuantProfile:
         """The unquantized policy, spelled out. Only useful as an explicit A/B baseline on a mesh
         with the DRAM for it -- passing no profile at all gives the same model."""
@@ -190,6 +212,10 @@ class MiniMaxH3QuantProfile:
 PRESETS = {
     "bf8_weights": MiniMaxH3QuantProfile.bf8_weights,
     "bf8_weights_bf8_out": MiniMaxH3QuantProfile.bf8_weights_bf8_out,
+    "bf4_ff": MiniMaxH3QuantProfile.bf4_ff,
+    # bf4 feed-forward with the first and last block pinned back to bf16 -- the sweep's accuracy
+    # escape hatch, 385 MB a block. Named here so it is reachable from a command line.
+    "bf4_ff_keep_ends": lambda: MiniMaxH3QuantProfile.bf4_ff(bf16_blocks=(0, -1)),
     "bf16": MiniMaxH3QuantProfile.bf16,
 }
 
