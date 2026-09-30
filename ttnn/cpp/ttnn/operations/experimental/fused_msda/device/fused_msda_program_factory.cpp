@@ -264,12 +264,19 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
     constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
+    constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
+    constexpr uint32_t gather_ready_sem = 0;
+    constexpr uint32_t gather_done_sem = 1;
 
     // Row-major staging: when D is a whole number of tile widths, the reader
     // lands the four corners of a point side by side as a row-major block and
     // compute tilizes it on the unpacker, so the reader copies nothing. Other
     // D fall back to the reader scattering sticks into tile faces.
     const bool rm_staging = s.head_dim % TILE_WIDTH == 0;
+    // Split gather: the writer RISC, idle but for each block's output rows,
+    // gathers half of every row-major block on its own NoC (see
+    // msda_gather_rows.hpp). The scatter path keeps the reader-only gather.
+    const bool split_gather = rm_staging;
 
     auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
@@ -326,6 +333,14 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     push_cb(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_fmt);
     // Writer-only scratch.
     push_cb(output_scratch_cb, 1, head_stick_aligned, output_fmt);
+    if (split_gather) {
+        // Reader -> writer, one point's gather arguments at a time.
+        push_cb(gather_mailbox_cb, 1, 64, value_fmt);
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_done_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
 
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both
@@ -366,6 +381,10 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         y0_cb,
         kGeomCbPages,
         static_cast<uint32_t>(rm_staging),
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
@@ -427,8 +446,19 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         output_scratch_cb,
         output_page_aligned,
         s.head_dim,
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
+        s.num_levels * s.num_points,
+        s.num_heads,
+        s.num_keys,
+        static_cast<uint32_t>(s.value_packed),
+        value_stick_aligned,
+        static_cast<uint32_t>(value.buffer()->page_size()),
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*value.buffer()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "dataflow/writer_msda.cpp";
@@ -470,9 +500,10 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         }
 
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(2 + tiles_here * 3);
+        writer_args.reserve(3 + tiles_here * 3);
         writer_args.push_back(output.buffer());
         writer_args.push_back(tiles_here);
+        writer_args.push_back(value.buffer());
 
         for (uint32_t i = 0; i < tiles_here; ++i) {
             const auto& asn = tiles[tile_cursor + i];

@@ -84,6 +84,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
 
 // ---------------------------------------------------------------------------
 // Compile-time args (same indices for both readers; the program factory emits
@@ -116,6 +117,14 @@ constexpr bool VALUE_PACKED = get_compile_time_arg_val(19) != 0;
 constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(20);
 constexpr bool FROM_OFFSETS = get_compile_time_arg_val(21) != 0;
 
+struct ReaderGatherCfg {
+    static constexpr uint32_t D = ::D;
+    static constexpr uint32_t NUM_KEYS = ::NUM_KEYS;
+    static constexpr uint32_t NUM_HEADS = ::NUM_HEADS;
+    static constexpr bool VALUE_PACKED = ::VALUE_PACKED;
+    static constexpr uint32_t STICK_NBYTES = value_stick_nbytes;
+};
+
 // Reader <-> compute tile pipes.
 constexpr uint32_t geom_x_cb_index = get_compile_time_arg_val(22);
 constexpr uint32_t geom_y_cb_index = get_compile_time_arg_val(23);
@@ -126,7 +135,13 @@ constexpr uint32_t x0_cb_index = get_compile_time_arg_val(27);
 constexpr uint32_t y0_cb_index = get_compile_time_arg_val(28);
 constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(29);
 constexpr bool RM_STAGING = get_compile_time_arg_val(30) != 0;
-constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 30;
+// The writer takes rows [SPLIT_ROW, 32) of every row-major block; see
+// msda_gather_rows.hpp.
+constexpr bool SPLIT_GATHER = get_compile_time_arg_val(31) != 0;
+constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(32);
+constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(33);
+constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(34);
+constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 34;
 constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 
 // ---------------------------------------------------------------------------
@@ -165,34 +180,7 @@ struct LevelGeom {
     uint32_t start_index;  // sum_{k<l} H_k * W_k
 };
 
-// Decodes a bf16 that holds an exact integer, with shifts only.
-//
-// The compute kernel floored px on the SFPU, so the value is integral by
-// construction, and going through float here would put soft-float on a core
-// that has no FPU. bf16 carries 8 significant bits, so every integer up to 256
-// is exact; `derive_shapes` in fused_msda_device_operation.cpp rejects feature
-// maps larger than that, which is what makes an in-bounds corner's index
-// exact.
-//
-// Anything too large to decode (including inf and NaN, whose exponent field is
-// 0xFF) is mapped to a magnitude no feature map can reach, so it fails the
-// bounds test rather than aliasing into it through a wrapped shift.
-constexpr int32_t BF16_INT_OUT_OF_RANGE = 1 << 24;
-
-inline int32_t bf16_exact_int(uint16_t v) {
-    const uint32_t bits = static_cast<uint32_t>(v) << 16;
-    const int32_t exp = static_cast<int32_t>((bits >> 23) & 0xFFu) - 127;
-    const bool negative = (bits & 0x80000000u) != 0;
-    if (exp < 0) {
-        return 0;  // |v| < 1, and v is integral, so v == 0
-    }
-    if (exp > 23) {
-        return negative ? -BF16_INT_OUT_OF_RANGE : BF16_INT_OUT_OF_RANGE;
-    }
-    const uint32_t mant = (bits & 0x7FFFFFu) | 0x800000u;
-    const int32_t m = static_cast<int32_t>(mant >> (23 - exp));
-    return negative ? -m : m;
-}
+using fused_msda_gather::bf16_exact_int;
 
 // Per-row corner indices and bounds flags for one (level, point), reused across
 // the four corners.
@@ -294,18 +282,10 @@ inline void write_col0(uint32_t tile_l1, uint32_t r, uint16_t value) {
 
 // Row-major staging: the four corners of a point share one input-CB block of
 // 32 rows, each row [NW | NE | SW | SE] of D bf16, which compute tilizes on the
-// unpacker. Only used when D is a whole number of tile widths.
-constexpr uint32_t CORNER_SLOT_WORDS = STICK_WORDS;
-constexpr uint32_t RM_ROW_WORDS = 4 * CORNER_SLOT_WORDS;
+// unpacker. Only used when D is a whole number of tile widths; the gather
+// itself is fused_msda_gather::gather_rows.
 static_assert(!RM_STAGING || D % 32 == 0, "row-major staging needs D to be a multiple of the tile width");
-
-inline void zero_words(uint32_t l1_addr, uint32_t words) {
-    uint32_t* p = CoreLocalMem<uint32_t>(l1_addr).get_unsafe_ptr();
-#pragma GCC unroll 8
-    for (uint32_t i = 0; i < words; ++i) {
-        p[i] = 0;
-    }
-}
+static_assert(!SPLIT_GATHER || RM_STAGING, "the split gather is a row-major staging path");
 
 // The input-tile writes below are plain, not volatile, so the compiler can
 // batch the loads and stores: a volatile word copy costs ~14 cycles, and the
@@ -407,6 +387,17 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
     RowGeometry geom;
 
+    // Split gather: the reader posts each point to the mailbox and bumps
+    // `ready`; the writer gathers its rows and bumps `done`. Both counters only
+    // grow, so neither side resets anything.
+    [[maybe_unused]] const uint32_t gather_mailbox_l1 =
+        SPLIT_GATHER ? CircularBuffer(gather_mailbox_cb_index).get_write_ptr() : 0u;
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* gather_ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_ready_sem_id));
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* gather_done =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather_done_sem_id));
+    [[maybe_unused]] uint32_t gather_seq = 0;
+
     uint32_t arg_idx = 5 + 3 * NUM_LEVELS;
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
         const uint32_t b = get_arg_val<uint32_t>(arg_idx++);
@@ -487,8 +478,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
             const uint32_t l = j / NUM_POINTS;
             const LevelGeom& g = levels[l];
-            const int32_t w_i = static_cast<int32_t>(g.width);
-            const int32_t h_i = static_cast<int32_t>(g.height);
+            [[maybe_unused]] const int32_t w_i = static_cast<int32_t>(g.width);
+            [[maybe_unused]] const int32_t h_i = static_cast<int32_t>(g.height);
 
             // Corners solved on the SFPU. Only the decode, the bounds test and
             // the page index stay here, all in integer arithmetic.
@@ -496,92 +487,56 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             y0_cb.wait_front(1);
             const uint32_t x0_l1 = x0_cb.get_read_ptr();
             const uint32_t y0_l1 = y0_cb.get_read_ptr();
-            for (uint32_t r = 0; r < v_rows; ++r) {
-                const uint32_t col0 = fused_msda_tile_layout::tile_col0_offset(r);
-                CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col0);
-                CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col0);
-                const int32_t x0 = bf16_exact_int(x0_src[0]);
-                const int32_t y0 = bf16_exact_int(y0_src[0]);
-                geom.x0[r] = x0;
-                geom.y0[r] = y0;
-                geom.x0_valid[r] = (x0 >= 0) && (x0 < w_i);
-                geom.x1_valid[r] = (x0 + 1 >= 0) && (x0 + 1 < w_i);
-                geom.y0_valid[r] = (y0 >= 0) && (y0 < h_i);
-                geom.y1_valid[r] = (y0 + 1 >= 0) && (y0 + 1 < h_i);
-            }
-            x0_cb.pop_front(1);
-            y0_cb.pop_front(1);
 
             if constexpr (RM_STAGING) {
                 input_tile_cb.reserve_back(4 * N_D_TILES);
-                const uint32_t block_l1 = input_tile_cb.get_write_ptr();
-                constexpr uint32_t row_nbytes = RM_ROW_WORDS * sizeof(uint32_t);
-
-                // c = 0, 1, 2, 3 is NW, NE, SW, SE, in lockstep with the four
-                // corner_weight calls in msda_geometry.hpp::point.
-                for (uint32_t c = 0; c < 4; ++c) {
-                    const int32_t dy_off = (c < 2) ? 0 : 1;
-                    const int32_t dx_off = (c & 1) ? 1 : 0;
-                    const bool* yv = (c < 2) ? geom.y0_valid : geom.y1_valid;
-                    const bool* xv = (c & 1) ? geom.x1_valid : geom.x0_valid;
-                    const uint32_t slot_l1 = block_l1 + c * value_stick_nbytes;
-                    for (uint32_t r = 0; r < v_rows; ++r) {
-                        if (!(yv[r] && xv[r])) {
-                            continue;
-                        }
-                        const uint32_t cy = static_cast<uint32_t>(geom.y0[r] + dy_off);
-                        const uint32_t cx = static_cast<uint32_t>(geom.x0[r] + dx_off);
-                        const uint32_t s = g.start_index + cy * g.width + cx;
-                        uint32_t page;
-                        uint32_t offset_bytes;
-                        if constexpr (VALUE_PACKED) {
-                            page = value_batch_base + s;
-                            offset_bytes = head * (D * 2u);
-                        } else {
-                            page = (value_batch_base + s) * NUM_HEADS + head;
-                            offset_bytes = 0;
-                        }
-                        CoreLocalMem<uint32_t> dst(slot_l1 + r * row_nbytes);
-                        noc.async_read(
-                            value_acc,
-                            dst,
-                            value_stick_nbytes,
-                            {.page_id = page, .offset_bytes = offset_bytes},
-                            {.offset_bytes = 0});
+                const fused_msda_gather::PointArgs pt{
+                    .x0_l1 = x0_l1,
+                    .y0_l1 = y0_l1,
+                    .block_l1 = input_tile_cb.get_write_ptr(),
+                    .v_rows = v_rows,
+                    .start_index = g.start_index,
+                    .width = g.width,
+                    .height = g.height,
+                    .batch = b,
+                    .head = head,
+                };
+                if constexpr (SPLIT_GATHER) {
+                    fused_msda_gather::post_point(gather_mailbox_l1, pt);
+                    *gather_ready = ++gather_seq;
+                    fused_msda_gather::gather_rows<ReaderGatherCfg>(
+                        noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW);
+                    noc.async_read_barrier();
+                    // The writer reads the corner tiles too, so they are popped
+                    // only once it is done with this point.
+                    while (*gather_done != gather_seq) {
                     }
+                } else {
+                    fused_msda_gather::gather_rows<ReaderGatherCfg>(noc, value_acc, pt, 0, TILE_MAX_ROWS);
+                    noc.async_read_barrier();
                 }
-
-                // Zero every slot the gather skipped while the reads are in
-                // flight; the slots are disjoint from the ones being written.
-                // Load-bearing for the same reason as the scatter path's zeroing.
-                for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                    const uint32_t row_l1 = block_l1 + r * row_nbytes;
-                    if (r >= v_rows) {
-                        zero_words(row_l1, RM_ROW_WORDS);
-                        continue;
-                    }
-                    const bool y0v = geom.y0_valid[r];
-                    const bool y1v = geom.y1_valid[r];
-                    const bool x0v = geom.x0_valid[r];
-                    const bool x1v = geom.x1_valid[r];
-                    if (!(y0v && x0v)) {
-                        zero_words(row_l1 + 0 * value_stick_nbytes, CORNER_SLOT_WORDS);
-                    }
-                    if (!(y0v && x1v)) {
-                        zero_words(row_l1 + 1 * value_stick_nbytes, CORNER_SLOT_WORDS);
-                    }
-                    if (!(y1v && x0v)) {
-                        zero_words(row_l1 + 2 * value_stick_nbytes, CORNER_SLOT_WORDS);
-                    }
-                    if (!(y1v && x1v)) {
-                        zero_words(row_l1 + 3 * value_stick_nbytes, CORNER_SLOT_WORDS);
-                    }
-                }
-                noc.async_read_barrier();
                 // Plain zero stores above; keep them ahead of the push.
                 asm volatile("" ::: "memory");
+                x0_cb.pop_front(1);
+                y0_cb.pop_front(1);
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
+                for (uint32_t r = 0; r < v_rows; ++r) {
+                    const uint32_t col0 = fused_msda_tile_layout::tile_col0_offset(r);
+                    CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col0);
+                    CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col0);
+                    const int32_t x0 = bf16_exact_int(x0_src[0]);
+                    const int32_t y0 = bf16_exact_int(y0_src[0]);
+                    geom.x0[r] = x0;
+                    geom.y0[r] = y0;
+                    geom.x0_valid[r] = (x0 >= 0) && (x0 < w_i);
+                    geom.x1_valid[r] = (x0 + 1 >= 0) && (x0 + 1 < w_i);
+                    geom.y0_valid[r] = (y0 >= 0) && (y0 < h_i);
+                    geom.y1_valid[r] = (y0 + 1 >= 0) && (y0 + 1 < h_i);
+                }
+                x0_cb.pop_front(1);
+                y0_cb.pop_front(1);
+
                 for (uint32_t c = 0; c < 4; ++c) {
                     // Hoist every c-invariant selector: c picks the (dy, dx) step to
                     // the corner and which validity arrays gate it.

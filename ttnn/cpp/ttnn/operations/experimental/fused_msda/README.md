@@ -242,6 +242,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_14` `frac_x`, `c_15` `frac_y` | compute → compute, `px - floor(px)` | 2 | 2048 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 | `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
+| `c_18` `gather_mailbox` | reader → writer, one point's split-gather arguments (only when `D % 32 == 0`) | 1 | 64 |
 
 `n_d_tiles = ceil(D / 32)`. CB pressure for the BEVFormer shape
 (`D=32, L=4, P=4`) is ~105 KB.
@@ -392,6 +393,17 @@ step 2 calls the primary and which the secondary.
 row's `D` values across them into a stick, and writes it at
 `page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
 
+**Split gather** (`D % 32 == 0`). The reader's gather is bound by how fast one
+RISC can decode corners and issue 64 B reads, and the writer RISC is idle but
+for each block's output rows. So both take half of every row-major block:
+the reader rows `0-15`, the writer rows `16-31`, each on its own NoC, through
+`fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`). Per point the
+reader posts the point's arguments to `gather_mailbox` and bumps the `ready`
+semaphore; the writer gathers its rows, barriers and bumps `done`; the reader
+waits for `done` before it pops the corner tiles and pushes the block. Both
+counters only grow. At nuscenes base with `value` in L1 this takes the op from
+1055 to 737 us on Blackhole.
+
 ---
 
 ## 9. Constraints
@@ -441,6 +453,7 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── dataflow/reader_msda_v1.cpp
         ├── dataflow/reader_msda_v2.cpp
         ├── dataflow/writer_msda.cpp
+        ├── dataflow/msda_gather_rows.hpp       row-range corner gather, shared by reader and writer
         ├── compute/msda_geometry.hpp           sampling geometry on the SFPU
         └── compute/compute_msda.cpp
 
