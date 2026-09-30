@@ -21,7 +21,8 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    std::optional<uint32_t> kv_cache_blocks) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -80,7 +81,8 @@ ttnn::Tensor sparse_sdpa_msa(
         cache_batch_idx,
         chunk_start_idx,
         cluster_axis,
-        block_cyclic);
+        block_cyclic,
+        kv_cache_blocks);
 }
 
 }  // namespace ttnn::transformer

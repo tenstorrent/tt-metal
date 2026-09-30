@@ -462,6 +462,12 @@ void bind_sdpa(nb::module_& mod) {
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+            kv_cache_blocks (int, optional): per-core L1 cache for the gathered K/V blocks: a block selected
+                again by a later query on the same core is read from L1 instead of DRAM. None (default) = off,
+                byte-identical to the streamed path. 0 = auto: as many slots as fit in the L1 below the lowest
+                live L1 buffer after the op's own CBs (at most 64); the count is resolved when the program is
+                created and is part of its cache key, so a trace replays the program it captured; none fitting
+                falls back to the streamed kernels. N > 0 = min(N, that limit); raises if none fits.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -482,7 +488,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("kv_cache_blocks") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

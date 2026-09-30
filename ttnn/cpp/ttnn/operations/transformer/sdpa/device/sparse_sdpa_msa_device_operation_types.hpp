@@ -28,9 +28,17 @@ struct SparseSDPAMsaParams {
     // SP mesh axis used to derive the per-device causal geometry; host-side only. chunk_start_idx + rank*S, or,
     // with a block-cyclic cache, the KV writer's rotated position (see compute_causal_geometry).
     std::optional<uint32_t> cluster_axis = std::nullopt;
+    // Per-core L1 cache for the gathered K/V blocks: a block re-selected by a later query on the same core is read
+    // from L1 instead of DRAM. Unset = off (byte-identical to the streamed kernels). 0 = auto: as many slots as fit
+    // in the L1 below the lowest live L1 buffer after the op's own CBs, at most KV_CACHE_SLOTS_MAX; the count is
+    // resolved at program creation and is part of the program-cache key, so a trace replays the program it
+    // captured; none fitting selects the streamed kernels. N > 0 = min(N, that limit); raises if none fits.
+    std::optional<uint32_t> kv_cache_blocks = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // The request, not the resolved state: an auto request may still run the streamed kernels.
+    bool block_cache_requested() const { return kv_cache_blocks.has_value(); }
 };
 
 struct SparseSDPAMsaInputs {

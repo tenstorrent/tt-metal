@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// sparse_sdpa_msa compute: online softmax over selected pre-tiled K/V blocks. Each token tilizes Q, streams
-// selected blocks through QK and PV, combines running max/sum/output, then normalizes the final output.
+// sparse_sdpa_msa compute: online softmax over selected pre-tiled K/V blocks. Each token tilizes Q, runs every
+// selected block (streamed, or read in place from the per-core block cache) through QK and PV, combines running
+// max/sum/output, then normalizes the final output.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -11,6 +12,9 @@
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
 #include "compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"  // ctrl record
+
+namespace ctrl = sparse_sdpa_msa::ctrl;
 #include "compute_streaming.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -37,11 +41,11 @@ void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(3);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(4);
 
-    // CB ids match the factory's compute compile-arg block.
+    // CB ids match the factory's compute compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
     constexpr uint32_t cb_q_rm = get_compile_time_arg_val(5);
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(7);  // K tiled [Skt, DHt] (reader-filled, pre-tiled)
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(8);  // V tiled [Skt, vDHt] (reader-filled, pre-tiled)
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(7);  // streamed build: one K block [Skt, DHt]
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(8);  // streamed build: one V block [Skt, vDHt]
     constexpr uint32_t cb_scale = get_compile_time_arg_val(9);
     constexpr uint32_t cb_qk_im = get_compile_time_arg_val(10);
     constexpr uint32_t cb_max_a = get_compile_time_arg_val(11);
@@ -62,6 +66,18 @@ void kernel_main() {
     constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(24) != 0;
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(25);  // persistent all -inf tile (future key-tiles)
     constexpr uint32_t cb_vmask = get_compile_time_arg_val(26);   // per-token partial-column boundary tile
+    // Per-core K/V block cache: when on, K/V for a chunk are read in place from the reader's resident slot
+    // (slot id over cb_slot, tile offset slot * tiles_per_block) instead of the streamed cb_k_in/cb_v_in. The
+    // cache CBs are never pushed or popped by anyone, so tile index 0 stays at the CB base and no wait_front
+    // applies; the handshake is cb_slot alone.
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_slot = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_k_src = (KV_CACHE_SLOTS > 0) ? cb_k_cache : cb_k_in;
+    constexpr uint32_t cb_v_src = (KV_CACHE_SLOTS > 0) ? cb_v_cache : cb_v_in;
+    constexpr uint32_t k_tiles_per_block = Skt * DHt;
+    constexpr uint32_t v_tiles_per_block = Skt * vDHt;
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -72,12 +88,12 @@ void kernel_main() {
     // CB wrappers for the fixed (non-ping-pong) buffers' lifecycle verbs.
     CircularBuffer q_in_cb(cb_q_in), k_in_cb(cb_k_in), v_in_cb(cb_v_in), qk_cb(cb_qk_im), scale_cb(cb_scale),
         ctrl_cb(cb_ctrl);
-    CircularBuffer corr_cb(cb_corr);
+    CircularBuffer corr_cb(cb_corr), slot_cb(cb_slot);
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
-    matmul_init(cb_q_in, cb_k_in);  // one-time matmul init; the no_mop matmuls reinit off this
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_src, cb_qk_im);
+    matmul_init(cb_q_in, cb_k_src);  // one-time matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
     if constexpr (CAUSAL_MASK_ENABLED) {
@@ -93,14 +109,14 @@ void kernel_main() {
         // Per-token control from the reader: active block count, and (causal) the diagonal block's chunk
         // index + within-block mask boundary.
         ctrl_cb.wait_front(1);
-        const uint32_t num_active_chunks = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/0);
+        const uint32_t num_active_chunks = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, ctrl::ACTIVE_BLOCKS);
         [[maybe_unused]] uint32_t diag_chunk = 0xFFFFFFFFu;
         [[maybe_unused]] uint32_t boundary_tile = 0;
         [[maybe_unused]] uint32_t boundary_col = 0;
         if constexpr (CAUSAL_MASK_ENABLED) {
-            diag_chunk = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/1);
-            boundary_tile = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/2);
-            boundary_col = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/3);
+            diag_chunk = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, ctrl::DIAG_CHUNK);
+            boundary_tile = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, ctrl::BOUNDARY_TILE);
+            boundary_col = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, ctrl::BOUNDARY_COL);
         }
         ctrl_cb.pop_front(1);
         // vmask is pushed by the reader exactly when the boundary key-tile is split (boundary_col > 0).
@@ -114,7 +130,7 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_active_chunks; ++chunk) {
             // K/V are already tiled. Set source formats for QK; scores remain bf16.
-            reconfig_data_format(cb_k_in, cb_q_in);
+            reconfig_data_format(cb_k_src, cb_q_in);
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
@@ -131,8 +147,17 @@ void kernel_main() {
             qk_cb.reserve_back(Sqt * KT_stride);
             sum_cur.reserve_back(Sqt);
             out_cur.reserve_back(Sqt * vDHt);
-            k_in_cb.wait_front(Skt * DHt);   // K: shared by every query group (QK)
-            v_in_cb.wait_front(Skt * vDHt);  // V: shared by every query group (PV)
+            // K/V for this chunk: the resident slot the reader names (cache on), else the streamed block.
+            uint32_t k_slot_off = 0, v_slot_off = 0;
+            if constexpr (KV_CACHE_SLOTS > 0) {
+                slot_cb.wait_front(1);
+                const uint32_t slot = ckernel::read_tile_value(cb_slot, /*tile=*/0, /*element_offset=*/0);
+                k_slot_off = slot * k_tiles_per_block;
+                v_slot_off = slot * v_tiles_per_block;
+            } else {
+                k_in_cb.wait_front(Skt * DHt);   // K: shared by every query group (QK)
+                v_in_cb.wait_front(Skt * vDHt);  // V: shared by every query group (PV)
+            }
             q_in_cb.wait_front(Sqt * DHt);
 
             // DST holds qsb query tile-rows; process Sqt rows in q_groups passes (one pass when qsb==Sqt).
@@ -145,15 +170,15 @@ void kernel_main() {
                 // Phase 1: Q@K^T -> scores and running row max.
                 {
                     // Use pack width 1 because Q tilize changes packer addrmods; wider packs need extra reinit.
-                    mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
+                    mm_no_mop_init_short(cb_q_in, cb_k_src, /*transpose=*/true, 1, qsb, DHt);
                     configure_row_pack_width(cb_qk_im, 1);
                     for (uint32_t kt = 0; kt < Skt; ++kt) {
                         blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                             cb_q_in,
-                            cb_k_in,
+                            cb_k_src,
                             cb_qk_im,
                             /*in0_index_start=*/row_base * DHt,
-                            /*in1_index_start=*/kt * DHt,
+                            /*in1_index_start=*/k_slot_off + kt * DHt,
                             /*row_subblock_idx=*/qg,
                             /*out_col_offset=*/kt,
                             /*subblock_w=*/1,
@@ -221,16 +246,16 @@ void kernel_main() {
                 {
                     qk_cb.wait_front((qg + 1) * qsb * KT_stride);
                     // PV reads V as srcA and probabilities as srcB.
-                    reconfig_data_format(cb_v_in, cb_qk_im);
-                    mm_no_mop_init_short(cb_qk_im, cb_v_in, /*transpose=*/false, 1, qsb, Skt);
+                    reconfig_data_format(cb_v_src, cb_qk_im);
+                    mm_no_mop_init_short(cb_qk_im, cb_v_src, /*transpose=*/false, 1, qsb, Skt);
                     configure_row_pack_width(out_cur.get_cb_id(), 1);
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/vDHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
-                            cb_v_in,
+                            cb_v_src,
                             out_cur.get_cb_id(),
                             /*in0_index_start=*/row_base * Skt,
-                            /*in1_index_start=*/vd,
+                            /*in1_index_start=*/v_slot_off + vd,
                             /*row_subblock_idx=*/qg,
                             /*out_col_offset=*/vd,
                             /*subblock_w=*/1,
@@ -301,10 +326,15 @@ void kernel_main() {
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
 
-            // Release the held cb_qk_im rows + this chunk's K (QK) and V (PV).
+            // Release the held cb_qk_im rows + this chunk's K (QK) and V (PV). Popping cb_slot is what lets the
+            // reader refill that slot.
             qk_cb.pop_front(Sqt * KT_stride);
-            k_in_cb.pop_front(Skt * DHt);
-            v_in_cb.pop_front(Skt * vDHt);
+            if constexpr (KV_CACHE_SLOTS > 0) {
+                slot_cb.pop_front(1);
+            } else {
+                k_in_cb.pop_front(Skt * DHt);
+                v_in_cb.pop_front(Skt * vDHt);
+            }
 
             swap_cb(max_prev, max_cur);  // prev <-> cur for the next chunk
             swap_cb(sum_prev, sum_cur);

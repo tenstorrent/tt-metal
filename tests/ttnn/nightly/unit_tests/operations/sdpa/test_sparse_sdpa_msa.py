@@ -443,8 +443,10 @@ def test_msa_indexed_kv_cache(device):
         out = _msa_op(device, q, k_tt, v_tt, indices, cache_batch_idx=cb)
         gold = sparse_attention_ref_msa(q, k_full[cb : cb + 1], v_full[cb : cb + 1], indices, _D**-0.5)
         assert pcc(out, gold) > 0.99, f"cache_batch_idx={cb}"
+        cached = _msa_op(device, q, k_tt, v_tt, indices, cache_batch_idx=cb, kv_cache_blocks=0)
+        assert torch.equal(out, cached), f"block cache on the indexed path differs, cache_batch_idx={cb}"
     n = device.num_program_cache_entries()
-    assert n == 1, f"indexing a different slot recompiled: {n} entries (expected 1)"
+    assert n == 2, f"indexing a different slot recompiled: {n} entries (expected streamed + cached)"
 
 
 @run_for_blackhole()
@@ -473,6 +475,8 @@ def test_msa_indexed_nd_sharded_kv(device):
         out = _msa_op(device, q, k_tt, v_tt, indices, cache_batch_idx=cb)
         gold = sparse_attention_ref_msa(q, k_full[cb : cb + 1], v_full[cb : cb + 1], indices, _D**-0.5)
         assert pcc(out, gold) > 0.99, f"nd-sharded cache_batch_idx={cb}"
+        cached = _msa_op(device, q, k_tt, v_tt, indices, cache_batch_idx=cb, kv_cache_blocks=0)
+        assert torch.equal(out, cached), f"block cache on the nd-sharded path differs, cache_batch_idx={cb}"
 
 
 # Changing T changes sharded K/V layout, so it must recompile.
@@ -537,7 +541,8 @@ def test_msa_hash_distinct_kv_dtype(device):
     [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.fp8_e4m3, ttnn.bfloat8_b)],
     ids=["bf16", "fp8"],
 )
-def test_msa_native_determinism(device, q_dtype, kv_dtype):
+@pytest.mark.parametrize("kv_cache_blocks", [None, 16], ids=["stream", "kv_cache"])
+def test_msa_native_determinism(device, q_dtype, kv_dtype, kv_cache_blocks):
     d, H, S, nblk, topk, iters = 128, 32, 128, 16, 16, 10  # multi-chunk; some cores process two tokens
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=11)
@@ -563,7 +568,11 @@ def test_msa_native_determinism(device, q_dtype, kv_dtype):
 
     ref, marker = None, None
     for _ in range(iters):
-        cur = comparable(ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, scale=d**-0.5, block_size=BLK_KV))
+        cur = comparable(
+            ttnn.transformer.sparse_sdpa_msa(
+                tt_q, tt_k, tt_v, tt_idx, scale=d**-0.5, block_size=BLK_KV, kv_cache_blocks=kv_cache_blocks
+            )
+        )
         if ref is None:
             ref = cur
         else:
