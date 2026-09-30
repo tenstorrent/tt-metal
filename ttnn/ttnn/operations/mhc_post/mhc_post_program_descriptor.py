@@ -32,6 +32,7 @@ DEPTH_IN = 2  # blocks in flight on cb_sublayer_tiles / cb_residual_tiles
 DEPTH_OUT = 2  # blocks in flight on cb_output_tiles
 COEF_DEPTH = 2  # token-row coefficient sets in flight on cb_coef_bcast
 L1_BUDGET_BYTES = 1 << 20  # CB budget per core
+MAX_BLOCK_COL_TILES = None  # optional cap on block_col_tiles (None = coarsest L1 fit); overlap perf lamp
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
 
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
@@ -125,6 +126,8 @@ def create_program_descriptor(
     block_col_tiles_fit = _block_col_tiles_fit(n, sublayer_page, residual_page, coef_page, num_raw_tiles)
     assert block_col_tiles_fit >= 1, "mhc_post: coefficient set + one column block does not fit L1_BUDGET_BYTES"
     block_col_tiles = min(block_col_tiles_fit, _max_segment_col_tiles(assignment, col_tiles_per_row))
+    if MAX_BLOCK_COL_TILES is not None:
+        block_col_tiles = max(1, min(block_col_tiles, MAX_BLOCK_COL_TILES))
 
     # ---- circular buffers ----
     cbs = [

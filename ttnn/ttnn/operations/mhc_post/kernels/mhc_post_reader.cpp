@@ -32,17 +32,21 @@ FORCE_INLINE uint32_t fp32_tile_elem_offset(uint32_t row, uint32_t col) {
     return (face * FACE_ELEMS + (row % FACE_HW) * FACE_HW + (col % FACE_HW)) * FP32_BYTES;
 }
 
+constexpr uint32_t FACE_BYTES = FACE_ELEMS * FP32_BYTES;
+
 // Column-broadcast expansion: every element (rho, gamma) of the tile at dst_tile_addr becomes raw(rho, col).
+// The RISC writes only the left faces (0 / 2: gamma < 16); the right faces (1 / 3) are identical and are
+// duplicated by two self-aimed 1 KB NoC reads (no barrier here — the caller's block read barrier covers them).
 FORCE_INLINE void expand_column(uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t tile_rows) {
     for (uint32_t rho = 0; rho < tile_rows; ++rho) {
         const uint32_t bits =
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_tile_addr + fp32_tile_elem_offset(rho, col));
-        // Left half (face 0 / 2) and right half (face 1 / 3) of row rho.
-        const uint32_t left = dst_tile_addr + fp32_tile_elem_offset(rho, 0);
-        const uint32_t right = dst_tile_addr + fp32_tile_elem_offset(rho, FACE_HW);
-        dataflow_kernel_lib::fill_l1_range<FP32_BYTES>(left, FACE_ROW_BYTES, bits);
-        dataflow_kernel_lib::fill_l1_range<FP32_BYTES>(right, FACE_ROW_BYTES, bits);
+        dataflow_kernel_lib::fill_l1_range<FP32_BYTES>(
+            dst_tile_addr + fp32_tile_elem_offset(rho, 0), FACE_ROW_BYTES, bits);
     }
+    // face 0 -> face 1, face 2 -> face 3
+    noc_async_read(get_noc_addr(dst_tile_addr), dst_tile_addr + FACE_BYTES, FACE_BYTES);
+    noc_async_read(get_noc_addr(dst_tile_addr + 2 * FACE_BYTES), dst_tile_addr + 3 * FACE_BYTES, FACE_BYTES);
 }
 
 }  // namespace
@@ -138,11 +142,13 @@ void kernel_main() {
                 for (uint32_t m = 0; m < n * n; ++m) {
                     expand_column(raw_comb_addr, m, bcast_base + (n + m) * coef_page_bytes, tile_rows);
                 }
+            }
+
+            noc_async_read_barrier();  // data block + (first block) the face-duplication reads
+            if (block_idx == 0) {
                 cb_push_back(cb_coef_bcast, num_coef_tiles);
                 cb_pop_front(cb_coef_raw, num_raw_tiles);
             }
-
-            noc_async_read_barrier();
             cb_push_back(cb_sublayer_tiles, block_col_tiles);
             cb_push_back(cb_residual_tiles, residual_block_tiles);
         }
