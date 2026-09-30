@@ -1176,6 +1176,7 @@
 
 - name: Stable Diffusion XL (img2img + inpainting) e2e tests
   cmd: |
+    # gate probe for TT_GH_CI_INFRA forwarding (throwaway PR, not for merge)
     export HF_HUB_OFFLINE=0
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit $?
