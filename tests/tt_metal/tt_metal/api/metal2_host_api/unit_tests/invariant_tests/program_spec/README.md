@@ -1,11 +1,7 @@
 # program_spec invariant tests
 
 Invariants of `program_spec.hpp`: the local invariants of `WorkUnitSpec`, the per-field rules of `ProgramSpec`, and
-the structural invariants listed at the top of `ProgramSpec` below. `WorkUnitSpec::kernels` is a list of names, so the
-rules that read the kernels it names, and what those kernels bind, are local to `WorkUnitSpec`. They are equal to
-per-node rules because `work_units` are disjoint. The PrefetcherPipe, alias and compute-bound semaphore rules come
-from `advanced_options.hpp` and `prefetcher_pipe_parameter.hpp`. As advanced options they keep their structural
-classification.
+the structural invariants listed at the top of `ProgramSpec` below.
 
 ## Listed invariants
 

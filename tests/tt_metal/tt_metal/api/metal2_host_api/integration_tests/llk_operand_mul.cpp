@@ -23,8 +23,8 @@
 #include <tt-metalium/buffer.hpp>
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include "metal2_host_api/test_helpers.hpp"
-#include "metal2_host_api/integration_tests/program_spec_hw_fixture.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

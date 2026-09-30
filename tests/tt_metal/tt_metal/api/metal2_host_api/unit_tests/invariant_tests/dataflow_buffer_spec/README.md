@@ -1,7 +1,6 @@
 # dataflow_buffer_spec invariant tests
 
-Local invariants of `DataflowBufferSpec` (`dataflow_buffer_spec.hpp`). `borrowed_from` is a pointer, so rules on the
-TensorParameter it names are local and tested here; that the name resolves is structural. Most other DFB rules depend
+Local invariants of `DataflowBufferSpec` (`dataflow_buffer_spec.hpp`).  Most other DFB rules depend
 on the kernels that bind the DFB, so they are structural and live in `../program_spec/`; `DFBAdvancedOptions` rules
 are in `../advanced_options/`.
 

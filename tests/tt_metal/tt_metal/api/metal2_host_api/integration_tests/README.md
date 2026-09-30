@@ -1,12 +1,21 @@
 # Metal 2.0 Host API integration tests
 
-Tests that run kernels on silicon or an emulator and check their results, including Metal 2.0's integration with
-the rest of the low-level stack (for example LLK). Put a test here only if a mock device cannot cover it.
+Integration tests are the heaviest tests in the Metal 2.0 suite. They need physical hardware or full emulation to run,
+and custom kernel source code to compile. They run the kernels and generally assert on the end-to-end result of the
+device output, including Metal 2.0's integration with the rest of the low-level stack (for example LLK).
 
-## Fixtures
+Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 
-- `ProgramSpecHWTest` (`program_spec_hw_fixture.hpp`): one Wormhole B0 or Blackhole device, slow dispatch
-  (`TT_METAL_SLOW_DISPATCH_MODE=1`).
-- `UnitMeshCQSingleCardFixture`: one card, fast dispatch.
-- `MeshWorkloadFactoryHWTest` (fast dispatch), `MeshWorkloadFactorySlowDispatchHWTest` (slow dispatch) and
-  `MeshWorkloadFactory1x2HWTest` (a 1x2 mesh, two devices), defined in `mesh_workload_factories.cpp`.
+- it only needs its kernel source to compile, checked with compile-time assertions: use
+  [kernel_compilation_tests](../kernel_compilation_tests/);
+- it needs no custom kernel source: use [unit_tests](../unit_tests/).
+
+| File | Test Category |
+|---|---|
+| `binding_loopbacks.cpp` | Resource bindings: DFB, semaphore and tensor accessor names |
+| `kernel_args_loopbacks.cpp` | Kernel arguments: named args, varargs, TT_KERNEL kernels and CRTA sections |
+| `scratchpad.cpp` | Scratchpads under slow dispatch |
+| `scratchpad_fast_dispatch.cpp` | Scratchpads under fast dispatch |
+| `compute_semaphore.cpp` | Compute-kernel semaphores (Blackhole) |
+| `llk_operand_mul.cpp` | LLK operands from a DFB, a LocalTensorAccessor and a Scratchpad (Blackhole) |
+| `mesh_workload_factories.cpp` | `MakeMeshWorkloadFromSpec(s)` |

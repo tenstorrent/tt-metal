@@ -16,7 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
-#include "metal2_host_api/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental::test_helpers {
 

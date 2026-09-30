@@ -1,8 +1,7 @@
 # kernel_spec invariant tests
 
-Local invariants of `KernelSpec` and its nested structs (`kernel_spec.hpp`). A binding's name is a pointer, so rules
-that read the object a binding names, such as the bound DFB's data format, are local to `KernelSpec` and tested here.
-That the name resolves ("the bound DFB is declared"), and rules that need every kernel binding an object, are
+Local invariants of `KernelSpec` and its nested structs (`kernel_spec.hpp`).
+Tests such as the name resolves ("the bound DFB is declared"), and rules that need every kernel binding an object, are
 structural and live in `../program_spec/`.
 
 ## Listed invariants
@@ -60,7 +59,7 @@ struct KernelSpec {
         // - For a producer binding, must be STRIDED.
         AccessPattern access_pattern = AccessPattern::STRIDED;
     };
-    // Local Invariant:
+    // Invariant:
     // - Each DFB has at most one PRODUCER binding and at most one CONSUMER binding.
     //   (A kernel that binds a DFB in both roles "self-loops" it.)
     // - Two bindings may share an accessor_name only if they are the PRODUCER and CONSUMER

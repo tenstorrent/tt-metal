@@ -1,12 +1,16 @@
 # Kernel compilation tests
 
-Host-only tests that JIT-compile custom kernel source against a mock device. The `unit_tests/` rules apply (no
-silicon, `CPU_` prefix), except that custom kernel source is allowed; these tests are slower because they compile.
+Like unit tests, kernel compilation tests are self-contained, relatively fast to run, and need no physical device or
+emulator. Unlike unit tests, they may contain custom kernel source code, which the JIT system compiles as part of the
+test. The kernels are compiled but never run: a test asserts only on building the program, not on its runtime
+behavior. To check the kernel-side setup, use compile-time assertions such as `static_assert` in the kernel source.
 
-The kernels are compiled, never run. Check generated binding code with `static_assert` in the kernel source. A test
-that must run a kernel and check its output belongs in `integration_tests/`.
+Put a test elsewhere when:
 
-| Directory | What it contains |
+- it has to dispatch to a device to check device-side behavior: use [integration_tests](../integration_tests/);
+- it needs no custom kernel source, for example to validate a ProgramSpec: use [unit_tests](../unit_tests/).
+
+| Directory | Test Category |
 |---|---|
-| `bindings/` | Resource binding tokens: tensor accessors and binding sequences, scratchpads, `get_token_if_present`, and the LLK operand metadata (`LLKOperandFrom`) of DFB, scratchpad and tensor bindings |
-| `kernel_args/` | Compile-time varargs, and the TT_KERNEL compute shim |
+| `resource_bindings/` | Resource binding emissions |
+| `kernel_args/` | Compile-time varargs, and 1st world kernel arguments |

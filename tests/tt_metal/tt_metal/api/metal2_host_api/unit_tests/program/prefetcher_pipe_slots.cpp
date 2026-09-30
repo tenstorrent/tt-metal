@@ -16,7 +16,7 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
-#include "metal2_host_api/prefetcher_pipe_test_helpers.hpp"
+#include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

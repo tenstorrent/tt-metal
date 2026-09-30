@@ -27,8 +27,8 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/program_impl.hpp"
 
-#include "metal2_host_api/mock_device_fixtures.hpp"
-#include "metal2_host_api/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental::test_helpers {
 

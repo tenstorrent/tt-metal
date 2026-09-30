@@ -67,7 +67,7 @@ struct SemaphoreSpec {
 
 ## Writing an invariant test
 
-- Start from a minimal valid spec (`test_helpers.hpp`), break exactly one rule, and assert on the error text with
+- Start from a minimal valid spec (`test_helpers/test_helpers.hpp`), break exactly one rule, and assert on the error text with
   `::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(...))`.
 - When the boundary is not obvious, pair the rejection with an acceptance test at the boundary, as
   `MaxComputeThreadsSucceeds` does for `ComputeKernelExceedingMaxThreadsFails`.
