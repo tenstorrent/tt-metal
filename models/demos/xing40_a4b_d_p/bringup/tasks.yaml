@@ -503,6 +503,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T14:19:09'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py: c4cfd54bbf952f5106256b79c69a4fee5e7b2e28346968fee13b327e767d58b8
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.07
   title: 'dense block with steps 1-7 on device (last: ffn_hc)'
   step: implement
