@@ -101,7 +101,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         """Load 2D weight, transposed to [in, out] for ttnn.linear (on a tensor-cache miss only)."""
         return ttnn.as_tensor(
             state_dict[name],
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.mm_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -135,7 +135,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         )
     qkv_proj_weight = ttnn.as_tensor(
         state_dict[qkv_key],
-        dtype=ttnn.bfloat8_b,
+        dtype=tpc.mm_weight_dtype(),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -283,7 +283,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         a_w = ttnn.to_torch(a_proj_weight)  # [4096, 32]
         b_w = ttnn.to_torch(b_proj_weight)  # [4096, 32]
         fused = torch.cat([a_w, b_w], dim=1).contiguous()  # [4096, 64]
-        return ttnn.from_torch(fused, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        return ttnn.from_torch(fused, dtype=tpc.mm_weight_dtype(), layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
     def _precompute_mega_fused_weight():
         """Fuse QKV + g + a + b projections into one [4096, D_total] weight.
@@ -305,7 +305,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         fused = torch.cat([qkv_w, g_w, a_w, b_w], dim=1).contiguous()
         return ttnn.as_tensor(
             fused,
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.mm_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -379,7 +379,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
 
         w = ttnn.as_tensor(
             torch.zeros(1),  # placeholder; _build makes the weight on a cache miss only
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.mm_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

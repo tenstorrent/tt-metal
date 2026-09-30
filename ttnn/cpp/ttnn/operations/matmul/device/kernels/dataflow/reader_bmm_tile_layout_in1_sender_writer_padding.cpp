@@ -277,6 +277,12 @@ void kernel_main() {
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
+#ifndef OUT_SHARDED
+    // Spread the output writes over NoC virtual channels 1..3 by core position. With all cores on the default
+    // unicast VC the cores at the start of a NoC row are starved by through traffic (parking-lot effect);
+    // the drain after the last K block took up to 29 us on the top row. Data and addresses are unchanged.
+    const uint32_t out_write_vc = 1u + ((get_absolute_logical_x() + get_absolute_logical_y()) % 3u);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
 
@@ -791,12 +797,13 @@ void kernel_main() {
                                 uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                                 for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                     if (bw < num_blocks_w_dim_) {
-                                        noc.async_write(
+                                        noc.async_write<NocOptions::CUSTOM_VC>(
                                             dfb_out,
                                             s,
                                             output_single_tile_size_bytes,
                                             {.offset_bytes = out_read_offset},
-                                            {.page_id = out_tensor_tile_id});
+                                            {.page_id = out_tensor_tile_id},
+                                            {.vc = out_write_vc});
                                     }
 
                                     out_read_offset += output_single_tile_size_bytes;

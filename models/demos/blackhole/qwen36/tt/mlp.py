@@ -162,8 +162,9 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
     # gate/up: bfloat4_b (bandwidth; default); bfloat8_b with QWEN36_F_MLP_GU_BF8=1 (accuracy item, tp_common
     # F flags). down: bfloat8_b (accuracy). as_tensor puts the dtype in the cache file name, so each dtype has
     # its own cache files. (Imported by name: the tp > 1 branch's local `tpc` import makes `tpc` a local of this
-    # whole function, unbound on this path.)
-    from models.demos.blackhole.qwen36.tt.tp_common import mlp_gate_up_dtype
+    # whole function, unbound on this path.) down: mm_weight_dtype() = bfloat8_b (default), bfloat4_b with
+    # QWEN36_W_BF4=1.
+    from models.demos.blackhole.qwen36.tt.tp_common import mlp_gate_up_dtype, mm_weight_dtype
 
     gu_dtype = mlp_gate_up_dtype()
 
@@ -185,7 +186,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
 
     return MLPWeights(
         w1=load("gate_proj", gu_dtype),
-        w2=load("down_proj", ttnn.bfloat8_b),
+        w2=load("down_proj", mm_weight_dtype()),
         w3=load("up_proj", gu_dtype),
         w_gate_up=wgu,
     )

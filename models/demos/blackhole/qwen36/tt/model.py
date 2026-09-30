@@ -161,7 +161,7 @@ class Qwen36Model:
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.mm_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -172,6 +172,10 @@ class Qwen36Model:
         # column chunks are built ONCE here from the weight just loaded, and the unsplit weight is freed
         # (see _a3_build_lm_chunks). None = every other LMHEAD value (lm_head_weight stays).
         self._a3_lm_chunks = None
+        # QWEN36_LM_BF4FAST (tp_common.lm_bf4fast_enabled; plan_0930 T24_LMFAST): True only with the flag "1" AND a
+        # bfloat4_b LM head weight. The A3 chunk layout (_a3_build_lm_chunks), program config and compute config
+        # (_lm_head_a3) all read this one attribute. False (flag "0" or bfloat8_b weight) = today's A3 exactly.
+        self._a3_lm_fast = tpc.lm_bf4fast_enabled() and self.lm_head_weight.dtype == ttnn.bfloat4_b
         if self.num_devices == 1 and tpc.i3_value("LMHEAD") == "A3" and tpc.i3_grid_ok(mesh_device):
             self._a3_lm_chunks = self._a3_build_lm_chunks(mesh_device)
 
@@ -1064,7 +1068,7 @@ class Qwen36Model:
         vt = vocab // 32
         assert vocab % 32 == 0 and vt % c["split"] == 0, f"A3: vocab {vocab} is not {c['split']} whole-tile chunks"
         nt = vt // c["split"]
-        shard_w = tpc.i3_a3_shard_w_tiles(vt)
+        shard_w = tpc.i3_a3_shard_w_tiles(vt, self._a3_lm_fast)
         assert nt <= tpc.DRAM_CORES * shard_w and tpc.DRAM_CORES * shard_w - nt < shard_w, (nt, shard_w)
         cols = nt * 32
         mc = tpc.i3_dram_width_memcfg(rows, shard_w)
@@ -1087,13 +1091,19 @@ class Qwen36Model:
             f"({nt} tiles, {shard_w} tiles/bank) from the loaded weight in {dt:.3f} s; unsplit weight freed. "
             f"DRAM allocated (all banks, MiB): {mb(dram0)} before -> {mb(dram1)} with chunks -> {mb(dram2)} after free"
         )
+        if self._a3_lm_fast:
+            logger.info(
+                f"[T24] QWEN36_LM_BF4FAST=1 (bfloat4_b LM head): A3 chunks use {tpc.i3_a3_wpb(True)} workers per DRAM "
+                f"bank ({shard_w} tiles/bank) and the LoFi compute config"
+            )
         return chunks
 
     def _lm_head_a3(self, x, want_token):
         """I-3 LM head A3 (M4; single device, one tile row, 13x10 grid). x: the final-norm output, either
         interleaved (prefill, the non-traced decode paths) or the D3 8-core width-sharded decode norm
         output (_forward_decode). One to_memory_config puts it in the 8x8 in0 layout (I2S or reshard).
-        Per chunk: DRAM-sharded linear (tp_common.i3_a3_lm_progcfg, HiFi2 / fp32 dest / packer L1 acc) into
+        Per chunk: DRAM-sharded linear (tp_common.i3_a3_lm_progcfg, HiFi2 / fp32 dest / packer L1 acc; LoFi and 3
+        workers per bank with QWEN36_LM_BF4FAST=1 and a bfloat4_b weight, see _a3_lm_fast) into
         L1 WIDTH_SHARDED, then at once (so its L1 shard frees early) either the untilize to one RM row in
         L1 interleaved (want_token) or the S2I to DRAM (logits). Then RM concat + argmax (uint32 [..., 1],
         first max index) or TILE concat (logits, DRAM, [..., vocab])."""
@@ -1105,8 +1115,8 @@ class Qwen36Model:
         in0_mc = tpc.i3_l1_width_memcfg(int(x.shape[-1]), gx, gy)
         same = x.memory_config() == in0_mc
         xs = x if same else ttnn.to_memory_config(x, in0_mc)
-        pc = tpc.i3_a3_lm_progcfg()
-        ck = self._i3_lm_ckc_hifi2()
+        pc = tpc.i3_a3_lm_progcfg(self._a3_lm_fast)
+        ck = self._a3_lm_ckc(self._a3_lm_fast)
         outs = []
         for c in chunks:
             p = ttnn.linear(
@@ -1220,6 +1230,16 @@ class Qwen36Model:
         fp32 dest, packer L1 acc, approx off)."""
         return ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+    @staticmethod
+    def _a3_lm_ckc(fast):
+        """I-3 LM head A3 compute config: _i3_lm_ckc_hifi2() (fast False, today's); with fast (QWEN36_LM_BF4FAST=1 and
+        a bfloat4_b LM head weight, see _a3_lm_fast) the same config at LoFi (approx off, fp32 dest, packer L1 acc)."""
+        if not fast:
+            return Qwen36Model._i3_lm_ckc_hifi2()
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
     @staticmethod

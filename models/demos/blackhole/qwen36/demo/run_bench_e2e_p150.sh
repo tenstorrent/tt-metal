@@ -115,6 +115,16 @@
 #   Runner default 1 since 2026-09-28 (differ from the code default 0; gated: PCC 0.97-0.99 vs bfp4 on isl4096/demo/
 #   isl1000, KL-vs-HF lower than bfp4 at every measured length, needle 48/50 vs 49/50 at bfp4); A/B e.g.
 #   QWEN36_F_MLP_GU_BF8=0 bash run_bench_e2e_p150.sh.
+# The W flag QWEN36_W_BF4 also survives the reset (tt/tp_common.py w_bf4_enabled / mm_weight_dtype; unset = runner
+#   default 0 = today's dtypes; values 0|1; single device): 1 = every matmul weight (GDN / FA projections, MLP
+#   gate/up/down, LM head) is bfloat4_b instead of bfloat8_b, and the MLP gate/up are bfloat4_b whatever
+#   QWEN36_F_MLP_GU_BF8 says (numerics change; new weight-cache files); A/B e.g. QWEN36_W_BF4=1 bash run_bench_e2e_p150.sh.
+# The LM flag QWEN36_LM_BF4FAST also survives the reset (tt/tp_common.py lm_bf4fast_enabled; unset = runner default 1;
+#   the code default in tp_common.py stays 0 = today's A3 LM head; values 0|1; single device, QWEN36_I3_LMHEAD=A3): 1 AND a
+#   bfloat4_b LM head weight (QWEN36_W_BF4=1) = the A3 LM head chunks use LoFi (fp32 dest / packer L1 acc unchanged) and 3
+#   workers per DRAM bank (shard 99 tiles/bank); bit-exact vs HiFi2 / 2 workers (T17A/T17B, one chunk: 103.1 -> 73.7 us).
+#   With a bfloat8_b LM head (default QWEN36_W_BF4=0) the flag changes nothing, so runner default 1 alters no default run.
+#   A/B e.g. QWEN36_W_BF4=1 QWEN36_LM_BF4FAST=0 bash run_bench_e2e_p150.sh.
 # The N item flag QWEN36_N_GAMMA_L1 also survives the reset (tt/tp_common.py N_FLAG_DEFAULTS; unset =
 #   code default 0 = the current path; values 0|1; single device): 1 = layer.py's attention_norm / ffn_norm
 #   gamma (RMSNorm weight) lives in L1 interleaved instead of DRAM (placement only, bit-exact; standalone
@@ -202,7 +212,7 @@ echo "== branch: $(git rev-parse --abbrev-ref HEAD) commit: $(git rev-parse HEAD
 
 # ---------------------------------------------------------------------------------------------
 # 1. Unset EVERY QWEN* var already in the shell, so nothing is inherited from a previous session.
-# (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* / QWEN36_R5_* / QWEN36_MM_* / QWEN36_SGRN_* item flags, QWEN36_GDN_DECODE_FUSED,
+# (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* / QWEN36_R5_* / QWEN36_MM_* / QWEN36_SGRN_* item flags, QWEN36_W_BF4, QWEN36_LM_BF4FAST, QWEN36_GDN_DECODE_FUSED,
 #  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, QWEN36_GDN_GATE_FUSE,
 #  QWEN36_GDN_GATES_OP,
 #  QWEN36_ROPE_L1, QWEN36_ACT_BF8_RESID, QWEN36_ACT_BF8_NORM, QWEN36_RESID_HS, QWEN36_GDN_STATE_INPLACE, QWEN36_FLA_SCAN_FID, QWEN36_FLA_SCAN_FID_BY_LEN, the QWEN36_I4_*
@@ -523,10 +533,25 @@ case "$PRELUDE_TRACE" in
   0|1) ;;
   *) echo "ERROR: QWEN36_PRELUDE_TRACE must be 0 or 1 (got '$PRELUDE_TRACE')" >&2; exit 1 ;;
 esac
+# QWEN36_W_BF4 (runner default 0 = code default; tt/tp_common.py w_bf4_enabled) survives the reset below.
+W_BF4="${QWEN36_W_BF4:-0}"
+case "$W_BF4" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_W_BF4 must be 0 or 1 (got '$W_BF4')" >&2; exit 1 ;;
+esac
+# QWEN36_LM_BF4FAST (runner default 1; code default in tt/tp_common.py lm_bf4fast_enabled stays 0; acts only with a
+# bfloat4_b LM head weight, QWEN36_W_BF4=1) survives the reset below.
+LM_BF4FAST="${QWEN36_LM_BF4FAST:-1}"
+case "$LM_BF4FAST" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_LM_BF4FAST must be 0 or 1 (got '$LM_BF4FAST')" >&2; exit 1 ;;
+esac
 while IFS='=' read -r name _; do
   [ -n "$name" ] && unset "$name"
 done < <(env | grep -E '^QWEN' || true)
 export QWEN36_PRELUDE_TRACE="$PRELUDE_TRACE"
+export QWEN36_W_BF4="$W_BF4"
+export QWEN36_LM_BF4FAST="$LM_BF4FAST"
 
 # ---------------------------------------------------------------------------------------------
 # 2. Core env.
@@ -834,7 +859,7 @@ else
   OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
-echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_REPACK_AFTER_TTFT=$QWEN36_REPACK_AFTER_TTFT QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_GDN_GATES_OP=$QWEN36_GDN_GATES_OP QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_FA_GATE_FAST=$QWEN36_FA_GATE_FAST QWEN36_SDPA_CONCAT_OUT=$QWEN36_SDPA_CONCAT_OUT QWEN36_ROPE_PARTIAL_INPLACE=$QWEN36_ROPE_PARTIAL_INPLACE QWEN36_ACT_BF8_RESID=$QWEN36_ACT_BF8_RESID QWEN36_ACT_BF8_NORM=$QWEN36_ACT_BF8_NORM QWEN36_RESID_HS=$QWEN36_RESID_HS QWEN36_GDN_STATE_INPLACE=$QWEN36_GDN_STATE_INPLACE QWEN36_FLA_SCAN_FID=${QWEN36_FLA_SCAN_FID:-<unset>} QWEN36_FLA_SCAN_FID_BY_LEN=$QWEN36_FLA_SCAN_FID_BY_LEN QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT QWEN36_PRELUDE_TRACE=$QWEN36_PRELUDE_TRACE -> $OUT =="
+echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY QWEN36_W_BF4=$QWEN36_W_BF4 QWEN36_LM_BF4FAST=$QWEN36_LM_BF4FAST$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_REPACK_AFTER_TTFT=$QWEN36_REPACK_AFTER_TTFT QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_GDN_GATES_OP=$QWEN36_GDN_GATES_OP QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_FA_GATE_FAST=$QWEN36_FA_GATE_FAST QWEN36_SDPA_CONCAT_OUT=$QWEN36_SDPA_CONCAT_OUT QWEN36_ROPE_PARTIAL_INPLACE=$QWEN36_ROPE_PARTIAL_INPLACE QWEN36_ACT_BF8_RESID=$QWEN36_ACT_BF8_RESID QWEN36_ACT_BF8_NORM=$QWEN36_ACT_BF8_NORM QWEN36_RESID_HS=$QWEN36_RESID_HS QWEN36_GDN_STATE_INPLACE=$QWEN36_GDN_STATE_INPLACE QWEN36_FLA_SCAN_FID=${QWEN36_FLA_SCAN_FID:-<unset>} QWEN36_FLA_SCAN_FID_BY_LEN=$QWEN36_FLA_SCAN_FID_BY_LEN QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT QWEN36_PRELUDE_TRACE=$QWEN36_PRELUDE_TRACE -> $OUT =="
 
 RUN_LOG="${OUT%.json}.log"
 set +e

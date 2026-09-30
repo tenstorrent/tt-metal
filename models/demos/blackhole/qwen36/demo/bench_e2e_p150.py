@@ -373,6 +373,19 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "F: single device, MLP gate/up weights (decode w1/w3 + prefill packed w_gate_up) bfloat8_b (numerics change, "
         "new weight-cache files); 0=bfloat4_b",
     ),
+    # W flag (tt/tp_common.py w_bf4_enabled / mm_weight_dtype / mlp_gate_up_dtype); 0 = current dtypes.
+    "QWEN36_W_BF4": (
+        "0",
+        "W: single device, every matmul weight (GDN/FA projections, MLP gate/up/down, LM head) bfloat4_b "
+        "(numerics change, new weight-cache files; overrides QWEN36_F_MLP_GU_BF8); 0=current dtypes (bfloat8_b "
+        "for the projections, down and LM head; gate/up per QWEN36_F_MLP_GU_BF8)",
+    ),
+    # LM flag (tt/tp_common.py lm_bf4fast_enabled; T24_LMFAST); 0 = current A3 LM head.
+    "QWEN36_LM_BF4FAST": (
+        "0",
+        "LM: single device, I-3 A3 LM head with a bfloat4_b weight (QWEN36_W_BF4=1): LoFi compute config + 3 workers "
+        "per DRAM bank (bit-exact vs HiFi2 / 2 workers); no effect with a bfloat8_b LM head; 0=HiFi2 / 2 workers",
+    ),
     # R5 item flags (tt/tp_common.py R5_FLAG_DEFAULTS; read via tp_common.r5_value); 0 = current path.
     "QWEN36_R5_GLU": (
         "0",

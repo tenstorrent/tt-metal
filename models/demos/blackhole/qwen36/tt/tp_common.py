@@ -504,8 +504,32 @@ def f_enabled(item):
     return f_value(item) != "0"
 
 
+# --- W_BF4 flag (2026-09-30; single device; plan_0930 T5_BF4FLAG) -------------------------------------------------
+# QWEN36_W_BF4 ("0" default = today's behavior exactly; "1"; any other value raises ValueError): "1" makes every
+# single-device matmul weight bfloat4_b -- each site that used the weight literal ttnn.bfloat8_b calls
+# mm_weight_dtype() instead (tt/gdn/weights.py, tt/attention/weights.py, tt/mlp.py down_proj, tt/model.py LM head)
+# and mlp_gate_up_dtype() returns bfloat4_b whatever QWEN36_F_MLP_GU_BF8 says. ttnn.as_tensor puts the dtype in the
+# cache file name, so each dtype has its own weight-cache files. Numerics change (bfloat4_b weights). Program
+# configs picked from the weight dtype (_PREFILL_TILE_BYTES in _pick_prefill_progcfg) can differ with "1".
+# Read on every call (weights load once per process; r5_glu_progcfg reads it at graph-build time).
+def w_bf4_enabled():
+    """True if QWEN36_W_BF4=1 (every matmul weight in bfloat4_b); False if "0" (default). Other values raise."""
+    v = os.environ.get("QWEN36_W_BF4", "0")
+    if v not in ("0", "1"):
+        raise ValueError(f"QWEN36_W_BF4 must be '0' or '1', got {v!r}")
+    return v == "1"
+
+
+def mm_weight_dtype():
+    """Matmul weight dtype: bfloat4_b with QWEN36_W_BF4=1, else bfloat8_b (default, today's literal)."""
+    return ttnn.bfloat4_b if w_bf4_enabled() else ttnn.bfloat8_b
+
+
 def mlp_gate_up_dtype():
-    """Single-device MLP gate/up weight dtype: bfloat8_b with QWEN36_F_MLP_GU_BF8=1, else bfloat4_b (default)."""
+    """Single-device MLP gate/up weight dtype: bfloat4_b with QWEN36_W_BF4=1 (whatever QWEN36_F_MLP_GU_BF8 says);
+    else bfloat8_b with QWEN36_F_MLP_GU_BF8=1, else bfloat4_b (default)."""
+    if w_bf4_enabled():
+        return ttnn.bfloat4_b
     return ttnn.bfloat8_b if f_enabled("MLP_GU_BF8") else ttnn.bfloat4_b
 
 
@@ -612,7 +636,11 @@ def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
     xs, ws = list(x.shape), list(w_gate_up.shape)
     if len(xs) < 2 or xs[-2:] != [R5_GLU_T, 2048] or any(d != 1 for d in xs[:-2]):
         return None
-    if ws[-2:] != [2048, 12288] or any(d != 1 for d in ws[:-2]) or w_gate_up.dtype != ttnn.bfloat8_b:
+    if ws[-2:] != [2048, 12288] or any(d != 1 for d in ws[:-2]):
+        return None
+    # Weight dtype: bfloat8_b (as before); with QWEN36_W_BF4=1 also bfloat4_b. With the flag "0" this is exactly
+    # the old `w_gate_up.dtype != ttnn.bfloat8_b` check.
+    if w_gate_up.dtype != ttnn.bfloat8_b and not (w_bf4_enabled() and w_gate_up.dtype == ttnn.bfloat4_b):
         return None
     if x.dtype != (ttnn.bfloat8_b if act_bf8_norm() else ttnn.bfloat16) and x.dtype != ttnn.bfloat16:
         return None
@@ -746,24 +774,48 @@ I3_FLAG_VALUES = {
 # I-3 LMHEAD "A3" (M4): (column splits, workers per DRAM bank, in0_block_w, per_core_N, in0 L1 grid).
 I3_A3_LM_CFG = {"split": 10, "wpb": 2, "bw": 2, "pcn": 13, "in0_grid": (8, 8)}
 
+# --- LM_BF4FAST flag (2026-09-30; single device; plan_0930 T24_LMFAST) -------------------------------------------
+# QWEN36_LM_BF4FAST ("0" default = today's A3 LM head exactly; "1"; any other value raises ValueError). "1" AND an
+# LM head weight in bfloat4_b (QWEN36_W_BF4=1; the model decides from the loaded weight's dtype, see
+# Qwen36Model._a3_lm_fast) switches the I-3 A3 LM head to: compute config LoFi (approx off, fp32 dest, packer L1 acc
+# unchanged) and num_workers_per_dram_bank 3 (chunk shard 99 tiles/bank, program config to match). T17A/T17B (device,
+# one A3 chunk, bf4 weight): LoFi == HiFi2 bit-exact; wpb 3 bit-exact vs wpb 2; 103.1 -> 73.7 us per chunk.
+# With a bfloat8_b LM head weight the flag changes nothing.
+I3_A3_LM_FAST_WPB = 3
 
-def i3_a3_shard_w_tiles(vocab_tiles):
-    """A3 chunk shard width (tiles per DRAM bank): wpb * ceil(chunk_tiles / (8 * wpb)) (776 -> 98)."""
+
+def lm_bf4fast_enabled():
+    """True if QWEN36_LM_BF4FAST=1; False if "0" (default). Other values raise."""
+    v = os.environ.get("QWEN36_LM_BF4FAST", "0")
+    if v not in ("0", "1"):
+        raise ValueError(f"QWEN36_LM_BF4FAST must be '0' or '1', got {v!r}")
+    return v == "1"
+
+
+def i3_a3_wpb(fast=False):
+    """A3 workers per DRAM bank: 2 (I3_A3_LM_CFG), or 3 with the LM_BF4FAST path (fast=True)."""
+    return I3_A3_LM_FAST_WPB if fast else I3_A3_LM_CFG["wpb"]
+
+
+def i3_a3_shard_w_tiles(vocab_tiles, fast=False):
+    """A3 chunk shard width (tiles per DRAM bank): wpb * ceil(chunk_tiles / (8 * wpb)) (776 -> 98; 99 with fast)."""
     c = I3_A3_LM_CFG
     nt = vocab_tiles // c["split"]
-    return c["wpb"] * math.ceil(nt / (DRAM_CORES * c["wpb"]))
+    wpb = i3_a3_wpb(fast)
+    return wpb * math.ceil(nt / (DRAM_CORES * wpb))
 
 
 @functools.lru_cache(maxsize=None)
-def i3_a3_lm_progcfg():
-    """A3 DRAM-sharded program config (R9 A3_s10_bw2: bw 2, per_core_M 1, per_core_N 13, 2 workers/bank)."""
+def i3_a3_lm_progcfg(fast=False):
+    """A3 DRAM-sharded program config (R9 A3_s10_bw2: bw 2, per_core_M 1, per_core_N 13, 2 workers/bank;
+    3 workers/bank with fast=True, the LM_BF4FAST path)."""
     c = I3_A3_LM_CFG
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=c["bw"],
         per_core_M=1,
         per_core_N=c["pcn"],
         fused_activation=None,
-        num_workers_per_dram_bank=c["wpb"],
+        num_workers_per_dram_bank=i3_a3_wpb(fast),
     )
 
 
