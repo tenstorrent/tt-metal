@@ -145,18 +145,41 @@ def test_topk_time_at_measured_rate_with_row_imbalance():
 @pytest.mark.parametrize(
     "layer, t, candidate_calls, row_width",
     [
-        (20, 5120, [], 5120),  # 640 blocks <= 2048: no candidates, direct top-512 over the row
-        (20, 56320, [(640, 7040, 2048)], 56320),  # 1760 superblocks <= 2048: one level over 7040 blocks
-        (20, 517120, [(640, 16160, 2048), (640, 8192, 2048)], 517120),  # two levels; row <= 2^19: direct
-        (20, 1 << 20, [(640, 32768, 2048), (640, 8192, 2048)], 65536),  # row > 2^19: among 2048 x 32 gathered
-        (24, 56320, [], 56320),  # masked to its candidates up to 2^17: top-512 over the whole row
-        (24, 517120, [], 65536),  # above 2^17: among the 2048 x 32 gathered columns
-        (2, 258560, [], 258560),  # ratio-2 index source: always direct
+        (20, 5120, [], 5120),  # 640 blocks of 8 <= 2048: every block kept, no ranking; top-512 over the row
+        (20, 16384, [], 16384),  # exactly 2048 blocks: still no candidates
+        (20, 16416, [(640, 2052, 2048)], 16384),  # 2052 blocks: top-2048 over them; row top-k in 2048 x 8 columns
+        (20, 517120, [(640, 64640, 2048)], 16384),  # all 64640 block maxima ranked (no superblock level)
+        (24, 56320, [], 16384),  # candidate index source: -inf outside its 2048 x 8 candidate columns
+        (24, 517120, [], 16384),
+        (24, 5120, [], 5120),  # no candidates yet: the whole row
+        (2, 258560, [], 258560),  # ratio-2 index source: always the whole row
     ],
 )
-def test_selection_topk_calls_follow_implemented_thresholds(layer, t, candidate_calls, row_width):
+def test_selection_topk_calls_follow_semantics(layer, t, candidate_calls, row_width):
     cand, row = m.selection_topk_calls(m.C.block_type(layer), 640, t)
     assert cand == candidate_calls and row == [(640, row_width, 512)]
+
+
+def test_candidate_selection_work_and_traffic():
+    # LoudBox 2x4 at start 51200: 640 queries per chip; L20 / L24 (ratio 1) see 56,320 columns = 7040 blocks of 8.
+    ops = {o.name: o for o in m.block_ops(20, m.Workload(start=51200), m.LOUDBOX_2X4, HW)}
+    sel = ops["candidate_select"]
+    # 7 max per block of 8 over 7040 blocks + 1 pin per query: 640 x (56320 - 7040 + 1) = 31,539,840
+    assert sel.eltwise == 31_539_840
+    # score read 640 x 56320 x 2 = 72,089,600 B; block maxima written + read 640 x 7040 x 2 x 2 = 18,022,400 B;
+    # 2048 int32 block ids per query written 5,242,880 B
+    assert sel.dram_bytes == 72_089_600 + 18_022_400 + 5_242_880
+    assert sel.topk_calls == [(640, 7040, 2048)]
+    # row top-k: the 16384 candidate columns (20,971,520 B) + block ids (5,242,880 B) read, 512 int32 ids written
+    # (1,310,720 B); a candidate index source does the same and has no selection op of its own
+    for layer in (20, 24):
+        by_name = {o.name: o for o in m.block_ops(layer, m.Workload(start=51200), m.LOUDBOX_2X4, HW)}
+        assert by_name["topk"].dram_bytes == 20_971_520 + 5_242_880 + 1_310_720
+        assert by_name["topk"].topk_calls == [(640, 16384, 512)]
+    assert "candidate_select" not in {o.name for o in m.block_ops(24, m.Workload(start=51200), m.LOUDBOX_2X4, HW)}
+    # the score is written once by the scoring op (visibility mask fused): 72,089,600 B of its DRAM bytes
+    scores = ops["index_scores"]
+    assert scores.dram_bytes == 640 * 32 * 128 * 2 + 56320 * 128 * 2 * 3 + 72_089_600
 
 
 def test_indexer_topk_is_timed_in_compute():

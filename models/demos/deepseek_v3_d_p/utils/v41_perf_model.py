@@ -43,8 +43,9 @@ counted (elements), not timed. Exception: the indexer's top-k (``topk_large_indi
 per-chip element rate (``TOPK_ELEMENTS_PER_NS``, bead F10, LoudBox 2x4, 640 rows per chip), because at long context
 it rivals the scoring FPU time. It runs on the Tensix math thread, so it adds to the op's FPU time
 (``compute_ns = fpu_ns + sfpu_ns``). Rows are spread one per core: the rate is scaled by the row imbalance
-ceil(rows / cores) / (rows / cores) (F10's convention). The top-k calls follow the implemented selection
-(``tt/v41/indexer.py`` ``select``), including its width thresholds.
+ceil(rows / cores) / (rows / cores) (F10's convention). The top-k widths follow the selection's semantics
+(``reference/deepseek_v41/model.py`` ``Indexer.forward`` / ``select_candidate_blocks``), not an implementation's
+thresholds: see ``selection_topk_calls``.
 
 Scenarios (``SCENARIOS``, as DeepSeek-V3.2 / GLM ``tests/sparse_mla/test_sparse_mla_perf.py``): one 5120-token chunk
 at start 0 (empty cache), 51200 (50k cached) and 512000 (0.5M cached). ``galaxy_slice`` scales chunk and start by
@@ -87,12 +88,6 @@ TILE = 32
 # ``topk_large_indices`` elements per ns per chip by k (F10 ``evidence/F10/targets_model.py``: k=512 from 3 points,
 # linear in T, P = 128K-1M; k=2048 from one point at 256K, less certain). Measured, not a hardware capability.
 TOPK_ELEMENTS_PER_NS = {512: 24.7, 2048: 7.1}
-# Selection thresholds of the implemented indexer (``tt/v41/indexer.py``; duplicated because that module imports
-# ttnn): the candidate source's own top-k runs among its candidate blocks above SUBSET_TOPK_MIN_WIDTH columns; a
-# candidate index source masks its whole row up to DENSE_MASK_MAX_WIDTH and gathers its candidates' rows above it.
-SUPERBLOCK = 32  # ``cache.SUPERBLOCK``
-SUBSET_TOPK_MIN_WIDTH = 1 << 19
-DENSE_MASK_MAX_WIDTH = 1 << 17
 # Galaxy chunk starts of the V3.2 / GLM perf scenarios (``tests/sparse_mla/test_sparse_mla_perf.py``)
 SCENARIOS = {"S0": 0, "S1": 51200, "S2": 512000}
 
@@ -512,52 +507,54 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
             matmul_flop=2 * qi * ih * idim * visible,
             fidelity="LoFi",  # FP4 q and k in the reference
             eltwise=qi * ih * visible * 3 + qi * t,
-            # q once, index-K read + tiled copy + read, score written, visibility mask added (2 reads, 1 write)
-            dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score * 4,
+            # q once, index-K read + tiled copy + read; the score written once, its visibility mask fused (the
+            # reference masks the score in place: -inf is part of the declared score)
+            dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score,
         ),
     ]
+    kb, block, k = C.CANDIDATE_TOPK_BLOCKS, C.CANDIDATE_BLOCK_SIZE, C.INDEX_TOPK
+    blocks = -(-t // block)
     candidate_calls, row_calls = selection_topk_calls(btype, qi, t)
-    if btype == V41BlockType.CANDIDATE_SOURCE:
+    candidate_cols = row_calls[0][1]  # the score columns the row top-k reads
+    ids = qi * kb * 4  # the published candidate set: kb int32 block ids per query
+    if candidate_calls:
+        # candidate source: block maxima (7 max per block of 8) of the whole row, written and read back by the
+        # top-kb over blocks; the newest row's block pinned (one write per query); candidate block ids written
         ops.append(
             OpCost(
                 "B10",
                 "candidate_select",
-                eltwise=qi * t * 3,
+                eltwise=qi * (t - blocks) + qi,
                 topk_calls=candidate_calls,
-                # block max over 8 strided slices, block top-k, scatter, repeat_interleave, where -> published mask
-                dram_bytes=score * 2 + score / C.CANDIDATE_BLOCK_SIZE * 4 + score * 2,
+                dram_bytes=score + qi * blocks * 2 * 2 + ids,
             )
         )
-    if btype == V41BlockType.CANDIDATE_INDEX_SOURCE:
-        ops.append(OpCost("B11", "candidate_mask", eltwise=qi * t, dram_bytes=score * 3))
-    ops.append(OpCost("B12", "topk", topk_calls=row_calls, dram_bytes=score + qi * C.INDEX_TOPK * 4))
+    # row top-k: reads the score columns it ranks (a candidate layer: only its candidate blocks' columns, plus the
+    # block ids) and writes k int32 row ids per query
+    row_in = qi * candidate_cols * 2 + (ids if candidate_cols < t else 0)
+    ops.append(OpCost("B12", "topk", topk_calls=row_calls, dram_bytes=row_in + qi * k * 4))
     return ops
 
 
 def selection_topk_calls(btype, qi: float, t: int) -> tuple[list, list]:
-    """The ``topk_large_indices`` calls (rows, width, k) of the implemented selection (``TtV41Indexer.select``) for
-    ``qi`` query rows and a score ``t`` columns wide: (candidate-block calls of the candidate source, row top-k).
+    """The top-k work (rows, width, k) the selection's semantics require for ``qi`` query rows and a score ``t``
+    columns wide: (candidate-block top-k of the candidate source, row top-k).
 
-    Candidate blocks exist once a row has more than ``CANDIDATE_TOPK_BLOCKS`` blocks of 8. The candidate source
-    ranks the block maxima of the whole row while it has at most 2048 superblocks of 32, else the superblock maxima
-    and then the block maxima of the 2048 gathered superblocks (8192 blocks). Row top-k: direct over the row, except
-    the candidate source above ``SUBSET_TOPK_MIN_WIDTH`` and a candidate index source above
-    ``DENSE_MASK_MAX_WIDTH``, which rank the 2048 x 32 gathered columns."""
+    Candidate blocks exist once a row has more than ``CANDIDATE_TOPK_BLOCKS`` (kb) blocks of ``CANDIDATE_BLOCK_SIZE``
+    (8); otherwise every reachable block is kept, which needs no ranking. The candidate source ranks all its block
+    maxima (top-kb over ceil(t / 8)); a hierarchical reduction (superblock maxima first) is an implementation choice
+    that adds work outside the semantic graph and is not counted. The row top-k (k = ``INDEX_TOPK``) of a layer with
+    candidates reads only the kb x 8 candidate columns: a candidate index source's score is -inf elsewhere (its
+    masked_fill); the candidate source's own top-k rows lie inside its top-kb blocks whenever kb - 1 > k (a row
+    outside them is at most its block's maximum, and at least kb - 1 unpinned kept blocks have a maximum at least as
+    large, so more than k rows rank above it), so given the block maxima the other columns cannot change its output. Without candidates, and at the ratio-2 index source, the
+    row top-k ranks the whole row."""
     kb, block, k = C.CANDIDATE_TOPK_BLOCKS, C.CANDIDATE_BLOCK_SIZE, C.INDEX_TOPK
-    has_candidates = t // block > kb
-    gathered = kb * SUPERBLOCK
-    candidate_calls, row_calls = [], [(qi, t, k)]
-    if btype == V41BlockType.CANDIDATE_SOURCE and has_candidates:
-        nsb = t // SUPERBLOCK
-        if nsb <= kb:
-            candidate_calls = [(qi, t // block, kb)]
-        else:
-            candidate_calls = [(qi, nsb, kb), (qi, gathered // block, kb)]
-        if t > SUBSET_TOPK_MIN_WIDTH:
-            row_calls = [(qi, gathered, k)]
-    if btype == V41BlockType.CANDIDATE_INDEX_SOURCE and has_candidates and t > DENSE_MASK_MAX_WIDTH:
-        row_calls = [(qi, gathered, k)]
-    return candidate_calls, row_calls
+    blocks = -(-t // block)
+    has_candidates = blocks > kb and btype in (V41BlockType.CANDIDATE_SOURCE, V41BlockType.CANDIDATE_INDEX_SOURCE)
+    assert kb - 1 > k, "the candidate source's top-k must lie inside its candidate blocks"
+    candidate_calls = [(qi, blocks, kb)] if has_candidates and btype == V41BlockType.CANDIDATE_SOURCE else []
+    return candidate_calls, [(qi, kb * block if has_candidates else t, k)]
 
 
 def moe_dispatch_rows(w: Workload, layout: Layout) -> int:
@@ -734,7 +731,7 @@ OP_GROUPS = {
     "attn.kv_write": ("window_kv_write", "compressor_r1", "compressor_r2", "index_keys", "compressed_kv_write"),
     "attn.a2a": ("q_head_to_seq", "o_seq_to_head"),
     "attn.sparse_sdpa": ("sparse_attention",),
-    "attn.indexer": ("index_wq_b", "index_weights_proj", "index_scores", "candidate_select", "candidate_mask", "topk"),
+    "attn.indexer": ("index_wq_b", "index_weights_proj", "index_scores", "candidate_select", "topk"),
     "moe.gate": ("gate",),
     "moe.dispatch_combine": ("moe_input_gather", "dispatch", "combine", "routed_reduce"),
     "moe.routed": ("routed_experts",),
