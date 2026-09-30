@@ -159,33 +159,68 @@ void kernel_main() {
             }
             uint32_t v = it.va;
             uint32_t sw = (it.va * r - it.ca_al) / 2;  // source word index of pixel v
-            for (; v + 1 < it.vb; v += 2) {
-                uint32_t w0[wpp];
-                uint32_t w1[wpp];
+            if constexpr (2 * wpp <= 16) {
+                // Small pixels (r=2, C<=4): two pixels per iteration, all 2*wpp loads issued before any store.
+                for (; v + 1 < it.vb; v += 2) {
+                    uint32_t w0[wpp];
+                    uint32_t w1[wpp];
 #pragma GCC unroll 32
-                for (uint32_t k = 0; k < rows_per_item; k++) {
+                    for (uint32_t k = 0; k < rows_per_item; k++) {
 #pragma GCC unroll 8
-                    for (uint32_t t = 0; t < wpr; t++) {
-                        w0[k * wpr + t] = rows[k][sw + t];
-                        w1[k * wpr + t] = rows[k][sw + wpr + t];  // pixel v+1 starts r/2 words on
+                        for (uint32_t t = 0; t < wpr; t++) {
+                            w0[k * wpr + t] = rows[k][sw + t];
+                            w1[k * wpr + t] = rows[k][sw + wpr + t];  // pixel v+1 starts r/2 words on
+                        }
                     }
-                }
-                tt_l1_ptr uint32_t* d0 = (tt_l1_ptr uint32_t*)dst;
-                tt_l1_ptr uint32_t* d1 = (tt_l1_ptr uint32_t*)(dst + out_row_nbytes);
+                    tt_l1_ptr uint32_t* d0 = (tt_l1_ptr uint32_t*)dst;
+                    tt_l1_ptr uint32_t* d1 = (tt_l1_ptr uint32_t*)(dst + out_row_nbytes);
 #pragma GCC unroll 32
-                for (uint32_t q = 0; q < wpp; q++) {
-                    d0[q] = w0[q];
-                    d1[q] = w1[q];
-                }
+                    for (uint32_t q = 0; q < wpp; q++) {
+                        d0[q] = w0[q];
+                        d1[q] = w1[q];
+                    }
 #pragma GCC unroll 32
-                for (uint32_t q = wpp; q < wpad; q++) {
-                    d0[q] = 0;
-                    d1[q] = 0;
+                    for (uint32_t q = wpp; q < wpad; q++) {
+                        d0[q] = 0;
+                        d1[q] = 0;
+                    }
+                    dst += 2 * out_row_nbytes;
+                    sw += 2 * wpr;
                 }
-                dst += 2 * out_row_nbytes;
-                sw += 2 * wpr;
+            } else {
+                // Large pixels (e.g. r=4, C=3: 24 words): one pixel per iteration, gathered in chunks of
+                // CHUNK words so about 12 loads are in flight without spilling registers - 2*wpp live words
+                // do not fit the 32 RISC-V registers, and spills double the L1 traffic.
+                constexpr uint32_t CHUNK = 12;
+                for (; v < it.vb; v++) {
+                    tt_l1_ptr uint32_t* d0 = (tt_l1_ptr uint32_t*)dst;
+#pragma GCC unroll 8
+                    for (uint32_t q0 = 0; q0 < wpp; q0 += CHUNK) {
+                        constexpr uint32_t n = CHUNK;  // words in this chunk (the tail is bounded below)
+                        uint32_t w[n];
+#pragma GCC unroll 16
+                        for (uint32_t j = 0; j < n; j++) {
+                            if (q0 + j < wpp) {
+                                const uint32_t k = (q0 + j) / wpr;
+                                w[j] = rows[k][sw + ((q0 + j) % wpr)];
+                            }
+                        }
+#pragma GCC unroll 16
+                        for (uint32_t j = 0; j < n; j++) {
+                            if (q0 + j < wpp) {
+                                d0[q0 + j] = w[j];
+                            }
+                        }
+                    }
+#pragma GCC unroll 32
+                    for (uint32_t q = wpp; q < wpad; q++) {
+                        d0[q] = 0;
+                    }
+                    dst += out_row_nbytes;
+                    sw += wpr;
+                }
             }
-            if (v < it.vb) {  // odd tail
+            if (v < it.vb) {  // odd tail of the pair loop
                 tt_l1_ptr uint32_t* d0 = (tt_l1_ptr uint32_t*)dst;
 #pragma GCC unroll 32
                 for (uint32_t k = 0; k < rows_per_item; k++) {
