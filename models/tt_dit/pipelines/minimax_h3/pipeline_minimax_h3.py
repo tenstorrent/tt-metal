@@ -75,7 +75,6 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
-
 from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
 from ...models.transformers.minimax_h3.step_reuse import StepReusePlan
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
