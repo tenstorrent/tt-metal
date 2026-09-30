@@ -484,6 +484,10 @@ public:
     bool is_sender_channel_serviced(uint32_t risc_id, uint32_t channel) const {
         return is_sender_channel_serviced_.at(risc_id).at(channel);
     }
+    // `channel` is the receiver compact index (RouterVcShape::flat_receiver_id).
+    bool is_receiver_channel_serviced(uint32_t risc_id, uint32_t channel) const {
+        return is_receiver_channel_serviced_.at(risc_id).at(channel);
+    }
 
     //    protected:
     tt::tt_metal::CoreCoord my_eth_core_logical;
