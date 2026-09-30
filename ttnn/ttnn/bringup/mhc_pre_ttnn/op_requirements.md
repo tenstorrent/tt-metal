@@ -10,7 +10,7 @@
     normalisation, then (iters−1) × (row, column)
   - `y = Σ_i pre_i · x[i·C:(i+1)·C]`
 - **PyTorch Reference**: `eval/golden_tests/mhc_pre/helpers.py::pytorch_mhc_pre` (with `sinkhorn_knopp`).
-- **Import Path**: `from ttnn.bringup.mhc_pre import mhc_pre, default_compute_kernel_config`
+- **Import Path**: `from ttnn.bringup.mhc_pre_ttnn import mhc_pre, default_compute_kernel_config`
 - **Function Signature**:
   `mhc_pre(input_tensor, proj_weight, proj_bias, *, scale: tuple[float, float, float], sinkhorn_iters: int = 20, eps: float = 1e-6, norm_eps: float = 1e-6, compute_kernel_config: ttnn.ComputeConfigDescriptor = None) -> (y, post, comb)`
   - y is `(..., T, C)` in X's dtype.
@@ -232,7 +232,7 @@ the one T3 lever.
 
 ```
 Bullet 2 FAIL: acceptance/refinement tests failing:
-  - ttnn/ttnn/bringup/mhc_pre/tests/unit/test_mhc_pre_precision_baseline.py::test_mhc_pre_bf16_stream_fp32_weight_precision[X1x1x256x24576] - AssertionError: comb: rel_rms 0.011754175593281494
+  - ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_mhc_pre_precision_baseline.py::test_mhc_pre_bf16_stream_fp32_weight_precision[X1x1x256x24576] - AssertionError: comb: rel_rms 0.011754175593281494
 Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 205/206). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
 ```
 
