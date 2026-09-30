@@ -46,6 +46,11 @@ GATHER_INDEX_WIDTH = 60 * 32
 # blocks, which are among the 2048 kept ones) once that is cheaper than a top-k over the whole row: measured on LB
 # 2x4 the gathered path costs ~12 ms at any width, the direct top-512 3.5 ms at 136K and 27 ms at 1.05M columns
 SUBSET_TOPK_MIN_WIDTH = 1 << 19
+# A candidate index source masks its whole score to its candidate blocks (a scatter of the block ids, an 8x
+# expansion, one top-k over the row) up to this width and gathers the candidates' rows above it: the gathered path
+# costs ~12 ms at any width (2048 superblocks of 32 rows per query), the masked one grows with the row (LB 2x4
+# traced L24: 3.8 / 16.1 / 30.1 ms masked vs 13.0 / 15.7 / 18.8 ms gathered at 21.5K / 136K / 267K columns)
+DENSE_MASK_MAX_WIDTH = 1 << 17
 
 
 WQ_B_GRID = (11, 10)  # the attention projections' 2D-multicast grid (tt/v41/attention.py MATMUL_GRID)
@@ -419,6 +424,29 @@ class TtV41Indexer(LightweightModule):
         row = ttnn.add(ttnn.multiply(chosen, block), ttnn.bitwise_and(pos, block - 1))
         return ttnn.to_layout(_keep_sentinel(row, pos), ttnn.ROW_MAJOR_LAYOUT)
 
+    def _topk_masked(self, score, ids, k: int):
+        """Top-k rows of ``score`` among each query's candidate blocks ``ids`` (as ``_topk_in_blocks``) by masking
+        the whole row: the block ids scatter into per-block keep flags, expanded to the rows of each block."""
+        rows, width = score.shape[2], score.shape[3]
+        block, kc = self.config.CANDIDATE_BLOCK_SIZE, ids.shape[3]
+        nblocks = width // block
+        cols = _round_up(nblocks + 1, 32)  # one spare column takes the sentinel picks
+        assert cols <= width and kc <= width
+        tiled = ttnn.to_layout(score, ttnn.TILE_LAYOUT)
+        # flags base / source from device fills of tiled slices (zeros_like / ones_like of a tiled tensor run
+        # ttnn.fill; of a row-major one, or a ttnn.full on the device, they write from the host)
+        base = ttnn.zeros_like(ttnn.slice(tiled, [0, 0, 0, 0], [1, 1, rows, cols]))
+        ones = ttnn.ones_like(ttnn.slice(tiled, [0, 0, 0, 0], [1, 1, rows, kc]))
+        target = _min(ttnn.to_layout(ids, ttnn.TILE_LAYOUT), nblocks)
+        target = ttnn.to_layout(ttnn.typecast(target, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT)
+        keep = ttnn.scatter(
+            ttnn.to_layout(base, ttnn.ROW_MAJOR_LAYOUT), -1, target, ttnn.to_layout(ones, ttnn.ROW_MAJOR_LAYOUT)
+        )
+        keep = ttnn.slice(keep, [0, 0, 0, 0], [1, 1, rows, nblocks])
+        keep = ttnn.repeat_interleave(ttnn.to_layout(keep, ttnn.TILE_LAYOUT), block, dim=-1)
+        masked = ttnn.where(ttnn.gtz(keep), tiled, float("-inf"))
+        return _topk(ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT), k)
+
     def select(self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None):
         """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with a
         sentinel tail, the published ``CandidateBlocks`` of the candidate source or None)."""
@@ -431,6 +459,8 @@ class TtV41Indexer(LightweightModule):
                 return self._topk_in_blocks(score, published.ids, tables, k), published
         elif self.uses_candidates:
             assert isinstance(candidates, CandidateBlocks), "a candidate index source needs the published candidates"
+            if candidates.ids is not None and score.shape[3] <= DENSE_MASK_MAX_WIDTH:
+                return self._topk_masked(score, candidates.ids, k), None
             if candidates.ids is not None:
                 return self._topk_in_blocks(score, candidates.ids, tables, k), None
         return _topk(score, k), published

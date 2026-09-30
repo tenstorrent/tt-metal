@@ -116,7 +116,14 @@ def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int,
         results[f"{tag}_source_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     idx, _ = consumer.select(feed, tables, start, visible, published)
     masked = scores.masked_fill(~ref_mask, float("-inf"))
-    results[f"{tag}_consumer_topk_exact"] = _rows(_per_query(idx)[0, 0]) == _ref_rows(masked, k)
+    ref_masked = _ref_rows(masked, k)
+    results[f"{tag}_consumer_topk_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
+    if published.ids is not None:
+        # both implementations of the candidate-restricted top-k (select picks one by row width)
+        idx = consumer._topk_in_blocks(feed, published.ids, tables, k)
+        results[f"{tag}_consumer_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
+        idx = consumer._topk_masked(feed, published.ids, k)
+        results[f"{tag}_consumer_topk_masked_exact"] = _rows(_per_query(idx)[0, 0]) == ref_masked
     return published
 
 
