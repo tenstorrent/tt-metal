@@ -45,6 +45,29 @@
   "started": "2026-09-30T03:31:24",
   "status": "PASS"
  },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 4915.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:05:48"
+   }
+  ],
+  "last_run": "2026-09-30T05:05:48",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "cpu_seconds": 4903.1,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 40,
+   "text_top5_acc_last_chunk": 0.7130298614501953
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:43:52",
+  "status": "PASS"
+ },
  "R.1": {
   "attempts": 0,
   "duration_s": 51.9,
