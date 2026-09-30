@@ -24,3 +24,10 @@ blx03 broker is HELD (degraded) since 13:37 PT: t41's job 904 was broker-killed 
 t16's ref_dv145 has no latents (raw/ holds only run.log), so the conv run is still needed for the CPU crop A/B.
 Next: once `tt-device-mcp status 1` on blx03 shows no HELD row and no other smarton job, relaunch drive19.sh
 (setsid nohup, log ~/fasth3/drive19.log). drive16.sh is done, so busy() only waits on other smarton jobs.
+
+## 2026-09-30 13:50 PT (attempt wake, probe passed but device still HELD)
+blx03 still HELD (degraded): 8/32 chips off the bus, broker glx_reset 910/912 failed. Nothing submitted.
+drive19.sh busy() now also waits while a broker recovery row runs or the latest [broker]hold row is HELD
+(and no longer waits on drive16). Relaunched detached on blx03: pid 122727, log ~/fasth3/drive19.log.
+It submits by itself once the hold ends and no other smarton job is running or queued.
+Wake check: DRIVE19_DONE in the log, or the driver is gone (e.g. blx03 rebooted) -> check state, relaunch if needed.

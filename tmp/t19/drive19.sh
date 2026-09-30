@@ -2,7 +2,12 @@
 # t19 (runs on blx03): after t16's driver and every other smarton job are done, queue ONE job: LTX-2.5 1080p/145f,
 # conv decoder, seeds 0,1,2 on the default prompt, stage-2 latents dumped to /var/tmp/fasth3/t19. Ends with DRIVE19_DONE.
 cd /home/smarton/fasth3/t19
-busy() { pgrep -f drive16.sh >/dev/null || tt-device-mcp status 1 2>&1 | sed -n "/^RUNNING/,/^RECENT/p" | grep -qw smarton; }
+# Busy while another smarton job runs or queues, the broker runs a recovery step, or its latest hold row is still HELD.
+busy() {
+  local st; st=$(tt-device-mcp status 40 2>&1) || return 0
+  echo "$st" | sed -n "/^RUNNING/,/^RECENT/p" | grep -qwE "smarton|broker" && return 0
+  echo "$st" | sed -n "/^RECENT/,\$p" | grep -m1 "\[broker\]hold" | grep -q "HELD"
+}
 while true; do
   while busy; do sleep 60; done
   sleep $((RANDOM % 30)); busy || break
