@@ -47,6 +47,7 @@ on:
           - vadv2
           - openpdn-mnist
           - yunet
+          - cosyvoice2-0.5b
           - xtts-v2
           - vibevoice-1.5b
       sku:

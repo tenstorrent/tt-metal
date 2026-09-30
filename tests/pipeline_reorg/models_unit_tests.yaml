@@ -2248,3 +2248,23 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: unit
+
+# CI validation of PR #56651 (mirror branch, not part of the PR). Real-checkpoint device PCC tests only; the e2e
+# suite needs COSYVOICE2_INPUTS generated from an upstream CosyVoice checkout + LibriSpeech, not staged.
+- name: CosyVoice2-0.5B unit tests
+  cmd: |
+    uv pip install -r models/experimental/cosyvoice2/requirements.txt
+    export TT_METAL_WATCHER=30
+    pytest --timeout 1800 models/experimental/cosyvoice2/tests/pcc/test_hift_checkpoint.py \
+      models/experimental/cosyvoice2/tests/pcc/test_flow_checkpoint.py \
+      models/experimental/cosyvoice2/tests/pcc/test_f0_predictor_checkpoint.py \
+      models/experimental/cosyvoice2/tests/pcc/test_qwen2lm_checkpoint.py
+  model: cosyvoice2-0.5b
+  model_family: CosyVoice
+  skus:
+    wh_n150:
+      timeout: 45
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by Sedherthe)
+  team: models
+  budget_type: unit
