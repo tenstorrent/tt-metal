@@ -7,13 +7,16 @@ dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float32"
   - name: "input_B"
+    tile_dims: all
     dims: [256, 256]
     format: "Float32"
     stimuli: 1.0
   - name: "reduce_block_max_runtime_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float32"
 

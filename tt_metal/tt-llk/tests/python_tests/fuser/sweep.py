@@ -19,15 +19,16 @@ from .arch_common import _get_parser
 from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
 from .fuser_config import FuserConfig
 from .operand import L1_PACKERS
+from .validator import SUPPORTED_TILE_SIZES
 
-SweepValue = str | bool | int | float
+SweepValue = str | bool | int | float | tuple[int, int]
 ConfigPath = tuple[str | int, ...]
 AllValues = tuple[SweepValue, ...] | Callable[[dict], Iterable[SweepValue]]
 
 
 @dataclass(frozen=True)
 class SweepParameter:
-    value_type: type[str] | type[bool] | type[int] | type[float] = str
+    value_type: type[str] | type[bool] | type[int] | type[float] | type[tuple] = str
     all_values: AllValues | None = None
     node_types: tuple[str, ...] = ()
     id_field: str | None = None
@@ -88,6 +89,9 @@ SWEEP_PARAMETERS: dict[str, dict[str, SweepParameter]] = {
     },
     "operand": {
         "format": SweepParameter(all_values=_operand_formats),
+        "tile_dims": SweepParameter(
+            value_type=tuple, all_values=tuple(sorted(SUPPORTED_TILE_SIZES))
+        ),
     },
 }
 
@@ -120,12 +124,27 @@ def _sweep_choices(
             raise ValueError(f"{location}: 'all' is not defined; use an explicit list")
         values = list(provider(node) if callable(provider) else provider)
     elif isinstance(value, list):
+        if (
+            value
+            and parameter.value_type is tuple
+            and all(type(item) is int for item in value)
+        ):
+            return None
         values = value
     else:
         return None
 
     if not values:
         raise ValueError(f"{location}: sweep choices cannot be empty")
+    if parameter.value_type is tuple:
+        if any(
+            not isinstance(choice, (list, tuple))
+            or len(choice) != 2
+            or any(type(dim) is not int for dim in choice)
+            for choice in values
+        ):
+            raise ValueError(f"{location}: sweep choices must be [rows, cols] pairs")
+        values = [tuple(choice) for choice in values]
     if any(type(choice) is not parameter.value_type for choice in values):
         raise ValueError(
             f"{location}: sweep choices must be {parameter.value_type.__name__} values"
@@ -167,7 +186,8 @@ def expand_fuser_configs(
             for key in axis.path[:-1]:
                 node = node[key]
             node[axis.path[-1]] = value
-            suffix.append(f"{axis.label}_{value}")
+            value_id = "x".join(map(str, value)) if isinstance(value, tuple) else value
+            suffix.append(f"{axis.label}_{value_id}")
         case_name = "__".join([test_name, *suffix])
         yield case_name, config_dict
 
