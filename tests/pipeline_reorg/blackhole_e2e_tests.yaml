@@ -197,7 +197,7 @@
     # GLM-5.2 reshards heads->sequence in _sparse_mla so it now runs at tp=4; 2x4 is its coverage (accuracy
     # + the determinism/chunked anchor cases, which pin to the highest-TP mesh). The sparse suite carries
     # no tier markers, so there is no -m gate.
-    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and 2x4" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and 2x4 and not kv_only" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:

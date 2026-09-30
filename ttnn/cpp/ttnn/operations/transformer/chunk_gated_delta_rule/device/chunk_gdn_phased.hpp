@@ -31,7 +31,7 @@ struct ChunkGdnPrepParams {
     uint32_t chunk_size;
     uint32_t key_dim;
     uint32_t val_dim;
-    // OPT-A (QWEN_GDN_FLAT_QKV): when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
+    // Flat v: when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
     // prep reader tile-addresses head hv's chunk c directly out of it (no head-split/permute/pad
     // materialization on the host). HV is the value-head count (needed for the flat row stride).
     // Only the v INPUT read changes; the prep still WRITES head-major v_beta, so the scan and every
@@ -46,6 +46,9 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
+    // work-items over the whole grid. Measurement only. Hashed, like every field here.
+    bool prep_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -80,8 +83,8 @@ struct ChunkGdnPrepOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
-// (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta - kd@S subtraction,
+// Returns {v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
+// (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta + nkd@S accumulation,
 //  so the inverse's fp error is not amplified by the cancellation.)
 std::vector<Tensor> chunk_gdn_prep(
     const Tensor& q,
@@ -101,7 +104,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool prep_serial = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -112,8 +116,8 @@ struct ChunkGdnScanParams {
     uint32_t chunk_size;
     uint32_t key_dim;
     uint32_t val_dim;
-    bool has_initial_state;
     bool output_final_state;
+    // ChunkGdnPhasedProgramConfig::use_mcast / scan_serial (see chunk_gated_delta_rule_config.hpp).
     bool use_mcast = true;
     bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -121,14 +125,14 @@ struct ChunkGdnScanParams {
 };
 
 struct ChunkGdnScanInputs {
-    Tensor v_beta;                        // [BH, NC, C, V] fp32  (= v * beta)
-    Tensor kd;                            // [BH, NC, C, K] fp32  (= k_beta * decay_exp)
-    Tensor q_decay;                       // [BH, NC, C, K] fp32
-    Tensor intra;                         // [BH, NC, C, C] fp32
-    Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 1, 1] fp32 (scalar per chunk in tile [0,0])
-    Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
-    std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    Tensor v_beta;  // [BH, NC, C, V] fp32  (= v * beta)
+    Tensor nkd;  // [BH, NC, C, K] fp32  (= -(k_beta * decay_exp): negated, the scan accumulates v_beta + nkd@S in DST)
+    Tensor q_decay;        // [BH, NC, C, K] fp32
+    Tensor intra;          // [BH, NC, C, C] fp32
+    Tensor k_dec_t;        // [BH, NC, K, C] fp32
+    Tensor dl;             // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
+    Tensor t_inv;          // [BH, NC, C, C] fp32  (WY inverse)
+    Tensor initial_state;  // [BH, K, V] fp32, REQUIRED: the scan reader always reads it (zeros for a fresh sequence)
 };
 
 struct ChunkGdnScanProgramFactory {
@@ -149,20 +153,23 @@ struct ChunkGdnScanOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {o [BH,NC,C,V] bf16, final_state [BH,K,V] fp32}.
+// Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32}. o is fp32 — see the scan factory's
+// df_io and ChunkGdnScanOperation::compute_output_specs (a bf16 o degraded full-model quality
+// and was removed).
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
-    const Tensor& kd,
+    const Tensor& nkd,
     const Tensor& q_decay,
     const Tensor& intra,
     const Tensor& k_dec_t,
     const Tensor& dl,
     const Tensor& t_inv,
-    const std::optional<Tensor>& initial_state,
+    const Tensor& initial_state,
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast = true);
+    bool use_mcast = true,
+    bool force_serial = false);
 
 }  // namespace ttnn::prim

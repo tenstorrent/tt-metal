@@ -25,6 +25,9 @@ from .ring_prefill import (
     write_chunk_to_sliding_ring_cache,
 )
 
+# One buffer pair for each of the five sliding layers between global layers.
+NUM_SWA_HALO_BUFFER_PAIRS = 5
+
 
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
@@ -284,6 +287,7 @@ class Gemma4Attention:
                 max_seq_len=self.ring_max_seq_len,
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
+                gather_buffer_key=self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS,
                 sliding_window_size=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
