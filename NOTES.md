@@ -48,3 +48,7 @@ Both caches survived the reboot on /var/tmp. New resumable driver tmp/drive26d.s
 skips labels whose run.log already shows " passed". dv145 = job 671 (queued behind 643/651/656).
 If the driver dies (reboot): rerun `nohup bash tmp/drive26d.sh >> tmp/drive26d.log 2>&1 &` in the t10 worktree.
 Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log (LTX_TIME_STAGES lines), mp4 in the same dir; still with ffmpeg -ss 3 -frames:v 1; build the table.
+Task t26 attempt 5 (2026-09-30 16:03): box rebooted again at 16:00 and killed drive26d; job 671 survived in the broker queue
+(position 4 behind 643/651/656). Both caches still on /var/tmp (72G DiT, 4.8G kernels). drive26d.sh now takes RESUME_<label>=<job>
+to wait on an already-queued job; restarted as `RESUME_dv145=671 nohup bash tmp/drive26d.sh >> tmp/drive26d.log 2>&1 &`.
+If it dies again: check `tt-device-mcp status -j 671`; if still queued, restart with RESUME_dv145=671, else without it.
