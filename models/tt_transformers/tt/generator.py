@@ -2420,9 +2420,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if not on_device_sampling or sampling_module is None or compile_output is None:
                 continue
             tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+            # Before the first capture no request has penalty history, so compiling the count update is safe.
             sampling_module.precompile(
                 logits=compile_output[i][0],
                 tt_out_tok=tt_out_tok,
+                compile_token_update=all_sampling_configs,
                 all_configs=all_sampling_configs,
             )
             if self.device_grammar_enabled:
@@ -2430,6 +2432,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     logits=compile_output[i][0],
                     tt_out_tok=tt_out_tok,
                     grammar_bitmask=self._create_warmup_grammar_bitmask(sampling_module.tt_sampling.max_batch_size),
+                    compile_token_update=all_sampling_configs,
                     all_configs=all_sampling_configs,
                 )
 

@@ -393,6 +393,7 @@ class SamplingGenerator:
         *,
         tt_out_tok: ttnn.Tensor | None = None,
         grammar_bitmask: torch.Tensor | None = None,
+        compile_token_update: bool = False,
         all_configs: bool = False,
     ) -> None:
         """Run the sampling pipeline once without capturing, to compile it and size its scratch.
@@ -409,6 +410,10 @@ class SamplingGenerator:
         selected by ``grammar_bitmask``. Grammar-plus-logprobs is excluded
         because that runtime combination is unsupported, and force-argmax
         variants are skipped when the model disables that path.
+
+        ``compile_token_update`` also compiles the penalty token-count update that a
+        captured trace records, then zeroes the counters. Only pass it before any
+        request has output history.
         """
         grammar_on = grammar_bitmask is not None
         if grammar_on:
@@ -425,8 +430,10 @@ class SamplingGenerator:
                 penalties_on=self._penalties_active,
                 grammar_on=grammar_on,
                 tt_out_tok=tt_out_tok,
-                count_tokens=False,
+                count_tokens=compile_token_update,
             )
+            if compile_token_update:
+                self.reset_penalty_counts()
             return
 
         log_probs = self.tt_sampling.log_probs_calculator
@@ -455,8 +462,10 @@ class SamplingGenerator:
                     penalties_on=penalties_on,
                     grammar_on=grammar_on,
                     tt_out_tok=tt_out_tok,
-                    count_tokens=False,
+                    count_tokens=compile_token_update,
                 )
+                if compile_token_update:
+                    self.reset_penalty_counts()
         finally:
             self._penalties_active = saved_penalties
             self.tt_sampling._force_argmax_sampling = saved_force_argmax

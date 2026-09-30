@@ -147,6 +147,8 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
     sampling._penalties_active = False
     sampling._log_probs_active = False
     sampling._copy_warmup_logits = lambda logits: logits
+    penalty_resets = []
+    sampling.tt_penalties = SimpleNamespace(reset_output_tokens=lambda: penalty_resets.append(True))
     calls = []
     sampling._run_sampling = lambda _logits, **kwargs: calls.append(
         (
@@ -172,13 +174,15 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
     sampling.precompile(
         object(),
         grammar_bitmask=grammar,
+        compile_token_update=True,
         all_configs=True,
     )
 
     assert sampling.tt_sampling.grammar_updates == [grammar]
     assert set(calls) == {
-        (penalties, False, force_argmax, True, False) for penalties in (False, True) for force_argmax in (False, True)
+        (penalties, False, force_argmax, True, True) for penalties in (False, True) for force_argmax in (False, True)
     }
+    assert len(penalty_resets) == 2
     assert sampling._penalties_active is False
     assert sampling.tt_sampling._force_argmax_sampling is False
     assert sampling._log_probs_active is False
