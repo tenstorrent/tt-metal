@@ -15,7 +15,9 @@ import torch
 import ttnn
 
 from ttnn.operations._op_contract import UnsupportedAxisValue
-from ttnn.bringup.mhc_post_ttnn import mhc_post, default_compute_kernel_config
+from ttnn.bringup.mhc_post_ttnn import default_compute_kernel_config
+
+mhc_post = ttnn.bringup.mhc_post  # the C++ op (the Python builder is the parity reference)
 
 N = 4
 
