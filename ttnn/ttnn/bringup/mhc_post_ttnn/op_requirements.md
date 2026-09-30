@@ -10,7 +10,7 @@
       pp = post.float().reshape(-1, n, 1); mm = comb.float().reshape(-1, n, n)
       return (pp * ff + torch.einsum("tij,tic->tjc", mm, xx)).reshape(*lead, n * C)
   ```
-- **Import Path**: `from ttnn.bringup.mhc_post import mhc_post, default_compute_kernel_config`
+- **Import Path**: `from ttnn.bringup.mhc_post_ttnn import mhc_post, default_compute_kernel_config`
 - **Function Signature**: `mhc_post(input_tensor: ttnn.Tensor, residual: ttnn.Tensor, post: ttnn.Tensor, comb: ttnn.Tensor, *, compute_kernel_config: ttnn.ComputeConfigDescriptor = None) -> ttnn.Tensor`. The inputs are F `(..., T, C)`, X `(..., T, n·C)`, post `(..., T, n)` float32 and comb `(..., T, n·n)` float32, all TILE and DRAM interleaved. The output X' has X's shape and dtype.
 
 ## Phases

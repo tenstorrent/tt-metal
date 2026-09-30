@@ -129,7 +129,7 @@ No MUST violations. No prefer/consider advisories are left unfollowed.
 
 ## Precision Baseline
 
-`ttnn/ttnn/bringup/mhc_pre/tests/unit/test_mhc_pre_precision_baseline.py` (fp32 X, tf32-rounded fp32 W,
+`ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_mhc_pre_precision_baseline.py` (fp32 X, tf32-rounded fp32 W,
 golden reference `pytorch_mhc_pre`, seed 7). ULP is float32 ULP of the reference. Ratio = got/true over
 \|ref\| > 1e-3·max.
 
