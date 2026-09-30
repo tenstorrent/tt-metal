@@ -7,8 +7,10 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    generate_bfloat16_binary_grid,
     pairwise_inputs,
     run_binary,
+    to_tt_tensor,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -28,7 +30,8 @@ Category 2: binary comparison + min/max
 
 Accuracy criteria
 ─────────────────
-  eq, ne, lt, le, gt, ge : exact  (SFPU comparison; result is 0 or 1)
+  eq, ne, lt, le, gt, ge : exact  (SFPU comparison; result is 0 or 1),
+                           tensor-tensor and tensor-scalar, incl. inplace
   isclose                : exact vs torch.isclose after two documented
                            dest-precision exceptions (see test_isclose)
   minimum, maximum       : exact on finite values, ±0, and ±inf
@@ -64,6 +67,57 @@ def test_relational_ops(device, ttnn_op):
     """
     input_a, input_b = pairwise_inputs(include_spl_values=True)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
+    assert_equal(golden.float(), result.float())
+
+
+RELATIONAL_OPS = [ttnn.eq, ttnn.ne, ttnn.lt, ttnn.le, ttnn.gt, ttnn.ge]
+RELATIONAL_INPLACE_OPS = [ttnn.eq_, ttnn.ne_, ttnn.lt_, ttnn.le_, ttnn.gt_, ttnn.ge_]
+
+# One scalar per ordering / special-value class. 0.1 is not a bfloat16 value:
+# the device packs the scalar as bfloat16 (round-to-nearest-even), and torch
+# casts a python scalar to the bfloat16 tensor's dtype before comparing, so
+# both compare against 0.10009765625.
+_RELATIONAL_SCALAR_VALUES = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    0.1,
+    -0.1,
+    float(torch.finfo(torch.bfloat16).tiny),
+    float(torch.finfo(torch.bfloat16).max),
+    float(torch.finfo(torch.bfloat16).min),
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+]
+
+
+@pytest.mark.parametrize("ttnn_op", RELATIONAL_OPS + RELATIONAL_INPLACE_OPS)
+@pytest.mark.parametrize("scalar", _RELATIONAL_SCALAR_VALUES)
+def test_relational_ops_scalar(device, ttnn_op, scalar):
+    """Tensor-scalar coverage of the relational ops (and their inplace
+    variants): the stratified bfloat16 grid, including ±0, ±inf and qNaN,
+    against a scalar from every ordering / special-value class.
+
+    The grid is broadcast to (2048, 2048) so the scalar path spans many tiles,
+    as in category 3's test_logical_ops_scalar. Same contract as the
+    tensor-tensor sweep: exact 0/1, ±0 compare equal, a NaN on either side
+    makes every compare false except ne.
+    """
+    values = generate_bfloat16_binary_grid(include_spl_values=True)
+    input_a = values.unsqueeze(1).expand(values.numel(), values.numel()).contiguous()
+    tt_a = to_tt_tensor(input_a, device)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_a.clone(), torch.tensor(scalar, dtype=input_a.dtype))
+
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, scalar)
+        result = ttnn.to_torch(tt_a)
+    else:
+        result = ttnn.to_torch(ttnn_op(tt_a, scalar))
+
     assert_equal(golden.float(), result.float())
 
 
