@@ -71,7 +71,9 @@ def test_rvv_column_math(device):
         runtime_args=rt,
         config=config,
     )
-    ttnn.generic_op([scratch], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[]))
+    # generic_op wants at least one input and one output; the kernel only touches `scratch`.
+    dummy = ttnn.from_torch(torch.zeros(32, 32), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn.generic_op([dummy, scratch], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[]))
     out = ttnn.to_torch(scratch).numpy().reshape(-1).view(np.uint8)
 
     stats = out[6272:6304].view(np.uint32)
