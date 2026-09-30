@@ -374,6 +374,8 @@ void blocked_matmul_and_pack(
 // keeps its compensated fold.
 #if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
 #define SDPA_PA 1
+// Set per K step: the Float32 denominator accumulates onto earlier chunks after the first.
+inline bool sdpa_pa_sum_acc = false;
 #ifndef SDPA_PA_DBG
 #define SDPA_PA_DBG 0
 #endif
@@ -727,12 +729,19 @@ void sub_exp_block_bcast_cols(
         }
 #endif
 #if !defined(SDPA_RECIPE_FP32) && !defined(SDPA_KO_SUMPACK)
+#ifdef SDPA_PA
+        pack_reconfig_data_format(reduce_cb);
+#endif
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
+#ifdef SDPA_PA
+                if (global_col_base > 0 || sdpa_pa_sum_acc) {
+#else
                 if (global_col_base > 0) {
+#endif
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 } else {
                     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -746,6 +755,9 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
+#ifdef SDPA_PA
+        pack_reconfig_data_format(inout_cb);
+#endif
 #endif
     }
 
@@ -1109,6 +1121,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
+#ifdef SDPA_PA
+            reconfig_data_format(cur_sum_cb, col_identity_cb);
+#endif
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
@@ -1352,6 +1367,9 @@ static void sdpa_inner_loop_step(
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
 
     CircularBuffer(cur.sum).reserve_back(Sq_chunk_t * sdpa_sum_stride);
+#ifdef SDPA_PA
+    sdpa_pa_sum_acc = !is_first_iter;
+#endif
 #ifndef SDPA_RECIPE_FP32
     if (is_first_iter) {
         tile_regs_acquire();
@@ -1359,11 +1377,17 @@ static void sdpa_inner_loop_step(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_zero_sum, 0, VectorMode::None)));
         tile_regs_commit();
         tile_regs_wait();
+#ifdef SDPA_PA
+        pack_reconfig_data_format(cur.sum);
+#endif
         configure_single_tile_pack(cur.sum);
         PACK((llk_pack_reconfig_l1_acc(0)));
         for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
             pack_tile<true>(0, cur.sum, 2 * r + 1);
         }
+#ifdef SDPA_PA
+        pack_reconfig_data_format(cb_qkt_im);
+#endif
         tile_regs_release();
     }
 #endif
@@ -1896,6 +1920,11 @@ static void sdpa_inner_loop_step(
             // Global row-group index is stable even when final normalization pops rows.
             const bool has_local = (group_k_index % 2 == 0) && group_local_valid[salad_row];
 #endif
+#ifdef SDPA_PA
+            // Reference max: nothing to fold; numerator and denominator accumulate in Float32 L1.
+            CircularBuffer(cb_exp_max_diff).pop_front(sbh);
+            return;
+#endif
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
@@ -2267,8 +2296,16 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 #ifdef SDPA_RECIPE_FP32
             if (!sdpa_skip_prev_sum_pop)
 #endif
+#ifndef SDPA_PA
                 sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t * sdpa_sum_stride);
+#endif
         }
+#ifdef SDPA_PA
+        // One Float32 denominator bank for the whole Q chunk: recycle it (its bytes survive in L1).
+        if (!is_last) {
+            sdpa_cb_pop_front_out_of_line(cur.sum, Sq_chunk_t * sdpa_sum_stride);
+        }
+#endif
 
         if (is_last) {
             sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
@@ -2277,6 +2314,9 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 #ifndef SDPA_RECIPE_FP32
             prev.out = cb_out_im_A;
             cur.out = cb_out_im_B;
+#endif
+#ifdef SDPA_PA
+            std::swap(prev.sum, cur.sum);
 #endif
         }
     }

@@ -124,8 +124,13 @@ ProgramDescriptor recipe_compute_program(
     for (uint8_t index : {10, 11}) {
         add_cb(index, q_tiles, 2048, tt::DataFormat::Float16_b);
     }
-    for (uint8_t index : {12, 13}) {
-        add_cb(index, q_tiles * stride, state_bytes, state_format);
+    if (proto_pa) {
+        add_cb(12, q_tiles * stride, 4096, tt::DataFormat::Float32);
+        add_cb(13, 1, state_bytes, state_format);
+    } else {
+        for (uint8_t index : {12, 13}) {
+            add_cb(index, q_tiles * stride, state_bytes, state_format);
+        }
     }
     add_cb(14, q_tiles, state_bytes, state_format);
     add_cb(16, (fp32 ? 2 : 4) * d_tiles, 2048, tt::DataFormat::Float16_b);
