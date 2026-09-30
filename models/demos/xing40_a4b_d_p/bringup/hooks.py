@@ -27,6 +27,7 @@ def reference(spec, layers=None, dtype=None):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual", "ffn_norm", "mlp"},
+    "moe": {"router"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -47,6 +48,18 @@ _RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
 # Dense SwiGLU (tt/mlp.py:TtDenseMLP): row-split ffn_norm [S, H] (replicated over axis 1) in -> gate / up
 # column-parallel, down row-parallel -> reduce_scatter axis 1 -> column-split mlp_out [S, H] fp32.
 _MLP_STEPS = {"mlp"}
+# MoE router (tt/router.py:TtRouter): row-split ffn_norm [S, H] (replicated over axis 1) in -> replicated fp32 gate,
+# sigmoid, bias, top-4, renorm x 2.0 -> row-split dense routing [S, 64] fp32 (+ idx / weights for dispatch). No CCL.
+_ROUTER_STEPS = {"router"}
+
+
+def _max_rows(spec):
+    """Largest per-chip row count of any chunk the spec runs (ladder rungs and the target), over SP = mesh rows."""
+    chunks = [r["chunk"] for r in (spec.get("ladder") or []) if "chunk" in r]
+    tgt = spec.get("target") or {}
+    if "chunk" in tgt:
+        chunks.append(tgt["chunk"])
+    return max(chunks) // spec.mesh[0]
 
 
 def _loader(spec):
@@ -193,6 +206,24 @@ def _mlp_host_fn(mesh, module):
     return fn
 
 
+def _router_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: row-split bf16 in,
+    replicated over axis 1, as ffn_norm's device output; the row-split dense matrix read back from column 0)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import row_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x, dtype=ttnn.bfloat16)
+        dense, idx, wts = module(xd)
+        out = row_split_to_host(mesh, dense).float()
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 class _AttentionHostFn:
     """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 768]) -> attn_out host [S, H] fp32.
 
@@ -267,6 +298,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.mlp import build_mlp
 
         return _mlp_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
+    if step in _ROUTER_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.router import build_router
+
+        return _router_host_fn(mesh, build_router(mesh, loader, cfg, layer, _max_rows(spec)))
     if step in _QA_STEPS:
         from models.demos.xing40_a4b_d_p.tt.q_a import build_q_a
 
