@@ -9,6 +9,8 @@ The module under test is chosen by BRINGUP_IMPL (set by freeze):
     stub       zeros shaped like the reference output: the test must FAIL with it
     mutate:<kind>  the CPU reference with its output altered (testing/mutate.py, F49): proves a test catches a
                wrong module, on the CPU; BRINGUP_MUTATE_STEP names the one step to alter
+    mutations  the freeze sweep of a component test with checks="auto" (F56, testing/component_checks.py): every
+               standard mistake on the CPU in one process; the test must PASS (every mistake caught)
 
 Device hooks a model provides (the implement role writes them):
     device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
@@ -40,7 +42,7 @@ def impl_mode() -> str:
     from models.demos.common.bringup.testing.mutate import kind_of
 
     mode = os.environ.get(IMPL_ENV, "device")
-    if mode not in ("device", "reference", "stub") and kind_of(mode) is None:
+    if mode not in ("device", "reference", "stub", "mutations") and kind_of(mode) is None:
         raise ValueError(f"{IMPL_ENV}={mode!r}")
     return mode
 

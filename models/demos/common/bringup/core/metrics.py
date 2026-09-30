@@ -61,7 +61,7 @@ def record(name: str, value, task: str | None = None, **extra) -> None:
     if hasattr(value, "item"):
         value = value.item()
     data["metrics"][name] = {"value": value, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), **extra}
-    tmp = p.with_suffix(".tmp")
+    tmp = p.with_suffix(f".{os.getpid()}.tmp")  # two processes on one task (dev proofs) must not share it
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
     os.replace(tmp, p)
 

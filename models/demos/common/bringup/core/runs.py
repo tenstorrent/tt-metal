@@ -24,7 +24,7 @@ from models.demos.common.bringup.core.gate import format_paths, git_commit, run_
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.core.spec import Spec
 
-IMPL_ENV = "BRINGUP_IMPL"  # device (default) | reference | stub; read by the test templates
+IMPL_ENV = "BRINGUP_IMPL"  # device (default) | reference | stub | mutate:<kind> | mutations; read by the test templates
 
 
 def now() -> str:
@@ -40,12 +40,21 @@ class FreezeError(RuntimeError):
     pass
 
 
-def freeze_task(spec: Spec, ledger: Ledger, tid: str, files: list[str] | None = None, commit: bool = True) -> dict:
+def freeze_task(
+    spec: Spec,
+    ledger: Ledger,
+    tid: str,
+    files: list[str] | None = None,
+    commit: bool = True,
+    mutations: bool = False,
+) -> dict:
     """Validate a task's tests and freeze them.
 
     The test files are formatted first (the commit hooks would otherwise change them after hashing). Unless the
     task sets ``stub_check: false``, the gate must PASS with BRINGUP_IMPL=reference (the CPU reference as the
-    module) and must FAIL with BRINGUP_IMPL=stub (a module that returns zeros). Then every file is hashed into
+    module) and must FAIL with BRINGUP_IMPL=stub (a module that returns zeros). With ``mutations`` (F56, a component
+    test with checks="auto" frozen without a review) the gate must also PASS with BRINGUP_IMPL=mutations: the CPU
+    sweep that injects every standard mistake and requires the checks to catch each. Then every file is hashed into
     the task's ``frozen`` block, and the files and the ledger are committed.
     """
     task = ledger.task(tid)
@@ -65,6 +74,12 @@ def freeze_task(spec: Spec, ledger: Ledger, tid: str, files: list[str] | None = 
             raise FreezeError(
                 f"{tid}: test passes with a zero stub, so it cannot catch a wrong module:\n{stub.summary()}"
             )
+    if mutations:
+        sw = run_gate(spec, ledger, tid, force=True, extra_env={IMPL_ENV: "mutations"}, record=False)
+        record["mutations"] = "PASS" if sw.rc == 0 else sw.verdict  # the test's own verdict: the sweep records no pcc
+        if sw.rc != 0:
+            tail = sw.log.read_text(errors="replace")[-3000:] if sw.log and sw.log.exists() else ""
+            raise FreezeError(f"{tid}: the mistake sweep failed (a mistake slipped through):\n{sw.summary()}\n{tail}")
     # Pin the goldens the test reads too (their manifest carries the content hash): a regenerated golden fails the gate.
     record["files"] = F.hash_paths(spec.repo, files + list(task.get("freeze_extra") or []))
     ledger.update_task_def(tid, frozen=record)
