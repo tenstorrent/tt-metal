@@ -64,6 +64,15 @@ Tensor ShardedToInterleavedPartialDeviceOperation::create_output_tensors(
     return tensor_args.cache_tensor;
 }
 
+std::vector<tt::tt_metal::TensorTopology> ShardedToInterleavedPartialDeviceOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    // In-place: the output is the caller's cache, and writing one slice into it does not change how the cache is
+    // distributed across the mesh. The default output-topology inference unions both inputs and, because
+    // input_tensor is declared first, would relabel the cache with the input's placement (e.g. Shard over a
+    // Replicate cache). Keep the cache's own label, as update_padded_kv_cache does.
+    return {tensor_args.cache_tensor.tensor_topology()};
+}
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t>
 ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,

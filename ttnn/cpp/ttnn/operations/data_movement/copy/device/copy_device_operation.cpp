@@ -198,6 +198,24 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
     return create_device_tensor(spec, input_tensor.device());
 }
 
+std::vector<tt::tt_metal::TensorTopology> CopyDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const tt::tt_metal::TensorTopology& src = tensor_args.input.tensor_topology();
+    if (!tensor_args.preallocated_output.has_value()) {
+        // Fresh output: a copy of the source is distributed exactly like the source.
+        return {src};
+    }
+    // Preallocated output: on every mesh coordinate the op performs dst[coord] := src[coord], so afterwards dst
+    // holds src's per-device contents and therefore src's distribution. The default inference would instead union
+    // src and dst, keeping a stale Shard label on a dst that is now replicated, or (worse) a Replicate label on a
+    // dst that now holds per-device shards, which the serialiser dedups to a single shard.
+    // When src spans fewer mesh coordinates than dst only that sub-mesh of dst is rewritten, so dst's own label is
+    // the only one still describing the whole tensor; keep it. Validation already forces src and dst onto the same
+    // device.
+    const tt::tt_metal::TensorTopology& dst = tensor_args.preallocated_output->tensor_topology();
+    return {src.mesh_coords() == dst.mesh_coords() ? src : dst};
+}
+
 CopyDeviceOperation::tensor_return_value_t copy(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,

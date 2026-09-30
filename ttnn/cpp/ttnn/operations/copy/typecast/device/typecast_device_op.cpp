@@ -131,6 +131,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires input and preallocated output to be on the same device.");
     }
 }
 
@@ -152,6 +155,20 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    const tt::tt_metal::TensorTopology& src = tensor_args.input.tensor_topology();
+    if (!tensor_args.preallocated_output.has_value()) {
+        // Fresh output: a typecast of the source is distributed exactly like the source.
+        return {src};
+    }
+    // Preallocated output: same rule as prim::copy. dst[coord] := cast(src[coord]) on every mesh coordinate, so
+    // dst adopts src's distribution; if src spans only a sub-mesh of dst, only that part of dst is rewritten and
+    // dst's own label is kept. Validation forces src and dst onto the same device.
+    const tt::tt_metal::TensorTopology& dst = tensor_args.preallocated_output->tensor_topology();
+    return {src.mesh_coords() == dst.mesh_coords() ? src : dst};
 }
 
 bool TypecastDeviceOperation::skip_launch(
