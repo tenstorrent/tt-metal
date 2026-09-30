@@ -239,6 +239,9 @@ def _device_params():
         fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
     else:
         fabric_config = ttnn.FabricConfig.FABRIC_1D
+    # Fabric launch is rejected on a 1-chip mesh; test_factory applies the same rule.
+    if _mesh_device_param() == (1, 1):
+        fabric_config = None
 
     params = {
         "fabric_config": fabric_config,
