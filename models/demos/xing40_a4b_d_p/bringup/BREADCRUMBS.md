@@ -77,3 +77,16 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: pcc_attn_hc_L00 0.999998; part rel vs cpu pre 0.00015 / post 0.00065 / comb 0.00087 (limits 0.006 / 0.03 /
   0.012); comb column sums 0.00164 (<= 0.01); auto second inputs (layer39, mixed, small, big) rel <= 0.00087.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py`
+
+## C.dense.attn_collapse implement (run1, attempt 1)
+- Wrote `tt/collapse.py:TtHcCollapse` / `build_collapse` (attn_collapse and ffn_collapse, weightless): per chip, 4
+  `ttnn.slice` of the stream-major [S/4, 4 x 1792] fp32 streams, 4 single-column slices of the replicated [S/4, 24]
+  hc, then `ttnn.multiply` + 3 x `ttnn.addcmul` in fp32 (glm53 TtHcCollapse / deepseek `_mix`). Output
+  [1, 1, S/4, 1792] fp32, rows split over axis 0, columns over axis 1; no collective, no host work, no constants.
+- Added `tt/layout.py:col_split_to_host` (harness boundary only). Hooks: `_COLLAPSE_STEPS` + `_collapse_host_fn`
+  (streams via `streams_to_device`, hc via `row_split_to_device`), `DEVICE_STEPS["dense"] = {attn_hc, attn_collapse}`.
+- Output kept fp32 (the plan's attn_in, input to the distributed attn_norm); `out_dtype` option exists for bf16.
+- Gate: pcc_attn_collapse_L00 0.999998; vs CPU rel 0 (bit-exact fp32 elementwise) on golden and all 4 second inputs;
+  vs golden rel 0.0018. The precompile collect pass prints a `FAIL pcc=0` line first (stubbed device results, known
+  issue); the real pass line counts.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py`
