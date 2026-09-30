@@ -72,3 +72,16 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   gates = frozen attention / experts component tests + the three full-block swap tests + rung last + profile, with
   device_ms_attention < 190 / device_ms_experts < 150 and total < 500 / 505. X.3 now depends on P.2. Marked rows 1-2 in
   opportunities.md.
+- 23:40-00:20 F49 (auto-checked swap tests) built by a helper in worktree tt-metal2-f49 (branch
+  dnijemcevic/f49-swap-checks): CPU mutation proof on the 4 reviewed Hy4 swap tests, new checks catch everything the
+  reviewed ones catch (old generic test about half); device proof pending. Correction to the time study: every swap and
+  component test was extended by its review agent (my first count saw only one edit tool); the page is fixed.
+- 00:20 P.1 PASS 1a79ae613f2: explicit matmul program configs (bit-identical output, same HiFi4 / dtypes), attention
+  212.8 -> 153.1 ms, chunk 519.0 -> 459.5 ms device. Accepted. Owner had not delegated the perf picks (my over-reading
+  of "etc"); P.2 removed, then re-requested, then dropped for good ("I don't have time").
+- 00:35 X.3: accuracy all pass, timeline_ok failed on dropped profiler markers (1177 programs per chunk > default 1000);
+  gate fixed with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 (93c2126d220, as glm53's framework fix). X.3 PASS
+  3ed3f51fd49: 0->55k full prefill 4899.8 ms, timeline aligned.
+- glm53: merge prepared in worktree tt-metal2-merge (b25381730df, with F49; glm53 F48-F52 renumbered F50-F54; 248
+  selftests). Artifacts copied from bh-qbge-09 (35.3 GB bringup + 16.7 GB tt_cache, file counts and sizes match).
+  Lands after run1 (O.1) finishes, then build and device checks.
