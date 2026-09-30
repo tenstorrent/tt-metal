@@ -659,7 +659,7 @@ void sub_exp_block_bcast_cols(
     const uint32_t max_row_base = q_subblock * tiles_per_row;
 
     {
-        MaybeDeviceZoneScopedNIf(profiling_enabled, "SUB_EXP_BLOCK_INIT", sdpa_profile::nested_gate());
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "SUB_EXP_BLOCK_INIT");
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
 
@@ -668,7 +668,7 @@ void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedNIf(profiling_enabled, "SUB", sdpa_profile::nested_gate());
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
@@ -682,7 +682,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_wait();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
-        MaybeDeviceZoneScopedNIf(profiling_enabled, "EXP", sdpa_profile::nested_gate());
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "EXP");
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
@@ -695,7 +695,7 @@ void sub_exp_block_bcast_cols(
     }
 
     {
-        MaybeDeviceZoneScopedNIf(profiling_enabled, "PACK SUB_EXP", sdpa_profile::nested_gate());
+        MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions.
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
@@ -891,7 +891,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
-            MaybeDeviceZoneScopedNIf(profiling_enabled, "NORM_MATMUL_RECIP", sdpa_profile::nested_gate());
+            MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
@@ -946,7 +946,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
         // Process in batches of up to dst_size tiles (DST capacity).
         {
-            MaybeDeviceZoneScopedNIf(profiling_enabled, "NORM_MUL_BCAST", sdpa_profile::nested_gate());
+            MaybeDeviceZoneScopedN(sdpa_profile::helper_zones<profiling_enabled>, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
@@ -1477,8 +1477,6 @@ static void sdpa_inner_loop_step(
     const uint32_t chunk_sum_cb = INVALID_CB,
     // Profiling window: this chunk records its zones (always true without SDPA_PROFILE_ITER/QCHUNK/KCHUNK_*).
     [[maybe_unused]] const bool prof_win = true) {
-    MaybeDeviceZoneScopedNWindow(profiling_enabled, "K_CHUNK", prof_win);
-    sdpa_profile::set_nested_gate(prof_win);
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;

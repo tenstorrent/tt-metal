@@ -53,16 +53,10 @@ inline __attribute__((always_inline)) bool window_hit(uint32_t ring_iter, uint32
            (k_chunk_hi < 0 || k_chunk < static_cast<uint32_t>(k_chunk_hi));
 }
 
-// Gate for zones in helpers below the K-chunk step; the step sets it per chunk. A global instead of an
-// argument keeps the helpers' signatures, and so the code of builds without a window, unchanged.
-#if defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && SDPA_PROFILE_ZONES == 1 && SDPA_PROFILE_HAS_WINDOW
-inline bool nested_on = true;
-inline __attribute__((always_inline)) void set_nested_gate(bool on) { nested_on = on; }
-inline __attribute__((always_inline)) bool nested_gate() { return nested_on; }
-#else
-inline __attribute__((always_inline)) void set_nested_gate(bool) {}
-inline __attribute__((always_inline)) constexpr bool nested_gate() { return true; }
-#endif
+// Zones inside the sub_exp / normalize helpers: off with a window, whose budget goes to the per-phase zones
+// (and whose code must fit the kernel config buffer).
+template <bool profiling_enabled>
+constexpr bool helper_zones = profiling_enabled && SDPA_PROFILE_HAS_WINDOW == 0;
 }  // namespace sdpa_profile
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
