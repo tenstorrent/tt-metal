@@ -275,6 +275,8 @@ class TPGatedDeltaNet:
         #                      split + tilize in ONE program (kda_conv_prefill);
         #   QWEN_GDN_CONV=fir  the shifted multiply-accumulate FIR everywhere.
         self._conv_impl = os.environ.get("QWEN_GDN_CONV", "kda")
+        if self._conv_impl not in {"kda", "fir"}:
+            raise ValueError(f"QWEN_GDN_CONV must be 'kda' or 'fir', got {self._conv_impl!r}")
         # The KDA op is fixed at four taps.
         self._gdn_kda_conv = self._conv_impl == "kda" and self.K == 4
         # KDA conv constants, allocated once by _ensure_kda_consts (host writes, so before any trace capture):
