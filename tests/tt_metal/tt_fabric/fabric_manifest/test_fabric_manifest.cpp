@@ -263,6 +263,46 @@ void check_credit_transport(const json& manifest) {
     }
 }
 
+// A local mesh lists each allocated stream register under its id, with the role the builder assigned it and
+// the keys that role is indexed by. Every use is a buf_space_available use until the scratch uses are added.
+void check_stream_registers(const json& manifest) {
+    const auto local_mesh_ids = control_plane().get_local_mesh_id_bindings();
+    for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
+        SCOPED_TRACE(mesh_key(mesh_id));
+        const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
+        if (std::ranges::find(local_mesh_ids, mesh_id) == local_mesh_ids.end()) {
+            EXPECT_FALSE(mesh.contains("stream_registers"));
+            continue;
+        }
+
+        const auto& registers = mesh.at("stream_registers");
+        std::set<std::string> expected_keys;
+        for (const auto& use : builder_context().get_stream_assignment(mesh_id).uses()) {
+            const auto id_key = std::to_string(use.stream_id);
+            expected_keys.insert(id_key);
+            SCOPED_TRACE(fmt::format("stream {}", id_key));
+            ASSERT_TRUE(registers.contains(id_key));
+            ASSERT_EQ(registers.at(id_key).size(), 1u);
+            const auto& entry = registers.at(id_key).at(0);
+
+            std::set<std::string> entry_keys{"role", "register"};
+            if (use.vc.has_value()) {
+                entry_keys.insert("vc");
+                EXPECT_EQ(entry.at("vc"), *use.vc);
+            }
+            if (use.index.has_value()) {
+                entry_keys.insert("index");
+                EXPECT_EQ(entry.at("index"), *use.index);
+            }
+            EXPECT_EQ(keys_of(entry), entry_keys);
+            EXPECT_EQ(entry.at("role"), lower_enum_name(use.role));
+            EXPECT_EQ(entry.at("register"), "buf_space_available");
+            EXPECT_LT(use.stream_id, StreamRegAssignments::num_eth_stream_registers);
+        }
+        EXPECT_EQ(keys_of(registers), expected_keys);
+    }
+}
+
 // Every chip in each mesh appears under its C key. Local chips carry their device ids, Z-port role and routers;
 // the others only say where they are, so the viewer can still draw the whole mesh.
 void check_chips(const json& manifest) {
@@ -503,6 +543,18 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::MULTI_TXQ), "multi_txq");
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::EXPRESS), "express");
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER), "no_completion_register");
+
+    EXPECT_EQ(lower_enum_name(StreamRole::RECEIVER_PKTS_SENT), "receiver_pkts_sent");
+    EXPECT_EQ(lower_enum_name(StreamRole::SENDER_PKTS_ACKED), "sender_pkts_acked");
+    EXPECT_EQ(lower_enum_name(StreamRole::SENDER_PKTS_COMPLETED), "sender_pkts_completed");
+    EXPECT_EQ(lower_enum_name(StreamRole::DOWNSTREAM_FREE_SLOTS), "downstream_free_slots");
+    EXPECT_EQ(lower_enum_name(StreamRole::SENDER_FREE_SLOTS), "sender_free_slots");
+    EXPECT_EQ(lower_enum_name(StreamRole::VC2_SENDER_FREE_SLOTS), "vc2_sender_free_slots");
+    EXPECT_EQ(lower_enum_name(StreamRole::VC2_RECEIVER_FREE_SLOTS), "vc2_receiver_free_slots");
+    EXPECT_EQ(lower_enum_name(StreamRole::TENSIX_RELAY_FREE_SLOTS), "tensix_relay_free_slots");
+
+    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
+    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::REMOTE_SRC), "remote_src");
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config); }
@@ -513,6 +565,9 @@ TEST_F(Fabric2DManifestFixture, Meshes) { check_meshes(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, CreditTransport) { check_credit_transport(manifest_); }
 TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manifest_); }
+
+TEST_F(Fabric1DManifestFixture, StreamRegisters) { check_stream_registers(manifest_); }
+TEST_F(Fabric2DManifestFixture, StreamRegisters) { check_stream_registers(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, Chips) { check_chips(manifest_); }
 TEST_F(Fabric2DManifestFixture, Chips) { check_chips(manifest_); }

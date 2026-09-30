@@ -122,6 +122,40 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
     return transport;
 }
 
+// What each allocated stream register on the mesh is used for, keyed by stream id.
+json make_stream_registers_json(const FabricBuilderContext& builder_context, MeshId mesh_id) {
+    std::map<uint32_t, json> uses_by_id;
+
+    // For the mesh, create a JSON object for each stream register
+    for (const auto& use : builder_context.get_stream_assignment(mesh_id).uses()) {
+        auto& uses = uses_by_id[use.stream_id];
+        // Two credit uses of one register would count into the same value.
+        TT_FATAL(
+            uses.empty(),
+            "Fabric manifest: {} stream {} has two buf_space_available uses: {} and {}",
+            mesh_key(mesh_id),
+            use.stream_id,
+            uses.front().at("role").get<std::string>(),
+            lower_enum_name(use.role));
+        json entry;
+        entry["role"] = lower_enum_name(use.role);
+        if (use.vc.has_value()) {
+            entry["vc"] = *use.vc;
+        }
+        if (use.index.has_value()) {
+            entry["index"] = *use.index;
+        }
+        entry["register"] = lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE);
+        uses.push_back(std::move(entry));
+    }
+
+    json registers = json::object();
+    for (auto& [stream_id, uses] : uses_by_id) {
+        registers[std::to_string(stream_id)] = std::move(uses);
+    }
+    return registers;
+}
+
 // ============ Paths ============
 
 // One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
@@ -410,6 +444,7 @@ json make_mesh_json(
     const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
     if (std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end()) {
         mesh["credit_transport"] = make_credit_transport_json(builder_context, mesh_id);
+        mesh["stream_registers"] = make_stream_registers_json(builder_context, mesh_id);
     }
 
     json chips = json::object();

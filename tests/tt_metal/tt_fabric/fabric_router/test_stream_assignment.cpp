@@ -10,6 +10,7 @@
 
 #include <hostdevcommon/fabric_common.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -211,6 +212,70 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     EXPECT_EQ(values["TO_SENDER_4_PKTS_ACKED_ID"], k_unused_stream_id);  // sentinel: activity
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 0, 0));
     EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
+}
+
+// The ids uses() lists are exactly the live ids named_args() hands the kernel, leaving out the scratch names,
+// which are not credit uses.
+std::set<uint32_t> live_named_ids(const StreamAssignment& a) {
+    std::set<uint32_t> ids;
+    for (const auto& [name, value] : a.named_args()) {
+        if (value != k_unused_stream_id && name != "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID" &&
+            name != "ETH_RETRAIN_LINK_SYNC_STREAM_ID") {
+            ids.insert(value);
+        }
+    }
+    return ids;
+}
+
+TEST(StreamAssignmentTest, UsesListEveryLiveRegisterOnceInIdOrder) {
+    CreditTransportPlan plan{};
+    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
+    const auto a = make_stream_assignment(stream_requirements(express_full_placement(), plan));
+    const auto uses = a.uses();
+
+    // The 30 allocated registers plus the VC2 sender and receiver pins.
+    ASSERT_EQ(uses.size(), 32u);
+    std::set<uint32_t> ids;
+    for (size_t i = 0; i < uses.size(); ++i) {
+        EXPECT_EQ(uses[i].stream_id, i);
+        ids.insert(uses[i].stream_id);
+    }
+    EXPECT_EQ(ids, live_named_ids(a));
+
+    // Each use's keys look up its own register.
+    for (const auto& use : uses) {
+        switch (use.role) {
+            case StreamRole::RECEIVER_PKTS_SENT:
+                EXPECT_FALSE(use.vc.has_value());
+                EXPECT_EQ(a.id(use.role, use.index.value(), 0), use.stream_id);
+                break;
+            case StreamRole::VC2_SENDER_FREE_SLOTS:
+            case StreamRole::VC2_RECEIVER_FREE_SLOTS:
+            case StreamRole::TENSIX_RELAY_FREE_SLOTS:
+                EXPECT_FALSE(use.vc.has_value());
+                EXPECT_FALSE(use.index.has_value());
+                break;
+            default: EXPECT_EQ(a.id(use.role, use.vc.value(), use.index.value()), use.stream_id); break;
+        }
+    }
+    EXPECT_EQ(uses[30].role, StreamRole::VC2_SENDER_FREE_SLOTS);
+    EXPECT_EQ(uses[31].role, StreamRole::VC2_RECEIVER_FREE_SLOTS);
+}
+
+TEST(StreamAssignmentTest, UsesListTheTensixRelayPinOnlyWhenLive) {
+    auto need = stream_requirements(legacy_2d_placement(), CreditTransportPlan{});
+    const auto without_relay = make_stream_assignment(need);
+    EXPECT_TRUE(std::ranges::none_of(without_relay.uses(), [](const StreamUse& use) { return use.stream_id >= 30; }));
+    EXPECT_EQ(without_relay.uses().size(), live_named_ids(without_relay).size());
+
+    need.tensix_relay_present = true;
+    const auto with_relay = make_stream_assignment(need);
+    const auto uses = with_relay.uses();
+    ASSERT_FALSE(uses.empty());
+    EXPECT_EQ(uses.back().stream_id, StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id);
+    EXPECT_EQ(uses.back().role, StreamRole::TENSIX_RELAY_FREE_SLOTS);
+    EXPECT_EQ(uses.size(), live_named_ids(with_relay).size());
 }
 
 TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
