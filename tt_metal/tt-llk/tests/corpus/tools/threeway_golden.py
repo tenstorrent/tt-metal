@@ -1570,6 +1570,12 @@ class CorrectnessAccumulator:
     # FTZ-flushed operand -- i.e. explained by the oracles not modelling input FTZ
     # rather than by the kernel being wrong.
     n_out_ftz_explained: int = 0
+    # Out-of-tolerance inputs explained by the packer's NaN->inf being
+    # SIGN-PRESERVING where the golden's convert_nan_to_inf hardcodes +inf.
+    n_out_nan_sign_explained: int = 0
+    # ...and by the kernel not PROPAGATING NaN at all (it returns an ordinary
+    # value where both oracles say NaN). Distinct from the sign question.
+    n_out_nan_nonprop: int = 0
     n_in_claim: int = 0
     n_out_in_claim: int = 0
     max_ulp_in_claim: float = 0.0
@@ -1652,6 +1658,34 @@ class CorrectnessAccumulator:
             )
             self.n_out_ftz_explained += int(np.count_nonzero(ftz_within))
 
+        # NaN accounting, both halves, before anything reads the counts.
+        #
+        # (a) SIGN. The golden's convert_nan_to_inf hardcodes +inf, but the packer
+        #     preserves the NaN's sign bit: the identity row copydest-fresh returns
+        #     -inf for a negative NaN, and it does nothing but copy, so nothing else
+        #     can account for it. Explained = the device matches the golden with
+        #     NaN mapped to a SAME-SIGNED infinity.
+        # (b) NON-PROPAGATION. tanh(nan) -> 1.0, threshold(nan) -> 10.0,
+        #     max(nan, 0) -> 0.0: the kernel returns an ordinary value where the
+        #     golden says NaN. For min/max that IS IEEE-754 minNum/maxNum, which
+        #     torch's min/max do not follow; for the others it is a kernel
+        #     semantics question this records rather than settles.
+        nan_in = np.isnan(xin.astype(np.float64))
+        if np.any(out & nan_in):
+            idx = np.flatnonzero(out & nan_in)
+            hp_n = np.asarray(self.spec.math(xin[idx]), dtype=np.float64)
+            signed = np.where(
+                np.isnan(hp_n), np.copysign(np.inf, xin[idx].astype(np.float64)), hp_n
+            )
+            g_signed = np.asarray(signed, dtype=np.float32)
+            _, ok_sign = numeric_comparison(
+                g_signed, dev[idx], self.spec.atol, self.spec.rtol
+            )
+            self.n_out_nan_sign_explained += int(np.count_nonzero(ok_sign))
+            self.n_out_nan_nonprop += int(
+                np.count_nonzero(~ok_sign & np.isnan(hp_n) & np.isfinite(dev[idx]))
+            )
+
         claim = CLAIMED_ACCURACY_DOMAIN.get(self.spec.op)
         if claim is not None:
             lo, hi = claim
@@ -1731,6 +1765,8 @@ class CorrectnessAccumulator:
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"n_graded={self.n_graded},n_out_graded={self.n_out_graded},"
             f"n_out_ftz_explained={self.n_out_ftz_explained},"
+            f"n_out_nan_sign_explained={self.n_out_nan_sign_explained},"
+            f"n_out_nan_nonprop={self.n_out_nan_nonprop},"
             f"max_ulp_graded={self.max_ulp_graded:.0f},"
             f"max_ulp_graded_input=0x{max(self.max_ulp_graded_input,0):08x},"
             f"graded_witness=0x{max(self.graded_witness_u32,0):08x},"
