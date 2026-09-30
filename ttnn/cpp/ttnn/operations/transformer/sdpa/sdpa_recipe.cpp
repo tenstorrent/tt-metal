@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <cmath>
 #include <set>
 
@@ -109,8 +110,16 @@ ProgramDescriptor recipe_compute_program(
     add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(5, 1, state_bytes, state_format);
     add_cb(6, q_tiles * k_tiles, state_bytes, state_format);
-    for (uint8_t index : {8, 9}) {
-        add_cb(index, q_tiles * d_tiles * stride, state_bytes, state_format);
+    // Perf research (not for merge): SDPA_PROTO_PA=1 selects the reference-max numerator for B/E. The
+    // numerator accumulates in CB 9 as Float32; the compensated root CB 8 is unused.
+    const bool proto_pa = !fp32 && policy.selection.recipe != Recipe::A && std::getenv("SDPA_PROTO_PA") != nullptr;
+    if (proto_pa) {
+        add_cb(8, 1, state_bytes, state_format);
+        add_cb(9, q_tiles * d_tiles * stride, 4096, tt::DataFormat::Float32);
+    } else {
+        for (uint8_t index : {8, 9}) {
+            add_cb(index, q_tiles * d_tiles * stride, state_bytes, state_format);
+        }
     }
     for (uint8_t index : {10, 11}) {
         add_cb(index, q_tiles, 2048, tt::DataFormat::Float16_b);
@@ -156,6 +165,9 @@ ProgramDescriptor recipe_compute_program(
         .config = compute_config};
     if (fp32) {
         compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
+    }
+    if (proto_pa) {
+        compute.defines.emplace_back("SDPA_PROTO_PA", "1");
     }
     if (policy.selection.recipe == Recipe::D) {
         compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");

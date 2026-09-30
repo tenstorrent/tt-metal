@@ -367,6 +367,24 @@ void blocked_matmul_and_pack(
 
 // Row maxima combine the current QK block with the previous online maximum.
 // Perf research knockouts (not for merge): each SDPA_KO_* define removes one piece of work; output is wrong.
+//
+// SDPA_PROTO_PA (B/E, perf research): reference-max numerator. P uses the first K chunk's row max for the
+// whole Q chunk, so every later chunk is an identity correction; PV accumulates across chunks in plane 0 of
+// the scratch CB (Float32, set by the host) with packer L1 accumulate; no numerator fold. The denominator
+// keeps its compensated fold.
+#if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
+#define SDPA_PA 1
+#define PA_PV_BEGIN(pv_cb, acc)                     \
+    do {                                            \
+        pack_reconfig_data_format(pv_cb);           \
+        PACK((llk_pack_reconfig_l1_acc((acc) ? 1 : 0))); \
+    } while (0)
+#define PA_PV_END(restore_cb)                 \
+    do {                                      \
+        PACK((llk_pack_reconfig_l1_acc(0)));  \
+        pack_reconfig_data_format(restore_cb); \
+    } while (0)
+#endif
 #ifdef SDPA_PERF_ZONES
 constexpr bool sdpa_perf_zones = true;
 #else
@@ -414,6 +432,16 @@ void reduce_c_row_group(
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
+#ifdef SDPA_PA
+        // Reference max: carry the previous maximum unchanged (bitwise), skipping the reduce.
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < group_size; i++) {
+            pack_tile<false>(i, out_cb);
+        }
+        tile_regs_release();
+        return;
+#endif
     }
 
     // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
@@ -969,7 +997,7 @@ void salad_correct_fused(
     PACK((llk_pack_reconfig_l1_acc(1)));
     return;
 #endif
-#ifndef SDPA_KO_NUMFOLD
+#if !defined(SDPA_KO_NUMFOLD) && !defined(SDPA_PA)
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -1068,6 +1096,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
+#ifdef SDPA_PA
+            reconfig_data_format_srca(cur_out_cb);
+#endif
             recipe_output_scale_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
@@ -1093,6 +1124,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 
             CircularBuffer(scratch_cb).pop_front(1);
             CircularBuffer(cur_out_cb).pop_front(head_dim_t_ * sdpa_out_stride);
+#ifdef SDPA_PA
+            reconfig_data_format_srca(normalized_out_cb);
+#endif
         }
     }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
@@ -1184,7 +1218,7 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
-#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT)
+#if defined(SDPA_KO_REDUCE) || defined(SDPA_KO_NOSPLIT) || defined(SDPA_PA)
     constexpr bool reduce_trigger = false &&
 #else
     constexpr bool reduce_trigger = reduce_trigger_supported && Sk_chunk_t % qkt_subblock_w == 0 &&
@@ -1528,7 +1562,11 @@ static void sdpa_inner_loop_step(
         const uint32_t out_cb = cur.out;
 #ifndef SDPA_RECIPE_FP32
         // Odd K begins with empty local; put PV directly in its final local plane.
+#ifdef SDPA_PA
+        constexpr uint32_t group_pv_offset = 0;
+#else
         const uint32_t group_pv_offset = (group_k_index % 2 == 1) ? vDHt : 0;
+#endif
 #endif
 
         // V wait deferred: don't block here. The sub_exp drain loop below
@@ -1593,6 +1631,9 @@ static void sdpa_inner_loop_step(
                     }
 #ifdef SDPA_RECIPE_FP32
                     if (kt_sub > 0 || inplace_numerator) {
+#elif defined(SDPA_PA)
+                    PA_PV_BEGIN(out_cb, kt_sub > 0 || !is_first_iter);
+                    if (false) {
 #else
                     if (kt_sub > 0) {
 #endif
@@ -1660,6 +1701,9 @@ static void sdpa_inner_loop_step(
 
 #ifdef SDPA_RECIPE_FP32
                     if (kt_sub > 0 || inplace_numerator) {
+#elif defined(SDPA_PA)
+                    PA_PV_END(cb_qkt_im);
+                    if (false) {
 #else
                     if (kt_sub > 0) {
 #endif
@@ -1756,7 +1800,7 @@ static void sdpa_inner_loop_step(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out>(
-#ifdef SDPA_RECIPE_FP32
+#if defined(SDPA_RECIPE_FP32) || defined(SDPA_PA)
                 cur.sum, out_cb, sbh);
 #else
                 cur.sum, prev.out, sbh);
@@ -1898,6 +1942,9 @@ static void sdpa_inner_loop_step(
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
 #endif
+#ifdef SDPA_PA
+                PA_PV_BEGIN(out_cb, !is_first_iter);
+#endif
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
@@ -1929,6 +1976,9 @@ static void sdpa_inner_loop_step(
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+#ifdef SDPA_PA
+                PA_PV_END(cb_qkt_im);
+#endif
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
@@ -2088,9 +2138,11 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 #ifndef SDPA_RECIPE_FP32
     const uint32_t cb_out_im_A = prev.out;
     const uint32_t cb_out_im_B = cur.out;
+#ifndef SDPA_PA
     if (state.processed_chunks == 0) {
         group2_initialize_root(cb_out_im_A, Sq_chunk_t * vDHt * sdpa_out_stride);
     }
+#endif
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
 #ifdef SDPA_PERF_PHASE_ZONES

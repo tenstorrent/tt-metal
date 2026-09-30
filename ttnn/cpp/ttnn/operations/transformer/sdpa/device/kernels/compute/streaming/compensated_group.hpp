@@ -51,6 +51,9 @@ inline void group2_copy_pair(uint32_t cb, uint32_t tile, uint32_t dst, bool sing
 // PV/local), so a row spans 2 * dh tiles. dh is the head dim in tiles.
 inline void group2_bootstrap_row(
     uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row, uint32_t rows = 2, uint32_t dh = 4) {
+#if defined(SDPA_PROTO_PA)
+    return;  // Reference-max prototype: the numerator lives in the scratch CB; no root copy.
+#endif
     const uint32_t row_stride = 2 * dh;
     // K0 has no correction-CB publication, so explicitly publish preceding PV.
     group2_pack_visibility_fence();
