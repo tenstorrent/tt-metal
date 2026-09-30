@@ -4508,10 +4508,12 @@ class ReduceGolden:
                 DataFormat.Bfp8_b,
                 DataFormat.Bfp4_b,
                 DataFormat.Bfp2_b,
+                DataFormat.Fp8_e4m3,
             }
         ):
             # Shared-exponent formats keep zero fill so masked infinities cannot change the
             # exponent of the valid result; integers keep it because all ones is not a MAX identity.
+            # Fp8_e4m3 keeps it because it has no infinity encoding.
             return 0
         return float("-inf")
 
