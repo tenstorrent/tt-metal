@@ -215,9 +215,11 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
     std::optional<ShardSpecBuffer> shard_spec_buffer;
     std::optional<BufferDistributionSpec> distribution_spec;
 
-    // Skip legacy from_shard_spec() so that the nd branch can handle the normalised MemoryConfig without
-    // core enumeration.
-    const bool nd_shard_spec_will_overwrite = memory_config_.nd_shard_spec().has_value();
+    // A config created from a legacy shard_spec carries an nd_shard_spec copied from it. The nd branch below
+    // calls from_shard_spec on the same inputs and overwrites the result. Skip the duplicate call. A config created
+    // from an nd_shard_spec keeps the legacy call.
+    const bool nd_shard_spec_will_overwrite =
+        memory_config_.nd_shard_spec().has_value() && !memory_config_.created_with_nd_shard_spec();
 
     if (auto shard_spec = memory_config_.shard_spec()) {
         const auto width_in_pages = physical_size.width() / page_shape.width();
