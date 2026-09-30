@@ -7,10 +7,12 @@
 3. ``test_decode_width_scaling_traced`` (device): traced step time vs decode width.
 """
 
+import importlib.util
 import os
 import statistics
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -50,6 +52,36 @@ def _padded_decode_batch(num_active, width):
         [torch.full((num_active,), 4096, dtype=torch.int32), torch.ones(width - num_active, dtype=torch.int32) * -1]
     )
     return tokens, positions
+
+
+def _import_qwen36_vllm(monkeypatch):
+    """Import the vLLM adapter where vLLM is not installed (the tt-metal unit-test runner) by stubbing
+    only the names qwen36_vllm takes from vllm at module scope; a real vLLM install is used as is."""
+    if "vllm" not in sys.modules and importlib.util.find_spec("vllm") is None:
+
+        class _Stub:
+            pass
+
+        registry = SimpleNamespace(register_processor=lambda *args, **kwargs: (lambda cls: cls))
+        stubs = {
+            "vllm": {},
+            "vllm.model_executor": {},
+            "vllm.model_executor.models": {},
+            "vllm.model_executor.models.interfaces": {"SupportsMultiModal": _Stub},
+            "vllm.model_executor.models.qwen3_5": {
+                "Qwen3_5ProcessingInfo": _Stub,
+                "Qwen3VLDummyInputsBuilder": _Stub,
+                "Qwen3VLMultiModalProcessor": _Stub,
+            },
+            "vllm.multimodal": {"MULTIMODAL_REGISTRY": registry},
+        }
+        for name, attrs in stubs.items():
+            module = ModuleType(name)
+            module.__dict__.update(attrs)
+            monkeypatch.setitem(sys.modules, name, module)
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+
+    return Qwen36ForCausalLM
 
 
 def test_bucket_selection():
@@ -110,6 +142,65 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
     assert result == "output"
     assert remaps == [slot_remap]
     assert forwarded[0][0][0].shape[0] == 4
+
+
+@pytest.mark.parametrize("sampling", ["host", "device"])
+@pytest.mark.parametrize("passing", ["keyword", "positional"])
+def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, sampling, passing):
+    """#51982: a batch condense must move the per-slot GDN recurrent/conv state exactly once, before
+    the decode reads it, whether the step samples on host or device. Decode contract v1
+    (vllm-tt-plugin#78) delivers slot_remap in both modes as a keyword; positional is the
+    tt_transformers Generator signature (index 9)."""
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    from models.tt_transformers.tt.generator import Generator
+
+    events = []
+    model = SimpleNamespace(
+        num_devices=4,
+        args=SimpleNamespace(max_batch_size=8),
+        sampling=None,
+        _remap_gdn_slots=lambda remap: events.append(("remap", list(remap))),
+    )
+    wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    wrapper.model = [model]
+    wrapper.data_parallel = 1  # read by Generator.__del__
+
+    def fake_decode(self, *args, **kwargs):
+        remap = kwargs["slot_remap"] if "slot_remap" in kwargs else args[9]
+        tokens = kwargs["tokens"] if "tokens" in kwargs else args[0]
+        events.append(("decode", list(remap), int(tokens.shape[0])))
+        return "output"
+
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    monkeypatch.setattr(Generator, "decode_forward", fake_decode)
+
+    # Slots 0-3 held A, B, C, D; B finished and D was condensed into B's row. Three rows stay live
+    # in an 8-wide batch, so plain bucketing would shrink this step to width 4.
+    tokens, positions = _padded_decode_batch(3, 8)
+    slot_remap = [0, 3, 2, 3, 4, 5, 6, 7]
+    sampling_params = SimpleNamespace() if sampling == "device" else None
+    reload = dict(reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
+
+    if passing == "keyword":
+        result = Qwen36ForCausalLM.decode_forward(
+            wrapper,
+            tokens=tokens,
+            start_pos=positions,
+            page_table=None,
+            kv_cache=None,
+            sampling_params=sampling_params,
+            slot_remap=slot_remap,
+            **reload,
+        )
+    else:
+        result = Qwen36ForCausalLM.decode_forward(
+            wrapper, tokens, positions, None, None, True, True, sampling_params, None, None, slot_remap, **reload
+        )
+
+    assert result == "output"
+    # GDN state moves once, before the forward; the remap is still forwarded (seed-RNG remap in
+    # Generator); the step keeps full width because the remap indexes the full slot space.
+    assert events == [("remap", slot_remap), ("decode", slot_remap, 8)]
 
 
 def test_unsupported_device_sampling_fails_at_startup(expect_error):
