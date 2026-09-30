@@ -69,7 +69,7 @@ _ISL_SHORT_BLOCK_SWEEP = [67, 289]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 # "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
 # kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
 # SwiGLU-OAI's production shapes. Neither is reachable through SINGLE_EXPERT_MODELS at its real
 # dims (minimax_m3 is absent; gptoss is there but only ever runs SiLU), so the activation had no
@@ -294,7 +294,7 @@ def _isl_params(active_sweep, only_models=None):
     7168 -> 3584 first, so EMB_SIZE would run it at 2x its real K. Its case is separate below.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
@@ -304,7 +304,6 @@ def _isl_params(active_sweep, only_models=None):
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )

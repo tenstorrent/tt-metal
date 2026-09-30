@@ -375,6 +375,7 @@ void Hal::initialize_wh(
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;

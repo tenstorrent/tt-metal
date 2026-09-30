@@ -257,7 +257,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
                 },
             },
         .compile_time_args = common_compile_time_args,
-        .hw_config = ttnn::create_reader_datamovement_config(inputs[0].get().device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // The writer is the only kernel that touches the output buffer: it packs into the resident
@@ -289,7 +289,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
                 },
             },
         .compile_time_args = common_compile_time_args,
-        .hw_config = ttnn::create_writer_datamovement_config(inputs[0].get().device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     const bool fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
@@ -300,7 +300,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     // left unpack_to_dest_mode empty — i.e. Default on every buffer — which is UnpackToSrc. When the
     // data format is Float32 all three buffers compute consumes carry that format (an is_bf8 input
     // cannot also be Float32), so all three need the entry.
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (data_format == tt::DataFormat::Float32) {
         unpack_modes[INPUT0_DFB] = UnpackMode::UnpackToSrc;
         unpack_modes[INPUT1_DFB] = UnpackMode::UnpackToSrc;
@@ -308,11 +308,11 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     }
 
     // The legacy factory set a Metal ComputeConfigDescriptor directly rather than resolving a TTNN
-    // ComputeKernelConfig, so build the Gen1 config by hand and leave every field the descriptor did
-    // not set at its default. ComputeGen1Config's defaults coincide with the legacy descriptor's:
+    // ComputeKernelConfig, so build the config by hand and leave every field the descriptor did
+    // not set at its default. ComputeHardwareConfig's defaults coincide with the legacy descriptor's:
     // math_approx_mode=false -> sfpu_precision_mode=Precise, dst_full_sync_en=false ->
     // double_buffer_dest=true, bfp8_pack_precise=false -> bfp_pack_precision_mode=Approximate.
-    ComputeGen1Config compute_hw_config{
+    ComputeHardwareConfig compute_hw_config{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .enable_32_bit_dest = fp32_dest_acc_en,
         .unpack_modes = std::move(unpack_modes),

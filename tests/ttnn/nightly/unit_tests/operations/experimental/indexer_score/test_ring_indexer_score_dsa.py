@@ -90,7 +90,7 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     return q_dev, w_dev, k_local, k_gathered
 
 
-def _open_full_mesh_ccl(mesh_shape, *, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY):
+def _open_full_mesh_ccl(mesh_shape, *, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY, trace_region_size=0):
     """Open the complete physical 2D mesh with the requested fabric configuration."""
     ttnn.set_fabric_config(
         fabric_config,
@@ -102,7 +102,7 @@ def _open_full_mesh_ccl(mesh_shape, *, fabric_config=ttnn.FabricConfig.FABRIC_2D
     )
     mesh = None
     try:
-        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), trace_region_size=trace_region_size)
         grid = mesh.compute_with_storage_grid_size()
         ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         worker_sub_device = ttnn.SubDevice([ccl_crs])
@@ -154,6 +154,50 @@ def _linear_full_mesh_ref(q_g, k_g, w_g, ring_size, local_sq, chunk_start):
         refs.append(
             indexer_score_dsa_ref(q_g[:, :, sl, :], k_g, w_g[:, :, sl, :], chunk_start + tensor_rank * local_sq)
         )
+    return torch.cat(refs, dim=2)
+
+
+def _sptp_full_mesh_positions(mesh_shape, local_sq, chunk_global, chunk_start):
+    """Query positions of each row-major device on a full mesh, laid out the way GLM-5.2 builds them.
+
+    The mesh rows are SP ranks: a chunk's queries are rotated into each row's SP stripe
+    (chunk_global / rows tokens per slab), in position order, starting at chunk_start. The mesh columns are
+    TP windows: column c takes rows [c*local_sq, (c+1)*local_sq) of its row's rotated list. On the boundary
+    SP rank that list holds the chunk's first and last tokens, so the slab seam lands on whichever column's
+    window covers it -- not on a single device's own stripe."""
+    rows, cols = mesh_shape
+    cl = chunk_global // rows  # SP stripe per slab
+    boundary_slab = chunk_start // chunk_global
+    boundary_sp = (chunk_start // cl) % rows
+    offset = chunk_start % cl
+    positions = []
+    for tensor_rank in range(rows * cols):
+        sp_rank, tp_col = divmod(tensor_rank, cols)
+        update_idxt = (
+            (boundary_slab + 1) * cl
+            if sp_rank < boundary_sp
+            else (boundary_slab * cl + offset if sp_rank == boundary_sp else boundary_slab * cl)
+        )
+        lr = update_idxt + tp_col * local_sq + torch.arange(local_sq)
+        positions.append((lr // cl) * chunk_global + sp_rank * cl + (lr % cl))
+    return positions
+
+
+def _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, t_len):
+    """Head-summed relu score with each device's queries at their SP-rotated, TP-windowed positions."""
+    ring_size = mesh_shape[0] * mesh_shape[1]
+    local_sq = q_g.shape[2] // ring_size
+    positions = _sptp_full_mesh_positions(mesh_shape, local_sq, chunk_global, chunk_start)
+    kh = k_nat[:, 0, :t_len].float()
+    refs = []
+    for tensor_rank, pos in enumerate(positions):
+        sl = slice(tensor_rank * local_sq, (tensor_rank + 1) * local_sq)
+        qh, wh = q_g[:, :, sl, :].float(), w_g[:, :, sl, :].float()
+        score = torch.zeros(1, local_sq, t_len)
+        for h in range(qh.shape[1]):
+            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, 0, :, h : h + 1]
+        future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
+        refs.append(score.masked_fill(future, float("-inf")).unsqueeze(1))
     return torch.cat(refs, dim=2)
 
 
@@ -771,7 +815,9 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
     local_sq = 64
     chunk_global = ring_size * local_sq
     if block_cyclic:
-        # Enter slab 1, rotate ownership by one tensor rank, and make exactly that boundary rank straddle.
+        # Enter slab 1 mid SP stripe: 96 tokens into SP rank 0's stripe (chunk_global / rows = 256 per slab
+        # on 2x4 and 8x4), which is not a multiple of the 64-row TP window. SP rank 0 then holds the chunk's
+        # first and last tokens and the slab seam falls inside its third TP window (#58339).
         chunk_start = chunk_global + local_sq + 32
         t_len = 3 * chunk_global
     else:
@@ -817,10 +863,32 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
 
         assert torch.equal(outputs[0], outputs[1]), "full-mesh indexer replay is not bit-exact"
         if block_cyclic:
-            ref = _straddle_ref(q_g, k_nat, w_g, ring_size, chunk_global, chunk_start, t_len)
+            ref = _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, t_len)
         else:
             ref = _linear_full_mesh_ref(q_g, k_nat, w_g, ring_size, local_sq, chunk_start)
         assert_indexer_match(outputs[0], ref, chunk_global, t_len, check_neg=True)
+
+        if block_cyclic:
+            # Metadata (trace-safe) path: the reader derives the same causal geometry on device. kv_len is
+            # chunk_start + chunk_global there, so compare the scored prefix.
+            meta_out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                semaphores,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx_tensor=_replicated_u32(mesh, chunk_start),
+                program_config=glx_config(heads),
+                **kwargs,
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            meta_host = ttnn.to_torch(meta_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+            kv_len = chunk_start + chunk_global
+            assert_indexer_match(meta_host[..., :kv_len], ref[..., :kv_len], chunk_global, kv_len, check_neg=True)
         logger.info(
             f"full-mesh indexer {mesh_shape} {'block-cyclic rotated' if block_cyclic else 'contiguous'}: "
             "PCC, deterministic replay, cache reuse, and canonical remote K placement passed"
@@ -1091,6 +1159,12 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
             tp_axis=tp_axis,
             chunk_global=chunk_global,
         )
+        usable_topology = ttnn.get_usable_topology(q_dev, cluster_axis=sp_axis)
+        if usable_topology not in (ttnn.Topology.Ring, ttnn.Topology.Torus):
+            pytest.skip(
+                f"the axis-ring readiness gate needs a wrapping SP axis; cluster_axis {sp_axis} of mesh "
+                f"{tuple(mesh.shape)} resolves to {usable_topology}"
+            )
         out = _run_sptp_loudbox_score(
             semaphores,
             subdevice_id,
@@ -1134,14 +1208,15 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
-def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config):
+@pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic_rotated"])
+def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config, block_cyclic):
     """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit.
 
     A torus closes the 8x4 snake; a plain 2D fabric has no closing edge and resolves the same
     walk as an open path, and the gathered result must match either way."""
     if ttnn.get_num_devices() != 32:
         pytest.skip("8x4 full-mesh indexer coverage requires exactly 32 available devices")
-    _run_full_mesh_accuracy_case((8, 4), block_cyclic=False, fabric_config=fabric_config)
+    _run_full_mesh_accuracy_case((8, 4), block_cyclic=block_cyclic, fabric_config=fabric_config)
 
 
 def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinism():
@@ -1195,7 +1270,9 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
         out0 = _score(slot=1, chunk_start=32, kv_len=large_kv_len)
         entries_after_first = mesh.num_program_cache_entries()
         scratch_after_large = [ttnn.to_torch(tensor).clone() for tensor in ttnn.get_device_tensors(k_gathered)]
-        ref0 = _straddle_ref(q_g, k_nat[1:2, :, :large_kv_len, :], w_g, ring_size, chunk_global, 32, large_kv_len)
+        ref0 = _sptp_full_mesh_ref(
+            q_g, k_nat[1:2, :, :large_kv_len, :], w_g, mesh_shape, chunk_global, 32, large_kv_len
+        )
         assert_indexer_match(out0[:, :, :, :large_kv_len], ref0, chunk_global, large_kv_len, check_neg=True)
         _assert_remote_gather_slots(
             k_local,
@@ -1212,8 +1289,8 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
         out1 = _score(slot=2, chunk_start=0, kv_len=chunk_global)
         out2 = _score(slot=2, chunk_start=0, kv_len=chunk_global)
         assert mesh.num_program_cache_entries() == entries_after_first, "runtime scalar changes recompiled"
-        assert torch.equal(out1, out2), "cache-hit replay is not bit-exact"
-        ref1 = _straddle_ref(q_g, k_nat[2:3, :, :chunk_global, :], w_g, ring_size, chunk_global, 0, chunk_global)
+        assert torch.equal(out1[..., :chunk_global], out2[..., :chunk_global]), "cache-hit replay is not bit-exact"
+        ref1 = _sptp_full_mesh_ref(q_g, k_nat[2:3, :, :chunk_global, :], w_g, mesh_shape, chunk_global, 0, chunk_global)
         assert_indexer_match(out1[:, :, :, :chunk_global], ref1, chunk_global, chunk_global, check_neg=True)
         _assert_remote_gather_slots(k_local, k_gathered, ring_size, valid_local_rows=local_sq, cache_batch_idx=2)
         scratch_after_small = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(k_gathered)]
@@ -1235,8 +1312,216 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
         _close_full_mesh_ccl(mesh)
 
 
+def test_indexer_score_full_mesh_accepts_stale_shard_placement():
+    """A correct dim-2 distribution whose placement metadata still names dim 0 scores like the canonical shard.
+
+    GLM hands the op activations built as [sp, 1, chunk_local, ...] sharded on dim 0: the rows sit where a
+    dim-2 shard would put them, but nothing renumbers the placement, so a placement-derived shard factor for
+    dim 2 under-counts. Same bytes on every device -> same score, and no host rejection.
+    """
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("complete 2x4 full-mesh coverage requires the exact physical eight-device LoudBox")
+
+    ring_size, local_sq, heads = 8, 64, 8
+    chunk_global = ring_size * local_sq
+    t_len = 2 * chunk_global
+    chunk_start = chunk_global
+
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl((2, 4))
+    try:
+        q_g, k_nat, w_g = _global_inputs(heads, chunk_global, t_len, seed=2029)
+        q_dev, w_dev, k_local, k_gathered = _full_mesh_inputs(mesh, q_g, w_g, k_nat)
+
+        def _stale_shard(host, rows_per_rank):
+            stacked = torch.cat(
+                [host[:, :, rank * rows_per_rank : (rank + 1) * rows_per_rank, :] for rank in range(ring_size)],
+                dim=0,
+            )
+            return ttnn.from_torch(
+                stacked,
+                device=mesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+
+        def _placements(tensor):
+            return [str(placement) for placement in tensor.tensor_topology().placements()]
+
+        q_stale = _stale_shard(q_g, local_sq)
+        w_stale = _stale_shard(w_g, local_sq)
+        k_local_stale = _stale_shard(k_nat, t_len // ring_size)
+        for name, stale, canonical in (
+            ("q", q_stale, q_dev),
+            ("weights", w_stale, w_dev),
+            ("k_local", k_local_stale, k_local),
+        ):
+            assert _placements(stale) != _placements(canonical), (
+                f"{name}: the stale build no longer differs from the canonical dim-2 shard "
+                f"({_placements(stale)}) -- this test would pass for the wrong reason"
+            )
+            assert stale.shape == canonical.shape, f"{name}: stale and canonical per-device shapes diverged"
+
+        k_gathered_stale = ttnn.from_torch(
+            torch.zeros_like(k_nat),
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+        def _score(q_t, w_t, k_local_t, k_t):
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_t,
+                k_t,
+                w_t,
+                k_local_t,
+                semaphores,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                program_config=glx_config(heads),
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+
+        canonical_out = _score(q_dev, w_dev, k_local, k_gathered)
+        stale_out = _score(q_stale, w_stale, k_local_stale, k_gathered_stale)
+
+        ref = _linear_full_mesh_ref(q_g, k_nat, w_g, ring_size, local_sq, chunk_start)
+        assert_indexer_match(canonical_out, ref, chunk_global, t_len, check_neg=True)
+        assert torch.equal(canonical_out, stale_out), "stale shard placement changed the full-mesh score"
+        logger.info("full-mesh indexer: dim-0 placement over a dim-2 distribution matched the canonical shard")
+    finally:
+        _close_full_mesh_ccl(mesh)
+
+
+def test_indexer_score_full_mesh_traced_slot_metadata_replay():
+    """Trace replay on the full mesh must follow the user slot in cache_batch_idx_tensor and the captured layer.
+
+    The eager scalar cache_batch_idx path is the oracle. One trace is captured per layer; within a trace the
+    user id is rewritten in place between replays, so a captured or cached slot shows up as a wrong-user score.
+    """
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("complete 2x4 trace coverage requires the exact physical eight-device LoudBox")
+
+    ring_size, local_sq, heads = 8, 64, 8
+    num_users, num_layers = 2, 2
+    num_slots = num_users * num_layers
+    chunk_global = ring_size * local_sq
+    t_alloc = 2 * chunk_global
+    chunk_start = chunk_global
+    kv_len = chunk_start + ring_size * local_sq
+
+    mesh, semaphores, subdevice_id, stall_group = _open_full_mesh_ccl((2, 4), trace_region_size=32 * 1024 * 1024)
+    trace_ids = {}
+    try:
+        q_g, _, w_g = _global_inputs(heads, chunk_global, t_alloc, seed=2030)
+        k_slots = torch.cat(
+            [
+                _to_slab(_global_inputs(heads, chunk_global, t_alloc, seed=2200 + slot)[1], ring_size, chunk_global)
+                for slot in range(num_slots)
+            ],
+            dim=0,
+        )
+        q_dev, w_dev, k_local_i, k_gathered = _full_mesh_inputs(mesh, q_g, w_g, k_slots)
+        k_local = ttnn.to_memory_config(k_local_i, _nd_sharded_dram_config(mesh, rows_per_shard=32))
+        ttnn.deallocate(k_local_i)
+
+        def _host_metadata(value):
+            return ttnn.from_torch(
+                torch.tensor([[[[value]]]], dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+        def _device_metadata(value):
+            return ttnn.from_torch(
+                torch.tensor([[[[value]]]], dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        user_tensor = _device_metadata(0)
+        chunk_start_tensor = _device_metadata(chunk_start)
+        host_users = {user: _host_metadata(user) for user in range(num_users)}
+
+        mesh.enable_program_cache()
+        mesh.clear_program_cache()
+
+        def _run(layer_idx, *, slot=None):
+            slot_kwargs = (
+                {"cache_batch_idx": slot, "chunk_start_idx": chunk_start, "kv_len": kv_len}
+                if slot is not None
+                else {"cache_batch_idx_tensor": user_tensor, "chunk_start_idx_tensor": chunk_start_tensor}
+            )
+            return ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                semaphores,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                index_cache_num_layers=num_layers,
+                index_cache_layer_idx=layer_idx,
+                block_cyclic_chunk_local=local_sq,
+                program_config=glx_config(heads),
+                **slot_kwargs,
+            )
+
+        def _read(tensor):
+            return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+
+        references = {}
+        for user in range(num_users):
+            for layer in range(num_layers):
+                out = _run(layer, slot=user * num_layers + layer)
+                ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+                references[(user, layer)] = _read(out)
+                ttnn.deallocate(out)
+        assert not torch.equal(references[(0, 0)], references[(1, 0)]), "distinct users produced identical scores"
+        assert not torch.equal(references[(0, 0)], references[(0, 1)]), "distinct layers produced identical scores"
+
+        traced_outputs = {}
+        for layer in range(num_layers):
+            warmup = _run(layer)
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            ttnn.deallocate(warmup)
+            trace_ids[layer] = ttnn.begin_trace_capture(mesh, cq_id=0)
+            traced_outputs[layer] = _run(layer)
+            ttnn.end_trace_capture(mesh, trace_ids[layer], cq_id=0)
+
+        for layer in range(num_layers):
+            for user in (1, 0, 1):
+                ttnn.copy_host_to_device_tensor(host_users[user], user_tensor)
+                ttnn.execute_trace(mesh, trace_ids[layer], cq_id=0, blocking=True)
+                assert torch.equal(_read(traced_outputs[layer]), references[(user, layer)]), (
+                    f"trace replay (layer {layer}) did not score user {user}'s slot "
+                    f"{user * num_layers + layer} -- the slot tensor is not re-read per dispatch"
+                )
+        logger.info(
+            f"full-mesh traced slot metadata: {num_layers} captured layers x {num_users} replayed users "
+            "matched the scalar cache_batch_idx oracle"
+        )
+    finally:
+        for trace_id in trace_ids.values():
+            ttnn.release_trace(mesh, trace_id)
+        if mesh is not None:
+            mesh.disable_and_clear_program_cache()
+        _close_full_mesh_ccl(mesh)
+
+
 def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
-    """Reject invalid full-mesh axis roles, placements, replication, and link requests on host."""
+    """Reject invalid full-mesh axis roles, per-device extents, replication, and link requests on host."""
     if ttnn.get_num_devices() != 8:
         pytest.skip("complete 2x4 negative coverage requires the exact physical eight-device LoudBox")
 
@@ -1250,6 +1535,7 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
         def _call(**overrides):
             q_arg = overrides.pop("q", q_dev)
             k_arg = overrides.pop("k", k_gathered)
+            k_local_arg = overrides.pop("k_local", k_local)
             kwargs = dict(
                 cluster_axis=None,
                 topology=ttnn.Topology.Ring,
@@ -1263,7 +1549,7 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
                 q_arg,
                 k_arg,
                 w_dev,
-                k_local,
+                k_local_arg,
                 semaphores,
                 **kwargs,
             )
@@ -1281,8 +1567,14 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
         axis_q = ttnn.from_torch(
             q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=axis_mapper
         )
-        with expect_error(RuntimeError, "sequence dim 2 to be sharded across all"):
+        with expect_error(RuntimeError, "Q and weights to share a per-device sequence extent"):
             _call(q=axis_q)
+
+        axis_k_local = ttnn.from_torch(
+            k_nat, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=axis_mapper
+        )
+        with expect_error(RuntimeError, "K-local to be 1/8 of the gathered K extent"):
+            _call(k_local=axis_k_local)
 
         nonreplicated_k = ttnn.from_torch(
             torch.zeros_like(k_nat),
@@ -1313,7 +1605,6 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     chunk_global = sp * q_per_rank
     k_capacity = 128 * 1024
     kv_lens = (56320, 112640)
-    dim = 128
     grid = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     subdevice_id = ttnn.SubDeviceId(0)

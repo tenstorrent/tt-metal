@@ -47,6 +47,9 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     const std::string_view operation_name =
         attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
     kda_factory_detail::check_actual_start(in.t_inv, in.actual_start, operation_name);
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "recurrent_chunk_scan");
+    }
     check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
     check_protocol_tensor(in.kd, "kd", true, operation_name);
     check_protocol_tensor(in.q_decay, "q_decay", true, operation_name);
@@ -202,7 +205,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
-    uint32_t sequence_parallel_axis) {
+    uint32_t sequence_parallel_axis,
+    const std::optional<Tensor>& actual_end) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -229,7 +233,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .t_inv = t_inv,
             .group_entry_states = group_entry_states,
             .tail_entry_states = tail_entry_states,
-            .actual_start = actual_start});
+            .actual_start = actual_start,
+            .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

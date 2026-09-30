@@ -39,6 +39,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
+#include "tt_metal/impl/dispatch/host_device_transfer.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -262,8 +263,8 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
         }
 
         // Write to device once per bank (appropriate core and offset)
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-            device, bank_id, this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)], data.data);
+        tt::tt_metal::slow_dispatch::WriteToDeviceDRAMChannel(
+            *device, bank_id, this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)], data.data);
 
         this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] =
             this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
@@ -437,7 +438,7 @@ inline bool DeviceData::validate_one_core(
     // Read results from device and compare to expected for this core.
     std::vector<uint32_t> results;
     if (core_type == tt::CoreType::DRAM) {
-        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
+        tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(*device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
         results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -1529,7 +1530,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_size,
     uint32_t prefetch_q_rd_ptr_addr,
-    uint32_t prefetch_q_pcie_rd_ptr_addr,
     uint32_t cmddat_q_base,
     uint32_t cmddat_q_pages,
     uint32_t scratch_db_base,
@@ -1574,7 +1574,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
         {"PREFETCH_Q_SIZE", std::to_string(prefetch_q_size)},
         {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
-        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
         {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
         {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
         {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
