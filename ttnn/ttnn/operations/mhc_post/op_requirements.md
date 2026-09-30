@@ -32,7 +32,7 @@
 - **Golden baseline**: 84 / 208 passing: 84 supported_pass, 123 xfail_expected (all bf16 cells), 0 supported_fail / xpass_drift / xfail_wrong_mode
 - **Perf**: fp32 loose sweep at 1.22–2.39× the DRAM roofline (T640 C7168 fp32: 537 µs vs 403 µs target; the composite is 3781 µs)
 
-### [ ] Refinement 1 — bfloat16 residual streams and sublayer output
+### [x] Refinement 1 — bfloat16 residual streams and sublayer output
 
 **Goal**: add `ttnn.bfloat16` to `SUPPORTED["dtype"]` (X and X') and to `SUPPORTED["sublayer_dtype"]` (F), independently, so all four (dtype × sublayer_dtype) combinations run. Both stay with fp32 DEST, and post / comb stay applied as fp32 values. This moves the 75 `test_op` bf16 cells and the 48 bf16 loose cases from xfail to passing, and un-skips `test_regression.py::test_depth_chain[bf16]` (122 wraps, drift ≤ 1e-3).
 - **Formats:** each CB's data format (F, X, X') and its `UnpackToDestFp32` tag are already derived from the tensor dtype on the host. A bf16 CB stays `Default`, because bf16 enters DEST exactly through srcA.
@@ -49,6 +49,8 @@
 - **Ledger.** Update `l1_ledger.md` page formats (bf16 rows) and the B_fit numbers if anything moves.
 
 **Done when**: all 4 dtype combos pass on all 25 INPUTS shapes (both alignments), all 48 bf16 loose cases pass, `test_depth_chain[bf16]` passes, `verify_supported` shows 0 xfail_expected and 0 loud categories, and the precision baseline gains bf16 rows (PCC, rel-RMS, signed bias, ratio spread).
+
+**Outcome**: no kernel change: SUPPORTED widened, and the packer's fp32 → bf16 rounding is RNE (bias ≤ 1.3e-5 rel; 122-wrap drift passes). The golden bf16 slice is 123/123 (75 test_op + 48 loose), and `test_depth_chain[bf16]` passes. Device time on 110 cores (bf16 / fp32): T640 C7168 388.0 / 537.6 µs, T640 C1792 151.0 / 186.6 µs, T1280 C4096 435.3 / 628.1 µs. Compute is now the bound, which is Refinement 2's job.
 
 ### [ ] Refinement 2 — Speed up the compute-bound SFPU mix on the perf-flagged bf16 profiles
 

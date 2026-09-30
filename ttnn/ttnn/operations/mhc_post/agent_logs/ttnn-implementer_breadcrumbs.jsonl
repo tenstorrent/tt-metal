@@ -3,3 +3,5 @@
 {"event":"perf","shape":"T640 C1792 fp32","ns":{"baseline":222621,"compute_stubbed":196916,"compute+expansion_stubbed":100677,"face_dup":168204},"bound":"reader coefficient expansion then compute","ts":"2026-09-30T01:56:56+00:00"}
 {"event":"perf","lever":"block_col_tiles cap","result":"B=4/2 slower (665/699us vs 560us at C7168); kept coarsest-fit default, MAX_BLOCK_COL_TILES knob parked at None","ts":"2026-09-30T01:56:56+00:00"}
 {"event":"friction","what":"none","ts":"2026-09-30T01:57:18+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-09-30T02:25:02+00:00"}
+{"event":"test_run","result":"pass","details":"R1 bf16: golden bf16 123/123, regression 12/12 incl depth_chain[bf16], unit 58/58; packer RNE confirmed; perf bf16 T640C7168 388us","ts":"2026-09-30T02:33:26+00:00"}

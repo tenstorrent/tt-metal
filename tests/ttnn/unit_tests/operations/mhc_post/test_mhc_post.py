@@ -115,8 +115,13 @@ SHAPES = [
     pytest.param((1, 4 * 7168), id="T1_decode_C7168"),
 ]
 
-# Phase 0 cell: float32 streams, float32 sublayer output.
-DTYPES = [pytest.param((ttnn.float32, ttnn.float32), id="X_fp32-F_fp32")]
+# (X/X' dtype, F dtype): Phase 0 fp32/fp32 + Refinement 1 bf16 combos.
+DTYPES = [
+    pytest.param((ttnn.float32, ttnn.float32), id="X_fp32-F_fp32"),
+    pytest.param((ttnn.bfloat16, ttnn.bfloat16), id="X_bf16-F_bf16"),
+    pytest.param((ttnn.float32, ttnn.bfloat16), id="X_fp32-F_bf16"),
+    pytest.param((ttnn.bfloat16, ttnn.float32), id="X_bf16-F_fp32"),
+]
 
 
 @pytest.mark.parametrize("dtypes", DTYPES)
@@ -144,14 +149,15 @@ def test_mhc_post_explicit_config(device):
     check(out, expected, x_shape, ttnn.float32)
 
 
-def test_mhc_post_deterministic(device):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_mhc_post_deterministic(device, dtype):
     x_shape = (1, 1, 96, 4 * 768)
-    out1, expected, args = run(device, x_shape, dtype=ttnn.float32, sublayer_dtype=ttnn.float32)
+    out1, expected, args = run(device, x_shape, dtype=dtype, sublayer_dtype=dtype)
     out2 = mhc_post(*args)
     a = ttnn.to_torch(out1)
     b = ttnn.to_torch(out2)
     assert torch.equal(a, b), "two calls on the same inputs must be bitwise identical"
-    check(out1, expected, x_shape, ttnn.float32)
+    check(out1, expected, x_shape, dtype)
 
 
 def test_mhc_post_refuses_fp16_dest(device, expect_error):

@@ -39,8 +39,8 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED
 # ---------------------------------------------------------------------------
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "sublayer_dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16],
+    "sublayer_dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
     "alignment": ["tile_aligned", "h_non_aligned"],

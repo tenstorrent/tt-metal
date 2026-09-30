@@ -7,7 +7,8 @@ Per shape: PCC, max / mean abs error, relative RMS (to the reference stddev), UL
 output (relative to the output value, and to the term magnitude sum_k |term_k|), the signed relative bias (the residual-highway
 shrink detector) and the got/true ratio spread (the uniform-scale-bug detector).
 
-Only the SUPPORTED cells are measured (Phase 0: float32 X, float32 F). Run with `-s` to see the table.
+All four SUPPORTED (X dtype x F dtype) cells are measured. fp32 X' is gated on the exact-mix bounds;
+bf16 X' on a single RNE output rounding (rel-RMS ~ 2^-9, unbiased). Run with `-s` to see the table.
 """
 
 import pytest
@@ -66,7 +67,15 @@ SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("dtypes", [pytest.param((ttnn.float32, ttnn.float32), id="X_fp32-F_fp32")])
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        pytest.param((ttnn.float32, ttnn.float32), id="X_fp32-F_fp32"),
+        pytest.param((ttnn.bfloat16, ttnn.bfloat16), id="X_bf16-F_bf16"),
+        pytest.param((ttnn.float32, ttnn.bfloat16), id="X_fp32-F_bf16"),
+        pytest.param((ttnn.bfloat16, ttnn.float32), id="X_bf16-F_fp32"),
+    ],
+)
 @pytest.mark.parametrize("x_shape", SHAPES)
 def test_mhc_post_precision_baseline(device, x_shape, dtypes):
     dtype, sublayer_dtype = dtypes
@@ -117,9 +126,17 @@ def test_mhc_post_precision_baseline(device, x_shape, dtypes):
     )
 
     assert torch.isfinite(got).all()
-    assert_with_pcc(ref32, got, pcc=0.9999999)
-    # fp32 streams: the SFPU mix is exact up to a few fp32 roundings (1 mul + n MADs).
-    assert rel_rms < 2e-6
-    assert ulp_s_max <= 8
-    assert abs(bias) <= 1e-6 + 6 * bias_se
-    assert abs(r_med - 1.0) < 1e-6
+    if dtype == ttnn.float32:
+        # fp32 streams: the SFPU mix is exact up to a few fp32 roundings (1 mul + n MADs); a bf16 F input
+        # is exact in fp32, so the reference (built from the rounded F) holds the same bound.
+        assert_with_pcc(ref32, got, pcc=0.9999999)
+        assert rel_rms < 2e-6
+        assert ulp_s_max <= 8
+        assert abs(bias) <= 1e-6 + 6 * bias_se
+        assert abs(r_med - 1.0) < 1e-6
+    else:
+        # bf16 X': one fp32 -> bf16 output rounding (RNE, unbiased) on top of the exact fp32 mix.
+        assert_with_pcc(ref32, got, pcc=0.9999)
+        assert rel_rms < 4e-3
+        assert abs(bias) <= 1e-5 + 6 * bias_se
+        assert abs(r_med - 1.0) < 1e-3
