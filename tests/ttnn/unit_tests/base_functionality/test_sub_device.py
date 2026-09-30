@@ -146,7 +146,7 @@ def test_sub_device_id_hash_matches_equality():
 
 
 @pytest.mark.parametrize("num_command_queues", [1, 2])
-def test_mesh_device_lifecycle_queries(num_command_queues, expect_error):
+def test_mesh_device_lifecycle_queries(num_command_queues, silicon_arch_name, expect_error):
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), num_command_queues=num_command_queues)
     try:
         assert mesh_device.is_initialized(), "newly opened mesh device is not initialized"
