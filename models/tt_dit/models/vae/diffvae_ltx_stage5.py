@@ -14,6 +14,7 @@ Port of ``ltx_core.model.video_vae``: ``DiffusionVideoDecoder.forward_diff_step`
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -819,7 +820,13 @@ class DiffusionNABlock(Module):
     )
     def _modulated(self, phase: str, norm, x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
         """``norm(x) * (1 + scale) + shift``; ``scale``/``shift`` broadcast over the site axis."""
-        scaled = consume(norm(x), ttnn.multiply, ttnn.add(scale, 1.0))
+        scale_p1 = ttnn.add(scale, 1.0)
+        if os.environ.get("DIFFVAE_S5_UNFUSED_ADALN") != "1":
+            # The modulation is the norm's affine weight and bias: one pass over the band instead
+            # of three, with the normalized value kept in fp32 until the shift is added.
+            weight = scale_p1 if norm.weight is None else ttnn.multiply(norm.weight.data, scale_p1)
+            return ttnn.experimental.dit_rms_norm_unary_fused(x, weight=weight, bias=shift, epsilon=norm.norm_eps)
+        scaled = consume(norm(x), ttnn.multiply, scale_p1)
         return consume(scaled, ttnn.add, shift)
 
     @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION)
