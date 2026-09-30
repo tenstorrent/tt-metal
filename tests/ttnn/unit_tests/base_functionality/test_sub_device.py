@@ -150,11 +150,13 @@ def test_mesh_device_lifecycle_queries(num_command_queues, silicon_arch_name, ex
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), num_command_queues=num_command_queues)
     try:
         assert mesh_device.is_initialized(), "newly opened mesh device is not initialized"
+        assert not mesh_device.is_remote_only(), "a local mesh reports only remote devices"
         assert mesh_device.num_hw_cqs() == num_command_queues, "mesh command queue count differs from open request"
     finally:
         ttnn.close_mesh_device(mesh_device)
 
     assert not mesh_device.is_initialized(), "closed mesh device remains initialized"
+    assert not mesh_device.is_remote_only(), "closed mesh device reports only remote devices"
     with expect_error(RuntimeError, "MeshDevice is not initialized"):
         mesh_device.get_sub_device_ids()
     with expect_error(RuntimeError, "MeshDevice is not initialized"):

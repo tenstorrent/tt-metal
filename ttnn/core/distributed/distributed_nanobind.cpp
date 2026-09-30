@@ -301,6 +301,15 @@ void py_module(nb::module_& mod) {
                     bool: Whether the mesh device is initialized.
             )doc")
         .def(
+            "is_remote_only",
+            &MeshDevice::is_remote_only,
+            R"doc(
+                Return whether the initialized mesh has no local devices.
+
+                Returns:
+                    bool: Whether the mesh contains only remote devices; false after close.
+            )doc")
+        .def(
             "num_hw_cqs",
             [](const MeshDevice& mesh_device) {
                 require_initialized_mesh_device(mesh_device);
