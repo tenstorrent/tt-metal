@@ -65,17 +65,20 @@ COMPONENT_DEFAULTS = {
     "component_floor": 0.003,  # rel L2 limit never below this
     "component_calib": 2.0,  # rel L2 limit = this x the bf16 precision model's error (Hy4 device: <= 1.7 x)
     "component_calib_low": 3.5,  # the same for tests.low_precision_kinds (Hy4 bfp8 experts: 2.1 x)
-    "component_col_factor": 2.0,  # a column's limit is at least this x the whole-output rel limit
+    "component_col_factor": 4.0,  # a column's limit is at least this x the whole-output rel limit (MiMo mlp: 2.8 x)
     "component_margin": 1.2,  # ... and never below this x the model's error, even above the cap
     "component_row": 0.03,  # worst row rel L2 (Hy4 device: <= 0.016)
     "component_ratio": 0.015,  # every row's norm ratio within 1 +- this (Hy4 device: within 0.0073)
-    "component_bias": 0.004,  # median row norm ratio within 1 +- this (a systematic scale)
+    "component_bias": 0.004,  # median row norm ratio within 1 +- this (a systematic scale) ...
+    "component_bias_share": 0.5,  # ... or this x the rel limit, whichever is larger
     "component_select": 0.995,  # selection outputs: mean selection overlap (Hy4 device router: 0.9982)
     "component_select_rel": 0.005,  # rel L2 on rows with the same selection (Hy4 device: 0.0017)
     "component_rowsum": 0.004,  # row sums on those rows within 1 +- this
     "component_index_row": 0.95,  # index outputs: worst row set overlap (Hy4 device indexer: 0.9888)
     "component_probe": 1.5,  # second inputs: the fixed limits x this ...
-    "component_second_rel": 0.03,  # ... and a rel limit of at least this, no bias limit
+    "component_second_rel": 0.03,  # ... and a rel limit of at least this, no bias limit ...
+    "component_second_row": 0.15,  # ... worst row at least this (GLM KDA attention x 1e-3: 0.09; hard cases >= 0.34)
+    "component_second_ratio": 0.1,  # ... row norm ratio within 1 +- at least this (GLM: 0.056; hard cases >= 0.13)
 }
 LOW_PRECISION_KINDS = ("moe",)
 SPARSE_ZEROS = 0.75
@@ -230,10 +233,11 @@ def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool
     columns stray far from the model (Hy4 attention L1, one of 6144 columns: 0.043 on permuted, 0.14 on x 1e-3)."""
     out = {
         "rel": max(rel_lim, lim["component_second_rel"]) if second else rel_lim,
-        "row": f * lim["component_row"],
+        "row": max(f * lim["component_row"], lim["component_second_row"]) if second else lim["component_row"],
         "col": None if second else col_lim,  # the golden input only (Hy4 attention on x 1e-3 inputs: one column 0.14)
-        "ratio": f * lim["component_ratio"],
-        "bias": math.inf if second else f * lim["component_bias"],
+        "ratio": max(f * lim["component_ratio"], lim["component_second_ratio"]) if second else lim["component_ratio"],
+        # a systematic scale may use at most half of the step's error budget (GLM KDA attention: -0.45 % of 0.68 %)
+        "bias": math.inf if second else max(lim["component_bias"], lim["component_bias_share"] * rel_lim),
     }
     if model:
         m = lim["component_margin"]
