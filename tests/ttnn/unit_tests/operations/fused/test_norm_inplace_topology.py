@@ -8,7 +8,12 @@ sharded program config and ``inplace=True``) hand the caller's own tensor back, 
 the mesh cannot change. Before the fix the framework relabelled that tensor with the union of ALL inputs,
 so a replicated activation came back labelled ``Shard`` whenever the mask / weight was sharded across the
 mesh. The out-of-place variants allocate a fresh tensor and keep the union label; the controls here
-document that path for the replicated-everything case, where the union is the input's own label.
+document that path both for the replicated-everything case (the union is the input's own label) and for a
+mesh-sharded mask / weight (the union is the sharded operand's label).
+
+Program-cache counts: ``ttnn.from_torch`` onto a mesh device may tilize on device, and
+``ttnn.interleaved_to_sharded`` is a device op, so every device tensor a test needs is built BEFORE the
+program cache is enabled and cleared. Only the op under test runs inside the counted window.
 """
 
 import math
@@ -54,11 +59,22 @@ def _per_device(tensor):
 SOFTMAX_SHAPE = (2, 4, 64, 128)
 
 
+def _random_mask(shape):
+    # Non-causal additive mask: one tile row per batch, broadcast over heads and rows; the kernel reads its
+    # first row.
+    return torch.where(torch.rand(shape) > 0.5, 0.0, -10000.0).to(torch.bfloat16)
+
+
+def _masked_softmax_reference(torch_input, scale, device_mask):
+    return torch.softmax(torch_input.float() * scale + device_mask[:, :, :1, :].float(), dim=-1)
+
+
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
 @pytest.mark.parametrize("shard_dim", [None, 0], ids=["replicated", "sharded_dim0"])
 def test_softmax_in_place_keeps_input_topology(mesh_device, shard_dim):
     """softmax_in_place has a single input, so its label was already correct; this pins the contract for
-    both a replicated and a sharded activation and checks the returned handle aliases the input."""
+    both a replicated and a sharded activation and checks the op really ran in place: the caller's own
+    handle, not just the returned one, holds the softmaxed values afterwards."""
     torch.manual_seed(0)
     num_devices = mesh_device.get_num_devices()
     if shard_dim is None:
@@ -77,8 +93,9 @@ def test_softmax_in_place_keeps_input_topology(mesh_device, shard_dim):
 
     assert output.tensor_topology() == reference.tensor_topology()
     assert input_tensor.tensor_topology() == reference.tensor_topology()
-    for got, want in zip(_per_device(output), expected):
-        assert_with_pcc(want, got.float(), 0.99)
+    for handle in (output, input_tensor):
+        for got, want in zip(_per_device(handle), expected):
+            assert_with_pcc(want, got.float(), 0.99)
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
@@ -96,14 +113,15 @@ def test_scale_mask_softmax_in_place_keeps_input_topology(mesh_device):
     scale = 0.5
 
     torch_input = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
-    # Non-causal mask: one tile row per batch, broadcast over heads and rows; the kernel reads its first row.
-    mask_shape = (batch * num_devices, 1, 32, width)
-    torch_mask = torch.where(torch.rand(mask_shape) > 0.5, 0.0, -10000.0).to(torch.bfloat16)
+    torch_mask = _random_mask((batch * num_devices, 1, 32, width))
 
     input_tensor = _replicated(torch_input, mesh_device)
     reference = _replicated(torch_input, mesh_device)
     mask = _sharded(torch_mask, mesh_device, 0)
     assert mask.tensor_topology() != reference.tensor_topology()
+    # Second-call operands, built up front so that no tensor construction runs inside the counted window.
+    second_input = _replicated(torch_input, mesh_device)
+    replicated_mask = _replicated(torch_mask[:batch], mesh_device)
 
     mesh_device.enable_program_cache()
     mesh_device.clear_program_cache()
@@ -118,12 +136,9 @@ def test_scale_mask_softmax_in_place_keeps_input_topology(mesh_device):
 
         per_device_masks = torch_mask.chunk(num_devices, dim=0)
         for got, device_mask in zip(_per_device(output), per_device_masks):
-            want = torch.softmax(torch_input.float() * scale + device_mask[:, :, :1, :].float(), dim=-1)
-            assert_with_pcc(want, got.float(), 0.99)
+            assert_with_pcc(_masked_softmax_reference(torch_input, scale, device_mask), got.float(), 0.99)
 
         # Same shapes, replicated mask: a cache hit, and still the input's label.
-        second_input = _replicated(torch_input, mesh_device)
-        replicated_mask = _replicated(torch_mask[:batch], mesh_device)
         output = ttnn.scale_mask_softmax_in_place(second_input, scale, replicated_mask, numeric_stable=True)
         assert mesh_device.num_program_cache_entries() == cache_entries
         assert output.tensor_topology() == reference.tensor_topology()
@@ -132,23 +147,41 @@ def test_scale_mask_softmax_in_place_keeps_input_topology(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
-def test_scale_mask_softmax_out_of_place_control(mesh_device):
-    """Out-of-place softmax returns an empty topology list and keeps the framework union: with a replicated
-    input and a replicated mask that union is the input's own label."""
+@pytest.mark.parametrize("mask_shard_dim", [None, 0], ids=["replicated_mask", "sharded_mask"])
+def test_scale_mask_softmax_out_of_place_control(mesh_device, mask_shard_dim):
+    """Out-of-place softmax returns an empty topology list, so the fresh output takes the framework union.
+
+    With a replicated input and a replicated mask the union is the input's own label. With the mask sharded
+    over the mesh on dim 0 the output is per-device distinct and the union is the mask's ``Shard(0)`` label
+    (``{2},[Shard(0)]``); the input is untouched and keeps its own label.
+    """
     torch.manual_seed(2)
+    num_devices = mesh_device.get_num_devices()
     batch, _, _, width = SOFTMAX_SHAPE
+    scale = 0.5
+
     torch_input = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
-    torch_mask = torch.where(torch.rand((batch, 1, 32, width)) > 0.5, 0.0, -10000.0).to(torch.bfloat16)
-
     input_tensor = _replicated(torch_input, mesh_device)
-    mask = _replicated(torch_mask, mesh_device)
+    reference = _replicated(torch_input, mesh_device)
 
-    output = ttnn.scale_mask_softmax(input_tensor, 0.5, mask, numeric_stable=True)
+    if mask_shard_dim is None:
+        torch_mask = _random_mask((batch, 1, 32, width))
+        mask = _replicated(torch_mask, mesh_device)
+        per_device_masks = [torch_mask] * num_devices
+        expected_topology = reference.tensor_topology()
+    else:
+        torch_mask = _random_mask((batch * num_devices, 1, 32, width))
+        mask = _sharded(torch_mask, mesh_device, mask_shard_dim)
+        per_device_masks = torch_mask.chunk(num_devices, dim=mask_shard_dim)
+        expected_topology = mask.tensor_topology()
+        assert expected_topology != reference.tensor_topology()
 
-    assert output.tensor_topology() == input_tensor.tensor_topology()
-    want = torch.softmax(torch_input.float() * 0.5 + torch_mask[:, :, :1, :].float(), dim=-1)
-    for got in _per_device(output):
-        assert_with_pcc(want, got.float(), 0.99)
+    output = ttnn.scale_mask_softmax(input_tensor, scale, mask, numeric_stable=True)
+
+    assert output.tensor_topology() == expected_topology
+    assert input_tensor.tensor_topology() == reference.tensor_topology()
+    for got, device_mask in zip(_per_device(output), per_device_masks):
+        assert_with_pcc(_masked_softmax_reference(torch_input, scale, device_mask), got.float(), 0.99)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -222,6 +255,10 @@ def test_layer_norm_in_place_keeps_input_topology(mesh_device):
     assert input_tensor.tensor_topology() == reference.tensor_topology()
     weight = _sharded(gamma_stacked, mesh_device, 2, layout=ttnn.ROW_MAJOR_LAYOUT)
     assert weight.tensor_topology() != reference.tensor_topology()
+    # Second-call operands, built up front: interleaved_to_sharded is itself a cached device op and must
+    # not run inside the counted window.
+    second_input = _block_sharded_replicated_input(torch_input, mesh_device, grid_size, shard_shape)
+    replicated_weight = _replicated(_gamma_row_major(torch_gamma[:K]), mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     mesh_device.enable_program_cache()
     mesh_device.clear_program_cache()
@@ -246,8 +283,6 @@ def test_layer_norm_in_place_keeps_input_topology(mesh_device):
             assert_with_pcc(want, got.float(), 0.99)
 
         # Same shapes, replicated weight: a cache hit, and still the input's label.
-        second_input = _block_sharded_replicated_input(torch_input, mesh_device, grid_size, shard_shape)
-        replicated_weight = _replicated(_gamma_row_major(torch_gamma[:K]), mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
         output = ttnn.layer_norm(
             second_input,
             epsilon=eps,
@@ -263,10 +298,17 @@ def test_layer_norm_in_place_keeps_input_topology(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
-def test_layer_norm_out_of_place_control(mesh_device):
-    """Out-of-place sharded layernorm returns an empty topology list and keeps the framework union: with a
-    replicated input and a replicated weight that union is the input's own label."""
+@pytest.mark.parametrize("shard_weight", [False, True], ids=["replicated_weight", "sharded_weight"])
+def test_layer_norm_out_of_place_control(mesh_device, shard_weight):
+    """Out-of-place sharded layernorm returns an empty topology list, so the fresh output takes the framework
+    union.
+
+    With a replicated input and a replicated weight the union is the input's own label. With the weight
+    sharded over the mesh on dim 2 (one gamma per device) the output is per-device distinct and the union is
+    the weight's ``Shard(2)`` label (``{2},[Shard(2)]``); the input is untouched and keeps its own label.
+    """
     torch.manual_seed(4)
+    num_devices = mesh_device.get_num_devices()
     in0_shape, grid_size, shard_shape, program_config, compute_kernel_config, out_mem_config = _layernorm_setup(
         mesh_device, inplace=False
     )
@@ -274,10 +316,20 @@ def test_layer_norm_out_of_place_control(mesh_device):
     eps = 1e-2
 
     torch_input = (torch.rand(in0_shape) * 2 - 0.95).to(torch.bfloat16)
-    torch_gamma = (torch.rand(K) * 2 - 1).to(torch.bfloat16)
-
     input_tensor = _block_sharded_replicated_input(torch_input, mesh_device, grid_size, shard_shape)
-    weight = _replicated(_gamma_row_major(torch_gamma), mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    reference = _replicated(torch_input, mesh_device)
+
+    if shard_weight:
+        torch_gamma = (torch.rand(K * num_devices) * 2 - 1).to(torch.bfloat16)
+        weight = _sharded(_gamma_row_major(torch_gamma), mesh_device, 2, layout=ttnn.ROW_MAJOR_LAYOUT)
+        per_device_gammas = torch_gamma.chunk(num_devices, dim=0)
+        expected_topology = weight.tensor_topology()
+        assert expected_topology != reference.tensor_topology()
+    else:
+        torch_gamma = (torch.rand(K) * 2 - 1).to(torch.bfloat16)
+        weight = _replicated(_gamma_row_major(torch_gamma), mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        per_device_gammas = [torch_gamma] * num_devices
+        expected_topology = reference.tensor_topology()
 
     output = ttnn.layer_norm(
         input_tensor,
@@ -288,7 +340,8 @@ def test_layer_norm_out_of_place_control(mesh_device):
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert output.tensor_topology() == input_tensor.tensor_topology()
-    want = F.layer_norm(torch_input.float(), (K,), torch_gamma.float(), None, eps)
-    for got in _per_device(output):
+    assert output.tensor_topology() == expected_topology
+    assert input_tensor.tensor_topology() == reference.tensor_topology()
+    for got, device_gamma in zip(_per_device(output), per_device_gammas):
+        want = F.layer_norm(torch_input.float(), (K,), device_gamma.float(), None, eps)
         assert_with_pcc(want, got.float(), 0.99)
