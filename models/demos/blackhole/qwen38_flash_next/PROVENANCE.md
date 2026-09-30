@@ -1,12 +1,17 @@
 # Source provenance
 
-This implementation originates from **Samuel Jett** ([sjettTT](https://github.com/sjettTT),
-sjett@tenstorrent.com), in
+This implementation is ported from the source maintained and optimized by
+**Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com), in
 [sjettTT/tt-qwen-3.8-flash-next](https://github.com/sjettTT/tt-qwen-3.8-flash-next)
 at immutable commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`.
 That snapshot contains 452 tracked files in this model subtree. The original
 source checkout and its measurement records are preserved separately from the
 publication port and its newly measured results.
+
+The initial source export, commit `2f6fcf1a6dccf91cf480c66dab31afe25f7729c3`,
+records both Author and Committer as `Codex <codex@openai.com>`. This export
+attribution is distinct from Samuel Jett's source maintenance, subsequent
+optimizations and original operation commits retained below.
 
 The port targets tt-metal `bdfc59036eea3e988ba0e2374c12ca0c15c6c970` and depends
 on Samuel Jett's original [tt-metal PR #57564](https://github.com/tenstorrent/tt-metal/pull/57564),
