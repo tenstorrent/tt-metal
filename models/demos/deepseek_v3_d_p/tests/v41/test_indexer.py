@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, CandidateBlocks, TtV41Indexer, TtV41IndexKeys
-from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import gather_runs, segment_max
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import candidate_scores, gather_runs, segment_max
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCORE_PCC = 0.999
@@ -205,6 +205,27 @@ def test_v41_indexer(mesh_device, device_params):
         assert torch.equal(finite, torch.isfinite(dev_score)), f"L{layer}: visibility masks differ"
         results[f"L{layer}_scores"] = comp_pcc(ref_score[finite], dev_score[finite], 0.0)[1]
 
+        if layer > cfg.CANDIDATE_SOURCE_LAYER and real_candidates.ids is not None:
+            # candidate scoring (the long-row path of a candidate index source) vs the reference and the full-row
+            # score, both over the candidate rows
+            ids = real_candidates.ids
+            sparse = per_query(indexer.candidate_rows(tt_x, tt_qr, index_k, tables, 0, ids))[0, 0].float()
+            dense = per_query(gather_runs(score, ids, cfg.CANDIDATE_BLOCK_SIZE))[0, 0].float()
+            host_ids = per_query(ids)[0, 0].long() & 0xFFFFFFFF
+            cols = (host_ids.unsqueeze(-1) * cfg.CANDIDATE_BLOCK_SIZE + torch.arange(cfg.CANDIDATE_BLOCK_SIZE)).flatten(
+                1
+            )
+            padded = torch.cat([ref_score, torch.full((seq, 1), float("-inf"))], dim=1)
+            ref_rows = torch.gather(padded, 1, cols.clamp(max=ref_score.shape[1]))
+            cand_finite = torch.isfinite(ref_rows)
+            results[f"L{layer}_candidate_rows_mask_exact"] = torch.equal(torch.isfinite(sparse), cand_finite) and (
+                torch.equal(torch.isfinite(dense), cand_finite)
+            )
+            results[f"L{layer}_candidate_scores"] = comp_pcc(ref_rows[cand_finite], sparse[cand_finite], 0.0)[1]
+            results[f"L{layer}_full_row_candidate_scores_diag"] = comp_pcc(
+                ref_rows[cand_finite], dense[cand_finite], 0.0
+            )[1]
+
         # selection given identical, tie-free scores
         g = torch.Generator().manual_seed(layer)
         # distinct bf16 values per row: distinct positive bf16 bit patterns (integers > 256 would collide)
@@ -373,3 +394,96 @@ def test_v41_gather_runs(mesh_device, device_params, k):
         dev = _per_query(out)[0, 0].float()
         assert torch.equal(dev, ref), (run, (dev != ref).nonzero()[:8].tolist())
         assert torch.equal(_per_query(gather_runs(feed, dev_ids, run))[0, 0].float(), dev), "not deterministic"
+
+
+def _fp4_like(shape, g) -> torch.Tensor:
+    """bf16 values with at most 2 significant bits (FP4 e2m1 codes times a power of two), as QDQ'd q and index-K."""
+    codes = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+    v = codes[torch.randint(0, 8, shape, generator=g)] * torch.where(torch.rand(shape, generator=g) < 0.5, -1.0, 1.0)
+    return (v * 2.0 ** torch.randint(-4, 0, shape[:-1] + (1,), generator=g)).to(torch.bfloat16)
+
+
+def _candidate_score_ref(q, w, k, ids, positions) -> torch.Tensor:
+    """[S, K * 8] reference of ``candidate_scores``: per head a bf16 q . k (exact fp32 dot, one rounding), relu,
+    weighted sum over the heads in fp32, one bf16 rounding; -inf for sentinel ids and rows past the query. Also
+    returns sum_h |w_h relu(q_h . k)| (the scale of the head sum's accumulation error)."""
+    seq, nk = ids.shape
+    nblocks = k.shape[0] // 8
+    valid = ids < nblocks
+    rows = (ids.clamp(max=nblocks - 1).unsqueeze(-1) * 8 + torch.arange(8)).reshape(seq, -1)  # [S, K * 8]
+    out, magnitude = torch.empty(seq, nk * 8), torch.empty(seq, nk * 8)
+    for i in range(seq):
+        kr = k[rows[i]].float()  # [K * 8, 128]
+        s = torch.einsum("hd,td->ht", q[i].float(), kr).to(torch.bfloat16).float().relu()
+        terms = w[i].float().unsqueeze(-1) * s
+        out[i] = terms.sum(0).to(torch.bfloat16).float()
+        magnitude[i] = terms.abs().sum(0)
+    visible = valid.repeat_interleave(8, dim=1) & (rows <= positions.view(-1, 1))
+    return torch.where(visible, out, float("-inf")), magnitude
+
+
+@pytest.mark.parametrize("nk, start", [(96, 2048), (2048, 131072)], ids=["K96", "K2048"])
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+def test_v41_candidate_scores(mesh_device, device_params, nk, start):
+    """candidate_scores vs torch (every chip): the newest block pinned first (partly past the query), random blocks
+    with a repeat, a sentinel tail on some queries; FP4-like q / index-K, bf16 head weights. The finite pattern must
+    match exactly; values within one bf16 rounding plus 2^-6 of the head terms' magnitude of the fp32-accumulated
+    reference, PCC >= 0.9999; deterministic."""
+    sp, tp = tuple(mesh_device.shape)
+    rows = 32  # per chip
+    seq = rows * sp * tp
+    g = torch.Generator().manual_seed(nk)
+    with phase("reference", what="inputs + torch candidate scores"):
+        t_rows = start + seq
+        q = _fp4_like((seq, 32, 128), g)
+        k = _fp4_like((t_rows, 128), g)
+        w = (torch.randn(seq, 32, generator=g) * 0.05).to(torch.bfloat16)
+        positions = start + torch.arange(seq)
+        ids = torch.stack([torch.randperm(start // 8, generator=g)[:nk] for _ in range(seq)])
+        ids[:, 0] = positions // 8  # the pinned newest block: rows past the query are masked
+        ids[:, 2] = ids[:, 3]  # a repeat
+        ids[::3, nk - 5 :] = SENTINEL
+        ref, magnitude = _candidate_score_ref(q, w, k, ids, positions)
+    with phase("compute", what="device candidate scores"):
+        shard = ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(0, 1))
+
+        def up(t, dtype):
+            return ttnn.from_torch(
+                t.reshape(sp, tp, rows, -1),
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=shard,
+            )
+
+        dev_k = ttnn.from_torch(
+            k[None, None],
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        dev_ids = up(ids.to(torch.int32), ttnn.uint32)  # the sentinel wraps to -1: its uint32 bits
+        args = (
+            up(q.reshape(seq, -1), ttnn.bfloat16),
+            up(w, ttnn.bfloat16),
+            dev_k,
+            dev_ids,
+            _pin_table(mesh_device, rows),
+        )
+        out = candidate_scores(*args, start, t_rows)
+        assert list(out.shape) == [1, 1, rows, nk * 8]
+        dev = _per_query(out)[0, 0].float()
+        again = _per_query(candidate_scores(*args, start, t_rows))[0, 0].float()
+    finite = torch.isfinite(ref)
+    assert torch.equal(torch.isfinite(dev), finite), (torch.isfinite(dev) != finite).nonzero()[:8].tolist()
+    diff = (dev[finite] - ref[finite]).abs()
+    exact = float((diff == 0).float().mean())
+    pcc = comp_pcc(ref[finite], dev[finite], 0.0)[1]
+    print(f"candidate_scores K{nk}: exact {exact:.4f}, max abs diff {float(diff.max()):.3e}, pcc {pcc:.6f}")
+    # the device's head sum is not an exact fp32 sum (measured: within 2^-7.6 of sum_h |terms| beyond the output's
+    # bf16 rounding); bound it by one bf16 rounding of the output plus 2^-6 of the terms' magnitude
+    bound = ref[finite].abs() * 2**-7 + magnitude[finite] * 2**-6 + 1e-6
+    assert bool((diff <= bound).all()), float((diff / bound).max())
+    assert pcc >= 0.9999, pcc
+    assert torch.equal(again, dev), "candidate_scores is not deterministic"

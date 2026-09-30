@@ -10,6 +10,9 @@ the indexer's score, so every chip's rows stay local (no collectives; replicated
   row's newest element's run pinned to +inf (the candidate source's pin).
 * :func:`gather_runs`: per row, the runs of 8 or 32 elements named by a row of run ids, in id order (-inf for an id
   past the row, e.g. the 0xFFFFFFFF sentinel).
+* :func:`candidate_scores`: a candidate index source's score of each query's candidate rows only (the rows of its
+  candidate blocks, in rank order), from the query, head weights and the row-major index-K cache: the same row
+  layout ``gather_runs`` makes of a full score.
 """
 
 import ttnn
@@ -174,3 +177,117 @@ def gather_runs(x, ids, run: int):
         )
     cbs = [_cb(risc, scratch, cores, page=scratch) for risc in (0, 1)]
     return ttnn.generic_op([x, ids, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+
+
+CANDSCORE_BLOCK = 8  # rows per candidate block (CANDIDATE_BLOCK_SIZE)
+
+
+def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
+    return next(b for b in options if n % b == 0)
+
+
+def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
+    """A ratio-1 candidate index source's score over each query's candidate rows only.
+
+    ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
+    bf16 row-major (scaled head weights), ``k`` [1, 1, T, 128] bf16 row-major (the index-K cache, T a multiple of 8),
+    ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail), all DRAM-interleaved; ``pin`` the
+    per-chip ``V41ChunkTables.query_first()``; ``start`` the chunk start; ``rows_visible`` the index-K rows any query
+    of the chunk can see (a multiple of 8, at most T). -> bf16 row-major [1, 1, R, K * 8]: element
+    8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h] . k[t])`` for ``t = 8 ids[i, r] + j``, -inf where
+    ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position, ``start + query_first + i``), i.e.
+    ``gather_runs(score, ids, 8)`` of the full masked score. The visible index-K is first copied into blocks of 8 rows
+    per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB DRAM read; random 256-byte row reads are bound
+    by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth for 640 x 16,384 rows); then one op
+    (kernels/candscore_*): per query its candidate blocks are gathered and tilized, ``relu(Q @ K^T)`` rounded to bf16
+    per head, and the heads summed by ``W @ S`` in fp32 (HiFi4)."""
+    for t, dtype, what in ((q, ttnn.bfloat16, "query"), (w, ttnn.bfloat16, "weights"), (k, ttnn.bfloat16, "index-K")):
+        _check_row_major(t, dtype, f"candidate_scores {what}")
+    _check_row_major(ids, ttnn.uint32, "candidate_scores ids")
+    rows, nk = q.shape[2], ids.shape[3]
+    assert q.shape[3] == 32 * 128 and (w.shape[2], w.shape[3]) == (rows, 32) and ids.shape[2] == rows
+    assert k.shape[3] == 128 and rows_visible % CANDSCORE_BLOCK == 0 and rows_visible <= k.shape[2]
+    tile_rows = nk * CANDSCORE_BLOCK // 32
+    assert tile_rows * 32 == nk * CANDSCORE_BLOCK, f"{nk} candidate blocks do not fill whole tiles"
+    batch = _largest_divisor(tile_rows)
+    per_read = _largest_divisor(tile_rows, (8, 4, 2, 1))
+    nblocks = rows_visible // CANDSCORE_BLOCK
+    if rows_visible < k.shape[2]:
+        k = ttnn.slice(k, [0, 0, 0, 0], [1, 1, rows_visible, 128])
+    k = ttnn.reshape(k, [1, 1, nblocks, CANDSCORE_BLOCK * 128])
+    device = q.device()
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, nk * CANDSCORE_BLOCK]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    coords, cores = _cores(device, rows)
+    reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for (cx, cy), (first, count) in zip(coords, _split(rows, len(coords))):
+        reader_args[cx][cy] = [
+            q.buffer_address(),
+            w.buffer_address(),
+            ids.buffer_address(),
+            k.buffer_address(),
+            first,
+            count,
+            nblocks,
+        ]
+        writer_args[cx][cy] = [
+            ids.buffer_address(),
+            out.buffer_address(),
+            pin.buffer_address(),
+            first,
+            count,
+            start,
+            nblocks,
+        ]
+        compute_args[cx][cy] = [count]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/candscore_reader.cpp",
+            core_ranges=cores,
+            compile_time_args=[0, 1, 2, 3, nk, per_read]
+            + ttnn.TensorAccessorArgs(q).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(w).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(k).get_compile_time_args(),
+            runtime_args=reader_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/candscore_writer.cpp",
+            core_ranges=cores,
+            compile_time_args=[16, 8, nk]
+            + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
+            runtime_args=writer_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/candscore_compute.cpp",
+            core_ranges=cores,
+            compile_time_args=[nk, batch],
+            runtime_args=compute_args,
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+            ),
+        ),
+    ]
+    writer_scratch = 64 + nk * 4 + 2 * nk * CANDSCORE_BLOCK * 2
+    cbs = [
+        _cb(0, 2 * 4 * _TILE_BYTES, cores),  # query rows (two queries)
+        _cb(1, 2 * _TILE_BYTES, cores),  # head-weight row pages (row 0; rows 1-31 zero)
+        _cb(2, 2 * 4 * per_read * _TILE_BYTES, cores),  # gathered index-K rows
+        _cb(3, nk * 4, cores, dtype=ttnn.uint32, page=nk * 4),  # reader: the query's ids
+        _cb(4, 4 * _TILE_BYTES, cores),  # Q tiles [heads, dims]
+        _cb(5, _TILE_BYTES, cores),  # W tile
+        _cb(6, 4 * batch * _TILE_BYTES, cores),  # K tiles [rows, dims]
+        _cb(7, batch * _TILE_BYTES, cores),  # S = relu(Q K^T) [heads, rows]
+        _cb(16, 2 * batch * _TILE_BYTES, cores),  # O = W S (row 0)
+        _cb(8, writer_scratch, cores, page=writer_scratch),  # writer: pin | ids | two output rows
+    ]
+    return ttnn.generic_op([q, w, k, ids, pin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))

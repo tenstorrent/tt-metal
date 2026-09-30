@@ -25,6 +25,11 @@ the 16,384 rows of its candidate blocks. Two V4.1 kernels (``tt/v41/kernels``, l
 work on the row-major score in DRAM: ``segment_max`` (block or superblock maxima in one read of the row, the newest
 row's block pinned to +inf) and ``gather_runs`` (a query's ranked blocks or superblocks, gathered from its row);
 ``tt/v41/indexer_kernels.py``.
+
+Candidate scoring (bead F10): a candidate index source's score is observable only in its candidate blocks (the
+reference masks the rest to -inf), so on long rows it scores only those rows (``candidate_scores``: per query its
+16,384 candidate index-K rows gathered from the cache) instead of the full row; on short rows the full-row score and
+a gather of its candidate blocks are cheaper (``SPARSE_SCORE_MIN_WIDTH``).
 """
 
 from dataclasses import dataclass
@@ -35,7 +40,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
-from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import gather_runs, segment_max
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import candidate_scores, gather_runs, segment_max
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_ue8m0_qdq, fp8_qdq
 
 SENTINEL = 0xFFFFFFFF
@@ -45,11 +50,18 @@ SUPERBLOCK = 32  # the candidate selection's first level: 32 rows (one 64-byte b
 # re-reads the whole input row on each core; up to this width it splits rows over cores (measured on [640, 2048]
 # uint32: 2.8 ms by a 2048-wide index vs 0.14 ms by a 1024-wide one)
 GATHER_INDEX_WIDTH = 60 * 32
-# The candidate source's own top-k runs among its candidate blocks' rows (exact: its top-512 rows lie in its top-512
-# blocks, which are among the 2048 kept ones) above this width, where that is cheaper than a top-k over the row
-# (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.4 ms; gather_runs 0.85 ms + top-512 of 16,384 0.38 ms + the
-# id mapping; the gather's sequential row read and the direct top-k both grow with the row)
-SUBSET_TOPK_MIN_WIDTH = 1 << 16
+# The candidate source's own top-k runs among the rows of its best candidate blocks above this width, where that is
+# cheaper than a top-k over the row. Exact: its top-512 rows lie in its top-512 blocks by max, which are among the
+# first 513 published ids (descending block max after the pinned block), so only those blocks are gathered
+# (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.43 ms; gather_runs of all 2048 blocks 0.62 ms + top-512 of
+# 16,384 0.31 ms + the id mapping; the gather's sequential row read and the direct top-k both grow with the row)
+SUBSET_TOPK_MIN_WIDTH = 1 << 15
+# A candidate index source scores only its candidate rows (``candidate_scores``: a per-query gather of its 16,384
+# index-K rows, a fixed ~2.7 GB per chip at 640 queries, plus a relayout of the visible index-K) from this score width
+# up; below it the full-row score (index-K read once per query tile-row) and ``gather_runs`` of its candidate blocks are
+# cheaper. Measured, LB 2x4 traced L24 indexer at chunk start 51,200 / 262,144 / 512,000: candidate scoring
+# 8.22 / 9.72 / 11.12 ms, full row 3.04 / 8.47 / 15.35 ms (crossover ~310K columns)
+SPARSE_SCORE_MIN_WIDTH = 5 << 16
 
 WQ_B_GRID = (11, 10)  # the attention projections' 2D-multicast grid (tt/v41/attention.py MATMUL_GRID)
 WQ_B_L1_BUDGET = 1 << 20  # bytes of output / fp32 partials / double-buffered in0 and in1 blocks per core
@@ -247,15 +259,16 @@ class TtV41Indexer(LightweightModule):
         """[1, *, S/sp, W] replicated across TP -> this chip's contiguous quarter of the SP shard."""
         return ttnn.mesh_partition(t, dim=2, cluster_axis=1) if self.tp > 1 else t
 
-    def scores(self, x, qr, index_k, tables, start: int, length: int):
-        """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] tiled,
-        ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
-        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows)."""
-        rows = qr.shape[2]
-        q_rows = rows // self.tp
+    def _width(self, start: int, length: int) -> tuple[int, int]:
+        """(visible rows, score width: the visible rows rounded up to tiles)."""
         assert start % self.ratio == 0 and (start // self.ratio) % 32 == 0, f"chunk start {start} not tile-aligned"
         visible = (start + length) // self.ratio
-        width = _round_up(max(visible, TOPK_MIN), 32)
+        return visible, _round_up(max(visible, TOPK_MIN), 32)
+
+    def _query(self, x, qr, tables, start: int):
+        """This chip's queries: (q [1, heads, S/(sp*tp), d] bf16 tiled after RoPE and QDQ, scaled head weights
+        w [1, 1, S/(sp*tp), heads] bf16 tiled)."""
+        q_rows = qr.shape[2] // self.tp
         cos, sin = (self._query_shard(t) for t in tables.rope(True, 1, start))
         q = ttnn.linear(
             fp8_qdq(self._query_shard(qr)),
@@ -267,7 +280,15 @@ class TtV41Indexer(LightweightModule):
             q, num_heads=self.heads, num_kv_heads=0, transpose_k_heads=False
         )
         q = self.qdq(self.rope(q, cos, sin))
-        w = self._query_shard(self.ccl.tp_all_reduce(ttnn.linear(x, self.weights_proj)))
+        return q, self._query_shard(self.ccl.tp_all_reduce(ttnn.linear(x, self.weights_proj)))
+
+    def scores(self, x, qr, index_k, tables, start: int, length: int):
+        """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] row-major,
+        ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
+        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows)."""
+        visible, width = self._width(start, length)
+        q, w = self._query(x, qr, tables, start)
+        q_rows = q.shape[2]
         k = ttnn.to_layout(ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, self.head_dim]), ttnn.TILE_LAYOUT)
         if self.ratio == 1:
             # V4.1's rule t < p + 1 is the kernel's causal mask: under seq_shard_axes=[] chip c (row-major (sp, tp)
@@ -319,11 +340,27 @@ class TtV41Indexer(LightweightModule):
         ids = ttnn.add(ttnn.multiply(c, per), ttnn.bitwise_and(pos, per - 1))
         return CandidateBlocks(ttnn.to_layout(_keep_sentinel(ids, pos), ttnn.ROW_MAJOR_LAYOUT))
 
+    def candidate_rows(self, x, qr, index_k, tables, start: int, ids):
+        """A candidate index source's score over its queries' candidate rows only (``candidate_scores``): [1, 1, R,
+        K * block] bf16 row-major, rank r's rows at [r * block, (r + 1) * block), -inf for sentinels and rows past the
+        query; the layout ``gather_runs`` makes of the full score."""
+        assert self.uses_candidates and self.ratio == 1
+        q, w = self._query(x, qr, tables, start)
+        q = ttnn.to_layout(ttnn.experimental.nlp_concat_heads(q), ttnn.ROW_MAJOR_LAYOUT)
+        w = ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT)
+        _, width = self._width(start, qr.shape[2] * self.sp)
+        return candidate_scores(q, w, index_k, ids, tables.query_first(), start, width)
+
     def _topk_in_blocks(self, score, ids, k: int):
         """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major (sentinel
         tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""
+        # rank r's rows at [r * block, (r + 1) * block); sentinels -inf
+        return self._topk_in_rows(gather_runs(score, ids, self.config.CANDIDATE_BLOCK_SIZE), ids, k)
+
+    def _topk_in_rows(self, rows, ids, k: int):
+        """Top-k of the candidate ``rows`` [1, 1, R, K * block] (rank r's block at [r * block, (r + 1) * block)) ->
+        [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""
         block = self.config.CANDIDATE_BLOCK_SIZE
-        rows = gather_runs(score, ids, block)  # rank r's rows at [r * block, (r + 1) * block); sentinels -inf
         if rows.shape[3] < k:  # fewer candidate rows than picks (small candidate counts): the rest are sentinels
             rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - rows.shape[3])], float("-inf"))
         pos = ttnn.to_layout(_topk(rows, k), ttnn.TILE_LAYOUT)
@@ -341,7 +378,9 @@ class TtV41Indexer(LightweightModule):
             published = self.candidates(score, tables, start)
             in_blocks = self.config.CANDIDATE_TOPK_BLOCKS > k  # its top-k rows lie in its top-k blocks
             if published.ids is not None and in_blocks and score.shape[3] > SUBSET_TOPK_MIN_WIDTH:
-                return self._topk_in_blocks(score, published.ids, k), published
+                best = _round_up(k + 1, 4)  # the pinned block + its top-k blocks, whole tiles of candidate rows
+                ids = ttnn.slice(published.ids, [0, 0, 0, 0], [1, 1, published.ids.shape[2], best])
+                return self._topk_in_blocks(score, ids, k), published
         elif self.uses_candidates:
             assert isinstance(candidates, CandidateBlocks), "a candidate index source needs the published candidates"
             if candidates.ids is not None:
@@ -350,5 +389,9 @@ class TtV41Indexer(LightweightModule):
 
     def forward(self, x, qr, index_k, tables, start: int, length: int, candidates: CandidateBlocks | None = None):
         """-> (top-k rows [1, 1, S/(sp*tp), k] uint32 row-major (sentinel tail), published CandidateBlocks or None)."""
+        visible, width = self._width(start, length)
+        if self.uses_candidates and candidates.ids is not None and width >= SPARSE_SCORE_MIN_WIDTH:
+            rows = self.candidate_rows(x, qr, index_k, tables, start, candidates.ids)
+            return self._topk_in_rows(rows, candidates.ids, min(self.config.INDEX_TOPK, visible)), None
         score, visible = self.scores(x, qr, index_k, tables, start, length)
         return self.select(score, tables, start, visible, candidates)
