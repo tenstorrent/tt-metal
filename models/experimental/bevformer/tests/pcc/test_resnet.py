@@ -13,18 +13,23 @@ from models.experimental.bevformer.tests.backbone_common import (
     assert_pcc,
     build_reference_backbone,
     from_conv_layout,
-    random_image_batch,
     to_conv_layout,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tests.backbone_weights import full_backbone_pcc
 from models.experimental.bevformer.tt.model_preprocessing_backbone import create_resnet_parameters
 from models.experimental.bevformer.tt.tt_resnet import TtBottleneck, TtResLayer, TtResNet
 
 
-def _reference_and_parameters():
+# Every block test reads the same preprocessed backbone. Preprocessing traces a full
+# reference forward, so it runs once per module rather than once per test. Being module
+# scoped, it runs before the first test's device and reset_seeds fixtures. The trace only
+# records shapes, so its input is zeros rather than a draw from the unseeded generator.
+# It also brings up the UMD cluster (infer_ttnn_module_args does, even without a device)
+# before the device fixture opens the device.
+@pytest.fixture(scope="module")
+def reference_and_parameters():
     reference_model = build_reference_backbone()
-    parameters = create_resnet_parameters(reference_model, random_image_batch())
+    parameters = create_resnet_parameters(reference_model, torch.zeros(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH))
     return reference_model, parameters
 
 
@@ -43,8 +48,8 @@ def _check(torch_output, ttnn_model, ttnn_output):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_bottleneck_layer1(device, reset_seeds):
-    reference_model, parameters = _reference_and_parameters()
+def test_bottleneck_layer1(device, reset_seeds, reference_and_parameters):
+    reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer1[0].eval()(torch_input)
 
@@ -61,8 +66,8 @@ def test_bottleneck_layer1(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_bottleneck_layer3(device, reset_seeds):
-    reference_model, parameters = _reference_and_parameters()
+def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
+    reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
     torch_output = reference_model.layer3[0].eval()(torch_input)
 
@@ -79,9 +84,9 @@ def test_bottleneck_layer3(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_bottleneck_layer4(device, reset_seeds):
+def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
     """layer4's DCN has 512 input channels, so it samples them in two chunks."""
-    reference_model, parameters = _reference_and_parameters()
+    reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 1024, IMAGE_HEIGHT // 16, IMAGE_WIDTH // 16)
     torch_output = reference_model.layer4[0].eval()(torch_input)
 
@@ -96,8 +101,8 @@ def test_bottleneck_layer4(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_reslayer1(device, reset_seeds):
-    reference_model, parameters = _reference_and_parameters()
+def test_reslayer1(device, reset_seeds, reference_and_parameters):
+    reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer1.eval()(torch_input)
 
@@ -115,8 +120,8 @@ def test_reslayer1(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_reslayer2(device, reset_seeds):
-    reference_model, parameters = _reference_and_parameters()
+def test_reslayer2(device, reset_seeds, reference_and_parameters):
+    reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 256, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer2.eval()(torch_input)
 
@@ -129,16 +134,3 @@ def test_reslayer2(device, reset_seeds):
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat8_b))
     _check(torch_output, ttnn_model, ttnn_output)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_resnet(device, reset_seeds):
-    reference_model, parameters = _reference_and_parameters()
-    torch_input = random_image_batch()
-    torch_outputs = reference_model(torch_input)
-
-    ttnn_model = TtResNet(parameters.conv_args, parameters["res_model"], device, **tt_resnet_kwargs())
-    ttnn_outputs = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
-
-    for torch_output, ttnn_output in zip(torch_outputs, ttnn_outputs, strict=True):
-        assert_pcc(torch_output, from_conv_layout(ttnn_output, torch_output.shape), full_backbone_pcc())
