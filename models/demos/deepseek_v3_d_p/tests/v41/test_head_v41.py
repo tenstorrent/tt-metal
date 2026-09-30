@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as O
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tt.v41.head import TtV41Embedding, TtV41Head
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -53,7 +54,7 @@ def _reference(source: str):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("weights_source", ["synthetic", "real"])
-@pytest.mark.parametrize("mesh_device, device_params", MESHES, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESHES + galaxy_meshes(), indirect=True)
 def test_v41_embedding_head(mesh_device, device_params, weights_source):
     model, result = _reference(weights_source)
     shape = tuple(mesh_device.shape)

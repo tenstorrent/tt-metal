@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes, on_galaxy
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
@@ -70,6 +71,7 @@ MESH = [
         id="fabric2d-mesh-2x4",
     )
 ]
+GALAXY_MESH = galaxy_meshes(trace_region_size=TRACE_REGION)  # bead 8y7.13.4; production-dims cases only
 
 
 class HostWriteGuard:
@@ -173,7 +175,8 @@ def _block_real(mesh_device, device_params, layer: int):
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("layer", [2, 0, 20], ids=["L2", "L0", "L20"])
 @pytest.mark.parametrize("weights", ["small", "real"])
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.uncollect_if(pred=lambda mesh_device, weights, **_: on_galaxy(mesh_device) and weights == "small")
 def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch):
     start = time.perf_counter()
     build = _block_small if weights == "small" else _block_real
@@ -435,7 +438,10 @@ def _replay_phases(mesh_device, trace, tokens, iters=TIMED_ITERS) -> dict:
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("case", list(PREFILL_CASES))
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.uncollect_if(
+    pred=lambda mesh_device, case, **_: on_galaxy(mesh_device) and PREFILL_CASES[case][0] == "small"
+)
 def test_v41_prefill_trace(mesh_device, device_params, case, monkeypatch):
     """``V41PrefillTrace`` (per-chunk captures, per-chunk input copies into fixed buffers, the next chunk's host
     Engram prepare overlapping the device) == ``TtV41Transformer.prefill`` bit-identically (logits of the scored

@@ -25,6 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes, on_galaxy
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 
@@ -104,7 +105,8 @@ def _check(mesh_device, y, host, local, cluster_axis, direction):
 @pytest.mark.parametrize("direction", list(DIRECTIONS))
 @pytest.mark.parametrize("size", list(SIZES))
 @pytest.mark.parametrize("cluster_axis", [1, 0], ids=["tp_axis", "sp_axis"])
-@pytest.mark.parametrize("mesh_device, device_params", [_mesh((2, 4)), _mesh((4, 2))], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", [_mesh((2, 4)), _mesh((4, 2))] + galaxy_meshes(), indirect=True)
+@pytest.mark.uncollect_if(pred=lambda mesh_device, size, **_: on_galaxy(mesh_device) and size == "small")
 def test_v41_all_to_all(mesh_device, device_params, cluster_axis, size, direction, num_links):
     """The shared op itself, on both mesh axes of both meshes (4x2 tp_axis is the hang regression)."""
     t0 = time.time()
@@ -134,7 +136,8 @@ def test_v41_all_to_all(mesh_device, device_params, cluster_axis, size, directio
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("direction", list(DIRECTIONS))
 @pytest.mark.parametrize("size", list(SIZES))
-@pytest.mark.parametrize("mesh_device, device_params", [_mesh((2, 4)), _mesh((4, 2))], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", [_mesh((2, 4)), _mesh((4, 2))] + galaxy_meshes(), indirect=True)
+@pytest.mark.uncollect_if(pred=lambda mesh_device, size, **_: on_galaxy(mesh_device) and size == "small")
 def test_v41_tp_all_to_all(mesh_device, device_params, size, direction):
     """``V41Collectives.tp_all_to_all`` (the attention reshard) is bit exact and repeatable on both meshes."""
     t0 = time.time()

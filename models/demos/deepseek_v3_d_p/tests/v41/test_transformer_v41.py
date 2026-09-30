@@ -37,6 +37,7 @@ from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import BLOCK_PCC, CACHE_PCC, _pack, _pcc, _unpack
@@ -367,12 +368,13 @@ def setup_production(mesh_device, weights, case):
     + [("real", c) for c in PRODUCTION_CASES if c not in ("one_chunk", "two_chunks")],
     ids=lambda v: v,
 )
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + galaxy_meshes(), indirect=True)
 def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
     """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
     tables, not downloaded). Precompute the reference outside the device lock first (tests/v41/prepare_caches.py:
     oracle, ``tail_logits`` clean and per noise seed; disk-cached). Long cases (``<n>x5120``) also gate the last
-    chunk's rows and run the block acceptance at the last chunk (module docstring)."""
+    chunk's rows and run the block acceptance at the last chunk (module docstring). Galaxy 8x4 / 4x8 (bead
+    8y7.13.4): the same cases and bars; the oracle is mesh-independent (LoudBox caches are reused)."""
     setup = setup_production(mesh_device, weights, chunks)
     if setup is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")

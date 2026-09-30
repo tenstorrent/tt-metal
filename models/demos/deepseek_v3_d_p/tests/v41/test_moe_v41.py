@@ -29,6 +29,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.moe_reference import LAYER, SEQ, device_weights, reference
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer, get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
@@ -108,7 +109,7 @@ def _metrics(ref: dict, dev: dict) -> dict:
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("expert_dtype", list(EXPERT_DTYPES))
 @pytest.mark.parametrize("weights_source", ["synthetic", "real"])
-@pytest.mark.parametrize("mesh_device, device_params", MESHES, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESHES + galaxy_meshes(), indirect=True)
 def test_v41_moe(mesh_device, device_params, weights_source, expert_dtype):
     ref, model = reference(weights_source)
     weights = device_weights(weights_source, model)

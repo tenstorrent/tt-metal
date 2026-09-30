@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes, on_galaxy
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import (  # noqa: F401 (WEIGHT_CACHE re-export)
@@ -184,10 +185,12 @@ def setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format):
             fabric2d_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
-        )
+        ),
+        *galaxy_meshes(),
     ],
     indirect=True,
 )
+@pytest.mark.uncollect_if(pred=lambda mesh_device, weights, **_: on_galaxy(mesh_device) and weights == "small")
 def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt, kv_format):
     setup = setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format)
     LAYERS, seq, spec, cfg, valid, tokens = setup.LAYERS, setup.seq, setup.spec, setup.cfg, setup.valid, setup.tokens

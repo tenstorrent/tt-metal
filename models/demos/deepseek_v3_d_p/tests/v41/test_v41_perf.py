@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import EXPERT_DTYPES, _weights
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import TRACE_REGION, capture
@@ -46,7 +47,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 LAYERS = (0, 2, 3, 20, 21, 24)  # the sharing schedule: every checkpoint layer
 CHUNK = R.CHUNK
 TIMED_ITERS = 3
-LAYOUTS = {(2, 4): M.LOUDBOX_2X4, (4, 2): M.LOUDBOX_4X2}
+LAYOUTS = {(2, 4): M.LOUDBOX_2X4, (4, 2): M.LOUDBOX_4X2, (8, 4): M.GALAXY_8X4, (4, 8): M.GALAXY_4X8}
 # measured stage -> model graph nodes (op names where one node spans stages)
 STAGE_NODES = {
     "mhc": {"B1", "B2", "B17", "B18", "B23"},
@@ -181,7 +182,9 @@ def text_stack(mesh_device, expert_dtype: str):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("expert_dtype", list(EXPERT_DTYPES))
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", MESH + galaxy_meshes(trace_region_size=TRACE_REGION), indirect=True
+)
 def test_v41_block_perf(mesh_device, device_params, expert_dtype):
     layers = LAYERS
     shape = tuple(mesh_device.shape)
