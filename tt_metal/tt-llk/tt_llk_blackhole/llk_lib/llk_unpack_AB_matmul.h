@@ -285,8 +285,7 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  * Every row follows the protocol of the other unpack operations: wait until at most one earlier row is still being
  * unpacked (the UNPACK_SYNC semaphore counts them), write the row's two base addresses into the free config context
  * from the RISC, post the token, hold the UNPACRs until the writes have landed, unpack the held tile, stream the other
- * operand through the MOP, take the token back and switch context. A row of one streamed tile issues its MOP as an
- * immediate.
+ * operand through the MOP, take the token back and switch context.
  * The streamed tile stride (SCRATCH_SEC0), which the replay's CFGSHIFTMASK adds after every tile, is copied from the
  * tile size GPRs when it differs from the one programmed, so a data format reconfig between calls is honoured
  * without a re-init.
@@ -395,23 +394,10 @@ inline void _llk_unpack_AB_matmul_(
         }
 
         // Stream the other operand; a set zmask bit selects the replay copy of context 1. The mask covers the 16
-        // iterations a full-sync block can have. A row of one streamed tile issues an immediate MOP (a branch on the
-        // context measured cheaper than forming the word: 54.2 against 60.6 cycles per tile at 1x1x32).
-        if (rut_dim == 1)
-        {
-            if (unp_cfg_context == 0)
-            {
-                TTI_MOP(0, 0, 0);
-            }
-            else
-            {
-                TTI_MOP(0, 0, 0xffff);
-            }
-        }
-        else
-        {
-            TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
-        }
+        // iterations a full-sync block can have. (An immediate MOP for one tile rows, selected by a branch on the
+        // context, laid the row out with two taken branches and a spill and cost about four cycles per row; the
+        // runtime word, as in the base, is one store.)
+        TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
