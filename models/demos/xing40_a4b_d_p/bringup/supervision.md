@@ -74,3 +74,14 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   prefer-expect-error hook (pytest.raises in the new fork test) and the orchestrator crashed. Owner chose "keep" (the
   fork: streaming + fp32 DEST) over bf16 DEST + a test exemption. Overseer fixed the one pytest.raises -> expect_error
   (test passes) and resumed.
+- 07:05 framework gap (F57 candidate): the C.dense.attention gate recorded PASS in state.json before its commit failed
+  on the hook; on resume the orchestrator skipped the task (PASS, commit None) and the next gate commit (S.dense.05,
+  9039a435f4e) swept in the staged attention files (tt/attention.py, sdpa fork change + tests). Content verified (the
+  S.dense.05 swap test runs attention on device); bookkeeping only. Fix later: record PASS only after a successful commit.
+- 07:15 owner asked why streaming excluded fp32 dest: the streaming PR (#38838) said "fp32_dest_acc_en is not functional
+  with the streaming path" when the kernel hard-coded an 8-tile DEST; it is dst_size-parametrized since, and #45191
+  keeps the exclusion without a reason. Owner: pause and check. Overseer check on device
+  (generated/xing_fp32_stream_check, not tracked): fork ring_mla at fp32 DEST vs the source at bf16 DEST vs fp32 torch,
+  every ladder rung's geometry (q32/k256; chunk 2048 / 8192 / 5120 incl. the 51200 last chunk) + q64/k256, q128/k128,
+  q32/k128, q64/k128; spread and sharp scores: 22/22 pass, every case bit-identical over two runs, fork more accurate
+  in every case (sharp worst row 0.14-0.16 vs 0.64-0.83 at bf16 DEST). Kept. Resumed.
