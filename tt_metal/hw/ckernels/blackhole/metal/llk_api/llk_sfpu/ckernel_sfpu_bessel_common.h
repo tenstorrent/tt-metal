@@ -12,13 +12,14 @@
 namespace ckernel::sfpu {
 
 // ======================================================================
-// Shared machinery for i0 and i1 asymptotic paths.
+// Shared machinery for the i1 asymptotic path, kept apart so that i0 can reuse
+// it once it gains one (ckernel_sfpu_i0.h is a single polynomial today).
 //
-// Both compute the same shape past |x| > 10:
+// Past |x| > 10 the asymptotic has the shape
 //   i_n(|x|) ≈ exp(|x|) / sqrt(|x|) · P(1/|x|)
-// where P is a degree-5 minimax fit specific to the order n (Q for i0, P for i1).
-// The two kernels differ only in the coefficient set and, for i1, a final
-// sign fix-up (i0 is even, i1 is odd).
+// where P is a degree-5 minimax fit specific to the order n. An i0 caller would
+// differ only in the coefficient set and in skipping i1's final sign fix-up
+// (i0 is even, i1 is odd).
 //
 // exp(|x|) leaves FP32 at 88.72284 but i0/i1 do not until ≈91.90 — the
 // asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/24 divisor. EXP2_DOWNSCALE
@@ -45,6 +46,11 @@ sfpi_inline sfpi::vFloat _rsqrt_quake_newton_23b_(const sfpi::vFloat x) {
     return c * sfpi::addexp(y, -1) + y;
 }
 
+// The |x| callers clamp to before _bessel_asymptotic_, which static_asserts it
+// against EXP2_DOWNSCALE. i0 (91.90076) and i1 (91.90626) both leave FP32
+// below it, so a clamped input still overflows to +/-Inf at the final multiply.
+constexpr float BESSEL_MAX_ABS_X = 92.0f;
+
 // Computes exp(|x|)/2^EXP2_DOWNSCALE · 1/sqrt(|x|) · 2^EXP2_DOWNSCALE·P(1/|x|),
 // the correctly-scaled asymptotic i_n(|x|). Callers pass P's coefficients
 // c0..c5 unscaled: the 2^EXP2_DOWNSCALE is multiplied into each c_k below (an
@@ -53,7 +59,8 @@ sfpi_inline sfpi::vFloat _rsqrt_quake_newton_23b_(const sfpi::vFloat x) {
 // Precondition: the unsafe exp variants skip their range guards, so the caller
 // must bound |x| to keep the biased result exponent |x|/ln2 + 127 -
 // EXP2_DOWNSCALE below 255, i.e. |x| < (128 + EXP2_DOWNSCALE)·ln2 (110.9 at
-// the default of 32). i1 clamps at 92, which needs EXP2_DOWNSCALE >= 5.
+// the default of 32). The static_assert below checks it at BESSEL_MAX_ABS_X,
+// which needs EXP2_DOWNSCALE >= 5.
 //
 // INP_FLOAT32 selects between the FP32-accurate and BF16 21-bit exp variants,
 // matching the caller's dtype macro. The rsqrt and poly evaluation are
@@ -67,7 +74,10 @@ sfpi_inline sfpi::vFloat _bessel_asymptotic_(
     const float c3,
     const float c4,
     const float c5) {
-    static_assert(EXP2_DOWNSCALE >= 0 && EXP2_DOWNSCALE < 64, "R below assumes a non-negative shift");
+    static_assert(EXP2_DOWNSCALE >= 0 && EXP2_DOWNSCALE < 64, "R below needs a shift in [0, 64)");
+    static_assert(
+        BESSEL_MAX_ABS_X * 1.442695f + 127 - EXP2_DOWNSCALE < 255,
+        "exp(BESSEL_MAX_ABS_X) / 2^EXP2_DOWNSCALE leaves FP32 in the unsafe exp");
     // 2^EXP2_DOWNSCALE, exact in FP32 for this range. Applied to the caller's
     // coefficients here rather than at the call site so the rescale can never
     // disagree with the downscale it undoes.
@@ -84,8 +94,10 @@ sfpi_inline sfpi::vFloat _bessel_asymptotic_(
     const sfpi::vFloat rsqrt_y = _rsqrt_quake_newton_23b_(abs_x);
     const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
 
-    // P(y) evaluated at full precision; this outlined function does not stress
-    // the main loop's LRA, so the extra ops are safe.
+    // P(y) at full precision. Nothing here is outlined (SFPI cannot pass a
+    // vFloat through a real call), so these ops share calculate_i1's LRegs;
+    // they fit because calculate_i1_asymptotic_ is reached from a v_if after
+    // the polynomial path's temporaries are dead.
     const sfpi::vFloat correction =
         PolynomialEvaluator::eval(inv_abs_x, R * c0, R * c1, R * c2, R * c3, R * c4, R * c5);
 

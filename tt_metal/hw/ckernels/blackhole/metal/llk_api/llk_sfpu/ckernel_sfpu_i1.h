@@ -25,9 +25,9 @@ namespace ckernel::sfpu {
 //              degree-5 minimax fit (6 coeffs), max rel err ~1e-9 over [10, 92].
 //
 // Code shape (chosen to relieve SFPI LRA budget):
-//   1. Compute polynomial result unconditionally and store to DST.
-//      Polynomial-path intermediates die at the store, freeing LRegs.
-//   2. v_if (|x|>10): overwrite DST with asymptotic result.
+//   1. Compute the polynomial result unconditionally into val.
+//      Polynomial-path intermediates die at the end of that block, freeing LRegs.
+//   2. v_if (|x|>10): overwrite val with the asymptotic result; store once after.
 // This is semantically identical to a v_if/v_else split but lets the
 // register allocator schedule the two paths sequentially rather than
 // keeping the polynomial alive across the asymptotic block.
@@ -37,7 +37,7 @@ namespace ckernel::sfpu {
 // asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/23.6 divisor, so i1 stays
 // representable for ln(sqrt(2·pi·88.5)) = 3.16 more of domain than the bare
 // exp(|x|) intermediate does. The intermediate is kept in range by evaluating
-// exp(|x|)/2^32 and rescaling at the end (see calculate_i1_asymptotic_), so the
+// exp(|x|)/2^32 and rescaling at the end (see _bessel_asymptotic_), so the
 // only operation that can overflow is that final rescale — and overflowing
 // there is the correct answer, because that is where i1 itself leaves FP32.
 // Every |x| > 92, including +/-Inf, therefore lands on +/-Inf rather than on
@@ -51,18 +51,20 @@ namespace ckernel::sfpu {
 
 // Asymptotic path: shared machinery lives in ckernel_sfpu_bessel_common.h,
 // which also applies the 2^32 rescale to the coefficients; this wrapper carries
-// P's unscaled coefficients (fit on y ∈ [1/92, 0.1], max rel err 1.052e-9 in
-// float64) and the final sign fix-up — i1 is odd, i0 is not.
+// P's unscaled coefficients (fit on y ∈ [1/88.5, 0.1] and only re-evaluated on
+// [1/92, 0.1]: max rel err 1.052e-9 in float64, at x = 92) and the final sign
+// fix-up, since i1 is odd and i0 is not.
 //
 // Inside _bessel_asymptotic_, exp_abs · rsqrt_y peaks at 2.2e29 for |x|=92, so
 // the rescaled polynomial multiply is the only operation that can overflow —
 // which is correct, because that is where i1 itself leaves FP32.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
 #ifdef INP_FLOAT32
-    const sfpi::vFloat mag = _bessel_asymptotic_<true>(
+    constexpr bool IS_FP32_INPUT = true;
 #else
-    const sfpi::vFloat mag = _bessel_asymptotic_<false>(
+    constexpr bool IS_FP32_INPUT = false;
 #endif
+    const sfpi::vFloat mag = _bessel_asymptotic_<IS_FP32_INPUT>(
         abs_x,
         3.9894228967e-01f,
         -1.4960495444e-01f,
@@ -79,7 +81,7 @@ inline void calculate_i1() {
     // Clamping at the larger bound keeps the 3.16 of domain in between, on which
     // i1 is finite and representable, and sends everything above it to +/-Inf,
     // which is the correct saturation for a function that has left the format.
-    constexpr float I1_MAX_INPUT = 92.0f;
+    constexpr float I1_MAX_INPUT = BESSEL_MAX_ABS_X;  // 92, see ckernel_sfpu_bessel_common.h
     constexpr float I1_THRESHOLD = 10.0f;
 
 #pragma GCC unroll 1
@@ -93,8 +95,8 @@ inline void calculate_i1() {
         const sfpi::vFloat abs_x = sfpi::abs(x);
 
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
-        // Computed unconditionally and stored — its LRegs are then free
-        // for the asymptotic block to use.
+        // Computed unconditionally into val; its temporaries die at the end of
+        // this block, so their LRegs are free for the asymptotic block.
         sfpi::vFloat val;
         {
             const sfpi::vFloat t = x * x;

@@ -121,7 +121,7 @@ def test_i1_ood(device, shapes, dtype):
 
 
 def _run_on_device(values, device, dtype):
-    """Push a 1-D list of float32 values through ttnn.i1, padded to one tile."""
+    """Push a 1-D float32 tensor of at most 32 values through ttnn.i1, padded to one tile."""
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded[0, 0, 0, : values.numel()] = values
 
@@ -170,6 +170,10 @@ def test_i1_large_magnitude(device, dtype):
         ],
         dtype=torch.float32,
     )
+    if dtype == ttnn.float32:
+        # i1(91.9) = 3.38e38, the last probe below the FP32 overflow at 91.90626.
+        # bfloat16 rounds 91.9 to 92.0, past it, so this probe is FP32 only.
+        boundaries = torch.cat([boundaries, torch.tensor([-91.9, 91.9], dtype=torch.float32)])
     # Quantise the reference input to the device dtype so we measure kernel
     # error, not input-quantisation noise. No clamp: i1 is finite and
     # representable at every point here, in both dtypes.
@@ -190,7 +194,7 @@ def test_i1_large_magnitude(device, dtype):
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i1_overflow_saturates_to_inf(device, dtype):
     values = torch.tensor(
-        [92.0, 100.0, 1000.0, 3.0e38, float("inf"), -92.0, -100.0, -1000.0, -3.0e38, float("-inf")],
+        [91.91, 92.0, 100.0, 1000.0, 3.0e38, float("inf"), -91.91, -92.0, -100.0, -1000.0, -3.0e38, float("-inf")],
         dtype=torch.float32,
     )
     output_tensor = _run_on_device(values, device, dtype)

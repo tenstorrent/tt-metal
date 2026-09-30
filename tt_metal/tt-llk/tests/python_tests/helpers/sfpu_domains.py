@@ -1800,9 +1800,10 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     # control. Crossed with Operand.B's zero encodings in _OP_OPERAND_EDGE_POINTS.
     MathOperation.SfpuElwpow: (-2.0, 2.0),
     # i1 leaves FP32 at +/-91.90626 and the kernel clamps at +/-92, so the result must be
-    # +/-inf at the clamp and above it. Exact in bfloat16. +/-inf itself is a cat B special,
-    # which I1 cannot take while it is outside SPECIALS_READY_OPS.
-    MathOperation.I1: (-95.0, -92.0, 92.0, 95.0),
+    # +/-inf at the clamp and above it, and finite at +/-91.5, the largest bfloat16 below the
+    # overflow. Exact in bfloat16. +/-inf itself is a cat B special, which I1 cannot take
+    # while it is outside SPECIALS_READY_OPS.
+    MathOperation.I1: (-95.0, -92.0, -91.5, 91.5, 92.0, 95.0),
 }
 
 
