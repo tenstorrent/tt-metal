@@ -443,8 +443,10 @@ conditioner fidelity rather than output quality.
 
 ## Denoise tuning knobs (4x8, 768P 15 s)
 
-Defaults now: the six adaLN modulation gathers run as one-hot matmuls (exact; `MINIMAX_H3_ADALN_GATHER=embedding`
-restores `ttnn.embedding`), the norms' static weight is multiplied into the 6-row modulation table instead of the
+Defaults now: on Blackhole the norms read the adaLN scale/shift through a per-tile-row map built once per request
+(exact; `MINIMAX_H3_ADALN_GATHER=matmul` restores the one-hot matmul gathers, `=embedding` the `ttnn.embedding`
+gathers; a request with more boundary tiles than `MINIMAX_H3_ADALN_MIXED_TILES` slots uses the one-hot gathers and
+says so in the log), the norms' static weight is multiplied into the 6-row modulation table instead of the
 per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores), and the AGMM / fused-MMRS tables carry rows for the 15 s
 per-device length (`agmm_config.py`, `mmrs_config.py`). Everything below is opt-in and leaves the numerics unchanged
 when unset; each was measured on the block perf test and the 15 s clip and gated with the 2-step-denoise comparison
