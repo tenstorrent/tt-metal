@@ -24,6 +24,7 @@ SHARDING (sequence-parallel):
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Optional, Tuple, Union
 
 import torch
@@ -218,6 +219,11 @@ class TtDFlashDrafter:
             # kw'[h*D + j, :] = kw[h*D + src[j], :] for every head h; kn'[j] = kn[src[j]].
             kw = kw.view(cfg.num_key_value_heads, D, H)[:, src, :].reshape(kv_dim, H).contiguous()
             kn = kn[src].contiguous()
+            if cfg.is_dspark:
+                # DSpark's yarn scales cos/sin by this but mla/rope.py's tables don't; RoPE is linear, so it folds
+                # exactly into the gain.
+                dspark_attention_factor = 0.1 * math.log(cfg.rope_factor) + 1.0
+                kn = kn * dspark_attention_factor
             self.k_proj.append(_linear_w(kw, mapper_col))
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
