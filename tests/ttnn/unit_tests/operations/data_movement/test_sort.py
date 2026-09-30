@@ -190,11 +190,10 @@ def test_sort_long_tensor(shape, dim, descending, device):
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
-def _sort_fp32_wide(descending, device):
+def _sort_fp32_wide(descending, device, n=151936, fill=float("-inf")):
     # A few finite logits in a sea of -inf, as in masked vocab-size logits.
     torch.manual_seed(0)
-    n = 151936
-    input = torch.full((1, n), float("-inf"), dtype=torch.float32)
+    input = torch.full((1, n), fill, dtype=torch.float32)
     input[..., torch.randperm(n)[:328]] = torch.randn(328) * 8.0
 
     ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
@@ -213,30 +212,21 @@ def test_sort_fp32_wide_values(descending, device):
 
 
 @pytest.mark.parametrize(
-    "descending",
+    "n, descending, fill",
     [
-        False,
-        # Descending order pads the row with -inf, which ties with real -inf
-        # entries and can emit padding indices (>= n) into the output on the
-        # MultiCore DRAM factory. Non-strict: on grids where this padded width
-        # lands on the CrossCore factory instead (e.g. an unharvested 8x8 WH
-        # grid), the index-aware comparator keeps padding entries in place and
-        # the test passes.
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="https://github.com/tenstorrent/tt-metal/issues/53326: padding indices leak",
-            ),
-        ),
+        (151936, False, float("-inf")),
+        (151936, True, float("-inf")),
+        # #53326: W=524288 exceeds CrossCore capacity on any grid, so these run on the
+        # MultiCore DRAM factory, where real ±inf ties with the ±inf padding.
+        (300000, True, float("-inf")),
+        (300000, False, float("inf")),
     ],
 )
-def test_sort_fp32_wide_index_correctness(descending, device):
+def test_sort_fp32_wide_index_correctness(n, descending, fill, device):
     # Ties make exact torch index parity undefined, so check invariants instead:
     # indices form a valid permutation and gather back the sorted values.
-    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device, n, fill)
 
-    n = input.shape[-1]
     values = ttnn.to_torch(ttnn_sort_values)
     indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
 
@@ -1457,25 +1447,12 @@ def test_sort_dim_size_1_row_major_out(device):
 
 
 # ---------------------------------------------------------------------------
-# Unstable index contract: unstable CrossCore sorts must return valid index
-# permutations on ties. The CrossCore factory pins the index-aware comparator
-# for BOTH stabilities, so its unstable output is exactly the torch-stable
-# permutation. Widths here are chosen to land on the CrossCore factory (padded
-# W=4096/8192 on the CI grids); the DRAM factory's separate tie defect is
-# issue #53326 and is not covered by these cells.
+# Unstable index contract: unstable multi-core sorts must return valid index
+# permutations on ties. The CrossCore and MultiCore DRAM factories pin the
+# index-aware comparator for BOTH stabilities (#54043, #53326), so their unstable
+# output is exactly the torch-stable permutation. Padded W=4096/8192 lands on
+# either factory depending on the grid.
 # ---------------------------------------------------------------------------
-
-
-def _crosscore_serves(device, padded_w):
-    """Mirror of select_program_factory's CrossCore capacity arm (USE_AS_MANY_CORES,
-    interleaved bf16/fp32): Wt <= cores * min(128, max(Wt // cores, 2)). Approximate —
-    keep in sync with SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core.
-    Widths past the capacity route to the MultiCore DRAM factory, whose separate tie
-    defect is issue #53326 and out of scope for these cells."""
-    grid = device.compute_with_storage_grid_size()
-    cores = grid.x * grid.y
-    wt = padded_w // 32
-    return wt <= cores * min(128, max(wt // cores, 2))
 
 
 def _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=False):
@@ -1517,8 +1494,6 @@ def _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, de
 def test_sort_unstable_all_ones_permutation(width, layout, descending, device):
     """An all-ones row is one giant tie group, so every compare crosses a tie:
     the harshest input for the unstable index-permutation contract."""
-    if not _crosscore_serves(device, width):
-        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
     input_tensor = torch.ones((32, width), dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
     ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
@@ -1531,9 +1506,6 @@ def test_sort_unstable_nonpow2_index_range(width, descending, device):
     """Non-pow2 logical widths pad with +/-inf sentinels. Entries tied with a
     sentinel must not leak pad positions: idx.max() has to stay below the
     logical width, else downstream gather/scatter reads out of bounds."""
-    padded = 1 << (width - 1).bit_length()
-    if not _crosscore_serves(device, padded):
-        pytest.skip(f"padded W={padded} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
     input_tensor = torch.full((32, width), -2.0, dtype=torch.bfloat16)
     input_tensor[:, 0] = float("inf")
     input_tensor[:, width - 1] = float("-inf")
@@ -1555,10 +1527,8 @@ def test_sort_unstable_nonpow2_index_range(width, descending, device):
 )
 def test_sort_unstable_fp32_ties(width, layout, descending, device):
     """fp32 tie groups (including the +/-0.0 tie class and +/-inf) on the
-    CrossCore path. These cells stay on CrossCore at every stack position, so
-    they are the durable regression pin for the comparator flip."""
-    if not _crosscore_serves(device, width):
-        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+    multi-core paths. These cells are the durable regression pin for the
+    comparator flip."""
     input_tensor = _tie_heavy_tensor(
         (32, width),
         [float("-inf"), -1.5, -0.0, 0.0, 0.5, 1.5, float("inf")],
