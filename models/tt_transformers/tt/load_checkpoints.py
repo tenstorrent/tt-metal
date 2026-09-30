@@ -817,6 +817,12 @@ def flatten_conv_linear(state_dict):
     return state_dict
 
 
+# HF name of each decoder-layer norm, keyed by the tt_transformers norm type. map_hf_to_meta_keys and
+# map_meta_to_hf_keys below carry the same two pairs; one-layer tests that read a single norm weight
+# straight from the checkpoint take the HF name from here instead of re-encoding it.
+HF_LAYER_NORM_KEYS = {"attention": "input_layernorm", "ffn": "post_attention_layernorm"}
+
+
 def map_hf_to_meta_keys(loaded_weights):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.

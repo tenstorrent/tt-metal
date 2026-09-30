@@ -12,7 +12,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from models.tt_transformers.tt.load_checkpoints import HF_LAYER_NORM_KEYS, load_hf_state_dict_filtered
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
@@ -43,6 +43,7 @@ def test_rms_norm_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    monkeypatch,
 ):
     dtype = ttnn.bfloat16
     # norm_type = "attention"
@@ -52,8 +53,16 @@ def test_rms_norm_inference(
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     # Read only the one norm weight this test uses. model_args.load_state_dict() would materialise the whole
     # 93 GB Mixtral-8x7B checkpoint from the network mount (4-5 minutes cold on the T3000 perf hosts) to
-    # hand over an 8 KB gamma, which is what kept tripping the 300 s pytest timeout.
-    hf_norm_prefix = f"model.layers.0.{'post_attention_layernorm' if norm_type == 'ffn' else 'input_layernorm'}."
+    # hand over an 8 KB gamma, which is what kept tripping the 300 s pytest timeout. The guard turns a
+    # reintroduced full load into an immediate failure instead of a 5-minute timeout.
+    monkeypatch.setattr(
+        ModelArgs,
+        "load_state_dict",
+        lambda self: pytest.fail(
+            "test_rms_norm_inference must not load the full checkpoint; read the norm weight only"
+        ),
+    )
+    hf_norm_prefix = f"model.layers.0.{HF_LAYER_NORM_KEYS[norm_type]}."
     norm_weight = load_hf_state_dict_filtered(model_args.CKPT_DIR, [hf_norm_prefix])[f"{hf_norm_prefix}weight"]
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     state_dict = {f"{state_dict_prefix}{norm_type}_norm.weight": norm_weight}
