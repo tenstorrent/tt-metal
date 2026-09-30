@@ -76,6 +76,7 @@ def test_a_mistake_below_the_steps_precision_fails_the_sweep(gspec, monkeypatch,
     # fails and the orchestrator sends the test to a review
     s = gspec()
     monkeypatch.setenv(IMPL_ENV, "mutations")
+    monkeypatch.setattr(CC, "NARROW", 0)  # the fixture's hidden size is narrow; real hidden sizes are not
     assert not run_component_test(s, "attention", 0, checks="auto")
     out = capsys.readouterr().out
     assert "noise1e-2                    SLIPPED" in out and "bf16 everywhere              pass" in out
@@ -96,6 +97,7 @@ def test_the_sweep_fails_when_a_mistake_slips_through(gspec, monkeypatch, capsys
     monkeypatch.setenv(IMPL_ENV, "mutations")
     loose = dict(CC.COMPONENT_DEFAULTS, component_bias=1.0, component_ratio=1.0, component_floor=0.5, component_rel=0.5)
     monkeypatch.setattr(CC, "COMPONENT_DEFAULTS", loose)
+    monkeypatch.setattr(CC, "NARROW", 0)
     assert not run_component_test(s, "mlp", 0, checks="auto")
     assert "scale1.02                    SLIPPED" in capsys.readouterr().out
 
@@ -244,3 +246,17 @@ def test_freeze_with_mutations_requires_the_sweep(sandbox):
     with pytest.raises(FreezeError, match="mistake sweep failed"):
         freeze_task(sandbox.spec, led, "C.1", commit=False, mutations=True)
     assert "mutations" not in freeze_task(sandbox.spec, led, "C.1", commit=False)
+
+
+def test_a_narrow_output_is_checked_per_column():
+    # iHC gates: one column near 0 among columns near 1; its sign flipped moves the whole-matrix error by ~1e-5
+    want = torch.ones(256, 8)
+    want[:, 0] = 1e-5 * torch.rand(256)
+    lim = CC.limits(_Spec())
+    L = CC.float_limits(lim, 1.0, 0.004, None)
+    flipped = want.clone()
+    flipped[:, 0] *= -1
+    e, bad = CC.float_fails(flipped, want, L)
+    assert e["rel"] < 1e-4 and bad == [f"worst column {e['col']:.5f} > 0.0150"]
+    assert not CC.float_fails(want * (1 + 1e-4), want, L)[1]
+    assert "col" not in CC.float_errors(torch.ones(4, 128), torch.ones(4, 128)), "wide outputs: no column check"

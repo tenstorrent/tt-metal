@@ -693,7 +693,8 @@ processes) and `dev/f56_device_check.py` (device, ~10 min).
     input-derived fp32 intermediate rounded to bf16 (constants such as weights and RoPE tables stay exact) has rel
     error e; limit = 2 e (3.5 e for Step.kind in `tests.low_precision_kinds`, default [moe]: bfp8 experts), within
     [0.003, 0.015], never below 1.2 e; vs the golden + the fp32 step's own error vs the bf16 golden. The fixed limits
-    are also never below 1.2 x what the precision model reaches.
+    are also never below 1.2 x what the precision model reaches. Narrow outputs (<= 64 columns, iHC gates): also
+    the worst column's rel L2 (0.015).
   - selection (>= 75 % zeros, dense router weights): same nonzero count per row, no negative weight, mean selection
     overlap >= 0.995, rel L2 on rows with the same selection <= 0.005, their row sums within 0.4 %.
   - index (integer rows that are sets, pads -1 / 0xFFFFFFFF): order-free overlap (mean >= thr, worst row >= 0.95),
@@ -713,7 +714,7 @@ processes) and `dev/f56_device_check.py` (device, ~10 min).
   the test role when `agents.component_review` (all | none | [block types]; default `COMPONENT_REVIEW_DEFAULT =
   "all"`) leaves its block type out AND the sweep passes; a failed sweep starts the test role with the sweep's log.
 - `core/metrics.py`: the temp file is per process (two proof processes on the adhoc task collided on it).
-- Selftests: `selftest/test_component_checks.py` (47 + 1 skip); all selftests 297 passed, 1 skipped.
+- Selftests: `selftest/test_component_checks.py` (48 + 1 skip); all selftests 298 passed, 1 skipped.
 
 **Design decisions and dead ends (do not redo)**
 - A fixed rel limit cannot work: noise1e-2 (rel 0.010) sits between the Hy4 device norms (0.002-0.003) and the
@@ -752,21 +753,27 @@ processes) and `dev/f56_device_check.py` (device, ~10 min).
   | attention (1) | float | 0.0064 (0.0111) | 0.0066 (0.0128) | big 0.0121, small 0.0092 (0.03) |
   | router (1) | selection | overlap 0.9998, rel 6e-5 | overlap 0.9982, rel 0.0017 | mixed 0.9998 |
   | experts (1), bfp8 | float | 0.0077 (0.0134) | 0.0080 (0.0157) | mixed 0.0107 (0.03) |
-- CPU proof result (`dev/f56_mutation_proof.md`, 2026-09-30, 29 min of runs, final code): 11 reviewed Hy4 component
-  tests (attention, attn_hc, attn_hc_pre, attn_norm, attn_residual, indexer, q_a of dense_full; router, experts,
-  moe_combine of moe_full; topk_shared of moe_shared), 106 rows.
-  - Mistakes 73: reviewed catches 73, new (`checks="auto"`) 73, old template 38. Caught by reviewed but not by new: 0.
-  - Controls 22 (reference, bf16, top-k with the valid positions shuffled): new passes 22/22.
-  - Freeze sweeps: 11/11 pass, i.e. all 11 would freeze without a review.
+- CPU proof result (`dev/f56_mutation_proof.md`, 2026-09-30, final code): ALL 42 reviewed Hy4 component tests
+  (dense_full 12, moe_full 15, moe_shared 15), 435 rows, about 1 h of runs in all (three processes).
+  - Mistakes 309: reviewed catches 307, new (`checks="auto"`) 308, old template 160. Caught by reviewed but not by
+    new: 0. Caught by new but not by reviewed: 1 (moe_shared attention, noise1e-2).
+  - Controls 84 (reference, bf16, top-k with the valid positions shuffled): new passes 84/84.
+  - Freeze sweeps: 41/42 pass (would freeze without a review). moe_full attention fails its sweep: 1 % noise is
+    within its bf16 precision limit (0.011), so neither new nor the reviewed test catches it; the sweep sends it to
+    the review, as intended.
   - Hard cases, each caught by new and by reviewed, missed by old (except nobias): attn_norm eps 1e-6 (by the small
-    and layer5 inputs), q_a eps 1e-5 (small), attn_hc_pre stream swap at layer 0 (mixed only), attn_hc post gates
-    halved, attn_residual / moe_combine addend x 1.02, experts without the SwiGLU clamp (golden and big), router
-    without its correction bias.
+    and layer5 inputs), q_a eps 1e-5 (small), attn_hc_pre stream swap at layer 0 (mixed only), attn_hc / ffn_hc
+    post gates halved, attn_residual / moe_combine addend x 1.02, experts without the SwiGLU clamp (golden and big),
+    router without its correction bias.
   - The 3 errors are the old template on topk_shared (it raises without the shared top-k: why that test needed its
     review); the new path gets the top-k through `swap_context` (the proof supplies it, as for F49).
-  - Found by the proof and fixed before this result: the reviewed topk_shared test requires pads after the valid
-    positions (the consumer, sparse_sdpa, reads a row up to its first pad); the index checks now require it when the
-    reference has it (commit "Top-k checks: pads stay after ..."); device indexer re-checked: passes.
-- Not proven: the other 31 reviewed Hy4 component tests (same steps on other layers or block types), other models,
-  weight-only bugs a step's output cannot show on any input. Owner decision pending: switch the default to "none"
-  (or keep the review for the first block type of a new model and skip it for block types that repeat the steps).
+  - Found by the proof and fixed before this result (both commits on this branch):
+    1. the reviewed topk_shared test requires pads after the valid positions (sparse_sdpa reads a row up to its
+       first pad): the index checks now require it when the reference has it; device indexer re-checked: passes;
+    2. moe_shared attn_hc: its pre gate 0 is ~0 (max 3e-5), so a sign flip of that column moved the whole [S, 8]
+       output by 4e-6; the reviewed test checks every gate column. Narrow float outputs (<= 64 columns) now also get
+       a worst-column rel L2 limit (component_col 0.015; the Hy4 device iHC gates recorded <= 0.0075 per column).
+       The six attn_hc / ffn_hc tests were rerun with it: all catch it, sweeps pass.
+- Not proven: other models; weight-only bugs a step's output cannot show on any input. Owner decision pending:
+  switch the default to "none" (or keep the review for the first block type of a new model and skip it for block
+  types that repeat the steps).
