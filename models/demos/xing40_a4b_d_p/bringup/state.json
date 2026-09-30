@@ -1910,8 +1910,113 @@
   "waiting": null
  },
  "C.moe.shared_expert": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "fc47544a-eadb-4954-8246-4b571dc8b3d4"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.shared_expert.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.shared_expert.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 63.7,
+    "session_id": "fc47544a-eadb-4954-8246-4b571dc8b3d4",
+    "t": "2026-09-30T15:38:38"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 17.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:37:34"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:39:00"
+   }
+  ],
+  "last_run": "2026-09-30T15:39:00",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.shared_expert.log",
+  "metrics": {
+   "auto_shared_expert_L02_big_bias": -0.0005491971969604492,
+   "auto_shared_expert_L02_big_ratio_max": 0.9996184706687927,
+   "auto_shared_expert_L02_big_ratio_min": 0.9992607831954956,
+   "auto_shared_expert_L02_big_rel": 0.0006416618707589805,
+   "auto_shared_expert_L02_big_rel_limit": 0.03,
+   "auto_shared_expert_L02_big_row": 0.0008257339359261096,
+   "auto_shared_expert_L02_layer39_bias": -0.0005444884300231934,
+   "auto_shared_expert_L02_layer39_ratio_max": 0.9997309446334839,
+   "auto_shared_expert_L02_layer39_ratio_min": 0.9991964101791382,
+   "auto_shared_expert_L02_layer39_rel": 0.0007714987732470036,
+   "auto_shared_expert_L02_layer39_rel_limit": 0.03,
+   "auto_shared_expert_L02_layer39_row": 0.001091357902623713,
+   "auto_shared_expert_L02_mixed_bias": -0.0005500912666320801,
+   "auto_shared_expert_L02_mixed_ratio_max": 0.9997873306274414,
+   "auto_shared_expert_L02_mixed_ratio_min": 0.9990148544311523,
+   "auto_shared_expert_L02_mixed_rel": 0.0007756718550808728,
+   "auto_shared_expert_L02_mixed_rel_limit": 0.03,
+   "auto_shared_expert_L02_mixed_row": 0.0012595511507242918,
+   "auto_shared_expert_L02_small_bias": -0.0005514025688171387,
+   "auto_shared_expert_L02_small_ratio_max": 0.9997131824493408,
+   "auto_shared_expert_L02_small_ratio_min": 0.9991950988769531,
+   "auto_shared_expert_L02_small_rel": 0.0006819498958066106,
+   "auto_shared_expert_L02_small_rel_limit": 0.03,
+   "auto_shared_expert_L02_small_row": 0.0009489203221164644,
+   "auto_shared_expert_L02_vs_cpu_bias": -0.000546872615814209,
+   "auto_shared_expert_L02_vs_cpu_ratio_max": 0.9996265769004822,
+   "auto_shared_expert_L02_vs_cpu_ratio_min": 0.999241054058075,
+   "auto_shared_expert_L02_vs_cpu_rel": 0.0006419540150091052,
+   "auto_shared_expert_L02_vs_cpu_rel_limit": 0.00464806891977787,
+   "auto_shared_expert_L02_vs_cpu_row": 0.0008314884616993368,
+   "auto_shared_expert_L02_vs_golden_bias": -0.0005601644515991211,
+   "auto_shared_expert_L02_vs_golden_ratio_max": 1.0001367330551147,
+   "auto_shared_expert_L02_vs_golden_ratio_min": 0.9989154934883118,
+   "auto_shared_expert_L02_vs_golden_rel": 0.0018027318874374032,
+   "auto_shared_expert_L02_vs_golden_rel_limit": 0.006330357515253127,
+   "auto_shared_expert_L02_vs_golden_row": 0.002097504213452339,
+   "pcc_shared_expert_L02": 0.9999985278822068
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:38:43",
+  "status": "PASS",
+  "waiting": null
  },
  "G.s16384": {
   "attempts": 0,
