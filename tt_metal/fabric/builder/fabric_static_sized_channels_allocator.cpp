@@ -73,6 +73,19 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
     return receiver_channels_base_address[vc_id][channel_id];
 }
 
+size_t FabricStaticSizedChannelsAllocator::get_channel_buffers_end_address() const {
+    size_t end = buffer_region_start;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (size_t i = 0; i < num_used_sender_channels_per_vc[vc]; ++i) {
+            end = std::max(end, sender_channels_base_address[vc][i] + sender_channels_size_bytes[vc][i]);
+        }
+        for (size_t i = 0; i < num_used_receiver_channels_per_vc[vc]; ++i) {
+            end = std::max(end, receiver_channels_base_address[vc][i] + receiver_channels_size_bytes[vc][i]);
+        }
+    }
+    return end;
+}
+
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,

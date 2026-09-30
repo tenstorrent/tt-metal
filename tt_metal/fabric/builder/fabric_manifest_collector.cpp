@@ -596,6 +596,13 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(
     return edges;
 }
 
+const FabricStaticSizedChannelsAllocator& channel_allocator(const FabricEriscDatamoverBuilder& erisc_builder) {
+    const auto* allocator =
+        dynamic_cast<const FabricStaticSizedChannelsAllocator*>(erisc_builder.config.channel_allocator.get());
+    TT_FATAL(allocator != nullptr, "Fabric manifest: the router's channel allocator is not statically sized");
+    return *allocator;
+}
+
 // Every sender and receiver channel in the router's shape, each indexed [vc][channel].
 manifest::Channels collect_channels(
     const FabricEriscDatamoverBuilder& erisc_builder,
@@ -603,10 +610,6 @@ manifest::Channels collect_channels(
     const RouterLocation& location,
     const manifest::RouterShape& shape,
     const std::vector<NamedArgs>& named_ct_args_per_risc) {
-    const auto* allocator =
-        dynamic_cast<const FabricStaticSizedChannelsAllocator*>(erisc_builder.config.channel_allocator.get());
-    TT_FATAL(allocator != nullptr, "Fabric manifest: the router's channel allocator is not statically sized");
-
     // Get the stream assignment for the router's mesh
     const auto& stream_assignment = builder_context().get_stream_assignment(erisc_builder.local_fabric_node_id.mesh_id);
     NamedArgs assigned_streams;
@@ -622,7 +625,7 @@ manifest::Channels collect_channels(
     // Context for channels on this router
     const ChannelCollectionContext ctx{
         .erisc_builder = erisc_builder,
-        .allocator = *allocator,
+        .allocator = channel_allocator(erisc_builder),
         .producer_slots = producer_slots,
         .named_ct_args_per_risc = named_ct_args_per_risc,
         .assigned_streams = assigned_streams,
@@ -665,7 +668,29 @@ manifest::Channels collect_channels(
         auto& receiver = channels.receivers[vc].front();
         receiver.downstream_edges = collect_downstream_edges(ctx, vc, !receiver.serviced_by.empty());
     }
+
+    // 0 when the builder did not allocate it (every architecture but Blackhole).
+    const size_t notify_address = emitted_config(
+        ctx,
+        "NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR",
+        erisc_builder.config.notify_worker_of_read_counter_update_src_address);
+    if (notify_address != 0) {
+        channels.notify_worker_src =
+            l1_region(notify_address, FabricEriscDatamoverConfig::field_size, "u32", addresses_to_clear);
+    }
     return channels;
+}
+
+// The space between the channel buffers and the end of what the builder loads.
+manifest::L1Span collect_leftover_l1(const FabricEriscDatamoverBuilder& erisc_builder) {
+    const size_t start = channel_allocator(erisc_builder).get_channel_buffers_end_address();
+    const size_t end = erisc_builder.config.max_l1_loading_size;
+    TT_FATAL(
+        start <= end,
+        "Fabric manifest: the channel buffers end at {:#x}, past max_l1_loading_size {:#x}",
+        start,
+        end);
+    return {.address = static_cast<uint32_t>(start), .size = static_cast<uint32_t>(end - start)};
 }
 
 // A lifecycle word the kernel receives at the `name` argument.
@@ -827,6 +852,70 @@ manifest::Diagnostics collect_diagnostics(
     };
 }
 
+// Calls `fn` on every L1 region of the router.
+template <typename Fn>
+void for_each_l1_region(const manifest::Router& router, Fn fn) {
+    const auto optional = [&](const std::optional<manifest::L1Region>& region) {
+        if (region.has_value()) {
+            fn(*region);
+        }
+    };
+
+    const auto& counters = router.credit_counters;
+    fn(counters.to_sender_ack);
+    fn(counters.to_sender_completion);
+    fn(counters.receiver_ack);
+    fn(counters.receiver_completion);
+
+    for (const auto& vc : router.channels.senders) {
+        for (const auto& sender : vc) {
+            fn(sender.ring_buffer);
+            fn(sender.control_info.connection);
+            fn(sender.control_info.conn_info);
+            optional(sender.control_info.buffer_index_sem);
+        }
+    }
+    for (const auto& vc : router.channels.receivers) {
+        for (const auto& receiver : vc) {
+            fn(receiver.ring_buffer);
+            for (const auto& edge : receiver.downstream_edges) {
+                fn(edge.teardown_sem);
+            }
+        }
+    }
+    optional(router.channels.notify_worker_src);
+
+    const auto& lifecycle = router.lifecycle;
+    fn(lifecycle.edm_status);
+    fn(lifecycle.termination_signal);
+    fn(lifecycle.local_sync);
+    fn(lifecycle.local_tensix_sync);
+    fn(lifecycle.handshake.region);
+
+    optional(router.diagnostics.perf_telemetry);
+    optional(router.diagnostics.code_profiling);
+    optional(router.diagnostics.channel_trimming);
+}
+
+// The host zeroes each of these addresses before launch, so each must start exactly one region, which the
+// collector marked host_cleared.
+void check_host_cleared(const manifest::Router& router) {
+    for (const size_t address : builder_context().get_fabric_router_addresses_to_clear()) {
+        size_t num_regions = 0;
+        for_each_l1_region(router, [&](const manifest::L1Region& region) {
+            if (region.address == address) {
+                TT_FATAL(region.host_cleared, "Fabric manifest: the region at {:#x} is not host_cleared", address);
+                ++num_regions;
+            }
+        });
+        TT_FATAL(
+            num_regions == 1,
+            "Fabric manifest: the host clears {:#x} before launch, but {} of the router's regions start there",
+            address,
+            num_regions);
+    }
+}
+
 }  // namespace
 
 // Build a manifest Router using information from fabric builder.
@@ -845,7 +934,7 @@ manifest::Router collect_manifest_router(
 
     auto shape = collect_shape(erisc_builder, vc_shape, named_ct_args_per_risc);
     auto channels = collect_channels(erisc_builder, vc_shape, location, shape, named_ct_args_per_risc);
-    return {
+    manifest::Router router{
         .identity = collect_identity(location),
         .link = collect_link(erisc_builder, location, chip_facts),
         .shape = std::move(shape),
@@ -853,7 +942,10 @@ manifest::Router collect_manifest_router(
         .channels = std::move(channels),
         .lifecycle = collect_lifecycle(erisc_builder, named_ct_args_per_risc),
         .diagnostics = collect_diagnostics(erisc_builder, named_ct_args_per_risc),
+        .leftover_l1 = collect_leftover_l1(erisc_builder),
     };
+    check_host_cleared(router);
+    return router;
 }
 
 }  // namespace tt::tt_fabric

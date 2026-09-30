@@ -197,7 +197,8 @@ struct Channels {
     // Indexed [vc][channel], over RouterShape's counts.
     std::vector<std::vector<SenderChannel>> senders;
     std::vector<std::vector<ReceiverChannel>> receivers;
-    // Blackhole only (category 9). Written under channels.senders.
+    // Blackhole only. This is used as a sender channel packets read counter staging area as
+    // inline NOC writes to workers can hang.
     std::optional<L1Region> notify_worker_src;
 };
 
@@ -279,7 +280,7 @@ struct Router {
     Channels channels;
     Lifecycle lifecycle;
     Diagnostics diagnostics;
-    // From the end of the last ring to max_l1_loading_size.
+    // From the end of the channel buffers to max_l1_loading_size.
     // TODO: end at the debug block base addr instead when debug instrumentation is on.
     L1Span leftover_l1;
 };

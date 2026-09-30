@@ -293,6 +293,14 @@ json l1_region_json(const manifest::L1Region& region) {
     return out;
 }
 
+// Bounds only: a span has no schema, so capture does not read it as a region.
+json l1_span_json(const manifest::L1Span& span) {
+    json out;
+    out["address"] = span.address;
+    out["size"] = span.size;
+    return out;
+}
+
 // ============ Router ============
 
 // The router's mesh and chip are its path, so they are not repeated here.
@@ -640,8 +648,12 @@ json make_router_json(
     out["credit_counters"] = credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = senders_json(router, control_plane, node);
     out["channels"]["receivers"] = receivers_json(router, peer_path, control_plane, node);
+    if (router.channels.notify_worker_src.has_value()) {
+        out["channels"]["notify_worker_src"] = l1_region_json(*router.channels.notify_worker_src);
+    }
     out["lifecycle"] = lifecycle_json(router.lifecycle);
     out["diagnostics"] = diagnostics_json(router.diagnostics);
+    out["leftover_l1"] = l1_span_json(router.leftover_l1);
     return out;
 }
 
