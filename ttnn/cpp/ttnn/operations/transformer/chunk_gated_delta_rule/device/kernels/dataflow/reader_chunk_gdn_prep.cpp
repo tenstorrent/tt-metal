@@ -57,6 +57,10 @@ void kernel_main() {
     // split, where producer p of head h owns the interleaved chunks c = p, p+NP, ... (wi stays the
     // flat h*NC + c, so every DRAM index below is unchanged).
     const uint32_t wi_stride = get_arg_val<uint32_t>(14);
+    // Cycles to wait before the first read. The fused factory staggers its producers with it (producer j of a
+    // head waits j steps): chunk j is not needed before chunk 0 plus j receiver steps, and a smaller kickoff
+    // burst gets chunk 0's reads served sooner. 0 for the phased prep.
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
 
     // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
     const uint32_t tb_io = get_tile_size(cb_q);
@@ -157,6 +161,9 @@ void kernel_main() {
     };
 
     // Kickoff: the first item's inputs and the constants in one flight.
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
     if (wi_count > 0) {
         issue_item(wi_start);
     }
