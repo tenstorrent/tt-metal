@@ -1668,6 +1668,13 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 2
+  frozen:
+    at: '2026-09-30T15:47:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py: 7d8c977b96aa70b8e92d9494486dd30ed679df75af773c6e962c6405cf001eda
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: M.1
   title: Assemble the all-device model (hidden state on the device from embedding to final norm)
   step: assemble
