@@ -17,6 +17,7 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "TT_POLY_BACKWARD_ERF_BW_INCLUDE";
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
@@ -762,6 +763,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
+            TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init();", fmt::format("recip_tile({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
