@@ -33,7 +33,10 @@ def test_remainder_scalar_honours_dtype(device):
     assert_with_pcc(torch.remainder(x.float(), 3.0), ttnn.to_torch(out), 0.99)
 
 
-@pytest.mark.parametrize("shape_a, shape_b", [((32,), (64,)), ((1, 32), (1, 64)), ((1, 32, 1), (1, 1, 64))])
+@pytest.mark.parametrize(
+    "shape_a, shape_b",
+    [((32,), (64,)), ((1, 32), (1, 64)), ((1, 32, 1), (1, 1, 64)), ((32, 1, 1, 1, 1), (1, 1, 1, 1, 64))],
+)
 def test_outer_low_rank(device, shape_a, shape_b):
     torch.manual_seed(0)
     a = torch.randn(shape_a, dtype=torch.bfloat16)
@@ -50,10 +53,11 @@ def test_outer_rejects_scalar_input(device, expect_error):
         ttnn.experimental.quasar.outer(a, b)
 
 
-def test_remainder_int32_rejects_fractional_scalar(device, expect_error):
+@pytest.mark.parametrize("scalar", [1.5, float("inf"), 2.0**31], ids=["fractional", "inf", "out_of_range"])
+def test_remainder_int32_rejects_inexact_scalar(device, scalar, expect_error):
     x = _to_device(torch.randint(-50, 50, (1, 1, 32, 32), dtype=torch.int32), device, dtype=ttnn.int32)
-    with expect_error(RuntimeError, "INT32 input with a fractional scalar"):
-        ttnn.experimental.quasar.remainder(x, 1.5)
+    with expect_error(RuntimeError, "INT32 input needs a finite integral scalar"):
+        ttnn.experimental.quasar.remainder(x, scalar)
 
 
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.experimental.quasar.add], ids=["ttnn", "quasar"])

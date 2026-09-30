@@ -479,12 +479,15 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // binary_ng packs the scalar in the input dtype, so a fractional divisor would be truncated for INT32.
-    TT_FATAL(
-        !(input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar) &&
-          std::get<float>(scalar) != std::trunc(std::get<float>(scalar))),
-        "remainder: INT32 input with a fractional scalar {} is not supported",
-        std::get<float>(scalar));
+    // binary_ng packs the scalar with a static_cast to the INT32 input dtype, which is exact only for a finite
+    // integer in range. 2^31 is written as a float because INT32_MAX is not representable as one.
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        const float value = std::get<float>(scalar);
+        TT_FATAL(
+            std::isfinite(value) && std::trunc(value) == value && value >= -2147483648.0f && value < 2147483648.0f,
+            "remainder: INT32 input needs a finite integral scalar within the INT32 range, got {}",
+            value);
+    }
     // The unary SFPU fast path takes none of these arguments and does not support INT32.
     if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
         post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
@@ -579,36 +582,32 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         "outer: inputs must be at least 1D, but got shapes {} and {}",
         input_a.logical_shape(),
         input_b.logical_shape());
-    // The checks and reshapes below index dims 0..3; view lower-rank inputs (e.g. 1-D vectors) as 4-D.
-    const ttnn::Shape s_a = input_a.logical_shape().to_rank(4);
-    const ttnn::Shape s_b = input_b.logical_shape().to_rank(4);
-    auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
-        uint32_t num1s = 0;
-        for (uint32_t idx = 0; idx < 4; idx++) {
-            num1s += (uint32_t)(s[idx] == 1);
+    const ttnn::Shape& s_a = input_a.logical_shape();
+    const ttnn::Shape& s_b = input_b.logical_shape();
+    // Inputs of any rank are vectors as long as at most one dimension differs from 1.
+    auto is_vector = [](const ttnn::Shape& s) {
+        uint32_t non_ones = 0;
+        for (int idx = 0; idx < static_cast<int>(s.rank()); idx++) {
+            non_ones += static_cast<uint32_t>(s[idx] != 1);
         }
-        return num1s;
+        return non_ones <= 1;
     };
+    TT_FATAL(is_vector(s_a), "outer: all but one dimension of input_a must be 1, got shape {}", s_a);
+    TT_FATAL(is_vector(s_b), "outer: all but one dimension of input_b must be 1, got shape {}", s_b);
 
-    // check if 3 dimensions are 1
-    TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
-    TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
-
-    const bool skip_reshape_a =
-        input_a.logical_shape().rank() == 4 && (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
-    const bool skip_reshape_b =
-        input_b.logical_shape().rank() == 4 && (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
+    const bool skip_reshape_a = s_a.rank() == 4 && s_a[0] == 1 && s_a[1] == 1 && s_a[3] == 1;
+    const bool skip_reshape_b = s_b.rank() == 4 && s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1;
 
     Tensor a_slim = input_a;
     Tensor b_slim = input_b;
 
     if (!skip_reshape_a) {
-        uint32_t a_volume = s_a[0] * s_a[1] * s_a[2] * s_a[3];
+        const auto a_volume = static_cast<uint32_t>(input_a.logical_volume());
         a_slim = ttnn::operations::experimental::quasar::reshape(
             input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
     }
     if (!skip_reshape_b) {
-        uint32_t b_volume = s_b[0] * s_b[1] * s_b[2] * s_b[3];
+        const auto b_volume = static_cast<uint32_t>(input_b.logical_volume());
         b_slim = ttnn::operations::experimental::quasar::reshape(
             input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
     }
