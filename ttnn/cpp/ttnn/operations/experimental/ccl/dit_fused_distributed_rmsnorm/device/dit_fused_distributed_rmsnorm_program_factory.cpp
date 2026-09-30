@@ -623,7 +623,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // welford_zero_cb (LayerNorm warm-row accumulator reset): 2 resident fp32 tiles, always present
     // for LN. Counted in the resident budget so wide LN shards correctly choose block-major.
     const uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
-    // Reader-private copy of the affine tile-row map (one row-major page), resident for the whole program.
     const uint32_t tile_row_map_bytes = use_tile_row_map ? tile_row_map->buffer()->aligned_page_size() : 0u;
 
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
@@ -1133,7 +1132,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
-    // Absent map: no define, CT or RT args, so the default reader is unchanged.
     std::map<std::string, std::string> reader_defines;
     if (use_tile_row_map) {
         reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
@@ -1411,7 +1409,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     std::vector<uint32_t> reader_common_args = {
         input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt};
     if (use_tile_row_map) {
-        reader_common_args.push_back(tile_row_map->buffer()->address());  // common arg 6
+        reader_common_args.push_back(tile_row_map->buffer()->address());
     }
     SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_args);
     if (use_mux) {

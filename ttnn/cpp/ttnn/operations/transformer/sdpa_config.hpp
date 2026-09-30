@@ -19,8 +19,7 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
-    // Per-phase matmul fidelity for the streaming SDPA kernels (QK^T and PV); nullopt uses the
-    // compute kernel config's fidelity.
+    // Streaming kernels' QK^T and PV matmul fidelity; nullopt falls back to the compute kernel config.
     std::optional<tt::tt_metal::MathFidelity> qk_math_fidelity;
     std::optional<tt::tt_metal::MathFidelity> pv_math_fidelity;
     // Streaming SDPA kernels: softmax with a constant zero row max (no reduce, subtract or rescale). Only

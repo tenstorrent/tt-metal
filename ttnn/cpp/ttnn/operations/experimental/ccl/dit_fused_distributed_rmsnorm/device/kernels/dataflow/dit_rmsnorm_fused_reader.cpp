@@ -103,7 +103,6 @@ void kernel_main() {
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
 #ifdef AFFINE_TILE_ROW_MAP
-    // Per-token weight/bias tile row r is read from affine tile row map[r] (a small table instead of [N, H]).
     constexpr uint32_t tile_row_map_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
     constexpr auto tile_row_map_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 1>();
 #endif
@@ -166,7 +165,7 @@ void kernel_main() {
     }
 
 #ifdef AFFINE_TILE_ROW_MAP
-    // The map is one row-major uint32 page, kept private in its CB; waited for at its first use below.
+    // One page into a private CB; the read barrier is deferred to the first per-token row below.
     const auto tile_row_map_accessor = TensorAccessor(tile_row_map_args, tile_row_map_addr);
     CircularBuffer cb_tile_row_map(tile_row_map_cb);
     if (tile_row_start < tile_row_end) {

@@ -1857,8 +1857,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";
-        // "iter,q,klo,khi": zones only for ring iter, Q chunk (index within the core) and K chunks [klo, khi);
-        // -1 leaves a bound open. Keeps a steady-state window inside the 125 zones each RISC can hold.
+        // "iter,q,klo,khi" (-1 = open bound) limits zones to one ring iter, Q chunk and K-chunk range so they
+        // fit the 125 zones a RISC can hold; the per-subblock FINE zones only fit inside such a window.
         if (const char* window = std::getenv("TT_SDPA_PROFILE_WINDOW"); window != nullptr) {
             std::array<int, 4> bounds{};
             char trailing = 0;
@@ -1872,7 +1872,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             defines["SDPA_PROFILE_QCHUNK"] = std::to_string(bounds[1]);
             defines["SDPA_PROFILE_KCHUNK_LO"] = std::to_string(bounds[2]);
             defines["SDPA_PROFILE_KCHUNK_HI"] = std::to_string(bounds[3]);
-            // Exp and pack zones per fixed-offset QK^T subblock (32 pairs per K chunk): use a one-chunk window.
             if (std::getenv("TT_SDPA_PROFILE_FINE") != nullptr) {
                 defines["SDPA_PROFILE_FINE"] = "1";
             }

@@ -25,9 +25,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             split, RoPE, and output-dtype cast. `cluster_axis=None` normalizes locally on
             every device (no gather), for tensors that are replicated or independent per device.
 
-            `affine_tile_row_map` (row-major uint32 [1, 1, 1, T], one entry per tile row of the
-            input) makes the reader fetch per-token weight/bias tile row r from tile row
-            map[r], so weight/bias can be a small table of tile rows instead of [N, H].
+            `affine_tile_row_map` (row-major uint32 [1, 1, 1, T], one entry per input tile row): per-token
+            weight/bias tile row r is read from row map[r], so weight/bias can be a small table of tile rows.
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
