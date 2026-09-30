@@ -32,3 +32,38 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
 3. Model cases (bringup-fork-tests, task O.1): `tests/cases.py` (10 glm53_flash_d_p call(s), captured with
    GLM_MHC_IMPL=fused on the s56320 rung), `tests/reference.py` (float64 torch semantics), `tests/test_mhc_pre_ttnn.py`
    (random per-chip inputs on the 2x2 mesh, PCC + rel L2 per output; limits from the measured error with margin).
+4. Xing4.0 entries (xing40_a4b_d_p, task P.2b, owner pick "adopt both fused mHC ops"): `ttnn.bringup.mhc_pre_xing` and
+   `ttnn.bringup.mhc_pre_xing_pack`. New entries with their own program; `ttnn.bringup.mhc_pre` (its kernels, host
+   code and program hash) is unchanged, so nothing changes for glm53_flash_d_p.
+   - What: for a caller that splits the projection over the mesh (xing40's 4x2 SP x TP: each chip holds half of every
+     stream's columns and all_reduces the partial row over axis 1).
+     `mhc_pre_xing_pack(mix, streams)`: the caller's partial projection row [.., T, 32] (x @ fn^T in columns 0..23) ->
+     the same row with column 24 = sum x^2 of the local streams (one pass, exact fp32 SFPU multiply-adds).
+     `mhc_pre_xing(input, streams=None, *, scale, base, norm_width, n, norm_eps, hc_eps, sinkhorn_iters, clamp_min,
+     clamp_max, coefficients_given=False)`: from the all-reduced row, the Xing math (xing_ref.py:hc_weights): r =
+     rsqrt(ss / norm_width + norm_eps); pre = sigmoid (no + eps); post = 2 sigmoid; comb logits clamped to
+     [clamp_min, clamp_max], exp(L - rowmax), then sinkhorn_iters x (row / (sum + eps), column / (sum + eps)).
+     Output hc [.., T, 24] = [pre | post | comb row-major] (the layout xing40's tt/residual.py slices for
+     `mhc_post(comb_transposed=False)`). With streams: y = sum_i pre_i x_i [.., T, C] (the collapse; column-local).
+     `coefficients_given=True` takes a finished hc and only collapses.
+   - Files: `mhc_pre_xing.{hpp,cpp}`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
+     `device/mhc_pre_xing_program_factory.cpp`, `kernels/mhc_pre_xing_{common.hpp,reader.cpp,writer.cpp,compute.cpp}`,
+     bindings in `mhc_pre_ttnn_nanobind.cpp`, `sources.cmake`. Kernels: the writer (BRISC) scatters the row tile
+     into the coefficient-major layout (`mhc_layout::slot_index`, lane = token) and back; the compute runs the
+     coefficients and a plain-SFPI Sinkhorn lane-wise in fp32 (accurate exp, Newton reciprocal / rsqrt, the helpers
+     of mhc_pre_compute.cpp); the collapse multiplies UnpackToDestFp32 stream tiles by a "pre-block" tile (8 row
+     blocks x n streams) on the SFPU at dst_full_sync. Work: token tile-rows (coefficients, pack) or y column tiles
+     (collapse) split over the grid. The scalars are runtime args patched on every call (one program for all layers;
+     the hash has only the mode, n and the tensor specs).
+   - Why: xing40 attn_hc / ffn_hc were ~112 small programs per call (composed Sinkhorn), the collapses 18.
+     Device time per call on the 4x2 box (5120-token chunk, 1280 rows per chip): hc 977 -> 353 us (matmul 211 +
+     pack 106 + all_reduce 18 + mhc_pre_xing 21), collapse 548 -> 134 us. Profile (40 layers, warm chunk
+     [51200, 56320)): attn_hc 39.2 -> 14.3 ms, ffn_hc 39.2 -> 14.3 ms, attn_collapse / ffn_collapse 22.1 -> 5.3 ms each.
+   - Tests: `tests/test_mhc_pre_xing.py` + `tests/xing_cases.py` (6 cases on the 4x2 mesh: pack, coef x 3 incl. a
+     clamp-saturating one and T 512, collapse, coef + collapse; float64 reference `tests/reference.py:
+     mhc_pre_xing_coefficients` / `mhc_pre_xing_collapse`, measured rel L2 <= 1.1e-7, limit 1e-5) and a CPU check
+     of that reference against xing_ref.hc_weights. Regression of the unchanged path: unit (test_mhc_pre,
+     blocking, cpp_parity) 48 passed; precision baseline + golden 215 passed; model cases (test_mhc_pre_ttnn.py) 10
+     passed, after its fixture was changed to open the whole box when the case mesh (2x2) does not match it (a 2x2
+     submesh of the 4x2 box fails the FABRIC_2D handshake; as P.2 did for mhc_post).
+   - Needed by: xing40_a4b_d_p (tt/mhc.py, tt/collapse.py; XING_HC_IMPL=composed keeps the op chain).
