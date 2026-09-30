@@ -21,7 +21,7 @@ inline void sign_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_sign(const uint /*exponent_size_8*/) {
 // All params are in FP16 format
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         // copysgn stamps v's sign bit onto 1.0, which is exactly the v < 0 arm. Only the
