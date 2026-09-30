@@ -5,8 +5,8 @@ from typing import List
 
 import pytest
 import torch
-from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.data_format_inference import infer_data_formats, infer_unpack_out
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
@@ -106,11 +106,13 @@ def generate_qsr_pack_combinations(
             and dest_acc == DestAccumulation.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
+        # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 inputs reach
+        # the packer as their Int8/UInt8 register format.
+        src_reg_fmt = infer_unpack_out(in_fmt, out_fmt, dest_acc)
         if (
             dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
+            and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
+            and src_reg_fmt != out_fmt
         ):
             return False
         return True
@@ -182,24 +184,31 @@ def generate_qsr_pack_combinations(
     return combinations
 
 
-PACK_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        DataFormat.Int32,
-        DataFormat.Int8,
-        DataFormat.UInt8,
-        DataFormat.Int16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ]
+PACK_DATA_FORMATS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+    DataFormat.Float32,
+    DataFormat.Int32,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+    DataFormat.Int16,
+    DataFormat.MxFp8R,
+    DataFormat.MxFp8P,
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
+]
+PACK_FORMATS = input_output_formats(PACK_DATA_FORMATS)
+# Int4/UInt4 are L1 input-only formats: the packer cannot output them.
+PACK_4BIT_INPUT_FORMATS = [
+    InputOutputFormat(input_format, output_format)
+    for input_format in (DataFormat.Int4, DataFormat.UInt4)
+    for output_format in PACK_DATA_FORMATS
+]
+ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(
+    PACK_FORMATS + PACK_4BIT_INPUT_FORMATS
 )
-ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
 
 
@@ -274,12 +283,18 @@ def test_pack_quasar(
         # divergence from HW that grows with threshold-relu (most visible for
         # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
         # pack_src instead and apply the single output MX quantization ourselves
-        # after relu. Non-MX outputs keep the existing path (saturate_integer etc.).
+        # after relu. Signed integer -> UInt8 outputs also route through pack_src and
+        # apply the packer's sign-clearing UInt8 conversion after relu. Other outputs
+        # keep the existing path (saturate_integer etc.).
 
         generate_golden = get_golden_generator(DataCopyGolden)
+        signed_integer_to_uint8 = (
+            formats.output_format == DataFormat.UInt8
+            and data_formats.pack_src in (DataFormat.Int8, DataFormat.Int32)
+        )
         datacopy_out_format = (
             data_formats.pack_src
-            if formats.output_format.is_mx_format()
+            if formats.output_format.is_mx_format() or signed_integer_to_uint8
             else formats.output_format
         )
         golden_tensor = generate_golden(
@@ -310,6 +325,9 @@ def test_pack_quasar(
             relu_config,
             data_formats.pack_src,
         )
+
+        if signed_integer_to_uint8:
+            golden_tensor = PackGolden.convert_signed_integer_to_uint8(golden_tensor)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

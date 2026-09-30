@@ -22,6 +22,7 @@ from .strategies.structured import ulp_sweep_value_count
 from .utils import (
     _clamp_mx_tensors,
     _get_dtype_for_format,
+    _get_integer_bounds,
     calculate_tile_and_face_counts,
     calculate_tile_and_face_counts_w_tile_dimensions,
 )
@@ -232,7 +233,8 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
     Defaults are chosen to give reasonable value ranges and avoid overflows
-    (e.g. positive ranges for floats, half-range for integers).
+    (e.g. positive ranges for floats, half-range for integers, full range
+    for 4-bit integers).
     """
     if stimuli_format == DataFormat.MxFp8R:
         return StimuliSpec.gaussian(
@@ -248,6 +250,9 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec(distribution=_default_bfp4b_face)
     if stimuli_format == DataFormat.Bfp2_b:
         return StimuliSpec(distribution=_default_bfp2b_face)
+    if stimuli_format.is_4bit_integer():
+        int_min, int_max = _get_integer_bounds(stimuli_format)
+        return StimuliSpec.uniform(low=float(int_min), high=float(int_max))
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))

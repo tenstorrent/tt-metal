@@ -10,7 +10,7 @@ from typing import ClassVar, Optional
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import FOUR_BIT_INTEGER_RANGE, DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
@@ -736,8 +736,12 @@ def quantize_input_to_unpack_format(
     """
     Quantize input stimuli to match the values visible after hardware unpack.
 
-    Model Bfp2_b, Bfp4_b, Bfp8_b, and all MX input formats; pass other formats through.
+    Model Bfp2_b, Bfp4_b, Bfp8_b, Int4, UInt4, and all MX input formats; pass other formats through.
     """
+    if input_format is not None and input_format.is_4bit_integer():
+        return torch.clamp(
+            torch.as_tensor(operand), *FOUR_BIT_INTEGER_RANGE[input_format]
+        )
     if input_format == DataFormat.Bfp2_b:
         return _bfp2b_to_float16b(operand)
     if input_format == DataFormat.Bfp4_b:
@@ -2204,6 +2208,21 @@ class PackGolden:
                 )
                 # Clamp between 0 and threshold
                 return torch.clamp(result, min=0.0, max=threshold)
+
+    @staticmethod
+    def convert_signed_integer_to_uint8(result: torch.Tensor) -> torch.Tensor:
+        """
+        Model the Quasar packer's Int8/Int32 to UInt8 conversion.
+
+        The packer clears the sign bit and saturates the magnitude to 255, so a negative
+        value packs to its magnitude, not to 0. Apply it after ReLU, which runs before
+        the packer format conversion.
+        Args:
+            result: Signed integer tensor in the pack_src format
+        Returns:
+            UInt8 tensor
+        """
+        return torch.clamp(torch.abs(result.to(torch.int32)), max=255).to(torch.uint8)
 
     @staticmethod
     def accumulate_l1(

@@ -5,7 +5,7 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
@@ -100,9 +100,9 @@ def generate_unpack_unary_operand_combinations(
         )
 
         if is_perf:
-            # Same packer constraint as the correctness path: non-Fp32 input cannot
-            # pack to Fp32 when dest is in 16-bit mode.
-            if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
+            # Same packer constraint as the correctness path: a non-32-bit input cannot
+            # pack to a 32-bit format when dest is in 16-bit mode.
+            if not in_fmt.is_32_bit() and fmt.output_format.is_32_bit():
                 continue
             dest_acc_modes = (
                 dest_acc_modes if in_fmt.is_32_bit() else (DestAccumulation.No,)
@@ -110,11 +110,11 @@ def generate_unpack_unary_operand_combinations(
 
         for dest_acc in dest_acc_modes:
             if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
+                not in_fmt.is_32_bit()
+                and fmt.output_format.is_32_bit()
                 and dest_acc == DestAccumulation.No
             ):
-                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
             for dest_sync in dest_sync_modes:
@@ -180,8 +180,16 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
+# Int4/UInt4 are L1 input-only formats: pair each with its unpacked register format
+# (UInt4 unpacks to UInt8) and with Int32.
+UNPACK_4BIT_INPUT_FORMATS = [
+    InputOutputFormat(DataFormat.Int4, DataFormat.Int8),
+    InputOutputFormat(DataFormat.Int4, DataFormat.Int32),
+    InputOutputFormat(DataFormat.UInt4, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt4, DataFormat.Int32),
+]
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
-    UNPACK_FORMATS
+    UNPACK_FORMATS + UNPACK_4BIT_INPUT_FORMATS
 )
 PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS,

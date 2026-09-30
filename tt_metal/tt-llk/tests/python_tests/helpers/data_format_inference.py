@@ -193,16 +193,30 @@ def infer_unpack_out(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
         if (
-            input_format == DataFormat.Int8
-            and register_format_hint != DataFormat.Int8_2x
-        ) or (
-            input_format == DataFormat.UInt8
-            and register_format_hint != DataFormat.UInt8_2x
+            (
+                input_format in (DataFormat.Int8, DataFormat.Int4)
+                and register_format_hint != DataFormat.Int8_2x
+            )
+            or (
+                input_format == DataFormat.UInt8
+                and register_format_hint != DataFormat.UInt8_2x
+            )
+            or (
+                input_format == DataFormat.UInt4
+                and register_format_hint
+                not in (DataFormat.Int8_2x, DataFormat.UInt8_2x)
+            )
         ):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
         return register_format_hint
+
+    # Int4/UInt4 can only exist in L1. The unpacker widens Int4 to Int8 and UInt4 to UInt8.
+    if input_format == DataFormat.Int4:
+        return DataFormat.Int8
+    if input_format == DataFormat.UInt4:
+        return DataFormat.UInt8
 
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
     # it can also unpack into float16 and TF32 but bfloat16 is the default for MX inputs and default in metal in general.
@@ -442,6 +456,11 @@ def infer_data_formats(
     if chip_arch is None:
         chip_arch = get_chip_architecture()
 
+    if output_format.is_4bit_integer():
+        raise ValueError(
+            f"{output_format.name} is an L1 input-only format; the packer cannot output it"
+        )
+
     # On Quasar the math and SFPU data formats can differ. Quasar has only one 16-bit integer HW
     # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a
     # UInt16 encoding, so UInt16 is pass-through as Int16 across the whole unpack/math/pack datapath.
@@ -660,9 +679,14 @@ def data_formats(
             math_format = DataFormat.Float16
             pack_src_format = DataFormat.Float16
         else:
-            unpack_dst = input_format
-            math_format = input_format
-            pack_src_format = input_format
+            # Int4/UInt4 can't exist in registers; the unpacker widens them to Int8/UInt8.
+            unpack_dst = (
+                infer_unpack_out(input_format, output_format, is_fp32_dest_acc_en)
+                if input_format.is_4bit_integer()
+                else input_format
+            )
+            math_format = unpack_dst
+            pack_src_format = unpack_dst
             # Widening reductions (e.g. UInt16 reduce-sum) keep a narrow input but accumulate into a
             # wider 32-bit value in a 32-bit dest. The kernel masks the garbage high bits on load (driven
             # by the narrow math format) yet stores the full 32-bit result, so the packer must read the

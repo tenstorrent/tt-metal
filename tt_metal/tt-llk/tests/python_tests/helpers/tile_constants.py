@@ -193,6 +193,7 @@ def calculate_tile_size_bytes(
         MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
         MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
         DataFormat,
+        l1_align,
     )
 
     tile_rows, tile_cols = tile_dimensions
@@ -229,6 +230,12 @@ def calculate_tile_size_bytes(
         actual_exponents = tile_elements // 16
         total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
         return total_exponents + (tile_elements // 4)
+
+    # Int4/UInt4: each face starts on a 16 B L1 boundary, so a 1x16 face (8 B) is padded to 16 B
+    if data_format.is_4bit_integer():
+        face_r_dim = min(tile_rows, MAX_FACE_R_DIM)
+        face_elements = face_r_dim * FACE_C_DIM
+        return (tile_elements // face_elements) * l1_align(face_elements // 2)
 
     # Use data_format.num_bytes_per_tile() for other formats
     # - MxFp8: 1 scale per 32 elements (at beginning of tile)
