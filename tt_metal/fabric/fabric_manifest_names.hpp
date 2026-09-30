@@ -19,24 +19,16 @@
 // The names and keys the fabric manifest writes. Changing one changes the manifest format.
 namespace tt::tt_fabric::manifest {
 
-// Returns a string representation of the enum value.
-//
-// enchantum::to_string yields an empty view for a value that is not a named enumerator, which happens for
-// bitmask combinations of FabricType such as MESH|TORUS_X, so in those cases we fall back to the numeric value.
-template <typename E>
-std::string enum_name(E value) {
-    const auto name = enchantum::to_string(value);
-    if (name.empty()) {
-        return std::to_string(static_cast<std::underlying_type_t<E>>(value));
-    }
-    return std::string(name);
-}
-
-// The manifest's spelling of an enum variant name inside a router or chip in lower case, e.g.
-// EdgeCapability::INTRAMESH_EXPRESS is "intramesh_express".
+// The manifest's spelling of an enum value: its enumerator name in lower case, e.g.
+// EdgeCapability::INTRAMESH_EXPRESS is "intramesh_express". A value with no enumerator name, such as a bitmask
+// combination, is written as its number.
 template <typename E>
 std::string lower_enum_name(E value) {
-    std::string name = enum_name(value);
+    const auto enumerator = enchantum::to_string(value);
+    if (enumerator.empty()) {
+        return std::to_string(static_cast<std::underlying_type_t<E>>(value));
+    }
+    std::string name(enumerator);
     std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return name;
 }
