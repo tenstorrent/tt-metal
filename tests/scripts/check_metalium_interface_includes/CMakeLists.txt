@@ -43,7 +43,10 @@ endwhile()
 
 list(LENGTH seen seen_count)
 if(seen_count LESS 2)
-    message(FATAL_ERROR "Only visited ${seen_count} target(s) from TT::Metalium; the walk is not seeing its dependencies.")
+    message(
+        FATAL_ERROR
+        "Only visited ${seen_count} target(s) from TT::Metalium; the walk is not seeing its dependencies."
+    )
 endif()
 
 message(STATUS "TT::Metalium interface include dirs (from ${seen_count} targets):")
