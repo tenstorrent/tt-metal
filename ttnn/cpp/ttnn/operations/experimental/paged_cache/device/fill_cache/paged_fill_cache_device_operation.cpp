@@ -213,6 +213,14 @@ Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     return tensor_args.cache_tensor;
 }
 
+PagedFillCacheDeviceOperation::topology_return_value_t PagedFillCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: the cache keeps its own distribution. The framework's default otherwise unions the cache's
+    // label with the input/page_table labels, so a replicated cache filled from a mesh-sharded input came
+    // back labelled as sharded (same contract as update_padded_kv_cache / indexed_fused_update_cache).
+    return {tensor_args.cache_tensor.tensor_topology()};
+}
+
 ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
