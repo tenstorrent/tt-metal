@@ -9,10 +9,10 @@ first use and registers the function as a ttnn operation named ``ttnn.bringup.<n
 fork-call capture see it like any other op. Nothing here imports at ``import ttnn`` time.
 """
 
-# python name -> (fork folder, function in its package).  Empty: `rms_norm` (rms_norm_ttnn/) has a C++ host side
-# now and binds as ttnn.bringup.rms_norm; its Python implementation stays importable as
-# ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn for A/B comparison.
-PYTHON_OPS = {}
+# python name -> (fork folder, function in its package). `rms_norm` (rms_norm_ttnn/) has a C++ host side now and binds
+# as ttnn.bringup.rms_norm; its Python implementation stays importable as ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn for
+# A/B comparison. mhc_pre / mhc_post: ai-generated (codegen runs 1045 / 1046), Python host side until their C++ port.
+PYTHON_OPS = {"mhc_pre": ("mhc_pre", "mhc_pre"), "mhc_post": ("mhc_post", "mhc_post")}
 
 
 def _stable_arg_reprs():
