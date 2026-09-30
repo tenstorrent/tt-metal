@@ -203,9 +203,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
 
     distributed::MeshDevice* device = a.device();
 
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
-    uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
-
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_h = output_padded_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_w = output_padded_shape[3] / TILE_WIDTH;
@@ -361,7 +358,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
         log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
         // log_debug(tt::LogOp, "padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
-        log_debug(tt::LogOp, "pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
         log_debug(tt::LogOp, "packed_pad_value: {}", packed_pad_value);
         log_debug(tt::LogOp, "src_nbytes_per_core_w: {}", src_nbytes_per_core_w);
         log_debug(tt::LogOp, "dst_nbytes_per_core_w: {}", dst_nbytes_per_core_w);
