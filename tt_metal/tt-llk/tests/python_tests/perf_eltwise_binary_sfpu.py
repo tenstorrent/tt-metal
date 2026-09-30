@@ -1099,6 +1099,7 @@ _PAIRED_GENERATED = {
     "log_sigmoid_bw": "backward_complete",
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
+    "softsign_bw": "backward_complete",
 }
 
 
