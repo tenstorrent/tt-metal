@@ -9,7 +9,9 @@ generically, chosen by the kind of the step's output:
 
     float       vs the CPU step on the same inputs and vs the golden: finite, rel L2, worst row rel L2
                 (<= component_row), every row's norm ratio (1 +- component_ratio), the median row norm ratio
-                (1 +- component_bias: a systematic scale). The rel L2 limit follows the step's precision: the CPU step
+                (1 +- component_bias: a systematic scale), and every column's rel L2 over the rows (an iHC gate near 0
+                with its sign flipped moves nothing else), each column against its own limit: the rule below applied
+                to the precision model's error in that column. The rel L2 limit follows the step's precision: the CPU step
                 run with every float intermediate rounded to bf16 (bf16 inputs and output; a model of a correct device
                 step, fp32 accumulation inside each op) has rel L2 e vs the fp32 step; the limit is
                 component_calib x e (component_calib_low for the step kinds in ``tests.low_precision_kinds``, default
@@ -64,7 +66,6 @@ COMPONENT_DEFAULTS = {
     "component_calib_low": 3.5,  # the same for tests.low_precision_kinds (Hy4 bfp8 experts: 2.1 x)
     "component_margin": 1.2,  # ... and never below this x the model's error, even above the cap
     "component_row": 0.03,  # worst row rel L2 (Hy4 device: <= 0.016)
-    "component_col": 0.015,  # narrow outputs (<= NARROW columns): worst column rel L2 (Hy4 iHC gates device: <= 0.0075)
     "component_ratio": 0.015,  # every row's norm ratio within 1 +- this (Hy4 device: within 0.0073)
     "component_bias": 0.004,  # median row norm ratio within 1 +- this (a systematic scale)
     "component_select": 0.995,  # selection outputs: mean selection overlap (Hy4 device router: 0.9982)
@@ -76,7 +77,7 @@ COMPONENT_DEFAULTS = {
 }
 LOW_PRECISION_KINDS = ("moe",)
 SPARSE_ZEROS = 0.75
-NARROW = 64  # an output with at most this many columns is checked per column too
+COL_FLOOR = 1e-3  # a column is measured against at least this fraction of the mean column norm (a ~0 column)
 PAD_SENTINEL = 0xFFFFFFFF
 SMALL_RMS = 1e-3
 BIG_SCALE = 2.0
@@ -109,6 +110,10 @@ def limits(s) -> dict:
 
 
 # ---------------------------------------------------------------- the precision model
+def _ptr(t: torch.Tensor) -> int:
+    return t.untyped_storage().data_ptr()
+
+
 class _Bf16Everywhere(TorchFunctionMode):
     """Rounds to bf16 the float32 result of every op that reads a value derived from the step's inputs; constants
     (weights, RoPE tables, masks, positions: anything built without the inputs) stay exact, as on a device where they
@@ -124,8 +129,10 @@ class _Bf16Everywhere(TorchFunctionMode):
         if isinstance(t, torch.Tensor):
             self.tainted[id(t)] = weakref.ref(t)
 
-    def _round(self, o):
-        if isinstance(o, torch.Tensor) and o.dtype == torch.float32:
+    def _round(self, o, ptrs=()):
+        # a view or an in-place result shares memory with an argument: replacing it by a rounded copy would cut the
+        # alias (Gemma writes its attention output through out.view(...)); it is marked, not rounded
+        if isinstance(o, torch.Tensor) and o.dtype == torch.float32 and _ptr(o) not in ptrs:
             o = o.to(torch.bfloat16).float()
         self._mark(o)
         return o
@@ -140,10 +147,11 @@ class _Bf16Everywhere(TorchFunctionMode):
         flat = [a for a in list(args) + list(kwargs.values())]
         flat += [x for a in flat if isinstance(a, (list, tuple)) for x in a]
         if any(self._is(a) for a in flat):
+            ptrs = {_ptr(a) for a in flat if isinstance(a, torch.Tensor)}
             if isinstance(out, torch.Tensor):
-                out = self._round(out)
+                out = self._round(out, ptrs)
             elif type(out) in (tuple, list):
-                out = type(out)(self._round(o) for o in out)
+                out = type(out)(self._round(o, ptrs) for o in out)
             elif isinstance(out, tuple):  # torch.return_types (topk, max, ...): marked, not rounded
                 for o in out:
                     self._mark(o)
@@ -169,11 +177,25 @@ def rel(a, b) -> float:
     return ((a.float().reshape(b.shape) - b.float()).norm() / b.float().norm().clamp_min(1e-30)).item()
 
 
-def rel_limit(lim, e: float, low: bool) -> float:
+def rel_limit(lim, e, low: bool):
     """calib x e within [floor, cap], but never below component_margin x e: a correct bf16 step must pass (when the
-    cap would cut it, the looser limit may let a mistake through, and the sweep then sends the test to a review)."""
+    cap would cut it, the looser limit may let a mistake through, and the sweep then sends the test to a review).
+    e is one error (the whole output) or a tensor of them (one per column)."""
     k = lim["component_calib_low"] if low else lim["component_calib"]
+    if isinstance(e, torch.Tensor):
+        return torch.maximum((k * e).clamp(lim["component_floor"], lim["component_rel"]), lim["component_margin"] * e)
     return max(lim["component_floor"], min(lim["component_rel"], k * e), lim["component_margin"] * e)
+
+
+def col_errors(got, want) -> torch.Tensor | None:
+    """rel L2 of every column (last dim) over all rows; a column is measured against at least COL_FLOOR x the mean
+    column norm (a column that is ~0 everywhere, such as an iHC gate near 0, is judged on the output's scale)."""
+    if want.dim() < 2 or got.numel() != want.numel():
+        return None
+    n = want.shape[-1]
+    gc, wc = got.float().reshape(-1, n), want.float().reshape(-1, n)
+    cn = wc.norm(dim=0)
+    return (gc - wc).norm(dim=0) / cn.clamp_min(COL_FLOOR * cn.mean().item() + 1e-30)
 
 
 # ---------------------------------------------------------------- checks per kind
@@ -187,15 +209,7 @@ def float_errors(got, want) -> dict:
     wn, gn = w.norm(dim=1), g.norm(dim=1)
     floor = 1e-6 * wn.mean().item() + 1e-30
     ratio = torch.where((wn < floor) & (gn < floor), torch.ones_like(wn), gn / wn.clamp_min(floor))
-    out = {}
-    if len(want.shape) >= 2 and want.shape[-1] <= NARROW:  # each column its own quantity (gates): worst column
-        gc, wc = got.float().reshape(-1, want.shape[-1]), want.float().reshape(-1, want.shape[-1])
-        cn = wc.norm(dim=0)
-        cfloor = 1e-6 * cn.mean().item() + 1e-30
-        both0 = (cn < cfloor) & (gc.norm(dim=0) < cfloor)
-        out["col"] = torch.where(both0, torch.zeros_like(cn), (gc - wc).norm(dim=0) / cn.clamp_min(cfloor)).max().item()
     return {
-        **out,
         "rel": ((g - w).norm() / w.norm().clamp_min(1e-30)).item(),
         "row": ((g - w).norm(dim=1) / wn.clamp_min(floor)).max().item(),
         "ratio_min": ratio.min().item(),
@@ -204,23 +218,23 @@ def float_errors(got, want) -> dict:
     }
 
 
-def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool = False) -> dict:
+def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool = False, col_lim=None) -> dict:
     """The float limits of one input: rel from the precision model (rel_limit), the fixed ones x f; each at least
     component_margin x what the precision model itself reaches (a correct bf16 step must pass). A second input is
     there for structural bugs (a wrong epsilon, stream order, a clamp: errors of 0.1 and more), not for precision: its
     rel limit is at least component_second_rel and it has no bias limit (a correct device drifts on synthetic scales;
-    Hy4 attention x 1e-3: rel 0.009, bias -0.0075)."""
+    Hy4 attention x 1e-3: rel 0.009, bias -0.0075). col_lim: the per-column rel limits (rel_limit of the precision
+    model's per-column errors), the same floor for a second input."""
     out = {
         "rel": max(rel_lim, lim["component_second_rel"]) if second else rel_lim,
         "row": f * lim["component_row"],
-        "col": f * lim["component_col"],
+        "col": None if col_lim is None else (col_lim.clamp_min(lim["component_second_rel"]) if second else col_lim),
         "ratio": f * lim["component_ratio"],
         "bias": math.inf if second else f * lim["component_bias"],
     }
     if model:
         m = lim["component_margin"]
         out["row"] = max(out["row"], m * model["row"])
-        out["col"] = max(out["col"], m * model.get("col", 0.0))
         out["ratio"] = max(out["ratio"], m * max(1 - model["ratio_min"], model["ratio_max"] - 1))
         out["bias"] = max(out["bias"], m * abs(model["bias"]))
     return out
@@ -233,11 +247,19 @@ def float_fails(got, want, L: dict) -> tuple[dict, list[str]]:
         return {}, ["non-finite output"]
     e = float_errors(got, want)
     e["rel_limit"] = L["rel"]
+    ce = col_errors(got, want) if L.get("col") is not None else None
+    if ce is not None:
+        j = int((ce / L["col"]).argmax().item())
+        e.update(col=ce[j].item(), col_limit=L["col"][j].item(), col_index=j)
     dev = max(1 - e["ratio_min"], e["ratio_max"] - 1)
     bad = [
         f"rel {e['rel']:.5f} > {L['rel']:.5f}" if not e["rel"] <= L["rel"] else "",
         f"worst row {e['row']:.5f} > {L['row']:.4f}" if not e["row"] <= L["row"] else "",
-        f"worst column {e['col']:.5f} > {L['col']:.4f}" if "col" in e and not e["col"] <= L["col"] else "",
+        (
+            f"column {e['col_index']} rel {e['col']:.5f} > its limit {e['col_limit']:.5f}"
+            if "col" in e and not e["col"] <= e["col_limit"]
+            else ""
+        ),
         (
             f"row norm ratio [{e['ratio_min']:.5f}, {e['ratio_max']:.5f}] outside 1 +- {L['ratio']:.4f}"
             if not dev <= L["ratio"]
@@ -429,13 +451,16 @@ class Expect:
         self.cpu_step = ref.component(layer, st.name)
         self.cases = cases(s, ref, layer, st, g, c, self.kind)
         self.cpu = {x.name: run_cpu(self.cpu_step, x) for x in self.cases}
-        self.rel_lim, self.model, self.model_err = {}, {}, {}
+        self.rel_lim, self.model, self.model_err, self.col_lim = {}, {}, {}, {}
         if self.kind == "float":
             for x in self.cases:
                 self.model[x.name] = precision_model(ref, self.cpu_step, x)
                 self.model_err[x.name] = float_errors(self.model[x.name], self.cpu[x.name])
                 self.rel_lim[x.name] = rel_limit(self.lim, self.model_err[x.name]["rel"], self.low)
+                mc = col_errors(self.model[x.name], self.cpu[x.name])
+                self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low)
             self.golden_err = rel(self.cpu["golden"], want)
+            self.golden_col_err = col_errors(self.cpu["golden"], want)
 
     def describe(self) -> str:
         lims = ", ".join(f"{k} {v:.4f}" for k, v in self.rel_lim.items())
@@ -448,7 +473,10 @@ class Expect:
         if self.kind == "float":
             rl = self.rel_lim[case.name] + (self.golden_err if vs_golden else 0.0)
             second = case.name != "golden"
-            e, bad = float_fails(got, ref, float_limits(self.lim, f, rl, self.model_err[case.name], second))
+            cl = self.col_lim[case.name]
+            if cl is not None and vs_golden and self.golden_col_err is not None:
+                cl = cl + self.golden_col_err
+            e, bad = float_fails(got, ref, float_limits(self.lim, f, rl, self.model_err[case.name], second, cl))
         elif self.kind == "selection":
             e, bad = selection_fails(got, ref, self.lim, f)
         elif self.kind == "index":
