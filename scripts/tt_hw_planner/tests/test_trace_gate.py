@@ -312,14 +312,21 @@ def test_overflow_fix_loop_resolves_after_growing():
     assert res["caps"]["trace_1cq"] is True
 
 
-def test_overflow_fix_loop_blocker_with_proof():
+def test_overflow_fix_loop_gives_up_without_minting_a_proof():
+    """CHANGED DELIBERATELY: this used to assert the give-up proof, which was the bug.
+
+    Three doublings that did not help says the TOOL could not fix it; it says nothing about what the
+    device can physically hold, and a waiver needs the latter. The loop still grows and still reports
+    how far it got -- it just no longer manufactures evidence."""
+
     def _cap(demo):
         return {"trace_1cq": False}, "trace region overflow persists"
 
     res = tg.overflow_fix_loop("x", capture_fn=_cap, max_rounds=3, base_region=1000)
     assert res["resolved"] is False
-    assert res["proof"]["required_bytes"] == 8000
-    assert res["proof"]["rounds"] == 3
+    assert res["proof"] is None, "giving up is not a proof"
+    assert "8000" in res["detail"] and "3 rounds" in res["detail"], res["detail"]
+    assert "not a waiver" in res["detail"]
 
 
 def test_overflow_fix_loop_non_overflow_stops_early():

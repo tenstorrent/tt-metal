@@ -120,11 +120,21 @@ def trace_engaged(trace_caps):
 
 
 def valid_overflow_proof(proof):
+    """A waiver needs a MEASURED budget, not a placeholder.
+
+    This accepted any proof where required > budget, and overflow_fix_loop filled budget_bytes with
+    0 when it gave up -- so anything exceeded it and every unfixed memory failure minted a valid
+    proof. Measured on a Qwen-Image-Edit run: a VAE decode that could not allocate a 100663296 B
+    DRAM buffer produced "trace waived: verified physical overflow required=191102976 > budget=0",
+    G6 went green, and the gate reported the pipeline trace-ready with no trace ever captured.
+    A budget of zero is not a statement about the device; it is the absence of one."""
     if not isinstance(proof, dict):
         return False
     required = proof.get("required_bytes")
     budget = proof.get("budget_bytes")
     if not isinstance(required, (int, float)) or not isinstance(budget, (int, float)):
+        return False
+    if budget <= 0:
         return False
     return required > budget
 
@@ -568,6 +578,12 @@ def glue_from_runtime(demo_dir):
 
 
 _OVERFLOW_MARKERS = ("trace region", "trace_region", "overflow", "out of memory", "oom", "not enough space")
+# THE REMEDY ONLY FITS ONE OF THESE. overflow_fix_loop's fix is to GROW the trace region, which is
+# right when the trace region is what overflowed and actively harmful otherwise: a bigger trace
+# region leaves LESS device memory, so on a plain buffer allocation failure the loop made the fault
+# worse on every one of its three doublings and then waived the gate. Matching the allocator's own
+# vocabulary, not the model's -- the same shape as _L1_MARKERS_* below.
+_REGION_MARKERS = ("trace region", "trace_region")
 _DEFAULT_TRACE_REGION = 23887872
 
 _L1_MARKERS_A = ("circular buffer", "max l1", "l1 size")
@@ -577,6 +593,12 @@ _L1_MARKERS_B = ("beyond max l1", "grow to", "l1 size of")
 def _is_overflow(detail):
     d = (detail or "").lower()
     return any(m in d for m in _OVERFLOW_MARKERS)
+
+
+def _is_region_overflow(detail):
+    """The trace REGION overflowed -- the one failure growing the region can fix."""
+    d = (detail or "").lower()
+    return any(m in d for m in _REGION_MARKERS)
 
 
 def is_l1_overflow(detail):
@@ -621,14 +643,19 @@ def overflow_fix_loop(demo_dir, capture_fn=None, max_rounds=3, base_region=_DEFA
         caps, detail = capture_fn(demo_dir)
         if caps and caps.get("trace_1cq"):
             return {"resolved": True, "caps": caps, "detail": "traced at region=%d" % region, "proof": None}
-        if not _is_overflow(detail):
+        if not _is_region_overflow(detail):
+            # An allocation failure that is NOT the trace region: growing the region cannot help and
+            # would take memory away from the thing that just ran out of it. Report it as it is.
             return {"resolved": False, "caps": caps, "detail": detail, "proof": None}
         region *= 2
+    # GIVING UP IS NOT A PROOF. Three doublings that did not help says this tool could not fix it;
+    # it says nothing about what the device can physically hold, and a waiver needs the latter.
     return {
         "resolved": False,
         "caps": caps,
-        "detail": "overflow persists after %d rounds (region grown to %d)" % (max_rounds, region),
-        "proof": {"required_bytes": region, "budget_bytes": 0, "rounds": max_rounds},
+        "detail": "trace region overflow persists after %d rounds (region grown to %d); no physical "
+        "budget was measured, so this is not a waiver -- the trace requirement stands" % (max_rounds, region),
+        "proof": None,
     }
 
 
