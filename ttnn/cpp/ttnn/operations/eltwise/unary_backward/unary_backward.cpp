@@ -187,16 +187,34 @@ std::vector<Tensor> rdiv_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
     if (rounding_mode == std::nullopt) {
+        // -grad * scalar / input^2, evaluated as -grad * ((scalar / input) / input).
+        //
+        // Forming input^2 first loses the answer at both ends of the range. Below
+        // |input| = 1.0842e-19 the square falls under the smallest normal and flushes to zero,
+        // so the reciprocal returns infinity. Above |input| = 2^63 it is the reciprocal of the
+        // square that falls under the smallest normal, so the gradient comes back as zero --
+        // and that starts a full octave before the square itself overflows at 2^64, because in
+        // between the square is still perfectly representable. The exact gradient is an
+        // ordinary float32 throughout.
+        //
+        // Taking the reciprocal first, with the scalar folded in between the two multiplies,
+        // keeps every intermediate in range for the same op count -- one reciprocal and two
+        // multiplies either way.
+        Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(
                 ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
-                    ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
+                    ttnn::multiply(recip_input, scalar, std::nullopt, output_mem_config),
+                    recip_input,
+                    std::nullopt,
+                    output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
             output_mem_config);
+        recip_input.deallocate();
         if (scalar > 0) {
             result = ttnn::where(
                 ttnn::logical_and(
