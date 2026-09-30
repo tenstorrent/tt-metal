@@ -76,12 +76,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         _llk_math_eltwise_sfpu_start_(RECIP_DST_INDEX);
-        for (std::uint32_t slab = 0; slab < 32; ++slab)
+        // Even slabs take the form that reloads the count into LREG7 before each Newton step (row 0 of a
+        // block), odd slabs the form that keeps it in LREG0 (rows 1 to 3); both must give the host's value.
+        for (std::uint32_t slab = 0; slab < 32; slab += 2)
         {
             // Slab s: face pair s / 16, 4-row group (s / 4) % 4, column half and face s % 4.
-            const std::uint32_t offset = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
-            _load_recip_of_idx_<0>(idx, no_lut);
-            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset);
+            const std::uint32_t offset_even = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
+            const std::uint32_t offset_odd  = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[(slab + 1) & 3];
+            _load_recip_of_idx_<0, false>(idx, no_lut);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset_even);
+            ++idx;
+            _load_recip_of_idx_<0, true>(idx, no_lut);
+            TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset_odd);
             ++idx;
         }
         _llk_math_eltwise_sfpu_done_();
