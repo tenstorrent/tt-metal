@@ -10,6 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import run_sdpa_block_mask
 
 
 def fa_rand(*shape):
@@ -817,3 +818,31 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert out_torch.shape == ref_torch.shape == (b, s, dim)
     n_diff = int((out_torch[:, :valid] != ref_torch[:, :valid]).sum())
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
+
+
+# Small shapes here; the nightly prefill file sweeps the masked fraction and the chunk sizes at S 2048 and 4096.
+@pytest.mark.parametrize(
+    "s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked",
+    [(1024, 8, True, 128, 128, 0.5), (1024, 2, False, 128, 256, 0.75)],
+)
+def test_sdpa_noncausal_block_mask(device, s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked):
+    run_sdpa_block_mask(device, 1, 8, nkv, s, 128, q_chunk_size, k_chunk_size, p_masked, bcast_heads)
+
+
+def test_sdpa_block_mask_needs_matching_shape(device, expect_error):
+    s, d = 1024, 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    mask = ttnn.from_torch(torch.zeros(1, 1, s, s), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bad_map = ttnn.from_torch(
+        torch.ones(1, 1, s // 128, s // 128 + 1, dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "attn_mask_block_map must be"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, program_config=program_config, attn_mask_block_map=bad_map
+        )
