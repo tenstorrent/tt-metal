@@ -102,7 +102,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
         TT_FATAL(
             nkv > 0 && nqh >= nkv && nqh % nkv == 0,
-            "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+            "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
+            "Got Q: {}, K: {}",
             nqh,
             nkv);
 
@@ -330,7 +331,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
         TT_FATAL(
             nkv > 0 && nqh >= nkv && nqh % nkv == 0,
-            "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+            "Q num_heads must be >= K num_heads and divisible by K num_heads, and K num_heads must be greater than 0. "
+            "Got Q: {}, K: {}",
             nqh,
             nkv);
 

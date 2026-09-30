@@ -7,10 +7,8 @@ import torch
 
 import ttnn
 
-
-# A chunk size of 0 passed the tile-multiple check, and a K tensor with 0 heads passed the head
-# relationship check; both then reached an integer division on the host, which killed the process
-# with SIGFPE instead of raising.
+# Checks that SDPA ops reject zero chunk sizes and zero head counts, which are used as host-side
+# divisors, with a RuntimeError.
 
 
 def _tensors(device, count, heads=1):
