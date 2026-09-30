@@ -133,7 +133,8 @@ def test_leaky_relu_with_positional_negative_slope_in_comparison_mode(device):
     torch_input = torch.full((1, 1, 32, 32), -2.0, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.leaky_relu.md: leaky-relu-golden-ignores-positional-slope
+    # A positional slope used to be swallowed by the golden's *args, so it was compared against the default
+    # slope of 0.01 instead of 0.5.
     with comparison_mode():
         output_tensor = ttnn.leaky_relu(input_tensor, 0.5)
 
@@ -145,7 +146,7 @@ def test_sum_with_scalar_in_comparison_mode(device):
     torch_input = torch.ones((1, 1, 32, 32), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.sum.md: sum-scalar-ignored
+    # The device multiplies the reduction by scalar; the golden used to ignore it and reported a false mismatch.
     with comparison_mode():
         output_tensor = ttnn.sum(input_tensor, dim=-1, keepdim=True, scalar=0.5)
 
@@ -162,7 +163,8 @@ def test_sum_int32_with_fractional_scalar_in_comparison_mode(device):
         device=device,
     )
 
-    # generated/ttnn.sum.md: sum-scalar-ignored
+    # For int32 input the scaled sum is computed in float32 and truncated back to int32, so a fractional scalar
+    # (0.5) must not leave the golden as a float tensor.
     with comparison_mode():
         output_tensor = ttnn.sum(input_tensor, dim=-1, keepdim=True, scalar=0.5)
 
@@ -174,7 +176,7 @@ def test_mean_with_zero_scalar_in_comparison_mode(device):
     torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.mean.md: mean-scalar-ignored
+    # scalar=0.0 makes the device mean exactly zero; the golden used to ignore scalar and return the unscaled mean.
     with comparison_mode():
         output_tensor = ttnn.mean(input_tensor, dim=-1, keepdim=True, scalar=0.0)
 
@@ -186,7 +188,8 @@ def test_max_with_negative_scalar_in_comparison_mode(device):
     torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.max.md: max-scalar-not-modeled
+    # A negative scalar flips the ordering, so the device max is scalar * min(input); the golden must swap
+    # max for min before scaling.
     with comparison_mode():
         output_tensor = ttnn.max(input_tensor, dim=-1, keepdim=True, scalar=-2.0)
 
@@ -198,7 +201,8 @@ def test_min_with_negative_scalar_in_comparison_mode(device):
     torch_input = torch.arange(1, 1025, dtype=torch.float32).to(torch.bfloat16).reshape(1, 1, 32, 32)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.min.md: inherits mean-scalar-ignored from ttnn.mean
+    # A negative scalar flips the ordering, so the device min is scalar * max(input); the golden must swap
+    # min for max before scaling.
     with comparison_mode():
         output_tensor = ttnn.min(input_tensor, dim=-1, keepdim=True, scalar=-2.0)
 
@@ -212,7 +216,7 @@ def test_var_with_zero_scalar_in_comparison_mode(device):
     torch_input = (row_scales * columns).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.var.md: var-scalar-ignored
+    # Variance scales with scalar**2, so scalar=0.0 must give zero; the golden used to return the unscaled variance.
     with comparison_mode():
         output_tensor = ttnn.var(input_tensor, dim=-1, keepdim=True, scalar=0.0, correction=False)
 
@@ -226,7 +230,7 @@ def test_std_with_zero_scalar_in_comparison_mode(device):
     torch_input = (row_scales * columns).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.std.md: std-scalar-ignored
+    # Standard deviation scales with |scalar|, so scalar=0.0 must give zero; the golden used to return it unscaled.
     with comparison_mode():
         output_tensor = ttnn.std(input_tensor, dim=-1, keepdim=True, scalar=0.0, correction=False)
 
@@ -238,7 +242,7 @@ def test_selu_with_non_default_parameters_in_comparison_mode(device):
     torch_input = torch.full((1, 1, 32, 32), -1.0, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.selu.md: selu-golden-ignores-parameters
+    # The golden used to call torch's selu with its fixed constants, ignoring the scale and alpha arguments.
     with comparison_mode():
         output_tensor = ttnn.selu(input_tensor, scale=0.9, alpha=1.2)
 
@@ -251,7 +255,7 @@ def test_softmax_over_dimension_zero_in_comparison_mode(device):
     torch_input[1] = 4.0
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.softmax.md: softmax-zero-dim
+    # The golden used `dim or -1`, which turned dim=0 into the last axis and computed softmax over the wrong dimension.
     with comparison_mode():
         output_tensor = ttnn.softmax(input_tensor, dim=0)
 
@@ -267,7 +271,7 @@ def test_rms_norm_with_bias_in_comparison_mode(device):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # generated/ttnn.rms_norm.md: rms-norm-missing-bias
+    # The input is all zeros, so the output is exactly the bias; the golden used to drop bias and expect zeros.
     with comparison_mode():
         output_tensor = ttnn.rms_norm(input_tensor, weight=weight, bias=bias)
 
@@ -281,7 +285,8 @@ def test_rms_norm_with_residual_in_comparison_mode(device):
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     residual = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # generated/ttnn.rms_norm.md: rms-norm-missing-residual
+    # The input is all zeros, so the output depends only on the residual; the golden used to ignore
+    # residual_input_tensor and normalize the input alone.
     with comparison_mode():
         output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual)
 
@@ -294,7 +299,8 @@ def test_abs_of_complex_tensor_in_comparison_mode(device):
         torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device
     )
 
-    # generated/ttnn.abs.md: abs-complex-preprocessing
+    # A ComplexTensor is two real device tensors rather than a ttnn.Tensor, so default input preprocessing used to
+    # pass the wrapper to torch unconverted; it must be rebuilt as a torch complex tensor.
     with comparison_mode():
         ttnn.abs(complex_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -306,7 +312,8 @@ def test_real_of_complex_tensor_in_comparison_mode(device, memory_config):
         torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 2, device
     )
 
-    # generated/ttnn.real.md: complex-input-not-preprocessed
+    # The ComplexTensor input must be rebuilt as a torch complex tensor for the golden, and the real-valued
+    # output must be compared with both an inherited and an explicit memory config.
     with comparison_mode():
         ttnn.real(complex_input, memory_config=memory_config)
 
@@ -317,7 +324,8 @@ def test_polar_of_complex_tensor_in_comparison_mode(device):
         torch.full(SINGLE_TILE, 2.0, dtype=torch.bfloat16), torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device
     )
 
-    # generated/ttnn.polar.md: single-argument-polar-golden
+    # polar takes one ComplexTensor holding (radius, angle) as (real, imag); the golden used to call torch.polar
+    # with that single argument although torch.polar needs separate radius and angle tensors.
     with comparison_mode():
         ttnn.polar(complex_input)
 
@@ -328,7 +336,8 @@ def test_acos_bfloat8_b_out_of_domain_input_is_compared_in_comparison_mode(devic
     input_tensor = _to_device(torch_input, device, dtype=ttnn.bfloat8_b)
     comparison_records = _capture_local_comparison_records(monkeypatch)
 
-    # generated/ttnn.acos.md: acos-invalid-bfloat8-skips-comparison
+    # A NaN from an out-of-domain lane makes the shared exponent of its whole BFLOAT8_B block non-finite. The golden
+    # used to return None and skip the comparison; it now models the block and compares non-finite positions.
     with comparison_mode():
         ttnn.acos(input_tensor)
 
@@ -342,9 +351,8 @@ def test_acos_bfloat8_b_out_of_domain_input_is_compared_in_comparison_mode(devic
     ids=["exp", "tanh"],
 )
 def test_fast_and_approximate_mode_degenerate_output_in_comparison_mode(device, operation, low, high):
-    # generated/ttnn.exp.md: exp-fast-mode-reference
-    # generated/ttnn.tanh.md: tanh-fast-mode-ignored
-    # A constant tile makes PCC degenerate, so the golden's comparison policy decides the result.
+    # Fast exp is accurate to ~5% relative error and the approximate tanh LUT to ~0.03 absolute error, so the golden
+    # must relax its tolerance in this mode. A constant tile makes PCC degenerate, so that tolerance decides the result.
     for value in torch.linspace(low, high, 9).tolist():
         input_tensor = _to_device(torch.full(SINGLE_TILE, value, dtype=torch.bfloat16), device)
         with comparison_mode():
@@ -356,8 +364,8 @@ def test_fast_and_approximate_mode_degenerate_output_in_comparison_mode(device, 
 def test_log_family_with_fast_and_approximate_mode_in_comparison_mode(device, operation):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 0.5, device)
 
-    # generated/ttnn.log.md: unary-fast-flag-forwarding
-    # generated/ttnn.log10.md, ttnn.log1p.md, ttnn.log2.md: inherit unary-fast-flag-forwarding from ttnn.log
+    # fast_and_approximate_mode is a TTNN-only kwarg that the generic unary golden wrapper must discard instead of
+    # forwarding it to the torch log function.
     with comparison_mode():
         operation(input_tensor, fast_and_approximate_mode=True)
 
@@ -369,8 +377,8 @@ def test_triangular_with_keyword_diagonal_in_comparison_mode(device, operation):
     torch_input += torch.diag(torch.full((32,), 100.0)) + torch.diag(torch.full((31,), 100.0), diagonal=1)
     input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
 
-    # generated/ttnn.tril.md: tril-keyword-diagonal-dropped
-    # generated/ttnn.triu.md: inherits tril-keyword-diagonal-dropped from ttnn.tril
+    # The generic unary wrapper filters out keyword arguments, which used to drop diagonal and compare against
+    # diagonal=0; the input has two large diagonals so a wrong diagonal gives a clearly different result.
     with comparison_mode():
         operation(input_tensor, diagonal=1)
 
@@ -382,8 +390,8 @@ def test_logit_with_eps_in_comparison_mode(device):
     torch_input[..., 1::4] = 1.0
     input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
 
-    # generated/ttnn.logit.md: logit-positional-eps-dropped
-    # The public binding makes eps keyword-only, so only the keyword form can be exercised.
+    # The input contains exact 0 and 1, where logit diverges unless it is clamped to [eps, 1 - eps], so eps must
+    # reach the golden. The public binding makes eps keyword-only, so only the keyword form can be exercised.
     with comparison_mode():
         ttnn.logit(input_tensor, eps=0.1)
 
@@ -393,7 +401,8 @@ def test_logit_with_eps_in_comparison_mode(device):
 def test_rdiv_with_rounding_mode_in_comparison_mode(device, rounding_mode):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 0.5, device)
 
-    # generated/ttnn.rdiv.md: rounding-mode-ignored
+    # "trunc" and "floor" round the quotient, so the golden must pass rounding_mode to torch.div instead of
+    # computing a true division.
     with comparison_mode():
         ttnn.rdiv(input_tensor, 2.0, rounding_mode=rounding_mode)
 
@@ -405,8 +414,8 @@ def test_normalize_uses_population_standard_deviation_in_comparison_mode(device,
     input_tensor = _to_device(torch_input, device, dtype=ttnn.float32)
     dims = (0, 1, 2, 3) if operation is ttnn.normalize_global else (-2, -1)
 
-    # generated/ttnn.normalize_global.md: normalize-global-sample-standard-deviation
-    # generated/ttnn.normalize_hw.md: normalize-hw-sample-standard-deviation
+    # The device divides by the population standard deviation, but torch.std defaults to the sample one; the golden
+    # must use correction=0. The last lines pin it against an independent population-std reference.
     with comparison_mode():
         operation(input_tensor)
 
@@ -422,7 +431,8 @@ def test_logical_not_int32_min_in_comparison_mode(device):
     torch_input[..., ::2] = torch.iinfo(torch.int32).min
     input_tensor = _to_device(torch_input, device, dtype=ttnn.int32)
 
-    # generated/ttnn.logical_not.md: logical-not-int32-min-overflow
+    # INT32_MIN is nonzero but is the one int32 whose negation overflows, so logical_not must still map it to
+    # false; every other lane is zero and maps to true.
     with comparison_mode():
         ttnn.logical_not(input_tensor)
 
@@ -441,8 +451,8 @@ def test_bitwise_with_highest_unsigned_values_in_comparison_mode(device, operati
     if operand_form == "tensor":
         other = _to_device(torch.full(SINGLE_TILE, 0x5555, dtype=torch.int64).to(torch_dtype), device, dtype=dtype)
 
-    # generated/ttnn.bitwise_and.md: bitwise-and-unsigned-reference
-    # generated/ttnn.bitwise_or.md: inherits bitwise-and-unsigned-reference from ttnn.bitwise_and
+    # Torch has no uint16/uint32 bitwise kernels, so the golden widens to int64. Values at the top of the unsigned
+    # range catch sign-extension errors when the result is narrowed back.
     with comparison_mode():
         operation(input_tensor, other)
 
@@ -453,7 +463,8 @@ def test_logical_right_shift_with_invalid_counts_in_comparison_mode(device):
     shift_counts = torch.tensor([31, 32, -1, 33], dtype=torch.int32).repeat(256).reshape(SINGLE_TILE)
     shift_tensor = _to_device(shift_counts, device, dtype=ttnn.int32)
 
-    # generated/ttnn.logical_right_shift.md: logical-right-shift-invalid-counts
+    # Shift counts of 32, 33 and -1 are outside the valid 0..31 range and have no Torch-defined result, so the
+    # golden must reproduce the device's values bit-for-bit (verified below).
     with comparison_mode():
         output = ttnn.logical_right_shift(input_tensor, shift_tensor)
 
@@ -488,7 +499,8 @@ def test_unary_chain_with_dtype_changing_op_in_comparison_mode(device, input_dty
     torch_input = float_values if input_dtype == ttnn.bfloat16 else _bit_patterns(float_values, torch.int16)
     input_tensor = _to_device(torch_input, device, dtype=input_dtype)
 
-    # generated/ttnn.unary_chain.md: dtype-changing-chain-ops-unsupported
+    # TYPECAST and BITCAST chain ops carry their source and target dtypes as float params, which the golden used
+    # to pass to a torch op as if they were scalar arguments instead of decoding them.
     with comparison_mode():
         ttnn.unary_chain(input_tensor, ops_chain)
 
@@ -509,8 +521,8 @@ def test_bitcast_fallback_keeps_requested_dtype(device, input_dtype, output_dtyp
     with comparison_mode():
         output = ttnn.bitcast(input_tensor, output_dtype)
 
-    # generated/ttnn.bitcast.md: bitcast-postprocess-dtype
-    # The postprocessor runs only on the golden fallback path, not in comparison mode.
+    # The fallback's output postprocessing used to cast the bitcast result back to the input dtype, undoing the
+    # requested output dtype. That postprocessor runs only on the golden fallback path, not in comparison mode.
     fallback_output = ttnn.get_fallback_function(ttnn.bitcast)(input_tensor, output_dtype)
     assert fallback_output.dtype == output.dtype
     # Compare with the reinterpreted input bits: the device FLOAT32 bitcast result is checked separately.
@@ -521,7 +533,8 @@ def test_bitcast_fallback_keeps_requested_dtype(device, input_dtype, output_dtyp
 def test_addalpha_bw_with_disabled_gradient_in_comparison_mode(device):
     grad, input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(3))
 
-    # generated/ttnn.addalpha_bw.md: addalpha-required-outputs-ignored
+    # With are_required_outputs=[True, False] the device returns None for the disabled gradient, so the golden
+    # must return the same list layout instead of computing both gradients.
     with comparison_mode():
         gradients = ttnn.addalpha_bw(grad, input_a, input_b, 2.0, are_required_outputs=[True, False])
 
@@ -541,8 +554,8 @@ def test_binary_backward_with_keyword_operands_in_comparison_mode(device, operat
     grad, input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(3))
     operands = dict(zip(operand_names, (input_a, input_b)))
 
-    # generated/ttnn.sub_bw.md: backward-keyword-arguments
-    # generated/ttnn.subalpha_bw.md, ttnn.squared_difference_bw.md: inherit backward-keyword-arguments from ttnn.sub_bw
+    # The public keyword names for the operands differ per op (input_tensor/other_tensor vs input_tensor_a/b) and
+    # the golden must accept them, instead of failing on a call that only works positionally.
     with comparison_mode():
         operation(grad_tensor=grad, **operands, **extra_kwargs)
 
@@ -552,7 +565,8 @@ def test_hardshrink_bw_with_keyword_lambd_in_comparison_mode(device):
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
     input_tensor = _to_device(torch.linspace(-4.0, 4.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
 
-    # generated/ttnn.hardshrink_bw.md: hardshrink-bw-lambd-keyword
+    # The golden named this parameter alpha, so the public lambd keyword fell into **kwargs and the default 0.5
+    # was used instead of 2.2.
     with comparison_mode():
         ttnn.hardshrink_bw(grad, input_tensor, lambd=2.2)
 
@@ -562,7 +576,8 @@ def test_softshrink_bw_with_keyword_lambd_in_comparison_mode(device):
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
     input_tensor = _to_device(torch.linspace(-4.0, 4.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
 
-    # generated/ttnn.softshrink_bw.md: softshrink-bw-keyword-lambd
+    # The golden named this parameter alpha, so the public lambd keyword fell into **kwargs and the default 0.5
+    # was used instead of 2.0.
     with comparison_mode():
         ttnn.softshrink_bw(grad, input_tensor, lambd=2.0)
 
@@ -573,7 +588,8 @@ def test_hardtanh_bw_with_keyword_bounds_in_comparison_mode(device):
     torch_input = torch.tensor([-0.9, 0.0, 0.9, 0.5]).repeat(256).reshape(SINGLE_TILE)
     input_tensor = _to_device(torch_input.to(torch.bfloat16), device)
 
-    # generated/ttnn.hardtanh_bw.md: hardtanh-bw-keyword-bounds
+    # The golden named the bounds min_val/max_val, so the public min/max keywords were ignored and the default
+    # [-1, 1] range was used; the input straddles +-0.8 and +-1 to tell them apart.
     with comparison_mode():
         ttnn.hardtanh_bw(grad, input_tensor, min=-0.8, max=0.8)
 
@@ -583,7 +599,8 @@ def test_leaky_relu_bw_with_keyword_slope_in_comparison_mode(device):
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
     input_tensor = _to_device(torch.linspace(-2.0, 2.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
 
-    # generated/ttnn.leaky_relu_bw.md: leaky-relu-bw-keyword-slope-ignored
+    # The golden named this parameter alpha, so the public negative_slope keyword was ignored and the default
+    # slope of 0.01 was used instead of 0.5.
     with comparison_mode():
         ttnn.leaky_relu_bw(grad, input_tensor, negative_slope=0.5)
 
@@ -593,7 +610,8 @@ def test_softplus_bw_with_only_beta_in_comparison_mode(device):
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
     input_tensor = _to_device(torch.linspace(-2.0, 2.0, 1024).reshape(SINGLE_TILE).to(torch.bfloat16), device)
 
-    # generated/ttnn.softplus_bw.md: softplus-bw-partial-kwargs
+    # The golden applied beta and threshold only when both were given, so a call with only beta silently used
+    # the default beta of 1.
     with comparison_mode():
         output = ttnn.softplus_bw(grad, input_tensor, beta=4.0)
 
@@ -607,7 +625,8 @@ def test_rdiv_bw_with_keyword_rounding_mode_in_comparison_mode(device, rounding_
     grad = _to_device(torch.ones(SINGLE_TILE, dtype=torch.bfloat16), device)
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
 
-    # generated/ttnn.rdiv_bw.md: keyword-rounding-mode-ignored
+    # Trunc and floor rounding make the quotient piecewise constant, so TTNN defines the gradient as zero; the
+    # golden used to return the gradient of plain division.
     with comparison_mode():
         ttnn.rdiv_bw(grad, input_tensor, 2.0, rounding_mode=rounding_mode)
 
@@ -619,8 +638,8 @@ def test_rpow_bw_matches_reverse_power_derivative_in_comparison_mode(device):
     grad = _to_device(torch_grad, device)
     input_tensor = _to_device(torch_input, device)
 
-    # generated/ttnn.rpow_bw.md: rpow-bw-uses-forward-power
-    # TTNN and the golden share the reversed derivative, so both are checked against the ideal reference.
+    # rpow computes base ** x, but the golden used to differentiate x ** base. Since TTNN and the golden now agree,
+    # both are also checked against the analytic derivative grad * ln(base) * base ** x.
     with comparison_mode():
         output = ttnn.rpow_bw(grad, input_tensor, 3.0)
 
@@ -637,7 +656,8 @@ def test_gelu_bw_tanh_variant_in_comparison_mode(device):
     grad = _to_device(torch_grad, device, dtype=ttnn.float32)
     input_tensor = _to_device(torch_input, device, dtype=ttnn.float32)
 
-    # generated/ttnn.gelu_bw.md: gelu-bw-tanh-variant-ignored
+    # The public API selects the tanh derivative with variant=GeluVariant.Tanh, but the golden only understood
+    # approximate="tanh" and computed the exact-erf gradient instead.
     with comparison_mode():
         ttnn.gelu_bw(grad, input_tensor, variant=ttnn.GeluVariant.Tanh)
 
@@ -654,7 +674,8 @@ def test_where_bw_with_bfloat16_predicate_in_comparison_mode(device):
     grad, input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(3))
     condition = _to_device(torch_condition, device)
 
-    # generated/ttnn.where_bw.md: nonboolean-predicate-golden
+    # TTNN predicates are 0/1 floating-point tensors, but torch.where needs a boolean condition, so the golden
+    # used to fail on a bfloat16 predicate.
     with comparison_mode():
         ttnn.where_bw(grad, condition, input_a, input_b)
 
@@ -663,7 +684,8 @@ def test_where_bw_with_bfloat16_predicate_in_comparison_mode(device):
 def test_lerp_with_public_keywords_in_comparison_mode(device):
     input_tensor, end_tensor = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(2))
 
-    # generated/ttnn.lerp.md: lerp-golden-public-keywords-unsupported
+    # The golden named its operands input_tensor_a/b/c, so a call with the public keywords input, end and weight
+    # used to fail in the golden.
     with comparison_mode():
         ttnn.lerp(input=input_tensor, end=end_tensor, weight=0.5)
 
@@ -676,7 +698,8 @@ def test_lerp_bw_with_public_keywords_in_comparison_mode(device, weight_form):
     )
     weight_kwargs = {"scalar": 0.5} if weight_form == "scalar" else {"input_tensor_c": weight}
 
-    # generated/ttnn.lerp_bw.md: lerp-bw-public-keywords-unsupported
+    # The public overloads pass the weight either as a tensor (input_tensor_c) or as scalar, while the golden
+    # expected positional end_tensor and weight arguments.
     with comparison_mode():
         ttnn.lerp_bw(grad_tensor=grad, input_tensor_a=input_a, input_tensor_b=input_b, **weight_kwargs)
 
@@ -691,7 +714,8 @@ def test_add_with_block_float_output_in_comparison_mode(device, output_form):
     else:
         output_kwargs = {"output_tensor": _to_device(torch.zeros(SINGLE_TILE), device, dtype=ttnn.bfloat8_b)}
 
-    # generated/ttnn.add.md: add-output-dtype-ignored
+    # BFLOAT4_B/BFLOAT8_B outputs share an exponent per 16 values, which flushes the 1s next to 1024 to zero. The
+    # golden used to keep full precision because it ignored both dtype and the output tensor's dtype.
     with comparison_mode():
         output = ttnn.add(input_a, input_b, **output_kwargs)
 
@@ -702,7 +726,8 @@ def test_add_with_block_float_output_in_comparison_mode(device, output_form):
 def test_add_int32_with_integral_float_scalar_in_comparison_mode(device):
     input_tensor = _to_device(torch.full(SINGLE_TILE, 16777217, dtype=torch.int32), device, dtype=ttnn.int32)
 
-    # generated/ttnn.add.md: add-integral-float-scalar
+    # Torch promotes int32 + 2.0 to float32, which changes the dtype and rounds 2**24 + 1 away; the device packs
+    # an integral scalar as an integer and stays exact in int32.
     with comparison_mode():
         output = ttnn.add(input_tensor, 2.0)
 
@@ -721,7 +746,8 @@ def test_add_int32_with_integral_float_scalar_in_comparison_mode(device):
 def test_minimum_with_value_affecting_options_in_comparison_mode(device, minimum_kwargs):
     input_a, input_b = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device) for _ in range(2))
 
-    # generated/ttnn.minimum.md: minimum-options-not-modeled
+    # minimum takes the same activations and output dtype as the other binary ops, but its golden ignored both,
+    # so a negating activation or a float32 output gave different values.
     with comparison_mode():
         output = ttnn.minimum(input_a, input_b, **minimum_kwargs)
 
@@ -733,7 +759,7 @@ def test_situ_glu_golden_accepts_keyword_betas():
     up = torch.randn((32, 64))
     golden_function = ttnn.get_golden_function(ttnn.situ_glu)
 
-    # generated/ttnn.situ_glu.md: situ-glu-golden-keyword-betas
+    # The betas can be passed by keyword or by position; both spellings must reach the golden and agree.
     # The device operation is Blackhole-only, so the registered golden is called directly.
     torch.testing.assert_close(golden_function(gate, up, beta1=1.0, beta2=2.0), golden_function(gate, up, 1.0, 2.0))
 
@@ -748,8 +774,8 @@ def test_situ_glu_golden_accepts_keyword_betas():
 def test_loss_with_reduction_enum_in_comparison_mode(device, operation, reduction):
     reference, prediction = (_to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device) for _ in range(2))
 
-    # generated/ttnn.l1_loss.md: reduction-enum-not-mapped
-    # generated/ttnn.mse_loss.md: enum-reduction-not-adapted
+    # The device takes a LossReductionMode enum while the torch losses need a string. Reduced losses are a single
+    # value where PCC is undefined, so they are compared within 3 ULP of a float32 reference instead.
     with comparison_mode():
         operation(reference, prediction, reduction=reduction)
 
@@ -762,7 +788,8 @@ def test_full_with_dtype_in_comparison_mode(device, dtype):
     if dtype is not None:
         full_kwargs["dtype"] = dtype
 
-    # generated/ttnn.full.md: full-dtype-ignored
+    # TTNN creates BFLOAT16 tensors when dtype is omitted while torch.full defaults to float32, and the golden
+    # used to ignore an explicit dtype as well.
     with comparison_mode():
         output = ttnn.full(*full_args, **full_kwargs)
 
@@ -773,7 +800,7 @@ def test_full_with_dtype_in_comparison_mode(device, dtype):
 def test_ones_like_with_dtype_override_in_comparison_mode(device):
     input_tensor = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.int32), device, dtype=ttnn.int32)
 
-    # generated/ttnn.ones_like.md: ones-like-dtype-override
+    # The golden used to ignore dtype and return a tensor in the int32 input's dtype instead of float32.
     with comparison_mode():
         output = ttnn.ones_like(input_tensor, dtype=ttnn.float32)
 
@@ -784,7 +811,7 @@ def test_ones_like_with_dtype_override_in_comparison_mode(device):
 def test_zeros_like_with_tensor_keyword_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.zeros_like.md: zeros-like-keyword-arguments
+    # The golden named its argument input_tensor, so a call with the public keyword tensor= used to fail in it.
     with comparison_mode():
         ttnn.zeros_like(tensor=input_tensor)
 
@@ -793,7 +820,7 @@ def test_zeros_like_with_tensor_keyword_in_comparison_mode(device):
 def test_zeros_like_with_dtype_override_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.zeros_like.md: zeros-like-dtype-override-ignored
+    # The golden used to ignore dtype and return a tensor in the bfloat16 input's dtype instead of float32.
     with comparison_mode():
         output = ttnn.zeros_like(input_tensor, dtype=ttnn.float32)
 
@@ -809,8 +836,8 @@ def test_fill_rm_dtype_follows_any_in_comparison_mode(device, operation, fill_va
     any_tensor = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device)
     fill_args = (*SINGLE_TILE, 16, 16, any_tensor, *fill_values)
 
-    # generated/ttnn.fill_rm.md: fill-rm-golden-drops-any-dtype
-    # generated/ttnn.fill_ones_rm.md: inherits fill-rm-golden-drops-any-dtype from ttnn.fill_rm
+    # The `any` tensor only supplies the output dtype; the golden used to return float32 regardless, so the
+    # dtype comparison against the bfloat16 device output failed.
     with comparison_mode():
         output = operation(*fill_args)
 
@@ -821,7 +848,7 @@ def test_fill_rm_dtype_follows_any_in_comparison_mode(device, operation, fill_va
 def test_clone_with_dtype_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.clone.md: clone-golden-ignores-dtype
+    # clone can convert dtype while copying, but the golden was a plain identity and kept the bfloat16 input dtype.
     with comparison_mode():
         output = ttnn.clone(input_tensor, dtype=ttnn.float32)
 
@@ -839,7 +866,8 @@ def test_clone_with_dtype_in_comparison_mode(device):
 def test_to_dtype_converts_values_in_comparison_mode(dtype, make_values):
     input_tensor = ttnn.from_torch(make_values(SINGLE_TILE), dtype=ttnn.float32)
 
-    # generated/ttnn.to_dtype.md: identity-does-not-cast-values
+    # The golden used to be an identity, so it kept full float32 precision. The input needs rounding to bfloat16
+    # or block-float quantization (1s beside 1024) to be told apart from the device's stored values.
     with comparison_mode():
         output = ttnn.to_dtype(input_tensor, dtype)
 
@@ -850,7 +878,7 @@ def test_to_dtype_converts_values_in_comparison_mode(dtype, make_values):
 def test_to_torch_with_dtype_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.to_torch.md: to-torch-golden-ignores-conversion-options
+    # The golden used to ignore dtype and return the bfloat16 tensor unchanged instead of converting it to float32.
     with comparison_mode():
         output = ttnn.to_torch(input_tensor, dtype=torch.float32)
 
@@ -863,7 +891,8 @@ def test_to_torch_with_dtype_in_comparison_mode(device):
 def test_from_torch_with_col_tilize_in_comparison_mode():
     torch_input = torch.randn((32, 64), dtype=torch.float32)
 
-    # generated/ttnn.from_torch.md: col-tilize-not-modeled
+    # Column tilization stores the transposed matrix, so the result's last two dimensions are swapped; the golden
+    # used to ignore col_tilize and returned the original (32, 64) shape.
     with comparison_mode():
         ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, col_tilize=True)
 
@@ -872,7 +901,8 @@ def test_from_torch_with_col_tilize_in_comparison_mode():
 def test_as_tensor_with_preprocess_in_comparison_mode(device):
     torch_input = torch.rand(SINGLE_TILE, dtype=torch.bfloat16)
 
-    # generated/ttnn.as_tensor.md: as-tensor-preprocess-not-modeled
+    # as_tensor runs the caller's preprocess callback on the torch input before conversion; the golden used to
+    # convert the raw input, so it missed the negation.
     with comparison_mode():
         ttnn.as_tensor(
             torch_input,
@@ -892,8 +922,8 @@ def test_as_tensor_with_preprocess_in_comparison_mode(device):
 def test_allocator_skip_policy_still_rejects_shape_mismatch(operation):
     golden = ttnn.get_golden_function(operation)((2, 3), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, None)
 
-    # generated/ttnn.allocate_tensor_on_device.md: allocator-skip-bypasses-shape-check
-    # generated/ttnn.allocate_tensor_on_host.md: inherits allocator-skip-bypasses-shape-check
+    # Allocated memory is uninitialized, so its values are skipped, but a logical-shape mismatch is still a wrong
+    # result. The skip policy used to return no record at all, hiding the shape mismatch.
     comparison_records = _compare_torch_tensors(
         golden, torch.zeros((2, 4), dtype=torch.bfloat16), fail_on_bad_comparison=False
     )
@@ -913,7 +943,8 @@ def test_allocator_skip_policy_still_rejects_shape_mismatch(operation):
 def test_tilize_with_output_dtype_in_comparison_mode(device, output_dtype, make_values):
     input_tensor = _to_device(make_values(SINGLE_TILE), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    # generated/ttnn.tilize.md: tilize-output-dtype-not-modeled
+    # The golden used to be an identity, so it ignored the output dtype and kept float32 precision instead of
+    # the rounded bfloat16 / block-float values the device stores.
     with comparison_mode():
         output = ttnn.tilize(input_tensor, dtype=output_dtype)
 
@@ -940,8 +971,8 @@ def test_interleaved_to_sharded_with_output_dtype_in_comparison_mode(device, ope
         call_kwargs = {"output_dtype": ttnn.bfloat8_b}
     operation = getattr(ttnn, operation)
 
-    # generated/ttnn.interleaved_to_sharded.md: interleaved-to-sharded-output-dtype-not-modeled
-    # generated/ttnn.interleaved_to_sharded_partial.md: inherits interleaved-to-sharded-output-dtype-not-modeled
+    # The output dtype is an optional trailing argument (positional or output_dtype=) that the golden used to
+    # ignore, so it kept float32 values instead of the bfloat8_b-quantized ones stored on device.
     with comparison_mode():
         output = operation(*call_args, **call_kwargs)
 
@@ -957,7 +988,8 @@ def test_sharded_to_interleaved_with_output_dtype_in_comparison_mode(device):
         memory_config=_single_core_height_sharded_memory_config(),
     )
 
-    # generated/ttnn.sharded_to_interleaved.md: sharded-to-interleaved-output-dtype-not-modeled
+    # The trailing positional output dtype used to be ignored by the golden, which kept float32 values instead of
+    # the bfloat8_b-quantized ones stored on device.
     with comparison_mode():
         output = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat8_b)
 
@@ -979,7 +1011,8 @@ def test_sharded_to_interleaved_partial_with_output_dtype_in_comparison_mode(dev
     partial_args = (sharded_slice, cache_tensor, 1, 0)
     partial_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG, "output_dtype": ttnn.bfloat8_b}
 
-    # generated/ttnn.sharded_to_interleaved_partial.md: sharded-to-interleaved-partial-output-dtype-not-modeled
+    # The partial write copies a slice into the bfloat8_b cache tensor; the golden used to write the slice at full
+    # float32 precision instead of quantizing it to the output dtype first.
     with comparison_mode():
         ttnn.sharded_to_interleaved_partial(*partial_args, **partial_kwargs)
 
@@ -997,7 +1030,8 @@ def test_quantize_saturates_narrow_output_in_comparison_mode(device, dtype):
     torch_input = torch.arange(low, low + 1024, dtype=torch.float32).reshape(SINGLE_TILE).to(torch.bfloat16)
     input_tensor = _to_device(torch_input, device)
 
-    # generated/ttnn.quantize.md: narrow-output-saturation-missing
+    # The device saturates narrow outputs, while a direct torch cast to int8/uint8 wraps around, so the golden
+    # must clamp before casting.
     with comparison_mode():
         output = ttnn.quantize(input_tensor, 1.0, 0, dtype=dtype)
 
@@ -1010,7 +1044,8 @@ def test_requantize_saturates_int8_output_in_comparison_mode(device):
     input_tensor = _to_device(torch_input, device, dtype=ttnn.int32)
     requantize_args = (input_tensor, 1.0, 0, 1.0, 0)
 
-    # generated/ttnn.requantize.md: requantize-narrow-output-does-not-saturate
+    # The int8 requantize path saturates on device (300 -> 127, -300 -> -128), while a direct torch cast wraps
+    # around, so the golden must clamp before casting.
     with comparison_mode():
         output = ttnn.requantize(*requantize_args, dtype=ttnn.int8)
 
@@ -1024,8 +1059,8 @@ def test_dequantize_fallback_defaults_to_bfloat16(device):
     with comparison_mode():
         output = ttnn.dequantize(input_tensor, 0.5, 2)
 
-    # generated/ttnn.dequantize.md: dequantize-input-dtype-postprocess
-    # The postprocessor runs only on the golden fallback path, not in comparison mode.
+    # Without dtype, dequantize outputs BFLOAT16, but the fallback's postprocessing used to cast the result back to
+    # the int32 input dtype. That postprocessor runs only on the golden fallback path, not in comparison mode.
     fallback_output = ttnn.get_fallback_function(ttnn.dequantize)(input_tensor, 0.5, 2)
     assert fallback_output.dtype == ttnn.bfloat16
     assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(output))
@@ -1039,8 +1074,8 @@ def test_pad_fallback_keeps_logical_shape(device):
     with comparison_mode():
         output = ttnn.pad(input_tensor, padding=padding, value=0.0)
 
-    # generated/ttnn.pad.md: pad-fallback-postprocess-shape
-    # The postprocessor runs only on the golden fallback path, not in comparison mode.
+    # The fallback's postprocessing used to reshape the result to the tile-aligned padded shape, so its logical
+    # shape differed from the device output. That postprocessor runs only on the fallback path, not in comparison mode.
     fallback_output = ttnn.get_fallback_function(ttnn.pad)(input_tensor, padding=padding, value=0.0)
     assert tuple(fallback_output.shape) == tuple(output.shape)
     assert torch.equal(ttnn.to_torch(fallback_output), ttnn.to_torch(output))
@@ -1060,7 +1095,8 @@ def test_fold_legacy_transpose_with_asymmetric_padding_in_comparison_mode(device
     input_tensor = _to_device(torch_input, device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=sharded_memory_config)
     grid_size = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
 
-    # generated/ttnn.fold.md: fold-legacy-asymmetric-padding
+    # The legacy transpose path honors only pad_top, pad_left and pad_c_back, and a sharded input pads both sides of
+    # H and W by them; the golden used to apply all six pad values on their own sides.
     with comparison_mode():
         ttnn.fold(input_tensor, 2, 2, use_transpose_as_fold=True, padding=[2, 4, 2, 4, 0, 1], grid_size=grid_size)
 
@@ -1074,7 +1110,8 @@ def test_avg_pool2d_with_block_float_dtype_in_comparison_mode(device):
     pool_args = (input_tensor, batch_size, input_h, input_w, channels, [2, 2], [2, 2], [0, 0])
     pool_kwargs = {"dtype": ttnn.bfloat8_b, "output_layout": ttnn.TILE_LAYOUT}
 
-    # generated/ttnn.avg_pool2d.md: avg-pool-output-dtype-ignored
+    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
+    # BFLOAT8_B (1s beside 1024 flush to zero).
     with comparison_mode():
         output = ttnn.avg_pool2d(*pool_args, **pool_kwargs)
 
@@ -1090,7 +1127,8 @@ def test_max_pool2d_with_block_float_dtype_in_comparison_mode(device):
     pool_args = (input_tensor, batch_size, input_h, input_w, channels, [2, 2], [2, 2], [0, 0], [1, 1])
     pool_kwargs = {"dtype": ttnn.bfloat8_b, "output_layout": ttnn.TILE_LAYOUT}
 
-    # generated/ttnn.max_pool2d.md: max-pool-dtype
+    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
+    # BFLOAT8_B (1s beside 1024 flush to zero).
     with comparison_mode():
         output = ttnn.max_pool2d(*pool_args, **pool_kwargs)
 
@@ -1108,7 +1146,8 @@ def test_conv2d_without_bias_in_comparison_mode(device):
         torch.randn((out_channels, in_channels, 1, 1), dtype=torch.bfloat16), dtype=ttnn.bfloat16
     )
 
-    # generated/ttnn.conv2d.md: missing-bias-none-handling
+    # bias_tensor is optional, but the golden unconditionally reshaped it and raised on None; stride and padding
+    # also lacked defaults although this call omits them.
     with comparison_mode():
         ttnn.conv2d(
             input_tensor=input_tensor,
@@ -1148,7 +1187,8 @@ def test_grid_sample_with_precomputed_grid_in_comparison_mode(device):
     )
     prepared_grid = ttnn.to_device(prepared_grid, device)
 
-    # generated/ttnn.grid_sample.md: precomputed-grid-not-modeled
+    # A prepared grid holds pixel indices and bilinear weights rather than normalized coordinates, but the golden
+    # always treated the grid as coordinates for torch's grid_sample.
     with comparison_mode():
         ttnn.grid_sample(input_tensor, prepared_grid, use_precomputed_grid=True)
 
@@ -1161,7 +1201,8 @@ def test_group_norm_without_optional_arguments_in_comparison_mode(device):
         torch.rand((1, 1, 256, 1024), dtype=torch.bfloat16), device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    # generated/ttnn.group_norm.md: optional-group-norm-inputs-rejected
+    # weight, bias, memory_config and core_grid are optional, but the golden unpacked them unconditionally and
+    # raised on None; an omitted weight or bias must leave the output unscaled or unshifted.
     with comparison_mode():
         ttnn.group_norm(input_tensor, num_groups=32, inplace=False)
 
@@ -1173,8 +1214,8 @@ def test_group_norm_without_optional_arguments_in_comparison_mode(device):
 def test_scale_mask_softmax_without_scale_in_comparison_mode(device, operation):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.scale_mask_softmax.md: scale-mask-optional-scale
-    # generated/ttnn.scale_mask_softmax_in_place.md: inherits scale-mask-optional-scale
+    # The public API makes scale and mask optional and names them scale/mask, but the golden required a positional
+    # scalar, so this call with neither used to fail in the golden.
     with comparison_mode():
         operation(input_tensor)
 
@@ -1183,7 +1224,8 @@ def test_scale_mask_softmax_without_scale_in_comparison_mode(device, operation):
 def test_rms_norm_pre_all_gather_with_dtype_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.rms_norm_pre_all_gather.md: rms-pre-stats-dtype-not-modeled
+    # The golden ignored dtype and returned float32 statistics, while the device stores them in the requested
+    # dtype (BFLOAT16 by default).
     with comparison_mode():
         output = ttnn.rms_norm_pre_all_gather(input_tensor, dtype=ttnn.bfloat16)
 
@@ -1198,7 +1240,8 @@ def test_rms_norm_post_all_gather_with_block_float_dtype_in_comparison_mode(devi
     input_tensor = _to_device(_block_float_sensitive_values(SINGLE_TILE).to(torch.bfloat16), device)
     stats = ttnn.rms_norm_pre_all_gather(input_tensor)
 
-    # generated/ttnn.rms_norm_post_all_gather.md: rms-post-output-dtype-not-modeled
+    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
+    # BFLOAT8_B (1s beside 1024 flush to zero).
     with comparison_mode():
         output = ttnn.rms_norm_post_all_gather(input_tensor, stats, dtype=ttnn.bfloat8_b)
 
@@ -1218,7 +1261,8 @@ def test_matmul_with_output_dtype_in_comparison_mode(device, input_dtype, output
     input_a = _to_device(make_values((32, 32)), device, dtype=input_dtype)
     input_b = _to_device(torch.eye(32), device, dtype=input_dtype)
 
-    # generated/ttnn.matmul.md: matmul-output-dtype-not-modeled
+    # The golden ignored the output dtype and kept the input precision, while the device rounds the result to
+    # bfloat16 / BFLOAT8_B (multiplying by the identity exposes exactly that rounding).
     with comparison_mode():
         output = ttnn.matmul(input_a, input_b, dtype=output_dtype)
 
@@ -1230,7 +1274,7 @@ def test_linear_with_float32_dtype_in_comparison_mode(device):
     input_a = _to_device(torch.randint(-4, 5, (32, 32)).to(torch.bfloat16), device)
     input_b = _to_device(torch.eye(32, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.linear.md: linear-output-dtype-ignored
+    # The golden ignored dtype and returned the bfloat16 input dtype instead of the requested float32 output.
     with comparison_mode():
         output = ttnn.linear(input_a, input_b, dtype=ttnn.float32)
 
@@ -1243,7 +1287,8 @@ def test_addmm_with_block_float_dtype_in_comparison_mode(device):
     mat1 = _to_device(_block_float_sensitive_values((32, 32)).to(torch.bfloat16), device)
     mat2 = _to_device(torch.eye(32, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.addmm.md: addmm-output-dtype-ignored
+    # The golden ignored the output dtype and kept full precision, while the device output is quantized to
+    # BFLOAT8_B (1s beside 1024 flush to zero).
     with comparison_mode():
         output = ttnn.addmm(addend, mat1, mat2, dtype=ttnn.bfloat8_b)
 
@@ -1285,7 +1330,8 @@ def test_matmul_batched_weights_with_output_dtype_in_comparison_mode(device):
         "dtype": ttnn.bfloat8_b,
     }
     try:
-        # generated/ttnn.matmul_batched_weights.md: batched-weights-arguments-not-modeled
+        # The golden ignored the output dtype and kept full precision, while the device output is quantized to
+        # BFLOAT8_B (1s beside 1024 flush to zero).
         # TTNN rejects transpose_a, transpose_b, and activation, so only dtype can change values.
         with comparison_mode():
             outputs = ttnn.matmul_batched_weights(input_a, weights, **matmul_kwargs)
@@ -1315,7 +1361,8 @@ def test_sparse_matmul_indexed_output_in_comparison_mode(device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    # generated/ttnn.sparse_matmul.md: sparse-matmul-indexed-output-unsupported
+    # Indexed mode gathers the listed groups of B into a compact group axis in index order and never reads
+    # sparsity; the golden used to raise NotImplementedError for any call with indices.
     with comparison_mode():
         ttnn.sparse_matmul(
             input_a,
@@ -1341,7 +1388,8 @@ def test_sparse_matmul_compact_output_in_comparison_mode(device):
     sparsity = _to_device(sparsity_values, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     compact_output = _to_device(torch.zeros((1, num_blocks, m, n), dtype=torch.bfloat16), device)
 
-    # generated/ttnn.sparse_matmul.md: sparse-matmul-compact-output-unsupported
+    # A [1, nnz, M, N] output packs only the active results in sparsity scan order (here experts 3, 1, 7, 2);
+    # the golden used to raise NotImplementedError when the output shape differed from the expanded one.
     with comparison_mode():
         ttnn.sparse_matmul(
             input_a,
@@ -1368,8 +1416,8 @@ def test_sparse_matmul_compact_output_in_comparison_mode(device):
 def test_moreh_softmax_with_op_in_comparison_mode(device, operation, op):
     input_tensor = _to_device(torch.randn((32, 32), dtype=torch.bfloat16), device)
 
-    # generated/ttnn.moreh_softmax.md: forward-op-dispatch-ignored
-    # generated/ttnn.moreh_softmin.md: inherits forward-op-dispatch-ignored from ttnn.moreh_softmax
+    # moreh_softmax and moreh_softmin share one kernel family and `op` overrides each one's default function; the
+    # golden always computed the default, so a cross-selected op (e.g. softmax as softmin) mismatched.
     with comparison_mode():
         operation(input_tensor, 1, op=op)
 
@@ -1388,8 +1436,8 @@ def test_moreh_softmax_backward_with_op_in_comparison_mode(device, operation, op
     output_tensor = _to_device(torch.softmax(torch.randn((32, 32)), dim=1).to(torch.bfloat16), device)
     output_grad_tensor = _to_device(torch.randn((32, 32), dtype=torch.bfloat16), device)
 
-    # generated/ttnn.moreh_softmax_backward.md: backward-op-dispatch-ignored
-    # generated/ttnn.moreh_softmin_backward.md: inherits backward-op-dispatch-ignored
+    # The softmax and softmin backward ops share one kernel family and `op` overrides each one's default
+    # derivative; the golden always used the default, so a cross-selected op (or logsoftmax) mismatched.
     with comparison_mode():
         operation(output_tensor, output_grad_tensor, 1, op=op)
 
@@ -1398,7 +1446,8 @@ def test_moreh_softmax_backward_with_op_in_comparison_mode(device, operation, op
 def test_moreh_mean_over_all_dims_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand((2, 3, 32, 64), dtype=torch.bfloat16), device)
 
-    # generated/ttnn.moreh_mean.md: mean-reduction-shape-comparison
+    # moreh keeps a reduced tile dimension (one of the last two) as size 1 even with keepdim=False, so its output
+    # shape differs from torch's rank-reduced result and the shape check used to fail.
     with comparison_mode():
         ttnn.moreh_mean(input_tensor, dim=None, keepdim=False)
 
@@ -1407,7 +1456,8 @@ def test_moreh_mean_over_all_dims_in_comparison_mode(device):
 def test_moreh_norm_of_rank_1_input_in_comparison_mode(device):
     input_tensor = _to_device(torch.empty([5]).uniform_(-1, 1).to(torch.bfloat16), device)
 
-    # generated/ttnn.moreh_norm.md: rank1-reduction-shape
+    # For a rank-1 input the reduced dimension is a tile dimension that moreh keeps as size 1, so the output is
+    # [1] while torch returns a 0-d scalar, which used to fail the shape check.
     with comparison_mode():
         ttnn.moreh_norm(input_tensor, 2.0, dim=0, keepdim=False)
 
@@ -1417,7 +1467,8 @@ def test_moreh_norm_of_rank_1_input_in_comparison_mode(device):
 def test_moreh_sum_of_rank_1_input_in_comparison_mode(device, dim):
     input_tensor = _to_device(torch.empty([5]).uniform_(-1, 1).to(torch.bfloat16), device)
 
-    # generated/ttnn.moreh_sum.md: rank1-reduction-shape
+    # For a rank-1 input the reduced dimension is a tile dimension that moreh keeps as size 1, so the output is
+    # [1] while torch returns a 0-d scalar, which used to fail the shape check.
     with comparison_mode():
         ttnn.moreh_sum(input_tensor, dim, keepdim=False)
 
@@ -1426,7 +1477,8 @@ def test_moreh_sum_of_rank_1_input_in_comparison_mode(device, dim):
 def test_topk_default_dim_in_comparison_mode(device):
     input_tensor = _to_device(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), device)
 
-    # generated/ttnn.topk.md: topk-default-dim
+    # topk defaults to dim=-1 (and k=32), but the golden defaulted dim to None and passed it to torch.topk, which
+    # failed for a call that omits dim.
     with comparison_mode():
         ttnn.topk(input_tensor, 4)
 
@@ -1444,7 +1496,8 @@ def test_topk_labels_and_stable_ties_in_comparison_mode(device, variant):
         topk_kwargs = {"stable": True}
     input_tensor = _to_device(torch_input, device)
 
-    # generated/ttnn.topk.md: topk-labels-and-stability
+    # indices_tensor supplies the label returned for each position, and stable=True keeps the lowest index first
+    # among ties; torch.topk guarantees neither, so the golden used to return different indices.
     with comparison_mode():
         _, indices = ttnn.topk(input_tensor, 4, dim=-1, **topk_kwargs)
 
@@ -1462,8 +1515,8 @@ def test_attention_softmax_with_causal_mask_in_comparison_mode(device, operation
     input_tensor = _to_device(torch.randn(SINGLE_TILE, dtype=torch.bfloat16), device)
     attention_mask = _to_device(torch.zeros(SINGLE_TILE, dtype=torch.bfloat16), device)
 
-    # generated/ttnn.transformer.attention_softmax.md: attention-softmax-causal-mask
-    # generated/ttnn.transformer.attention_softmax_.md: inherits attention-softmax-causal-mask
+    # head_size is optional in the public API (None here), but the golden declared head_size and attention_mask
+    # as required keyword-only arguments.
     with comparison_mode():
         operation(input_tensor, head_size=None, attention_mask=attention_mask, causal_mask=True)
 
@@ -1488,7 +1541,8 @@ def test_scaled_dot_product_attention_decode_non_causal_ignores_cur_pos_in_compa
         packer_l1_acc=False,
     )
 
-    # generated/ttnn.transformer.scaled_dot_product_attention_decode.md: decode-noncausal-cur-pos-truncation
+    # The non-causal decode reader attends the whole KV cache and cur_pos only bounds causal decode; the golden
+    # used to truncate the keys at cur_pos (0 here), attending to a single position.
     with comparison_mode():
         ttnn.transformer.scaled_dot_product_attention_decode(
             query,
@@ -1506,7 +1560,8 @@ def test_scaled_dot_product_attention_decode_non_causal_ignores_cur_pos_in_compa
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_ldexp_inplace_updates_global_golden(device, tmp_path):
-    # generated/ttnn.ldexp_.md: inplace-mutation-not-modeled
+    # ldexp_ overwrites input_a, but its golden was the out-of-place one, so the stored global golden of input_a
+    # kept the pre-op value and the later to_torch comparison used it.
     with _global_comparison_mode(tmp_path):
         input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) + 1, device)
         input_b = _to_device(torch.randint(-2, 3, SINGLE_TILE).to(torch.bfloat16), device)
@@ -1517,8 +1572,8 @@ def test_ldexp_inplace_updates_global_golden(device, tmp_path):
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("operation", [ttnn.logaddexp_, ttnn.logaddexp2_], ids=["logaddexp_", "logaddexp2_"])
 def test_logaddexp_inplace_updates_global_golden(device, tmp_path, operation):
-    # generated/ttnn.logaddexp.md: logaddexp-family-inplace-global-golden
-    # generated/ttnn.logaddexp_.md, ttnn.logaddexp2_.md: inherit logaddexp-family-inplace-global-golden
+    # These in-place ops overwrite input_a, but their goldens were the out-of-place ones, so the stored global
+    # golden of input_a kept the pre-op value and the later to_torch comparison used it.
     with _global_comparison_mode(tmp_path):
         input_a = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
         input_b = _to_device(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2, device)
@@ -1536,8 +1591,8 @@ def test_logical_binary_inplace_updates_global_golden(device, tmp_path, operatio
     torch_b = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
     torch_b[..., ::3] = 1
 
-    # generated/ttnn.logical_and_.md: logical-inplace-global-state
-    # generated/ttnn.logical_or_.md, ttnn.logical_xor_.md: inherit logical-inplace-global-state
+    # These in-place ops overwrite input_a; its stored global golden must become the logical result, otherwise the
+    # later to_torch comparison runs against the stale pre-op tensor.
     with _global_comparison_mode(tmp_path):
         input_a = _to_device(torch_a, device)
         input_b = _to_device(torch_b, device)
@@ -1550,7 +1605,8 @@ def test_logical_not_inplace_updates_global_golden(device, tmp_path):
     torch_input = torch.zeros(SINGLE_TILE, dtype=torch.bfloat16)
     torch_input[..., ::2] = 1
 
-    # generated/ttnn.logical_not_.md: logical-not-inplace-global-state
+    # logical_not_ overwrites its input; the stored global golden must become the negated result, otherwise the
+    # later to_torch comparison runs against the stale pre-op tensor.
     with _global_comparison_mode(tmp_path):
         input_tensor = _to_device(torch_input, device)
         ttnn.logical_not_(input_tensor)
@@ -1564,7 +1620,8 @@ def test_normalize_hw_keeps_global_golden_input(device, tmp_path):
         [torch.rand(SINGLE_TILE, dtype=torch.bfloat16), torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 10 + 50], dim=1
     )
 
-    # generated/ttnn.normalize_hw.md: normalize-hw-mutates-global-golden-input
+    # normalize_hw is out-of-place, but its golden used to write the normalized values into its input tensor, which
+    # is the stored global golden of the device input, corrupting it.
     with _global_comparison_mode(tmp_path):
         input_tensor = _to_device(torch_input, device)
         ttnn.normalize_hw(input_tensor)
@@ -1611,7 +1668,8 @@ def test_group_norm_default_inplace_updates_global_golden(device, tmp_path):
         )
     )
 
-    # generated/ttnn.group_norm.md: group-norm-inplace-state-not-preserved
+    # group_norm writes its result back into the input by default; the stored global golden of the input must be
+    # replaced with the normalized output, otherwise the to_torch comparison uses the pre-norm values.
     with _global_comparison_mode(tmp_path):
         input_tensor = _to_device(
             torch_input,
