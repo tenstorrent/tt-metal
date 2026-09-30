@@ -404,7 +404,9 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
     mathop=[MathOperation.Exp],
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
-def test_perf_eltwise_unary_sfpu_exp_clamped(perf_report, formats, mathop, input_dimensions):
+def test_perf_eltwise_unary_sfpu_exp_clamped(
+    perf_report, formats, mathop, input_dimensions
+):
     _extra_slice_config(
         formats,
         mathop,
