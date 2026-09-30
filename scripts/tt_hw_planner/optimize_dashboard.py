@@ -199,6 +199,27 @@ def _attempt_status(rec: dict, rows: list | None = None) -> str:
     return "no-gain"
 
 
+def _metric_now(metric, ledger: dict):
+    """The run's metric with `current` taken from the ledger's latest committed reading of it.
+
+    state.json is written by the FSM when the loop starts and the optimize loop never touches it
+    again, so its `current` stayed at the baseline for the whole run (Qwen-Image-Edit: 11615.70 ms
+    "current" after six committed wins took it to 5257.93). The ledger's device-time readings are the
+    same quantity -- linked by evidence, not by name: when the ledger's first `before` reading IS the
+    metric's baseline, its latest `after` reading is the current value. Anything else is unchanged."""
+    if not isinstance(metric, dict):
+        return metric
+    from models.experimental.perf_automation.cc_optimize import measurements as _m
+
+    rows = [r for r in (ledger or {}).get(_m.KIND_EAGER) or [] if isinstance(r.get("value_ms"), (int, float))]
+    before = next((r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_BEFORE), None)
+    afters = [r["value_ms"] for r in rows if r.get("phase") == _m.PHASE_AFTER]
+    base = metric.get("baseline")
+    if afters and isinstance(base, (int, float)) and before is not None and abs(before - base) < 1e-6:
+        return {**metric, "current": afters[-1]}
+    return metric
+
+
 def _load_attempts(dirs: list, slug: str | None) -> list:
     """Lever attempts for this model across tasks, archive (.cumulative) union live log — the same
     union _load_attempts_all reads, so the dashboard agrees with the engine about what was tried."""
@@ -489,6 +510,8 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
             if isinstance(row, dict) and row.get("kind"):
                 ledger.setdefault(row["kind"], []).append(row)
 
+    metric = _metric_now(state.get("metric"), ledger)
+
     # Throughput only when the run itself declared a per-token unit (the full-pipeline baseline's
     # "unit" field). Current comes from the ledger's committed after-rows — earliest-reading-wins
     # durability means the before row is the TRUE original, not this run's starting point.
@@ -595,7 +618,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
             for k in ("metric", "devices", "pcc_test", "perf_test", "max_iter")
             if config.get(k) is not None
         },
-        "metric": state.get("metric"),
+        "metric": metric,
         "batch": _parse_batch(run_dir, requested_batch),
         "stages": stages,
         "serving": serving,
