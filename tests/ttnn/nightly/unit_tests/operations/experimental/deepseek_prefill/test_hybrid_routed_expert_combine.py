@@ -20,6 +20,8 @@ from types import SimpleNamespace
 import statistics
 
 import pytest
+import heapq
+
 import torch
 from loguru import logger
 
@@ -56,9 +58,32 @@ _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
 _MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
-# The hot case: this share of every origin chip's tokens picks ONE global expert first. Spread over a hot
-# expert per chip it could never exceed seq * topk / chips, well under the models' 320-token threshold; on
-# one expert it reaches ~2.1k and is the only expert the real threshold leaves to the unified half.
+# Kimi K2.7 routing captured off-device from total_counts_per_expert, one dispatch group (experts 0-95) of
+# a 32-chip chunked prefill of the code_debug golden. Scaled to this test's 10240 in-group routings, which
+# leaves the 106.7 mean intact. Real routing is far lumpier than a uniform draw: even the flattest layer
+# runs max/mean 2.75 and leaves an expert empty.
+# fmt: off
+_KIMI_K27_COUNTS = {
+    "balanced": (
+        # MoE layer 34, chunk 1
+        282, 85, 112, 78, 94, 35, 60, 73, 10, 80, 87, 122, 107, 215, 41, 85, 105, 76, 114, 37, 284, 146, 59,
+        44, 120, 78, 47, 0, 36, 162, 120, 247, 95, 115, 131, 228, 122, 103, 183, 52, 157, 18, 2, 294, 238,
+        105, 107, 27, 249, 23, 216, 99, 141, 162, 181, 62, 144, 125, 17, 33, 52, 73, 35, 200, 80, 138, 217,
+        69, 38, 114, 160, 38, 155, 42, 165, 114, 28, 87, 88, 2, 63, 93, 2, 99, 67, 45, 141, 287, 105, 27,
+        244, 159, 53, 194, 87, 9
+    ),
+    "hot-expert": (
+        # MoE layer 5, chunk 0
+        8, 109, 86, 102, 20, 221, 107, 54, 188, 5, 53, 67, 36, 50, 73, 91, 25, 108, 36, 43, 36, 172, 61, 46,
+        32, 115, 40, 4, 0, 58, 1, 40, 2878, 4, 108, 53, 286, 58, 92, 97, 48, 145, 68, 70, 67, 132, 35, 340,
+        41, 17, 53, 288, 130, 66, 49, 230, 52, 6, 47, 163, 6, 42, 17, 65, 56, 6, 2, 98, 138, 16, 43, 31,
+        112, 49, 110, 94, 85, 44, 121, 140, 76, 124, 65, 155, 181, 109, 60, 29, 38, 16, 53, 16, 139, 54, 82,
+        58
+    ),
+}
+# fmt: on
+# GLM 5.3 has no capture here, so its routing is generated: uniform for the balanced case, and this share of
+# every origin chip's tokens forced onto one expert for the hot case.
 _HOT_SHARE = 0.4
 # Measured programs per configuration; the median is reported.
 _PERF_ITERS = 5
@@ -85,7 +110,7 @@ def _mesh_params():
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
         for model_id in _MODELS:
-            for threshold_id in ("all-unified", "median-split", "hot-expert", "all-AIcodegen"):
+            for threshold_id in ("balanced", "hot-expert"):
                 params.append(
                     pytest.param(
                         mesh,
@@ -103,6 +128,29 @@ def _int_tensor(torch_tensor, mesh_device, mesh_mapper, dtype=ttnn.int32):
     return ttnn.from_torch(
         torch_tensor, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=dtype
     )
+
+
+def _indices_from_counts(counts, chips, seq, topk):
+    """Routing indices whose per-expert totals are exactly `counts`.
+
+    Each token takes the topk experts with the most tokens still to place, which keeps its picks distinct
+    and lands every count exactly -- feasible because no expert is owed more tokens than there are tokens.
+    The token order is then permuted so a heavily loaded expert is not confined to the first rows.
+    """
+    tokens = chips * seq
+    assert sum(counts) == tokens * topk, f"counts sum to {sum(counts)}, need {tokens * topk}"
+    assert max(counts) <= tokens, "an expert cannot take the same token twice"
+    remaining = [(-c, e) for e, c in enumerate(counts) if c]
+    heapq.heapify(remaining)
+    rows = []
+    for _ in range(tokens):
+        taken = [heapq.heappop(remaining) for _ in range(topk)]
+        rows.append([e for _, e in taken])
+        for c, e in taken:
+            if c + 1 < 0:
+                heapq.heappush(remaining, (c + 1, e))
+    order = torch.randperm(tokens, generator=torch.Generator().manual_seed(42)).tolist()
+    return torch.tensor([rows[i] for i in order], dtype=torch.int32).reshape(chips, seq, topk)
 
 
 def _hot_expert(idx_table, experts_per_chip, chips):
@@ -169,7 +217,12 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    if threshold_id == "hot-expert":
+    captured = _KIMI_K27_COUNTS.get(threshold_id) if model_id == "kimi-k27" else None
+    if captured is not None:
+        # Replay the measured routing rather than a draw. Only this model has a capture; the rest keep the
+        # generated form, so the two are not the same experiment and their numbers do not compare.
+        indices = _indices_from_counts(captured, dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok)
+    elif threshold_id == "hot-expert":
         _add_hot_experts(indices, idx_table, experts_per_chip)
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -200,28 +253,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     )(x, weights, indices, expert_offsets)
 
     counts = expert_token_counts.flatten()
-    if threshold_id == "hot-expert":
-        hot = _hot_expert(idx_table, experts_per_chip, dispatch_group_size)
-        logger.info(f"hot expert (last local slot of the last chip): {hot}, count {int(counts[hot])}")
-    if threshold_id == "all-unified":
-        # Every expert above the threshold, so the unified pass takes them all and combine sees each
-        # one released as that pass finishes it.
-        threshold = 0
-    elif threshold_id == "all-AIcodegen":
-        # Every expert at or below the threshold, so the fused pass takes them all: the unified pass
-        # walks each local slot with no work and nothing is released until the fused pass reaches it.
-        # The bound on what the overlap can hide.
-        threshold = int(counts.max().item())
-    elif threshold_id == "hot-expert":
-        # The model's own measured crossover. On the flat routing every expert falls under it, which is
-        # all-AIcodegen again; it only splits anything once one expert is genuinely hot.
-        threshold = model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
-    else:
-        threshold = max(1, int(counts[counts > 0].median().item()))
+    # Both cases run the crossover the model ships. Balanced leaves every expert under it, so the fused
+    # pass takes them all -- which is what production does at this chunk size; the hot expert is the one
+    # the threshold lifts into the unified pass.
+    threshold = model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
     assert threshold < max_dispatched_tokens_per_expert
+    hot = int(counts.argmax())
     logger.info(
         f"{num_routed_experts=} {num_experts_per_tok=} {experts_per_chip=} {max_dispatched_tokens_per_expert=} "
-        f"{threshold=} fused experts={(counts <= threshold).sum().item()}/{counts.numel()}"
+        f"{threshold=} fused experts={(counts <= threshold).sum().item()}/{counts.numel()} "
+        f"busiest expert={hot} at {int(counts[hot])} tokens"
     )
 
     ep_mapper = get_ep_mesh_mapper(mesh_device)
