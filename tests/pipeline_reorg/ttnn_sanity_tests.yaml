@@ -337,3 +337,19 @@
   team: ttnn
   budget_type: sanity
   owner_id: U091SNDA4TS # Tomasz Cheda
+
+- name: "ttnn sweep framework tensor setup"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/sweep_framework/test_tensor_setup.py
+    tests/sweep_framework/test_tensor_setup_device.py
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U08T3JQEB36 # stevendae

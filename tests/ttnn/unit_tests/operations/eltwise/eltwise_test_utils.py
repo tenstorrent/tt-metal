@@ -3,9 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
+from mpmath import cosh as mp_cosh
+from mpmath import mp
+
+from tests.ttnn.utils_for_testing import (
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 
 
 def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
@@ -170,13 +177,53 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
 
 
+def binary_grid_values(
+    low=-float("inf"), high=float("inf"), min_magnitude=0.0, include_zero=True, dtype=torch.bfloat16
+):
+    """Binary-grid values restricted to a domain, for ops that are only defined
+    (or only well-conditioned) on part of the bfloat16 range.
+
+    Keeps the grid's stratification. An exponent that lies wholly inside
+    [low, high] still carries all 4 mantissa codes and both signs. A bound
+    that cuts a binade keeps only the codes that fall inside it — the
+    mantissas are 1.0, 1.0078, 1.0625, 1.9922, so ±80, ±100, and ±1e19 each
+    drop a code at the edge. The filter is by value, not by exponent. An
+    outer product of two restricted sets stays a few million elements
+    instead of the billions an exhaustive in-range sweep would need.
+
+    Args:
+        low, high (float, optional): Inclusive value bounds. Default unbounded.
+        min_magnitude (float, optional): Drop values with |v| below this, e.g.
+            operands whose square would underflow. Defaults to 0.0.
+        include_zero (bool, optional): Keep +0 when it is inside [low, high],
+            exempting it from min_magnitude. Defaults to True.
+        dtype (torch.dtype, optional): Target dtype. Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: 1D tensor of the surviving values, in grid order.
+    """
+    values = generate_bfloat16_binary_grid(dtype=dtype, include_zero=include_zero)
+    in_range = (values >= low) & (values <= high)
+    keep = in_range & (values.abs() >= min_magnitude)
+    if include_zero:
+        keep |= in_range & (values == 0)
+    return values[keep].contiguous()
+
+
+def pairwise_from_values(values_a, values_b=None):
+    """Outer product of two value sets: A[i, j] = values_a[i], B[i, j] = values_b[j]."""
+    if values_b is None:
+        values_b = values_a
+    a, b = torch.meshgrid(values_a, values_b, indexing="ij")
+    return a.contiguous(), b.contiguous()
+
+
 def pairwise_inputs(include_spl_values=False, include_zero=False, dtype=torch.bfloat16):
     """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
     values = generate_bfloat16_binary_grid(
         dtype=dtype, include_spl_values=include_spl_values, include_zero=include_zero
     )
-    a, b = torch.meshgrid(values, values, indexing="ij")
-    return a.contiguous(), b.contiguous()
+    return pairwise_from_values(values)
 
 
 def to_tt_tensor(
@@ -295,3 +342,18 @@ def bf16_quantize_rne(x: float) -> float:
     the device input — uses round-to-nearest-even. For test points that are not
     exact BF16 values (e.g., 2.9, 3.01), truncation and RNE diverge."""
     return float(torch.tensor([x], dtype=torch.bfloat16).item())
+
+
+def sech2_exact(x: float) -> float:
+    """
+    Exact tanh derivative using mpmath 256-bit precision.
+
+    tanh'(x) = sech²(x) = 1 / cosh²(x)
+
+    Uses 1/cosh²(x) form (not 1 - tanh²(x)) to avoid the catastrophic cancellation
+    in the latter. Shared golden for test_tanh_bw_ulp.py and test_tanh_bw_fp32_ulp.py,
+    which apply their own input rounding and flushing around it.
+    """
+    mp.prec = 256
+    cosh_x = mp_cosh(mp.mpf(x))
+    return float(1 / (cosh_x * cosh_x))
