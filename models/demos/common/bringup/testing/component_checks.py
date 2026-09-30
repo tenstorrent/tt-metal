@@ -82,7 +82,7 @@ COMPONENT_DEFAULTS = {
 }
 LOW_PRECISION_KINDS = ("moe",)
 SPARSE_ZEROS = 0.75
-COL_FLOOR = 1e-3  # a column is measured against at least this fraction of the mean column norm (a ~0 column)
+COL_FLOOR = 1e-6  # a column is measured against at least this fraction of the mean column norm (as rows are)
 PAD_SENTINEL = 0xFFFFFFFF
 SMALL_RMS = 1e-3
 BIG_SCALE = 2.0
@@ -193,8 +193,9 @@ def rel_limit(lim, e, low: bool):
 
 
 def col_errors(got, want) -> torch.Tensor | None:
-    """rel L2 of every column (last dim) over all rows; a column is measured against at least COL_FLOOR x the mean
-    column norm (a column that is ~0 everywhere, such as an iHC gate near 0, is judged on the output's scale)."""
+    """rel L2 of every column (last dim) over all rows, against its own norm (at least COL_FLOOR x the mean column
+    norm): a gate that is ~0 everywhere (Hy4 moe_shared iHC pre gate 0, <= 3e-5) with its sign flipped is a 200 %
+    error of its own column; against 1e-3 x the mean column norm it read 1.6 %."""
     if want.dim() < 2 or got.numel() != want.numel():
         return None
     n = want.shape[-1]
