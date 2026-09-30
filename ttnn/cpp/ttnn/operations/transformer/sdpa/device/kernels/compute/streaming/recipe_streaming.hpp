@@ -401,7 +401,9 @@ constexpr bool sdpa_perf_zones = false;
 #define SDPA_PA_DBG 0
 #endif
 #ifndef SDPA_PROTO_PA_TAU
-#define SDPA_PROTO_PA_TAU 20.0f
+// 28 ln 2: shifts the fast exp's INT16 grid by exactly 28 octaves (256 * 28 = 7168 steps), so P is
+// 2^-28 times the unshifted P bit for bit and the exp's error pattern is unchanged.
+#define SDPA_PROTO_PA_TAU (28.0f * 0.69314718055994531f)
 #endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
@@ -1401,7 +1403,7 @@ static void sdpa_inner_loop_step(
     // y = 256*log2(e)*scale*x + (B - C) as INT16 (saturating ~0.72 above zero); lowering the constant by
     // 256*log2(e)*tau moves saturation to tau + 0.72 while s - m_ref stays small (precise in BF16).
     PACK({
-        constexpr float pa_exp_c = 32500.818359375f - 256.0f * 1.4426950408889634f * SDPA_PROTO_PA_TAU;
+        constexpr float pa_exp_c = 32500.818359375f - 256.0f * 28.0f;  // tau = 28 ln 2, exact in the grid
         constexpr uint32_t pa_exp_bits = __builtin_bit_cast(uint32_t, pa_exp_c);
         TTI_SFPLOADI(0, 0xA, pa_exp_bits & 0xFFFF);
         TTI_SFPLOADI(0, 0x8, pa_exp_bits >> 16);
