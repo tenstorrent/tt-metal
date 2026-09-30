@@ -340,9 +340,8 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        // No width floor here: a leg cannot tell a caller's row-major input from the round trip's
-        // untilized copy of a TILE input, which may be one element wide. The whole-call gate refuses a
-        // row-major input narrower than two elements before any leg is planned.
+        // A one-element bfloat16 stick is served: the last-dim reader replicates a 2-byte stick with
+        // halfword stores, and every other leg moves whole aligned pages.
         if (input.dtype() == DataType::BFLOAT8_B) {
             return false;
         }
@@ -409,12 +408,6 @@ bool supported_by_codegen(
     }
     // Every leg below runs row-major, the round trip's included.
     if (input.dtype() == DataType::BFLOAT8_B) {
-        return false;
-    }
-    // A row-major input narrower than two elements is outside the scope the codegen path was verified
-    // over. The round trip's untilized copy of a TILE input can still be one element wide; that case
-    // is verified through its TILE input.
-    if (input.layout() == ttnn::ROW_MAJOR_LAYOUT && shape[-1] < 2) {
         return false;
     }
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
