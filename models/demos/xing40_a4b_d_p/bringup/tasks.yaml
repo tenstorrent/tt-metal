@@ -757,6 +757,14 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T14:35:10'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_residual.py: d4974b4e33d5df2e3cd62858085b4998595acf0d765ac25f8d0bd3f495e2b6ae
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.11
   title: 'dense block with steps 1-11 on device (last: ffn_residual)'
   step: implement
