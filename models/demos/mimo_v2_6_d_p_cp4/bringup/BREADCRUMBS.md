@@ -91,3 +91,21 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Not done: the narrow-V ring path. Validation relaxes VDH == DH for causal/chunked calls, but no one has tried it
   in the kernel. Sliding layers still raise NotImplementedError.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attention.py`
+
+## C.full_dense.attn_residual.test.1 (test review)
+- Ported the prior's frozen test (`mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_residual.py`, same golden:
+  s4096 chunk 1, [2048, 4096]). Kept COMPARE/THRESHOLD None (PCC >= 0.99), plus asserted: output size, finite,
+  rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01]. New for CP=4: rel L2 <= 0.01 per CP slice (rows
+  [r*512, (r+1)*512)), to catch slice-order or gather bugs. Metric `rel_l2_slice_max_attn_residual_L00` recorded.
+- Measured: reference PCC 0.999998, rel 0.00207, ratio [0.9991, 1.0007], slices [0.00207, 0.00206, 0.00208,
+  0.00207]. bf16 control passes (rel 0.00234). Stub fails (PCC). mutate:scale1.02 fails (rel 0.0201). rowshift and
+  quarterzero fail (PCC).
+- Device mode currently fails with NotImplementedError (no device module yet). The implement step supplies it.
+- The "FAIL pcc=0.000000" line printed during collection is the precompile collect pass (known issue). Ignore it.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attn_residual.py` (and `BRINGUP_IMPL=stub`).
+
+## C.full_dense.attn_residual implement (attempt 1)
+- Copied `mimo_v2_6_d_p/tt/residual.py` to `tt/residual.py` (TtResidualAdd: `ttnn.add`, bf16 out, DRAM). It works unchanged on CP slices: both operands hold the same rows on each chip, so no CCL is needed.
+- hooks.py: added `_RESIDUAL_STEPS` (attn/mlp/ffn residual) and `_residual_host_fn`, which does a CP split in via `to_device_cp` and a concat out via `cp_to_host`. It is registered in `device_component`, and the hybrid model builds residual overrides for any residual step in DEVICE_STEPS. `attn_residual` was added to DEVICE_STEPS["full_dense"].
+- Gate: pcc 0.999997, rel_l2 0.0024, per-slice rel ~0.0024. The "FAIL pcc=0" line in the log comes from the precompile collect pass and is not the real result.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attn_residual.py`

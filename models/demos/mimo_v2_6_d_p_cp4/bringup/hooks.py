@@ -49,6 +49,30 @@ def _cp_host_fn(mesh, module):
     return fn
 
 
+# Residual steps (bf16 add of two CP slices of the same rows, no collective).
+_RESIDUAL_STEPS = {"attn_residual", "mlp_residual", "ffn_residual"}
+
+
+def _residual_host_fn(mesh):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] via TtResidualAdd on the CP slices."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_cp4.tt.residual import TtResidualAdd
+    from models.demos.mimo_v2_6_d_p_cp4.tt.rms_norm import cp_to_host, to_device_cp
+
+    module = TtResidualAdd(mesh)
+
+    def fn(ctx, a, b):
+        ad = to_device_cp(mesh, a)
+        bd = to_device_cp(mesh, b)
+        yd = module(ad, bd)
+        y = cp_to_host(mesh, yd)
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
+        return y.to(a.dtype)
+
+    return fn
+
+
 def _rope_max_seq(spec):
     """Longest sequence any rung or the target runs: the RoPE tables are built once for it at load."""
     seqs = [int(r.get("seq", 0)) for r in spec.data.get("ladder", [])]
@@ -121,6 +145,8 @@ def _attention_host_fn(mesh, module, cache_of):
 def device_component(mesh, spec, layer, step):
     if step in _NORM_WEIGHTS:
         return _cp_host_fn(mesh, _norm_module(mesh, spec, layer, step))
+    if step in _RESIDUAL_STEPS:
+        return _residual_host_fn(mesh)
     if step == "attention":
         from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
@@ -147,7 +173,7 @@ def device_component(mesh, spec, layer, step):
 # Device steps of the hybrid harness, per block type: each passed its component gate on the device (CP slices).
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention"},
+    "full_dense": {"attn_norm", "attention", "attn_residual"},
     "sliding_moe": set(),
     "full_moe": set(),
 }
@@ -194,6 +220,7 @@ class HybridDeviceModel:
         for i in self.ref.layer_ids:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _cp_host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
+            ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "attention" in steps:
                 from models.demos.mimo_v2_6_d_p_cp4.tt.ccl import RingCCL
 
