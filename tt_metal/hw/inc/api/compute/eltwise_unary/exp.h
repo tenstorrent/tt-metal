@@ -33,14 +33,12 @@ enum class InputClamping : uint8_t {
 template <
     bool approx = false,
     uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
-    uint32_t offset = 0>
+    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
-        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en, offset)));
+        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en)));
 }
 
 // clang-format off
