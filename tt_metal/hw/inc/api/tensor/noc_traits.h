@@ -8,6 +8,18 @@
 #include "api/tensor/tensor_accessor.h"
 #include "noc_address_backend.h"
 
+// Op-to-op R/W inference: these endpoints read/write their accessor's tensor (api/dataflow/buf_rw_note.h).
+namespace tt_buf_rw {
+template <typename Accessor>
+struct endpoint<PageView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<ShardView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<tensor_accessor::AccessorPage<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<tensor_accessor::ShardPage<Accessor>> : endpoint<Accessor> {};
+}  // namespace tt_buf_rw
+
 // TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
 // (need to break the include dependency dataflow_api.h -> tensor_accessor.h.).
 template <typename DSpecT>
@@ -137,6 +149,11 @@ struct noc_traits_t<tensor_accessor::Page> {
         return noc_addr;
     }
 };
+
+template <typename Accessor>
+struct noc_traits_t<tensor_accessor::AccessorPage<Accessor>> : noc_traits_t<tensor_accessor::Page> {};
+template <typename Accessor>
+struct noc_traits_t<tensor_accessor::ShardPage<Accessor>> : noc_traits_t<tensor_accessor::Page> {};
 
 template <>
 struct noc_traits_t<AbstractTensorAccessorWrapper> {
