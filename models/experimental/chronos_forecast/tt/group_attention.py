@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN GroupSelfAttention (encoder sublayer 2). Wrapper over TtMhaCore.
+"""GroupSelfAttention (encoder sublayer 2) weights, group masks and block packing; TtEncoderBlock runs it on TtMhaCore.
 
 reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
     x = x + GroupSelfAttention(x)  # no RoPE, batch-axis, mask (T,1,B,B)
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import torch
 from einops import rearrange
 
-from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights, maybe_upload_mask
+from models.experimental.chronos_forecast.tt.mha_core import TtMhaWeights
 
 
 @dataclass(frozen=True)
@@ -175,47 +175,3 @@ def pack_group_blocks(
     same = packed_groups[:, :, None] == packed_groups[:, None, :]
     mask = ((~same).to(dtype) * torch.finfo(dtype).min).unsqueeze(1)
     return GroupBlockPacking(rows=rows, output_rows=output_rows, block=block, mask=mask)
-
-
-class TtGroupAttention:
-    """TTNN group self-attention. Weights move host -> device once in ``__init__``."""
-
-    def __init__(self, device, weights: TtGroupAttentionWeights):
-        self.device = device
-        self.weights = weights
-        self.core = TtMhaCore(device, weights.to_mha())
-
-    def forward(self, x_host: torch.Tensor, mask_host: torch.Tensor) -> torch.Tensor:
-        """Host (B,T,d) + mask (T,1,B,B) -> host (B,T,d) float for PCC."""
-        import ttnn
-
-        b, t, _d = x_host.shape
-        x = ttnn.from_torch(
-            x_host.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Transpose batch/time: attention runs along the batch axis.
-        x_flip = ttnn.permute(x, (1, 0, 2))
-        # Group attention runs along batch, so its seq length is B.
-        mask = maybe_upload_mask(self.device, mask_host, seq_len=b)
-        out = self.core(x_flip, mask)
-        ttnn.deallocate(x_flip)
-        if mask is not None:
-            ttnn.deallocate(mask)
-        # Flip back; residual against the ORIGINAL (B, T, d).
-        back = ttnn.permute(out, (1, 0, 2))
-        ttnn.deallocate(out)
-        if back.memory_config() != x.memory_config():
-            back = ttnn.to_memory_config(back, x.memory_config())
-        y = ttnn.add(x, back, memory_config=x.memory_config())
-        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,d),
-        # drop seq tile padding on host; return float for PCC.
-        host = ttnn.to_torch(y).float()
-        if host.dim() == 4 and host.shape[0] == 1:
-            host = host.squeeze(0)
-        return host[:, :t, :]
-
-    __call__ = forward
