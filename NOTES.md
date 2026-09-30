@@ -10,3 +10,6 @@
   (handoff may change nothing numerically — the prompt comes from the encoder straight into device buffers).
 - 2026-09-30 14:10 UTC (attempt 2): 601/602 still queued (first in line); device HELD by broker for recovery
   (chip 20 left PCIe bus). Nothing run. On resume: `bash tmp/cmp.sh noisepf 601` and `bash tmp/cmp.sh noisepf_ph 602`.
+- 2026-09-30 14:15 UTC (attempt 3): 601/602 FAILED in 3 s — t22 had no ttnn/ttnn/_ttnn.so (ImportError
+  get_all_unsafe_tracked_ids). Fixed: symlink ttnn/ttnn/_ttnn.so -> t14's build (t22 has no ttnn diff vs t14; import checked OK).
+  Resubmitted directly: job 630 (noisepf), 631 (noisepf_ph). On resume: `bash tmp/cmp.sh noisepf 630`, `bash tmp/cmp.sh noisepf_ph 631`.
