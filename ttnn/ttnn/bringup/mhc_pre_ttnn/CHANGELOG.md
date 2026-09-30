@@ -29,3 +29,6 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
      program-cache hit); the unit suite and the eval golden suite (`tests/golden/`, from tt_ops_code_gen
      `mstaletovic/mhc-goldens`, run on the C++ op) pass.
    - Needed by: glm53_flash_d_p.
+3. Model cases (bringup-fork-tests, task O.1): `tests/cases.py` (10 glm53_flash_d_p call(s), captured with
+   GLM_MHC_IMPL=fused on the s56320 rung), `tests/reference.py` (float64 torch semantics), `tests/test_mhc_pre_ttnn.py`
+   (random per-chip inputs on the 2x2 mesh, PCC + rel L2 per output; limits from the measured error with margin).
