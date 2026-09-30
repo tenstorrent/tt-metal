@@ -47,6 +47,7 @@ def diffvae_options(request):
     return dataclasses.replace(
         DiffVAEOptions.production(slab_frames=opt.diffvae_slab_frames or None, tp_heads=not opt.diffvae_no_tp_heads),
         gna_stride=parse_stride(opt.diffvae_gna_stride),
+        stage5_fused_qkv=os.environ.get("DIFFVAE_S5_FUSED_QKV") == "1",
     )
 
 
