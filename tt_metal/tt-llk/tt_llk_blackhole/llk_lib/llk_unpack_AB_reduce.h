@@ -32,7 +32,9 @@ using namespace ckernel::unpacker;
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
  * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs.
- * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
+ * @note The math kernel of REDUCE_SCALAR writes SrcA rows 0 to 15 of the bank it works on (MOVB2A). A full face
+ *       rewrites all sixteen rows on the next unpack, so only tiny tiles, whose faces leave rows behind, need
+ *       the source clear; it is the same clear the tiny tile path of every reduce dimension uses.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
@@ -42,7 +44,6 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     constexpr bool is_max                  = pool_type == PoolType::MAX;
     constexpr bool swap_operands           = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
-    constexpr bool is_scalar               = reduce_dim == ReduceDim::REDUCE_SCALAR;
     constexpr std::uint32_t REPLAY_BUF_LEN = 2;
     constexpr std::uint32_t clear_src      = swap_operands ? Srcs::SrcB : Srcs::SrcA;
 
@@ -70,7 +71,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     const std::uint32_t replay = lltt::replay_insn(0, REPLAY_BUF_LEN);
 
-    if (is_tiny || is_scalar)
+    if (is_tiny)
     {
         ckernel_template tmp(1, innerloop, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, 0, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
         tmp.program();
