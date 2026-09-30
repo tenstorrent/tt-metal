@@ -382,6 +382,14 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
+  frozen:
+    at: '2026-09-30T06:19:42'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py: ecdb03203c38eb149d0c3e334e6e304f4f895dc46ae512f94dc0e4fc77bc27af
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.05
   title: 'dense block with steps 1-5 on device (last: attention)'
   step: implement
