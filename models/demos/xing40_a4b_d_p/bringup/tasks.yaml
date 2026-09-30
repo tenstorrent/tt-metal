@@ -1083,6 +1083,13 @@ tasks:
     - q_a
     - attention
     layer: 2
+  frozen:
+    at: '2026-09-30T15:07:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_05_attention.py: db2316ac22ac9224dc37a0d761e93c36536ee2137e923cb535316c1bc1ba11c5
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.moe.attn_residual
   title: moe attn_residual (residual) on device, layer 2
   step: implement
