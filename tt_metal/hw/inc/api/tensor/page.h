@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "api/dataflow/buf_rw_note.h"
+
 namespace tensor_accessor {
 
 /**
@@ -37,6 +39,13 @@ public:
         Page(noc_addr, global_page_id), accessor_(accessor) {}
 
     const Accessor& accessor() const { return *accessor_; }
+
+    // Hides Page::noc_addr: the raw address escapes the binding, so note the tensor as read and written (see
+    // TensorAccessor::get_noc_addr). The NoC traits read the address through Page and note the exact access instead.
+    uint64_t noc_addr() const {
+        tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
+        return Page::noc_addr();
+    }
 
 private:
     const Accessor* accessor_;

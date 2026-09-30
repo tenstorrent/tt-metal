@@ -366,7 +366,7 @@ private:
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
     void update_current_page() {
-        auto current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
+        auto current_noc_addr = accessor.transfer_noc_addr(current_page_id, 0, noc);
         current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor);
     }
 };

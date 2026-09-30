@@ -35,7 +35,7 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = src.transfer_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
             return noc_address_backend::extract_local_address(noc_addr);
@@ -45,7 +45,7 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
     template <Noc::AddressType address_type>
     static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = dst.transfer_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
             return noc_address_backend::extract_local_address(noc_addr);
@@ -67,7 +67,7 @@ struct noc_traits_t<PageView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const PageView<Accessor>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = src.accessor.transfer_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
             return noc_address_backend::extract_local_address(noc_addr);
@@ -77,7 +77,7 @@ struct noc_traits_t<PageView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto dst_addr(const PageView<Accessor>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = dst.accessor.transfer_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
             return noc_address_backend::extract_local_address(noc_addr);
@@ -99,7 +99,7 @@ struct noc_traits_t<ShardView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const ShardView<Accessor>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = src.accessor.transfer_shard_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(src.is_local_shard(args.shard_id, noc.get_noc_id()));
             ASSERT(noc.is_local_addr(noc_addr));
@@ -110,7 +110,7 @@ struct noc_traits_t<ShardView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto dst_addr(const ShardView<Accessor>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = dst.accessor.transfer_shard_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(dst.is_local_shard(args.shard_id, noc.get_noc_id()));
             ASSERT(noc.is_local_addr(noc_addr));

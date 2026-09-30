@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
 #define DATA_FORMATS_DEFINED
@@ -1164,6 +1166,27 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     WAYPOINT("NWPD");
 }
 
+namespace tensor_accessor::detail {
+template <typename AddrGen, typename = void>
+struct has_transfer_noc_addr : std::false_type {};
+template <typename AddrGen>
+struct has_transfer_noc_addr<
+    AddrGen,
+    std::void_t<decltype(std::declval<const AddrGen&>().transfer_noc_addr(uint32_t{}, uint32_t{}, uint8_t{}))>>
+    : std::true_type {};
+
+// The page address for a transfer that notes its own access (op-to-op R/W inference): a TensorAccessor's un-noted
+// transfer_noc_addr, or any other address generator's get_noc_addr.
+template <typename AddrGen>
+FORCE_INLINE uint64_t transfer_noc_addr(const AddrGen& addrgen, uint32_t id, uint32_t offset, uint8_t noc) {
+    if constexpr (has_transfer_noc_addr<AddrGen>::value) {
+        return addrgen.transfer_noc_addr(id, offset, noc);
+    } else {
+        return addrgen.get_noc_addr(id, offset, noc);
+    }
+}
+}  // namespace tensor_accessor::detail
+
 // clang-format off
 /**
  * Sets the stateful registers for asynchronous writes of any size to a destination node located at NOC
@@ -1402,7 +1425,7 @@ FORCE_INLINE void noc_async_read_page(
     }
     tt_buf_rw::note_if_bound<tt_buf_rw::READ, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+        tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
 
 // clang-format off
@@ -1587,7 +1610,10 @@ FORCE_INLINE void noc_async_write_page(
     }
     tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
+        src_local_l1_addr,
+        tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc),
+        size ? size : page_size,
+        noc);
 }
 
 // clang-format off
@@ -1760,14 +1786,14 @@ FORCE_INLINE void noc_async_read_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ,
         dst_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        s.transfer_shard_noc_addr(shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     tt_buf_rw::note_if_bound<tt_buf_rw::READ, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        s.transfer_shard_noc_addr(shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
         s.get_aligned_page_size() * shard_volume,
         noc);
@@ -1798,7 +1824,7 @@ FORCE_INLINE void noc_async_write_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::WRITE_,
         src_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        s.transfer_shard_noc_addr(shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
@@ -1806,7 +1832,7 @@ FORCE_INLINE void noc_async_write_shard(
     tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        s.transfer_shard_noc_addr(shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         noc);
 }
