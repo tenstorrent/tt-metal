@@ -3244,7 +3244,7 @@ AssignedMeshes decode_sat_placement(const MappingResult<GlobalMeshId, const Cand
     return assignment;
 }
 
-constexpr std::size_t kGrowBudgetPerVariant = 32;
+constexpr std::size_t kGrowBudgetPerVariant = 128;
 constexpr std::size_t kMaxGrowthCycles = 4;
 
 // True when this grouping's committed footprint (mesh_node_to_asic_position) satisfies every one of a mesh's
