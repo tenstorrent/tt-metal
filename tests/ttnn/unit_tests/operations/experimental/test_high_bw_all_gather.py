@@ -683,9 +683,12 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     duplicate_topology = duplicate_sharded_input.tensor_topology()
+    # mesh_partition labels this result `{8},[Shard(2)]`: a row-major split of dim 2 over the whole mesh, spelt the
+    # collapsed way because both mesh axes now shard the same tensor dimension. high_bw_all_gather requires one
+    # placement per mesh axis, so re-spell the same layout as `[Shard(2), Shard(2)]` on the device mesh shape.
     duplicate_sharded_input.update_tensor_topology(
         ttnn.TensorTopology(
-            duplicate_topology.distribution_shape(),
+            mesh_device.shape,
             duplicate_placements,
             duplicate_topology.mesh_coords(),
         )

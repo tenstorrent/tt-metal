@@ -719,6 +719,33 @@ def test_mesh_partition_golden_round_trips_replicated_input():
     assert golden_function([full], 0) is None
 
 
+def test_mesh_partition_golden_whole_mesh_concatenates_every_device():
+    """cluster_axis=None: device k keeps chunk k of dim in row-major device order and the op labels the output
+    {N}, [Shard(dim)], so the golden must compose every device along dim, on an N-D and on a collapsed mesh shape
+    alike. The first version kept the input's shard dims for None and composed to device 0's chunk, which only
+    matched the stale pre-fix output label."""
+    full = torch.arange(16, dtype=torch.float32).reshape(2, 8)
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+
+    output = golden_function(
+        [full.clone() for _ in range(4)],
+        1,
+        cluster_axis=None,
+        _ttnn_golden_mesh_shape=(2, 2),
+        _ttnn_golden_mesh_shard_dims=(None, None),
+    )
+    assert torch.equal(output, full)
+
+    output = golden_function(
+        [full.clone() for _ in range(4)],
+        -1,
+        cluster_axis=None,
+        _ttnn_golden_mesh_shape=(4,),
+        _ttnn_golden_mesh_shard_dims=(None,),
+    )
+    assert torch.equal(output, full)
+
+
 def test_allocate_tensor_goldens_return_skip_marked_uninitialized_storage():
     shape_overload = ttnn.get_golden_function(ttnn.allocate_tensor_on_device)(
         (2, 3), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, None

@@ -103,6 +103,50 @@ def gen_tensor(dim, per_device_output_shape, mesh_axes, mesh_shape, cluster_axis
     return torch_input_tensor, torch_output_tensor
 
 
+def _placement_is_shard_of(placement, dim):
+    return isinstance(placement, ttnn.PlacementShard) and placement.dim == dim
+
+
+def _placement_matches(actual, expected):
+    if isinstance(expected, ttnn.PlacementShard):
+        return _placement_is_shard_of(actual, expected.dim)
+    return isinstance(actual, ttnn.PlacementReplicate)
+
+
+def expected_mesh_partition_label(input_placements, dist_shape, dim, cluster_axis):
+    """Label ttnn.mesh_partition must produce for the N-D (ShardTensor2dMesh) inputs this file builds: Shard(dim) on
+    the partitioned axis, the input's placement elsewhere, never a dim sharded on two mesh axes. Returns
+    (distribution_shape, placements), or None when the op keeps the input label because the partitioned result has
+    no exact TensorTopology. Mirrors MeshPartitionDeviceOperation::compute_output_topologies rules 1 and 2."""
+    num_devices = 1
+    for size in dist_shape:
+        num_devices *= size
+    if cluster_axis is None:
+        # Whole mesh, row-major: collapsed {N}, [Shard(dim)] unless another dim stays sharded on a non-trivial axis.
+        for axis, placement in enumerate(input_placements):
+            if dist_shape[axis] > 1 and isinstance(placement, ttnn.PlacementShard) and placement.dim != dim:
+                return None
+        return [num_devices], [ttnn.PlacementShard(dim)]
+    output = list(input_placements)
+    output[cluster_axis] = ttnn.PlacementShard(dim)
+    partitioned_axis_composes = isinstance(input_placements[cluster_axis], ttnn.PlacementReplicate) or (
+        _placement_is_shard_of(input_placements[cluster_axis], dim)
+    )
+    for axis, placement in enumerate(input_placements):
+        if axis == cluster_axis or not _placement_is_shard_of(placement, dim):
+            continue
+        if dist_shape[axis] == 1:
+            output[axis] = ttnn.PlacementReplicate()  # one chunk on a size-1 axis is the whole extent
+            continue
+        other_axes_trivial = all(
+            dist_shape[other] == 1 for other in range(len(dist_shape)) if other not in (axis, cluster_axis)
+        )
+        if axis < cluster_axis and partitioned_axis_composes and other_axes_trivial:
+            return [num_devices], [ttnn.PlacementShard(dim)]  # row-major hierarchical sharding, collapsed
+        return None
+    return list(dist_shape), output
+
+
 def run_mesh_partition_test(
     mesh_device,
     per_device_output_shape,
@@ -247,6 +291,29 @@ def run_mesh_partition_test(
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")
         assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
+
+    # Label contract (see tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_topology.py). Before
+    # compute_output_topologies existed the output always kept the input's label.
+    input_topology = tt_input_tensors_list[0].tensor_topology()
+    output_topology = tt_out_tensor_list[0].tensor_topology()
+    expected = expected_mesh_partition_label(
+        list(input_topology.placements()), list(input_topology.distribution_shape()), dim, cluster_axis
+    )
+    output_placements = list(output_topology.placements())
+    if expected is None:
+        # Not expressible (a dim sharded on two axes that is not row-major hierarchical, or a whole-mesh partition of
+        # a tensor sharded on other dims): the op returns {} and launch() keeps the union default, i.e. the input
+        # label, and logs a warning (documented fallback).
+        assert output_topology == input_topology, f"{output_topology} != input {input_topology}"
+    else:
+        expected_shape, expected_placements = expected
+        assert list(output_topology.distribution_shape()) == expected_shape, f"{output_topology}"
+        assert len(output_placements) == len(expected_placements), f"{output_placements} vs {expected_placements}"
+        for actual, wanted in zip(output_placements, expected_placements):
+            assert _placement_matches(actual, wanted), f"{output_placements} != {expected_placements}"
+    shard_dims = [p.dim for p in output_placements if isinstance(p, ttnn.PlacementShard)]
+    assert len(shard_dims) == len(set(shard_dims)), f"a tensor dim is sharded on two mesh axes: {shard_dims}"
+    assert list(output_topology.mesh_coords()) == list(input_topology.mesh_coords())
 
 
 @pytest.mark.parametrize(
