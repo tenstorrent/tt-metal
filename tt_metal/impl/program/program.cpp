@@ -3273,13 +3273,29 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // The compile and allocation steps below are individually guarded and would early-return:
     // nothing has changed since this program was compiled and laid out for this device. Skip them
     // outright, since this is called on every enqueue and the guards alone cost microseconds per
-    // program. The validation steps still have to run: they read live device state - L1 allocations
-    // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
-    // this program's regions is only caught by re-checking them here.
+    // program. Validation still reads live device state. In the lockstep case,
+    // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
+            device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
+            device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
+            if (this->simple_l1_validation_region_end_ == 0) {
+                return;
+            }
+            const auto lowest_address =
+                device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
+            if (!lowest_address.has_value() || *lowest_address >= this->simple_l1_validation_region_end_) {
+                return;
+            }
+            // Preserve the detailed collision error from the full validator.
+        }
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
+        this->simple_l1_validation_cached_ =
+            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+        this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
         return;
     }
     this->compile(device, force_slow_dispatch);
@@ -3296,6 +3312,24 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
+
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    this->simple_l1_validation_cached_ =
+        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+    this->simple_l1_validation_region_end_ = 0;
+    for (const auto& cb_allocator : this->cb_allocators_) {
+        if (!cb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, cb_allocator.l1_regions.back().second);
+        }
+    }
+    for (const auto& dfb_allocator : this->dfb_allocators_) {
+        if (!dfb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, dfb_allocator.l1_regions.back().second);
+        }
+    }
 
     this->compile_and_allocate_needed_ = false;
     this->compile_and_allocate_device_ = device;
