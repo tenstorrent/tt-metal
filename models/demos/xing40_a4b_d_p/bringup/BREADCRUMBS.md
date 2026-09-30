@@ -103,3 +103,16 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: pcc_attn_norm_L00 0.999996; vs CPU rel 0.0018 (limit 0.0062), ratio [0.9987, 1.0003]; vs golden rel 0.0029;
   second inputs (layer39, mixed, small, big) rel <= 0.0018. The small negative bias (-0.0005) is the bf16 output.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_norm.py`
+
+## C.dense.q_a implement (attempt 1)
+- Added `tt/q_a.py:TtQa` / `build_q_a`, adapted from `hy4_preview_d_p/tt/q_a.py:TtQa`: q_a_proj^T K-split over axis 1
+  ([1792, 768] bf16 per chip) -> `ttnn.linear` HiFi4 + fp32 dest, fp32 partial -> `ttnn.all_reduce(cluster_axis=1)`
+  (fp32, [S/4, 768]) -> `ttnn.bringup.rms_norm` (q_a_layernorm, eps = cfg.rms_norm_eps 1e-6, fp32 row-major weight)
+  -> typecast bf16. Output row-split over axis 0, replicated over axis 1. Weights built at load; no host work in forward.
+- Chose the fork norm over native ttnn.rms_norm (native scales rows ~0.1% low on fp32 input, known issues);
+  `norm_impl="native"` kept for comparison. all_reduce instead of reduce_scatter + all_gather: no persistent buffers.
+- Hooks: `_QA_STEPS` + `_qa_host_fn` (bf16 `col_split_to_device` in, `row_split_to_host` out),
+  `DEVICE_STEPS["dense"]` now {attn_hc, attn_collapse, attn_norm, q_a}.
+- Gate: pcc_q_a_L00 0.999998; vs CPU rel 0.00175 (limit 0.0066), ratio [0.99895, 1.00058]; vs golden rel 0.00215;
+  second inputs (layer39, mixed, small, big) rel <= 0.00178.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_q_a.py`
