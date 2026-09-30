@@ -22,7 +22,7 @@ from collections import defaultdict
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
-from models.demos.common.bringup.testing import cpu_bridge, profiler
+from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, profiler
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
@@ -209,6 +209,7 @@ def op_profile(mesh, run) -> tuple[dict, dict | None]:
 
 
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
+    accuracy_guard.check(s)  # accuracy first: a perf pick whose frozen test failed in this attempt is not profiled
     rung_name = rung_name or profile_rung(s)
     rung = s.rung(rung_name)
     g = Golden.for_rung(s, rung_name)

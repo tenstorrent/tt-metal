@@ -19,7 +19,7 @@ python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --wr
 python -m models.demos.common.bringup.orchestrator run --spec <spec>
 ```
 
-The orchestrator stops with exit 3 when a person is needed (approve the plan, pick performance items) and exit 1 when a
+The orchestrator stops with exit 3 when a person is needed (approve the plan, pick performance items, decide a pick) and exit 1 when a
 task is STOPPED after the implementer and the debugger both failed three times. `orchestrator resume` continues. A run
 whose only unfinished tasks are DEFERRED ends with exit 0, "complete with N deferred" (below).
 
@@ -36,7 +36,7 @@ whose only unfinished tasks are DEFERRED ends with exit 0, "complete with N defe
 | implement | C.<block>.<step>, S.<block>.<nn> | agent (test role, freeze, implement role) | frozen component test, then the swap order; a C task may end DEFERRED (op request accepted by the checker) |
 | integrate | L.<rung> | script (fix agent on failure) | per-layer trail, state, final hidden, top-5 |
 | contract | K.1 | agent (contract role) | engine API: layout, table, ack timing, engine input, producer read-back |
-| perf | X.1 profile, X.2 opportunities, picked items | script + person | warm profile; each pick: faster and every accuracy gate still passes |
+| perf | X.1 profile, X.2 opportunities, picked items | script + person | warm profile; each pick: the owner decides on its A/B report, then its gate (below) |
 
 ## Steps TTNN has no op for (F46)
 
@@ -55,6 +55,36 @@ $B op-export <op> --spec <spec>                               # prompt + golden 
                                                               # next steps (submodule commit, gitlink, push, run_eval.py)
 $B op-ready <op> [<op> ...] --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.bringup.<op>, tasks reset
 python -m models.demos.common.bringup.orchestrator resume --spec <spec>
+```
+
+## Perf picks: the owner decides on an A/B report (F57)
+
+A pick (step `perf`, role `perf`) has no gate before or after its agent. The agent makes the change behind a switch
+and runs the gate's frozen tests once, accuracy first: at the first failure it stops and writes the failing metrics
+into BREADCRUMBS (`testing/profile.py` refuses to profile a pick whose frozen test failed in the attempt,
+`testing/accuracy_guard.py`). Then the orchestrator measures the change off (the task's `ab.env`, the old path) and
+on: every frozen test of the gate, the ladder at `ab_rungs` (default: the gate's rung and the spec's last rung) and
+one plain profile, each with its own results dir under `runs/<run>/ab/<task>/<old|new>/`. It writes `table.md` there
+(component checks, min layer PCC, final hidden, logits PCC, top1, top5, device ms total and of the gated section,
+whether the gate would pass) and the record to state.json, and waits for the owner (exit 3):
+
+```bash
+O="python -m models.demos.common.bringup.orchestrator"
+$O decide --task P.3 --accept --spec <spec>   # resume runs the gate (as tasks.yaml has it) and commits on PASS
+$O decide --task P.3 --reject --spec <spec>   # resume reverts the change under the task's paths: REJECTED, dependents run
+$O decide --task P.3 --rerun --spec <spec>    # resume measures again (e.g. after a board reset)
+$O resume --spec <spec>
+```
+
+If the owner accepts a change that fails a frozen test, dropping that test from the pick's gate in tasks.yaml is
+their edit (as for Xing P.1). A new `brief` or `ab` voids the report: the agent runs again.
+
+```yaml
+- id: P.3
+  step: perf
+  role: perf
+  ab: {env: {XING_EXPERTS_FIDELITY: hifi4}}   # the old path
+  ab_rungs: [last, s56320]                     # optional
 ```
 
 ## Layout
