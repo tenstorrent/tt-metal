@@ -49,7 +49,7 @@ constexpr std::uint32_t WELFORD_RECIP_NEWTON_STEPS = 3;
  * program of row 0 has consumed); otherwise it is reloaded into LREG7 before each step so that only
  * LREG6 and LREG7 are used. The math RISC has no floating-point unit, so the division it used to
  * do here cost about 225 cycles per row against the 10 the SFPU needs for the row itself; the SFPU
- * sequence costs about 14 cycles per row. The result is within one fp32 ulp of the correctly
+ * sequence costs about 12.5 cycles per row. The result is within one fp32 ulp of the correctly
  * rounded reciprocal (the multiply-add keeps the product at fp32 plus four bits, so the last
  * correction cannot always decide the rounding); tests/python_tests/test_sfpu_welford.py compares
  * it with the host's fp32 division for every count up to 16384 and around 2^16 and 2^20.
