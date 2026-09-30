@@ -119,12 +119,12 @@
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
-- id: fabric-cpu-pipeline-placement-sc24
-  name: fabric cpu pipeline placement (SC24)
-  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "subtorus_sc24"
+- id: fabric-cpu-pipeline-placement-sc16-3bm
+  name: fabric cpu pipeline placement (SC16 3-BigMesh)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "subtorus_sc16_4x32_3bigmesh"
   skus:
     cpu_medium:
-      timeout: 45
+      timeout: 15
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
