@@ -212,6 +212,9 @@ inline std::uint32_t get_active_bank_mask()
 
 inline void configure_hardware()
 {
+#if defined(TT_METAL_TTSIM) // ttsim models no counter registers
+    return;
+#endif
     const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     std::uint32_t configured_mask            = 0;
 
@@ -254,6 +257,9 @@ inline void configure_hardware()
 
 inline void arm_hardware()
 {
+#if defined(TT_METAL_TTSIM)
+    return;
+#endif
     const std::uint32_t arm_cmd = detail::arm_cmd;
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
@@ -306,7 +312,9 @@ inline void configure_all_zones()
     {
         // Both builds run all three: neither the scrub nor configure starts anything and the arm writes STOP in the
         // counters off build. Skipping any of it moves the release of the other threads.
+#if !defined(TT_METAL_TTSIM)
         llk::perf::clear_debug_feature_disable();
+#endif
         configure_hardware();
         arm_hardware();
     }
@@ -411,6 +419,9 @@ static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counte
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
 inline __attribute__((always_inline)) void arm_all_counters()
 {
+#if defined(TT_METAL_TTSIM)
+    return;
+#endif
     ckernel::fence_compiler();
     const std::uint32_t arm_cmd = detail::arm_cmd;
     llk::perf::write(llk::perf::PERF_CNT_ALL, arm_cmd);
@@ -429,6 +440,9 @@ inline __attribute__((always_inline)) void arm_all_counters()
 
 inline __attribute__((always_inline)) void freeze_all_counters()
 {
+#if defined(TT_METAL_TTSIM)
+    return;
+#endif
     ckernel::fence_compiler();
     llk::perf::stop_all();
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::STOP);
@@ -447,8 +461,11 @@ inline __attribute__((always_inline)) void freeze_all_counters()
 
 // Register hungry: inlined on the measured thread it reshuffles the registers of the measured loop itself (one
 // reload per loop level in math_matmul), so single thread run types only freeze there and a peer reads later.
-inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_id)
+inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] std::uint32_t zone_id)
 {
+#if defined(TT_METAL_TTSIM)
+    return;
+#endif
     ckernel::fence_compiler();
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
     volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
