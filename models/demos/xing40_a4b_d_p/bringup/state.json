@@ -1,27 +1,143 @@
 {
  "B.1": {
   "attempts": 0,
-  "duration_s": 18.8,
+  "duration_s": 13.5,
   "history": [
    {
     "status": "PASS",
     "t": "2026-09-30T05:06:10"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:31:28"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:31:41"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:32:44"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:32:58"
    }
   ],
-  "last_run": "2026-09-30T05:06:10",
+  "last_run": "2026-09-30T05:32:58",
   "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/B.1.log",
   "metrics": {
    "all_gather_maxabs": 0.0,
-   "all_reduce_rel_err_axis0": 0.0028818442951887846,
-   "all_reduce_rel_err_axis1": 0.0050607286393642426,
+   "all_reduce_rel_err_axis0": 0.004725898150354624,
+   "all_reduce_rel_err_axis1": 0.0026666666381061077,
    "chips": 8,
-   "mesh_cols": 4,
-   "mesh_rows": 2
+   "mesh_cols": 2,
+   "mesh_rows": 4
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-09-30T05:05:51",
+  "started": "2026-09-30T05:32:44",
   "status": "PASS"
+ },
+ "C.dense.attention": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.attn_collapse": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.attn_hc": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.attn_norm": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.attn_residual": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.ffn_collapse": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.ffn_hc": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.ffn_norm": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.ffn_residual": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.mlp": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.dense.q_a": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.attention": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.attn_collapse": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.attn_hc": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.attn_norm": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.attn_residual": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.experts": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.ffn_collapse": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.ffn_hc": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.ffn_norm": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.ffn_residual": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.moe_add": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.q_a": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.router": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "C.moe.shared_expert": {
+  "attempts": 0,
+  "status": "TODO"
  },
  "G.s16384": {
   "attempts": 0,
@@ -92,6 +208,34 @@
   "started": "2026-09-30T03:43:52",
   "status": "PASS"
  },
+ "K.1": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "L.last": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "L.s16384": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "L.s4096": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "L.s56320": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "M.1": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "O.1": {
+  "attempts": 0,
+  "status": "TODO"
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 3.7,
@@ -112,6 +256,97 @@
   "reason": [],
   "started": "2026-09-30T05:06:17",
   "status": "PASS"
+ },
+ "PL.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "5f256676-42b2-4859-a10a-bbf994cc0a67"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/PL.1.plan.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/PL.1.plan.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "plan",
+    "seconds": 641.9,
+    "session_id": "5f256676-42b2-4859-a10a-bbf994cc0a67",
+    "t": "2026-09-30T05:17:14"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 2.7,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:06:31"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:31:28"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:31:44"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:32:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:33:01"
+   }
+  ],
+  "last_run": "2026-09-30T05:33:01",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/PL.1.log",
+  "metrics": {},
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (3s), log: /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/PL.1.log",
+   "  MISSING  plan_fits (need == 1)",
+   "  MISSING  unplaced_tensors (need == 0)",
+   "  MISSING  plan_errors (need == 0)",
+   "  MISSING  component_errors (need == 0)",
+   "  MISSING  ledger_errors (need == 0)",
+   "  MISSING  plan_approved (need == 1)"
+  ],
+  "role": "plan",
+  "started": "2026-09-30T05:32:58",
+  "status": "FAIL",
+  "waiting": "approve the plan in models/demos/xing40_a4b_d_p/bringup (plan.yaml, plan.md, components.yaml, tasks.yaml), then: python -m models.demos.common.bringup approve plan --spec /localdev/dnijemcevic/tt-metal/models/demos/xing40_a4b_d_p/bringup/spec.yaml"
  },
  "R.1": {
   "attempts": 0,
@@ -282,6 +517,118 @@
   "reason": [],
   "started": "2026-09-30T03:28:36",
   "status": "PASS"
+ },
+ "S.dense.01": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.02": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.03": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.04": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.05": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.06": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.07": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.08": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.09": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.10": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.dense.11": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.01": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.02": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.03": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.04": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.05": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.06": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.07": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.08": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.09": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.10": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.11": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.12": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.13": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "S.moe.14": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "X.1": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "X.2": {
+  "attempts": 0,
+  "status": "TODO"
+ },
+ "X.3": {
+  "attempts": 0,
+  "status": "TODO"
  },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
