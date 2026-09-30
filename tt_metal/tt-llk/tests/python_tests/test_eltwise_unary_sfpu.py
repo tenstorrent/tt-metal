@@ -1734,7 +1734,9 @@ _TT_POLY_FP32_DEST = {
     "erfc": (),
     "exp2": (),
     "expm1": (),
+    "hardsigmoid": (),
     "relu": (),
+    "sigmoid": (),
 }
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ()
@@ -1846,7 +1848,17 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
     (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
+    (
+        MathOperation.Hardsigmoid,
+        "hardsigmoid",
+        True,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_activations.h",
+    ),
     (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
+    (MathOperation.Sigmoid, "sigmoid", True, True, 8, "RC", "ckernel_sfpu_sigmoid.h"),
 ]
 
 
@@ -1915,7 +1927,9 @@ _TT_POLY_PERF_OPERATIONS = (
     "erfc",
     "exp2",
     "expm1",
+    "hardsigmoid",
     "relu",
+    "sigmoid",
 )
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
@@ -2145,5 +2159,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "erfc",
     "exp2",
     "expm1",
+    "hardsigmoid",
     "relu",
+    "sigmoid",
 )
