@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, MathOperation, PerfRunType, ReducePool
 from helpers.param_config import (
@@ -19,8 +18,9 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+TILE_DIM = 32
 
-@skip_for_blackhole
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -30,9 +30,7 @@ from helpers.test_variant_parameters import (
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
-    loop_factor=list(
-        range(10, 201, 10)
-    ),  # Multiple loop factors to minimize profiler overhead
+    loop_factor=[16, 128],  # as perf_sfpu_reduce.py: the plain value and the amortised one
 )
 def test_perf_sfpu_reduce_sdpa(
     perf_report,
@@ -43,30 +41,31 @@ def test_perf_sfpu_reduce_sdpa(
     loop_factor,
 ):
     """
-    Performance test for SFPU reduce SDPA operation.
+    Performance test for the SFPU column MAX reduce over a block of tiles, the shape SDPA softmax uses.
 
-    This test specifically measures the performance of the SFPU reduce operation
-    used in SDPA (Scaled Dot-Product Attention) implementations. It focuses on
-    measuring cycles spent in the SFPU calculations, not including memory operations.
+    The kernel (sources/sfpu_reduce_sdpa_perf.cpp) runs the generic calculate_reduce<MAX, REDUCE_COL,
+    Float16_b> over a block height of four tiles on the math thread; it is the block-height path of
+    calculate_reduce_max_min, not the 4x2 sub-block reduce of sfpu_reduce_sdpa_test.cpp and not the
+    pack-thread issue the SDPA kernels use. The input is one column of four 32x32 tiles (128x32).
 
-    The test uses a 128x32 input dimension (4 tiles) and performs column-wise
-    max reduction, which is the typical operation in SDPA softmax computation.
+    MATH_ISOLATE issues one four-tile reduce per tile count per loop iteration and the report divides the
+    window by loop_factor x tile_cnt, so its column is cycles per four-tile call (divide by four for cycles
+    per tile). L1_TO_L1 unpacks and copies the four tiles into dest, reduces the block once and packs the
+    four tiles, so its column is per tile.
+
+    The test runs on every architecture the kernel compiles for; the earlier Blackhole skip had no
+    recorded reason and the module passes there.
     """
 
-    input_dimensions = [128, 64]
-    tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
+    input_dimensions = [4 * TILE_DIM, TILE_DIM]
+    tile_count = (input_dimensions[0] // TILE_DIM) * (input_dimensions[1] // TILE_DIM)
 
-    # Run performance benchmarks focusing on MATH_ISOLATE to measure SFPU cycles
-    # MATH_ISOLATE measures only the math operation cycles, excluding unpack/pack
-    # This specifically measures the _calculate_reduce_sdpa_ function cycles
     configuration = PerfConfig(
         "sources/sfpu_reduce_sdpa_perf.cpp",
         formats,
         run_types=[
-            # PerfRunType.L1_TO_L1,         # Full operation timing
-            PerfRunType.MATH_ISOLATE,  # Only SFPU computation cycles (_calculate_reduce_sdpa_)
-            # PerfRunType.UNPACK_ISOLATE,   # Unpack timing for reference
-            # PerfRunType.PACK_ISOLATE,     # Pack timing for reference
+            PerfRunType.MATH_ISOLATE,  # the SFPU body over the four-tile block
+            PerfRunType.L1_TO_L1,  # unpack, copy into dest, reduce, pack
         ],
         templates=[
             MATH_OP(mathop=mathop),
@@ -75,7 +74,7 @@ def test_perf_sfpu_reduce_sdpa(
         ],
         runtimes=[
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),  # Used to minimize profiler overhead
+            LOOP_FACTOR(loop_factor),
         ],
         variant_stimuli=StimuliConfig(
             None,
