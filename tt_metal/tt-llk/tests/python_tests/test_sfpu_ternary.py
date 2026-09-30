@@ -160,26 +160,13 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The op's declared accuracy contract for this exact variant, the same lookup the
-    # unary and binary drivers make. Gated on the whole contract, step budget included:
-    # the ternary rows were measured over this driver's own variants. fp16 subnormal
-    # outputs are flushed for the ULP arm, as in the binary driver.
-    contract = accuracy_contract(
-        mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        # The mode the kernel compiled. Left unset, a row keyed `approx: "No"` would not
-        # match and would silently fall back to the default tolerance.
-        approx_mode=_APPROX_MODE,
-        dest_acc=dest_acc,
-        arch=get_chip_architecture(),
+    # The op's declared accuracy contract for this exact variant, the same gate the
+    # binary driver applies: the whole contract, step budget included, since the ternary
+    # rows were measured over this driver's own variants. The mode the kernel compiled
+    # is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_against_contract(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
     )
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        **contract.passed_test_kwargs(flush_subnormals=True),
-    ), "Assert against golden failed"
 
 
 @parametrize(

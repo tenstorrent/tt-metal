@@ -812,42 +812,15 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
-#: metric, with what was measured there. Each is a real deviation on an op that should
-#: be exact, and only Signbit's has a cause established; the test below keeps the list from
-#: growing unnoticed, and fails when an entry is no longer needed. (Abs/Neg/Identity's
-#: 512-step Float16 cells were the metric keeping fp16 subnormals the pack does not
-#: reproduce; the sweep flushes them now, and those cells measure 0.)
-_EXACT_OP_DEMOTIONS = {
-    (
-        MathOperation.Floor,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
-        DestAccumulation.Yes,
-    ): "15360 ULP measured",
-    **{
-        (MathOperation.Floor, DataFormat.Bfp8_b, DataFormat.Float16_b, dest): (
-            "16129 ULP measured"
-        )
-        for dest in DestAccumulation
-    },
-    # One lane: the sweep's -0.0 input. The golden block-quantizes a Bfp8_b input
-    # itself and turns that lane, in its block of subnormals, into a positive non-zero
-    # value (log/sqrt/ceil read it as +inf or ~6e-39), so signbit's golden says 0 where
-    # the kernel says 1. The golden's quantization, not the kernel; the 16-bit inputs of
-    # the same op gate at 0.
-    (
-        MathOperation.Signbit,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
-        DestAccumulation.Yes,
-    ): ("14337 ULP measured, the -0.0 lane"),
-    **{
-        (MathOperation.Signbit, DataFormat.Bfp8_b, DataFormat.Float16_b, dest): (
-            "16129 ULP measured, the -0.0 lane"
-        )
-        for dest in DestAccumulation
-    },
-}
+#: metric, with what was measured there. Each would be a real deviation on an op that
+#: should be exact, with no cause established yet; the test below keeps the list from
+#: growing unnoticed, and fails when an entry is no longer needed. Empty today. The
+#: classes it used to hold were the sweep's, not the ops': Abs/Neg/Identity's 512-step
+#: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce,
+#: and Floor's and Signbit's 14,337/16,129-step Bfp8_b cells were the one -0.0 lane the
+#: block quantizer turns into -2**-127 for the golden, so floor read -1 and signbit read
+#: 1 against silicon's flushed 0 (``ulp_sweep.flushed_inputs``). All of them measure 0.
+_EXACT_OP_DEMOTIONS: dict = {}
 
 
 def _swept_exact_ops():
