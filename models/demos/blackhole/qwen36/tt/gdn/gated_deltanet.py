@@ -27,6 +27,8 @@ from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 #   "nv2np4d3"     -> NV=2, NP=4, row-local, handoff_depth=3, SPLIT core map (split_layout: 96 cores on 11x10,
 #                     falls back to row-local where it does not fit) and double-buffered fp32 q/k CBs (with the
 #                     conv's prenormed fp32 q/k). The SP prefill dies' geometry (demo/sp_sc_flags.env).
+#   "nv2np4d2" / "nv2np4d4" / "nv2np3d3" / "nv1np5d3" / "nv4np2" / "nv4np2d3": depth / geometry variants of nv2np4d3 on
+#                     the 11x10 dies, A/B'd in the SP prefill (traced 4k TTFT); none beats nv2np4d3 (bit-exact to it).
 _GDN_PCFG_GEOMETRIES = {
     "nv1np6": dict(num_producers=6, num_receivers=1, row_local=False),
     "nv1np5": dict(num_producers=5, num_receivers=1, row_local=True),
@@ -44,6 +46,59 @@ _GDN_PCFG_GEOMETRIES = {
         split_layout=True,
         qk_fp32_double_buffer=True,
     ),
+    # Hand-off depth / geometry variants of nv2np4d3 for the 11x10 P300 dies (BH=16, Vt=4; bit-neutral by design:
+    # geometry / depth / placement do not change the accumulation order). All keep the SPLIT core map and the
+    # double-buffered fp32 q/k CBs. Core counts = 16 * (NV + NP); the die has 110.
+    "nv2np4d2": dict(
+        num_producers=4,
+        num_receivers=2,
+        row_local=True,
+        handoff_depth=2,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
+    "nv2np4d4": dict(
+        num_producers=4,
+        num_receivers=2,
+        row_local=True,
+        handoff_depth=4,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
+    "nv2np3d3": dict(  # 80 cores
+        num_producers=3,
+        num_receivers=2,
+        row_local=True,
+        handoff_depth=3,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
+    "nv1np5d3": dict(  # 96 cores
+        num_producers=5,
+        num_receivers=1,
+        row_local=True,
+        handoff_depth=3,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
+    # NV=4 (Vt/NV = 1 tile per receiver): the SPLIT map does not fit NV=4 with NP >= 2 on 11x10 (one producer row per
+    # half, the extra producers do not fit the 3 free columns), and row-local is infeasible (NV+NP = 6, 16 heads), so
+    # these use the row-major placement (placement 0: 2 heads per receiver row, producers fill the free cores).
+    "nv4np2": dict(  # 96 cores
+        num_producers=2,
+        num_receivers=4,
+        row_local=False,
+        handoff_depth=2,
+        qk_fp32_double_buffer=True,
+    ),
+    "nv4np2d3": dict(  # 96 cores
+        num_producers=2,
+        num_receivers=4,
+        row_local=False,
+        handoff_depth=3,
+        qk_fp32_double_buffer=True,
+    ),
+    # nv1np6 (NV=1, NP=6) needs 16 * 7 = 112 cores > 110: no fused geometry fits the 11x10 die (TT_FATAL).
 }
 
 
