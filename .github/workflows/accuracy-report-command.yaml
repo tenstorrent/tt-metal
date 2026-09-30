@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
+# Lives in tt-metal as `accuracy-report-command.yaml`; kept here so it cannot drift. Setup: docs/pr-command.md.
+
+name: accuracy-report-command
+
+# Quoted: a bare `#` would start a comment.
+run-name: "/accuracy-report on #${{ github.event.issue.number }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  ORACLE: tenstorrent/tt-eltwise-accuracy-report
+
+jobs:
+  dispatch:
+    # Gated here like `/test`: an outsider starts no run. Exact, or `/accuracy-reporting` would fire it.
+    if: "github.event.issue.pull_request != null
+      && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
+                  github.event.comment.author_association)
+      && (github.event.comment.body == '/accuracy-report'
+          || startsWith(github.event.comment.body, '/accuracy-report ')
+          || startsWith(github.event.comment.body, '/accuracy-report\n'))"
+    runs-on: ubuntu-slim
+    # Two API calls and a 30s wait; longer means a hung `gh`.
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    # One per PR. The default group would be shared, since `github.ref` is always `main`.
+    concurrency:
+      group: accuracy-report-command-${{ github.event.issue.number }}
+    steps:
+      # The real control: the gate above admits read-only collaborators and all org members.
+      - name: Refuse anyone without write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          if ! level=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
+                 --jq .permission 2>"$RUNNER_TEMP/err")
+          then
+            # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
+            grep -q 404 "$RUNNER_TEMP/err" || {
+              cat "$RUNNER_TEMP/err" >&2
+              echo "::error::cannot read $ACTOR's access to $GITHUB_REPOSITORY"; exit 1; }
+            level=none
+          fi
+          case "$level" in
+            admin|maintain|write) echo "$ACTOR may run this" ;;
+            *) echo "::error::$ACTOR has $level access; /accuracy-report needs write"; exit 1 ;;
+          esac
+
+      - name: Start the run
+        id: start
+        env:
+          # Actions on ORACLE only: nothing here can reach tt-metal with it.
+          GH_TOKEN: ${{ secrets.ACCURACY_REPORT_DISPATCH_TOKEN }}
+          PR: ${{ github.event.issue.number }}
+          # Attacker-controlled. Via env and matched to a fixed shape; `${{ }}` would inject.
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          [[ $BODY =~ ops=([A-Za-z0-9_,]+) ]] && ops=${BASH_REMATCH[1]} || ops=
+
+          if ! gh workflow run accuracy-command.yml --repo "$ORACLE" \
+                 -f pr="$PR" ${ops:+-f ops="$ops"}
+          then
+            # Comment first, fail after: the asker and the maintainer both need to know.
+            echo "started=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          workflow="$GITHUB_SERVER_URL/$ORACLE/actions/workflows/accuracy-command.yml"
+
+          # `gh workflow run` returns no id, so match the oracle's `run-name`. Not `displayTitle`: older `gh` errors.
+          for _ in 1 2 3 4 5 6; do
+            sleep 5
+            id=$(gh run list --repo "$ORACLE" --workflow accuracy-command.yml \
+              --limit 20 --json databaseId,createdAt,name \
+              --jq "[.[] | select(.name == \"accuracy-report for tt-metal#$PR\")]
+                    | sort_by(.createdAt) | last | .databaseId // empty" 2>/dev/null || true)
+            [ -z "$id" ] || break
+          done
+          # The run started either way; only the link is less precise.
+          if [ -n "$id" ]
+          then echo "url=$GITHUB_SERVER_URL/$ORACLE/actions/runs/$id" >> "$GITHUB_OUTPUT"
+          else echo "url=$workflow" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say it started
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+          URL: ${{ steps.start.outputs.url }}
+          STARTED: ${{ steps.start.outputs.started }}
+        run: |
+          if [ "$STARTED" = true ]; then
+            body="Measuring the eltwise ops this change can affect — [run]($URL)."
+            body="$body Informational: it does not gate this pull request."
+          else
+            # This run's log: the `gh` error is there, not on the oracle.
+            body="\`/accuracy-report\` could not start a run on \`$ORACLE\`, most likely a"
+            body="$body missing \`ACCURACY_REPORT_DISPATCH_TOKEN\`."
+            body="$body [Log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          fi
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          [ "$STARTED" = true ]
