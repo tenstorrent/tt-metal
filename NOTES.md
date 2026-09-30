@@ -69,3 +69,12 @@ Driver ~/fasth3/t27/tmp/drive27b.sh (detached): process job 887, then thread job
 Log ~/fasth3/t27/tmp/drive27b.log ends DRIVE27_DONE; job logs tmp/job_process.log, tmp/job_thread.log.
 Next: same greps and md5 check as attempt 4. Then the #20 follow-up (t24 export_async on t20 conv path,
 faster x264 settings) is still open; it was not started.
+
+## 2026-09-30 20:32 (attempt 7)
+Job 887 (process) hit the 600 s broker cap: the JIT cache moved to /var/tmp/fasth3/cache/t27-tt-metal-cache (cold),
+so it spent the run compiling. That cache is now 5.1 GB and warm. Job 889 (thread) started 20:28 on the warm cache.
+The blx03 chip drop at 20:16 (holds 891-903) was under job 888 (task t37), not ours.
+Detached driver ~/fasth3/t27/tmp/drive27c.sh waits for drive27b (job 889), then reruns process mode.
+Log ~/fasth3/t27/tmp/drive27c.log ends DRIVE27C_DONE; job logs tmp/job_thread.log, tmp/job_process2.log.
+Next: same greps and md5 check as attempt 4, comparing job_thread.log with job_process2.log.
+Cleanup after: rm -rf /var/tmp/fasth3/cache/t27-tt-metal-cache (5.1 GB) and the ~/fasth3/t27 worktree on blx03.
