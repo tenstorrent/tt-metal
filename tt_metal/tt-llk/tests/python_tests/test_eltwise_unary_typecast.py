@@ -256,7 +256,7 @@ def _edge_spec_uint16() -> StimuliSpec:
 
 
 def _edge_spec_float_to_uint16() -> StimuliSpec:
-    # Negatives (to 0), fractions with ties (round to nearest even), the top of the range and past it (saturation
+    # Negatives (to 0), fractions with ties (round to nearest, ties away from zero), the top of the range and past it (saturation
     # to 65535, kept off the odd positions), plus random values in -100 to 70000.
     def dist(size, dtype, generator):
         values = torch.rand(size, generator=generator) * 70100.0 - 100.0
@@ -295,7 +295,11 @@ def _as_float_tensor(src) -> torch.Tensor:
 
 
 def _golden_float_to_uint16(src):
-    return torch.clamp(torch.round(_as_float_tensor(src)), 0, 65535).to(torch.int32).flatten()
+    # The body clamps the input at zero (SFPSWAP against 0) and rounds with SFPSTOCHRND in its round-to-nearest
+    # mode, which rounds ties away from zero (tt-isa-documentation, SFPSTOCHRND float to integer), then saturates
+    # at 65535. Computed in float64, where floor(x + 0.5) is exact for every float32 x.
+    values = torch.clamp(_as_float_tensor(src).to(torch.float64), min=0.0)
+    return torch.clamp(torch.floor(values + 0.5), 0, 65535).to(torch.int32).flatten()
 
 
 @parametrize(
