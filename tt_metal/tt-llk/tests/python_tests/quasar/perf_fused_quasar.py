@@ -4,7 +4,7 @@
 
 import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
-from fuser.config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from fuser.config_parser import FUSER_CONFIG_DIR
 from fuser.sweep import collect_fuser_cases
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
@@ -23,6 +23,6 @@ def test_fuser(
     regenerate_cpp,
     worker_id,
 ):
-    config = FuserConfigSchema.load(case_name, case_configs[case_name])
+    config = case_configs[case_name]
     config.global_config.regenerate_cpp = regenerate_cpp
     config.run_perf_test(worker_id=worker_id)
