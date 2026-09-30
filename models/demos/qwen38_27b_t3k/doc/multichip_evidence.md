@@ -114,6 +114,57 @@ of `ERISC_APP_KERNEL_CODE`. The run above therefore has `NOC_SANITIZE`, `SANITIZ
 that fault class remains unchecked. A failed watcher build also leaves the devices needing
 `tt-smi -r`; a subsequent run reports an unexpected `run_mailbox` value until it is reset.
 
+## End-to-end eval
+
+`r1_gpqa_diamond` was run against a served instance of this tree on a T3K, tt-shield run
+36587180186, on tt-metal `04bc281998a` and tt-inference-server `39906703`, which is the commit
+that routes the T3K serving class at this tree rather than the Blackhole one. The workflow logs
+name `qwen38_27b_t3k` 42 times and the QB2 tree not at all, so the run exercised this
+implementation.
+
+| metric | value |
+| --- | ---: |
+| score | 84.85 |
+| published reference | 89.2 |
+| ratio | 0.9512 |
+| samples scored | 198 |
+| samples failed | 0 |
+| mean seconds per task | 163.9 |
+| serving duration | 9 h 20 m |
+
+The accuracy check passes, and so does acceptance. This is the first external accuracy result
+for this mesh: unlike the per-layer PCC and the qualitative suite it compares against a
+published number rather than against a local reference implementation, so it bounds the
+end-to-end quality cost of bfloat4_b projections and a bfloat8_b decode collective at roughly
+five percent of the published GPQA score.
+
+Three things about the run were checked rather than assumed, because an earlier run in this
+project reported a passing score of 35.0 while the server was dead for 33 of 40 prompts, its
+error sentinels letter-matched into spurious credit:
+
+- No sample carries `__INFERENCE_ERROR__` or `__PARTIAL_OUTPUT__`. Seven of the 198 lack a
+  closed `</think>`, but those are reasoning traces that ran into the 65536-token generation
+  cap at 74k to 104k characters; five still carry an earlier `\boxed` and score 1, two score 0,
+  and one of those has no `\boxed` at all. They are graded honestly rather than credited.
+- The `tt_triage` capture is routine, not a hang record. Its only matches for timeout, fatal
+  error or engine death are an unknown-environment-variable warning for `VLLM_RPC_TIMEOUT` and
+  `EngineCore loop active`; the log ends on `EngineCore waiting for work` one second before the
+  samples file was written.
+- The duration is eval work, not a stall: 163.9 s per task over 198 tasks is 9 h 01 m of the
+  9 h 20 m.
+
+The intermittent `binary_ng` device hang that ended three earlier serving runs did not occur in
+nine hours of continuous serving. That is consistent with the fabric-and-topology mismatch
+having been the cause of those hangs rather than a separate defect, though it does not prove it.
+
+The run produced no benchmark, spec-test or agentic block, so it is an accuracy and stability
+result only; the throughput figures below remain local measurements.
+
+The report metadata labels the implementation `qwen36` and the model id
+`id_qwen36_Qwen3.8-27B_t3k`. That is a stale `impl:` key on the spec entry, not a wrong code
+path, since `TT_MODEL_CLASS_OVERRIDES` does the routing and the logs confirm which tree loaded.
+Correcting it would change `model_id`, which keys the eval artifact directory.
+
 ## Gaps
 
 - No PCC against a single-chip TTNN baseline, which is what would separate sharding and
@@ -143,9 +194,10 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
   dispatch-bound, with that overhead identical in both arms. It reports 1.05x for a GDN layer
   and 1.21x for a full-attention layer, which measures host dispatch rather than parallel
   efficiency.
-- The qualitative suite is in `readiness_qualitative/`, covering prompt format and answer
-  quality on the shared six prompts at 256 tokens against a native-bfloat16 control. It is not
-  an accuracy gate: no top-1/top-5/top-100 and no AIME24 reference exist yet.
+- No top-1/top-5/top-100 agreement against a reference implementation and no AIME24 run. The
+  qualitative suite in `readiness_qualitative/` covers prompt format and answer quality on the
+  shared six prompts at 256 tokens against a native-bfloat16 control, and the GPQA Diamond
+  result above is an external accuracy gate, but neither is a logit-level agreement measurement.
 - The residual and fused-CCL families are still unmeasured here. `fused_grid` and
   `rs_core_offset` hold Blackhole values that no 8x8 worker grid can satisfy, so `mmrs`,
   `agmm` and the sharded-residual path cannot run without T3K-legal values first. A shape
