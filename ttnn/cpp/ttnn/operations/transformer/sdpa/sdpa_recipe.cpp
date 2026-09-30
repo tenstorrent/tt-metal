@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <set>
+#include <string>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -171,6 +172,19 @@ ProgramDescriptor recipe_compute_program(
         .config = compute_config};
     if (fp32) {
         compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
+    }
+    // Perf research (not for merge): SDPA_EXTRA_DEFINES="A,B=1" adds compute-kernel defines.
+    if (const char* extra = std::getenv("SDPA_EXTRA_DEFINES")) {
+        std::string list(extra);
+        for (size_t start = 0; start < list.size();) {
+            size_t end = list.find(',', start);
+            std::string item = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!item.empty()) {
+                size_t eq = item.find('=');
+                compute.defines.emplace_back(item.substr(0, eq), eq == std::string::npos ? "1" : item.substr(eq + 1));
+            }
+            start = end == std::string::npos ? list.size() : end + 1;
+        }
     }
     if (proto_pa) {
         compute.defines.emplace_back("SDPA_PROTO_PA", "1");
