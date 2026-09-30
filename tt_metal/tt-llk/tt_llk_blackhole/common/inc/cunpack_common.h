@@ -207,7 +207,7 @@ inline void switch_config_context_from(const std::uint32_t context_used)
 // Which block body the unpack thread's replay buffer holds. The init that records a body sets it, every other init of
 // this family clears it, and the block calls fall back to their per tile calls when it does not name their body, so a
 // block call after an init that recorded something else cannot replay a foreign body. The unpack A values equal the
-// face count the body was recorded for.
+// face count the body was recorded for. A function local static, so that only the kernels that use it carry it.
 enum class BlockReplayBody : std::uint8_t
 {
     None      = 0,
@@ -217,7 +217,11 @@ enum class BlockReplayBody : std::uint8_t
     Tilize    = 8,
 };
 
-inline BlockReplayBody block_replay_body = BlockReplayBody::None;
+inline BlockReplayBody& block_replay_body()
+{
+    static BlockReplayBody body = BlockReplayBody::None;
+    return body;
+}
 
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
