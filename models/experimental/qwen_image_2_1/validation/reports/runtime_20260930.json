@@ -1,0 +1,536 @@
+{
+  "date": "2026-09-30",
+  "model": "Qwen/Qwen-Image-2.1",
+  "model_revision": "790c92633540aa0cb11d9abf19eb46d861714758",
+  "diffusers_commit": "5ff8e59ff9fe81c6e2df4fb4c6ea0d97a5df5ab2",
+  "prompt": "the quick brown fox jumps over the lazy dog",
+  "height": 256,
+  "width": 384,
+  "steps": 20,
+  "seed": 42,
+  "prompt_expansion": false,
+  "activation_injection": false,
+  "hardware": {
+    "CUDA": {
+      "gpu": "NVIDIA RTX A6000",
+      "cards": 1,
+      "cuda_visible_devices": "2",
+      "torch": "2.8.0+cu128",
+      "dtype": "BF16",
+      "cpu_offload": true,
+      "prefix_kv_cache": true
+    },
+    "TT": {
+      "host": "f02cs02",
+      "cards": 1,
+      "device": "Blackhole P150",
+      "bdf": "0000:81:00.0",
+      "ttnn": "0.65.1rc17.dev6333+h3.3",
+      "firmware": "19.11.0",
+      "dtype": "BF16",
+      "prefix_kv_cache": false
+    }
+  },
+  "integrated_runs": {
+    "CUDA": {
+      "seconds": 36.152398101985455,
+      "steps": 20,
+      "timing_boundary": "from before checkpoint/pipeline loading to saved PNG; excludes process imports and initial CLI validation",
+      "samples": 1
+    },
+    "TT": {
+      "seconds": 568.4549219692126,
+      "steps": 20,
+      "timing_boundary": "from before device open to saved PNG; excludes tokenization and CPU request metadata built before device open",
+      "samples": 1,
+      "denoising_step_seconds": {
+        "count": 20,
+        "sum": 538.632674110122,
+        "mean": 26.9316337055061,
+        "median": 25.209194446448237,
+        "min": 24.82154928240925,
+        "max": 39.21086795348674
+      },
+      "non_step_remainder_seconds": 29.822247859090567
+    }
+  },
+  "instrumented_runs": {
+    "CUDA": {
+      "seconds": 28.683107264339924,
+      "executed_steps": 20,
+      "warmup": "none in-process; filesystem/kernel caches may be reused",
+      "module_summary": {
+        "prompt_encoder": {
+          "count": 1,
+          "sum_seconds": 3.7998970951884985,
+          "mean_seconds": 3.7998970951884985,
+          "median_seconds": 3.7998970951884985,
+          "min_seconds": 3.7998970951884985,
+          "max_seconds": 3.7998970951884985
+        },
+        "denoiser": {
+          "count": 20,
+          "sum_seconds": 15.808282349258661,
+          "mean_seconds": 0.7904141174629331,
+          "median_seconds": 0.08132918365299702,
+          "min_seconds": 0.08093659207224846,
+          "max_seconds": 14.26326007116586
+        },
+        "vae_decoder": {
+          "count": 1,
+          "sum_seconds": 0.06857272516936064,
+          "mean_seconds": 0.06857272516936064,
+          "median_seconds": 0.06857272516936064,
+          "min_seconds": 0.06857272516936064,
+          "max_seconds": 0.06857272516936064
+        }
+      },
+      "modules": [
+        {
+          "module": "prompt_encoder",
+          "step": null,
+          "seconds": 3.7998970951884985
+        },
+        {
+          "module": "denoiser",
+          "step": 0,
+          "seconds": 14.26326007116586
+        },
+        {
+          "module": "denoiser",
+          "step": 1,
+          "seconds": 0.0817760294303298
+        },
+        {
+          "module": "denoiser",
+          "step": 2,
+          "seconds": 0.0812775306403637
+        },
+        {
+          "module": "denoiser",
+          "step": 3,
+          "seconds": 0.08121479209512472
+        },
+        {
+          "module": "denoiser",
+          "step": 4,
+          "seconds": 0.08113887719810009
+        },
+        {
+          "module": "denoiser",
+          "step": 5,
+          "seconds": 0.08093659207224846
+        },
+        {
+          "module": "denoiser",
+          "step": 6,
+          "seconds": 0.08107602782547474
+        },
+        {
+          "module": "denoiser",
+          "step": 7,
+          "seconds": 0.08127900306135416
+        },
+        {
+          "module": "denoiser",
+          "step": 8,
+          "seconds": 0.081391298212111
+        },
+        {
+          "module": "denoiser",
+          "step": 9,
+          "seconds": 0.08100541308522224
+        },
+        {
+          "module": "denoiser",
+          "step": 10,
+          "seconds": 0.08143988065421581
+        },
+        {
+          "module": "denoiser",
+          "step": 11,
+          "seconds": 0.08142002020031214
+        },
+        {
+          "module": "denoiser",
+          "step": 12,
+          "seconds": 0.08154108189046383
+        },
+        {
+          "module": "denoiser",
+          "step": 13,
+          "seconds": 0.08175295498222113
+        },
+        {
+          "module": "denoiser",
+          "step": 14,
+          "seconds": 0.08163850754499435
+        },
+        {
+          "module": "denoiser",
+          "step": 15,
+          "seconds": 0.08136323280632496
+        },
+        {
+          "module": "denoiser",
+          "step": 16,
+          "seconds": 0.08103604149073362
+        },
+        {
+          "module": "denoiser",
+          "step": 17,
+          "seconds": 0.08142319694161415
+        },
+        {
+          "module": "denoiser",
+          "step": 18,
+          "seconds": 0.08129513449966908
+        },
+        {
+          "module": "denoiser",
+          "step": 19,
+          "seconds": 0.0810166634619236
+        },
+        {
+          "module": "vae_decoder",
+          "step": null,
+          "seconds": 0.06857272516936064
+        }
+      ],
+      "timing": "synchronized host wall time; module hooks include offload/observation overhead where inside module boundary"
+    },
+    "TT": {
+      "seconds": 54.63366387411952,
+      "executed_steps": 1,
+      "schedule_steps": 20,
+      "decoded_early_diagnostic_latent": true,
+      "warmup": "none in-process; existing JIT cache reused",
+      "module_summary": {
+        "prompt_encoder": {
+          "count": 1,
+          "sum_seconds": 24.689442506060004,
+          "mean_seconds": 24.689442506060004,
+          "median_seconds": 24.689442506060004,
+          "min_seconds": 24.689442506060004,
+          "max_seconds": 24.689442506060004
+        },
+        "text_projection": {
+          "count": 1,
+          "sum_seconds": 0.029073615558445454,
+          "mean_seconds": 0.029073615558445454,
+          "median_seconds": 0.029073615558445454,
+          "min_seconds": 0.029073615558445454,
+          "max_seconds": 0.029073615558445454
+        },
+        "initial_noise": {
+          "count": 1,
+          "sum_seconds": 0.04319552052766085,
+          "mean_seconds": 0.04319552052766085,
+          "median_seconds": 0.04319552052766085,
+          "min_seconds": 0.04319552052766085,
+          "max_seconds": 0.04319552052766085
+        },
+        "input_and_conditioning": {
+          "count": 1,
+          "sum_seconds": 0.10142366588115692,
+          "mean_seconds": 0.10142366588115692,
+          "median_seconds": 0.10142366588115692,
+          "min_seconds": 0.10142366588115692,
+          "max_seconds": 0.10142366588115692
+        },
+        "dit_block": {
+          "count": 32,
+          "sum_seconds": 24.57430080510676,
+          "mean_seconds": 0.7679469001595862,
+          "median_seconds": 0.756793069653213,
+          "min_seconds": 0.746891999617219,
+          "max_seconds": 0.9776119226589799
+        },
+        "output_head": {
+          "count": 1,
+          "sum_seconds": 0.03770909830927849,
+          "mean_seconds": 0.03770909830927849,
+          "median_seconds": 0.03770909830927849,
+          "min_seconds": 0.03770909830927849,
+          "max_seconds": 0.03770909830927849
+        },
+        "euler_update": {
+          "count": 1,
+          "sum_seconds": 0.018899240531027317,
+          "mean_seconds": 0.018899240531027317,
+          "median_seconds": 0.018899240531027317,
+          "min_seconds": 0.018899240531027317,
+          "max_seconds": 0.018899240531027317
+        },
+        "vae_decode": {
+          "count": 1,
+          "sum_seconds": 3.286079566925764,
+          "mean_seconds": 3.286079566925764,
+          "median_seconds": 3.286079566925764,
+          "min_seconds": 3.286079566925764,
+          "max_seconds": 3.286079566925764
+        }
+      },
+      "modules": [
+        {
+          "module": "prompt_encoder",
+          "step": null,
+          "layer": null,
+          "seconds": 24.689442506060004
+        },
+        {
+          "module": "text_projection",
+          "step": null,
+          "layer": null,
+          "seconds": 0.029073615558445454
+        },
+        {
+          "module": "initial_noise",
+          "step": null,
+          "layer": null,
+          "seconds": 0.04319552052766085
+        },
+        {
+          "module": "input_and_conditioning",
+          "step": 0,
+          "layer": null,
+          "seconds": 0.10142366588115692
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 0,
+          "seconds": 0.9776119226589799
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 1,
+          "seconds": 0.746891999617219
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 2,
+          "seconds": 0.7568157119676471
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 3,
+          "seconds": 0.7775317523628473
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 4,
+          "seconds": 0.7797292908653617
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 5,
+          "seconds": 0.7788202716037631
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 6,
+          "seconds": 0.7797374213114381
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 7,
+          "seconds": 0.7762084314599633
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 8,
+          "seconds": 0.7786584878340364
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 9,
+          "seconds": 0.7790895262733102
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 10,
+          "seconds": 0.7546029509976506
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 11,
+          "seconds": 0.7730631018057466
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 12,
+          "seconds": 0.7594128474593163
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 13,
+          "seconds": 0.7581034088507295
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 14,
+          "seconds": 0.753109147772193
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 15,
+          "seconds": 0.7506847642362118
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 16,
+          "seconds": 0.7528147613629699
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 17,
+          "seconds": 0.7604333003982902
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 18,
+          "seconds": 0.7578040519729257
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 19,
+          "seconds": 0.7603099569678307
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 20,
+          "seconds": 0.756632405333221
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 21,
+          "seconds": 0.7542370725423098
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 22,
+          "seconds": 0.7593537755310535
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 23,
+          "seconds": 0.7559502590447664
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 24,
+          "seconds": 0.7540165074169636
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 25,
+          "seconds": 0.7522893287241459
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 26,
+          "seconds": 0.7560153212398291
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 27,
+          "seconds": 0.7560702813789248
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 28,
+          "seconds": 0.75437649525702
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 29,
+          "seconds": 0.752803148701787
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 30,
+          "seconds": 0.7543526748195291
+        },
+        {
+          "module": "dit_block",
+          "step": 0,
+          "layer": 31,
+          "seconds": 0.756770427338779
+        },
+        {
+          "module": "output_head",
+          "step": 0,
+          "layer": null,
+          "seconds": 0.03770909830927849
+        },
+        {
+          "module": "euler_update",
+          "step": 0,
+          "layer": null,
+          "seconds": 0.018899240531027317
+        },
+        {
+          "module": "vae_decode",
+          "step": null,
+          "layer": null,
+          "seconds": 3.286079566925764
+        }
+      ],
+      "timing": "synchronized host wall time, including weight loading and dispatch; not device kernel time"
+    }
+  },
+  "limits": [
+    "One full independent generation per backend; not a multi-request performance distribution.",
+    "The TT timing diagnostic executes only step 0 of the same 20-step schedule; its decoded image is not a full-generation reference.",
+    "Module wall times synchronize device completion and include Python/weight-loading/dispatch overhead inside each boundary; they are not kernel-only timings.",
+    "CUDA retains the denoiser on GPU and caches its prefix across steps; TT reloads block weights and recomputes the prefix each step.",
+    "CUDA decoder hook excludes input normalization, post-quant convolution, and whole-VAE offload transfer outside that module; TT decoder timing includes latent preprocessing and post-quant convolution.",
+    "CUDA initial-noise and Euler-update durations were not separately instrumented.",
+    "No exact end-to-end speedup ratio is claimed because the original full-run timing starts differ."
+  ],
+  "fork_validation": {
+    "date": "2026-09-30",
+    "passed": 12,
+    "skipped": 1,
+    "elapsed_seconds": 175.34,
+    "tests": [
+      "native raw-prompt TT encoder, native Gaussian noise, one step from a 20-step schedule, TT VAE decode, CUDA unavailable",
+      "existing paired first-step denoiser PCC regression",
+      "CPU request metadata tests"
+    ],
+    "native_one_step_png_bitwise_equal_to_workspace_timing_diagnostic": true,
+    "png_sha256": "8f45babf1627b2cd2bc9137435b4e47bf596b7d86bdaaead00a78b1d138a8674",
+    "note": "Migrated fork package was run in its own environment. Cold JIT compilation occurred; this pytest duration is a validation duration, not an inference benchmark."
+  }
+}

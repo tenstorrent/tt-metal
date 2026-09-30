@@ -1,0 +1,3730 @@
+{
+  "schema_version": 1,
+  "report_date": "2026-09-30",
+  "model_id": "Qwen/Qwen-Image-2.1",
+  "model_revision": "790c92633540aa0cb11d9abf19eb46d861714758",
+  "artifact_root": "~/data/qwen-image-2.1",
+  "prompt": "the quick brown fox jumps over the lazy dog",
+  "prompt_expansion": false,
+  "metric_definitions": {
+    "pcc": "Pearson correlation over every finite flattened tensor element, centered in float64; exact equality yields 1; roundoff is bounded to [-1, 1].",
+    "relative_rms_error": "RMS(TT - CUDA) / RMS(CUDA), not an elementwise relative tolerance.",
+    "fraction_within_atol_0_01": "Fraction of absolute tensor differences <= 0.01 with rtol=0.",
+    "scope": "Independent native CUDA and TT RNG trajectories cannot be correctness-tested by elementwise latent or final-image PCC."
+  },
+  "groups": [
+    {
+      "module": "prompt_encoder_current_native_runs",
+      "scope": "current independent integrated runs, same raw prompt and tokenization; valid deterministic encoder comparison despite independent subsequent RNG",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "steps": 20,
+        "seed": 42,
+        "input_tokens": 31,
+        "prompt_tokens": 17
+      },
+      "rows": [
+        {
+          "stage": "prompt_embeds",
+          "shape": [
+            1,
+            17,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9992962835959462,
+            "relative_rms_error": 0.0384463824120384,
+            "mean_abs_error": 0.3227842169649461,
+            "max_abs_error": 32.0,
+            "fraction_within_atol_0_01": 0.05743049172794118,
+            "bitwise_equal": false,
+            "elements": 69632,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "integrated-native-20260930/tt-remote/prompt_embeds.pt",
+          "cuda_tensor": "integrated-native-20260930/cuda/initial_encoder_hidden_states.pt"
+        }
+      ]
+    },
+    {
+      "module": "vae_current_native_tt_final_latent",
+      "scope": "current native TT final latent decoded independently by CUDA VAE oracle; TT native decoder ran without activation injection, and this subsequent CUDA-only oracle isolates final decoder error",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "batch_size": 1,
+        "frames": 1,
+        "latent_channels": 64,
+        "output_channels": 4
+      },
+      "input_provenance": {
+        "tt_latent": "integrated-native-20260930/tt-remote/step_019/updated_latents.pt",
+        "cuda_oracle_manifest": "integrated-native-20260930/cuda-vae-on-tt-final/manifest.json"
+      },
+      "rows": [
+        {
+          "stage": "output",
+          "shape": [
+            1,
+            4,
+            1,
+            256,
+            384
+          ],
+          "metrics": {
+            "pcc": 0.9999514922672535,
+            "relative_rms_error": 0.007838790985734381,
+            "mean_abs_error": 0.0028371839713751492,
+            "max_abs_error": 0.220703125,
+            "fraction_within_atol_0_01": 0.9330774943033854,
+            "bitwise_equal": false,
+            "elements": 393216,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "integrated-native-20260930/tt-remote/decoded_image.pt",
+          "cuda_tensor": "integrated-native-20260930/cuda-vae-on-tt-final/output.pt"
+        }
+      ],
+      "same_packed_input_bitwise_verified": true
+    },
+    {
+      "module": "denoiser_current_fork_matched_input_first_step",
+      "scope": "fresh hardware validation from the migrated fork import path at the current native workload geometry; captured CUDA initial latent and prompt embeddings deliberately supply identical inputs for this separate accuracy test. Complete first denoising step is chained through all 32 TT transformer blocks, followed by TT scheduler update. This diagnostic is separate from the activation-injection-free native integrated generation.",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "reference_steps": 20,
+        "tested_step": 0,
+        "seed": 42,
+        "sequence_tokens": 401,
+        "latent_tokens": 384
+      },
+      "input_provenance": "integrated-native-20260930/fork-denoiser-test/inputs.json",
+      "hardware_suite": {
+        "passed": 12,
+        "skipped": 1,
+        "elapsed_seconds": 175.34,
+        "scope": "native one-step decode, paired first-step denoiser, and metadata checks; suite elapsed time is not model inference runtime"
+      },
+      "rows": [
+        {
+          "stage": "velocity_output",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9996117208381888,
+            "relative_rms_error": 0.02846355660255284,
+            "mean_abs_error": 0.02774569964579617,
+            "max_abs_error": 0.171875,
+            "fraction_within_atol_0_01": 0.2431640625,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "integrated-native-20260930/fork-denoiser-test/step_000/velocity.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_000/transformer/proj_out.pt:[:,-384:,:]"
+        },
+        {
+          "stage": "scheduler.updated_latents",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9999976131355437,
+            "relative_rms_error": 0.002242846245951501,
+            "mean_abs_error": 0.0009135805691281954,
+            "max_abs_error": 0.015625,
+            "fraction_within_atol_0_01": 0.9961344401041666,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "integrated-native-20260930/fork-denoiser-test/step_000/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_000/scheduler/updated_latents.pt"
+        }
+      ]
+    },
+    {
+      "module": "prompt_encoder_all_layers",
+      "scope": "historical complete encoder chain from same raw token IDs, no layer activation injection; intermediate metrics include upstream encoder errors",
+      "workload": {
+        "input_tokens": 31,
+        "prompt_tokens": 17,
+        "hidden_size": 4096,
+        "layers": 36,
+        "encoder_revision": "790c92633540aa0cb11d9abf19eb46d861714758"
+      },
+      "rows": [
+        {
+          "stage": "embedding",
+          "historical_metrics": {
+            "pcc": 0.9999999999999223,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 1.0,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": true,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/embedding.pt",
+          "cuda_tensor": "encoder/cuda-fox/embedding.pt"
+        },
+        {
+          "stage": "rotary_cos",
+          "historical_metrics": {
+            "pcc": 1.0000000000000027,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0
+          },
+          "shape": [
+            1,
+            31,
+            128
+          ],
+          "metrics": {
+            "pcc": 1.0,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": true,
+            "elements": 3968,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/rotary_cos.pt",
+          "cuda_tensor": "encoder/cuda-fox/rotary_cos.pt"
+        },
+        {
+          "stage": "rotary_sin",
+          "historical_metrics": {
+            "pcc": 1.000000000000001,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0
+          },
+          "shape": [
+            1,
+            31,
+            128
+          ],
+          "metrics": {
+            "pcc": 1.0,
+            "relative_rms_error": 0.0,
+            "mean_abs_error": 0.0,
+            "max_abs_error": 0.0,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": true,
+            "elements": 3968,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/rotary_sin.pt",
+          "cuda_tensor": "encoder/cuda-fox/rotary_sin.pt"
+        },
+        {
+          "stage": "layer_000/input_layernorm",
+          "historical_metrics": {
+            "pcc": 0.9999996259619841,
+            "relative_rms_error": 0.0008749350164467711,
+            "mean_abs_error": 6.30552442030861e-07,
+            "max_abs_error": 0.0009765625
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999996259619838,
+            "relative_rms_error": 0.0008749350164467711,
+            "mean_abs_error": 6.30552442030861e-07,
+            "max_abs_error": 0.0009765625,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_input_layernorm.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/input_layernorm.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.q_proj",
+          "historical_metrics": {
+            "pcc": 0.9999989804455832,
+            "relative_rms_error": 0.0014316547045325368,
+            "mean_abs_error": 1.3967645248070063e-05,
+            "max_abs_error": 0.00390625
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999989804455833,
+            "relative_rms_error": 0.0014316547045325368,
+            "mean_abs_error": 1.3967645248070063e-05,
+            "max_abs_error": 0.00390625,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.q_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.q_proj.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.q_norm",
+          "historical_metrics": {
+            "pcc": 0.9999977456631799,
+            "relative_rms_error": 0.002122856860881576,
+            "mean_abs_error": 0.0008974076582460604,
+            "max_abs_error": 0.125
+          },
+          "shape": [
+            1,
+            31,
+            32,
+            128
+          ],
+          "metrics": {
+            "pcc": 0.9999977456631799,
+            "relative_rms_error": 0.002122856860881576,
+            "mean_abs_error": 0.0008974076582460604,
+            "max_abs_error": 0.125,
+            "fraction_within_atol_0_01": 0.9810751638104839,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.q_norm.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.q_norm.pt"
+        },
+        {
+          "stage": "layer_000/rotated_q",
+          "historical_metrics": {
+            "pcc": 0.9999945234882225,
+            "relative_rms_error": 0.0034584611609673613,
+            "mean_abs_error": 0.001982481109969799,
+            "max_abs_error": 0.125
+          },
+          "shape": [
+            1,
+            32,
+            31,
+            128
+          ],
+          "metrics": {
+            "pcc": 0.9999945234882224,
+            "relative_rms_error": 0.0034584611609673613,
+            "mean_abs_error": 0.001982481109969799,
+            "max_abs_error": 0.125,
+            "fraction_within_atol_0_01": 0.9486595892137096,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_rotated_q.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/rotated_q.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.k_proj",
+          "historical_metrics": {
+            "pcc": 0.9999990957694433,
+            "relative_rms_error": 0.001346630803050932,
+            "mean_abs_error": 1.6380108131523876e-05,
+            "max_abs_error": 0.00390625
+          },
+          "shape": [
+            1,
+            31,
+            1024
+          ],
+          "metrics": {
+            "pcc": 0.9999990957694433,
+            "relative_rms_error": 0.001346630803050932,
+            "mean_abs_error": 1.6380108131523876e-05,
+            "max_abs_error": 0.00390625,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 31744,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.k_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.k_proj.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.k_norm",
+          "historical_metrics": {
+            "pcc": 0.9999984460932864,
+            "relative_rms_error": 0.001764386063025099,
+            "mean_abs_error": 0.0015164410649430788,
+            "max_abs_error": 1.0
+          },
+          "shape": [
+            1,
+            31,
+            8,
+            128
+          ],
+          "metrics": {
+            "pcc": 0.9999984460932859,
+            "relative_rms_error": 0.001764386063025099,
+            "mean_abs_error": 0.0015164410649430788,
+            "max_abs_error": 1.0,
+            "fraction_within_atol_0_01": 0.9807207661290323,
+            "bitwise_equal": false,
+            "elements": 31744,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.k_norm.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.k_norm.pt"
+        },
+        {
+          "stage": "layer_000/rotated_k",
+          "historical_metrics": {
+            "pcc": 0.9999984083803983,
+            "relative_rms_error": 0.0017860549155213558,
+            "mean_abs_error": 0.002515790379425931,
+            "max_abs_error": 1.0
+          },
+          "shape": [
+            1,
+            8,
+            31,
+            128
+          ],
+          "metrics": {
+            "pcc": 0.9999984083803989,
+            "relative_rms_error": 0.0017860549155213558,
+            "mean_abs_error": 0.002515790379425931,
+            "max_abs_error": 1.0,
+            "fraction_within_atol_0_01": 0.9496282762096774,
+            "bitwise_equal": false,
+            "elements": 31744,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_rotated_k.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/rotated_k.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.v_proj",
+          "historical_metrics": {
+            "pcc": 0.999998804083977,
+            "relative_rms_error": 0.0015565754770177826,
+            "mean_abs_error": 1.0248053454673819e-05,
+            "max_abs_error": 0.0009765625
+          },
+          "shape": [
+            1,
+            31,
+            1024
+          ],
+          "metrics": {
+            "pcc": 0.9999988040839768,
+            "relative_rms_error": 0.0015565754770177826,
+            "mean_abs_error": 1.0248053454673819e-05,
+            "max_abs_error": 0.0009765625,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 31744,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.v_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.v_proj.pt"
+        },
+        {
+          "stage": "layer_000/attention_heads_merged",
+          "historical_metrics": {
+            "pcc": 0.9999535345339361,
+            "relative_rms_error": 0.010097280918738174,
+            "mean_abs_error": 0.00010536998175142241,
+            "max_abs_error": 0.0047607421875
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999535345339364,
+            "relative_rms_error": 0.010097280918738174,
+            "mean_abs_error": 0.00010536998175142241,
+            "max_abs_error": 0.0047607421875,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_attention_heads_merged.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/attention_heads_merged.pt"
+        },
+        {
+          "stage": "layer_000/self_attn.o_proj",
+          "historical_metrics": {
+            "pcc": 0.9999846723633075,
+            "relative_rms_error": 0.0059342375269587026,
+            "mean_abs_error": 0.0002457400362547354,
+            "max_abs_error": 0.015625
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999846723633071,
+            "relative_rms_error": 0.0059342375269587026,
+            "mean_abs_error": 0.0002457400362547354,
+            "max_abs_error": 0.015625,
+            "fraction_within_atol_0_01": 0.999968497983871,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_self_attn.o_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/self_attn.o_proj.pt"
+        },
+        {
+          "stage": "layer_000/post_attention_layernorm",
+          "historical_metrics": {
+            "pcc": 0.9999614329933909,
+            "relative_rms_error": 0.008782588897337408,
+            "mean_abs_error": 0.0004999537071149286,
+            "max_abs_error": 0.0078125
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999614329933908,
+            "relative_rms_error": 0.008782588897337408,
+            "mean_abs_error": 0.0004999537071149286,
+            "max_abs_error": 0.0078125,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_post_attention_layernorm.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/post_attention_layernorm.pt"
+        },
+        {
+          "stage": "layer_000/mlp.gate_proj",
+          "historical_metrics": {
+            "pcc": 0.9999568538492976,
+            "relative_rms_error": 0.009138181441648605,
+            "mean_abs_error": 0.001263032180715175,
+            "max_abs_error": 0.0576171875
+          },
+          "shape": [
+            1,
+            31,
+            12288
+          ],
+          "metrics": {
+            "pcc": 0.9999568538492978,
+            "relative_rms_error": 0.009138181441648605,
+            "mean_abs_error": 0.001263032180715175,
+            "max_abs_error": 0.0576171875,
+            "fraction_within_atol_0_01": 0.9973013272849462,
+            "bitwise_equal": false,
+            "elements": 380928,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_mlp.gate_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/mlp.gate_proj.pt"
+        },
+        {
+          "stage": "layer_000/mlp.up_proj",
+          "historical_metrics": {
+            "pcc": 0.9999656474971251,
+            "relative_rms_error": 0.00830086959450852,
+            "mean_abs_error": 0.0010403408517548438,
+            "max_abs_error": 0.0390625
+          },
+          "shape": [
+            1,
+            31,
+            12288
+          ],
+          "metrics": {
+            "pcc": 0.9999656474971251,
+            "relative_rms_error": 0.00830086959450852,
+            "mean_abs_error": 0.0010403408517548438,
+            "max_abs_error": 0.0390625,
+            "fraction_within_atol_0_01": 0.9993647093413979,
+            "bitwise_equal": false,
+            "elements": 380928,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_mlp.up_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/mlp.up_proj.pt"
+        },
+        {
+          "stage": "layer_000/mlp_product",
+          "historical_metrics": {
+            "pcc": 0.9999540300567379,
+            "relative_rms_error": 0.009665453217979349,
+            "mean_abs_error": 0.00014375370168747908,
+            "max_abs_error": 0.0625
+          },
+          "shape": [
+            1,
+            31,
+            12288
+          ],
+          "metrics": {
+            "pcc": 0.9999540300567378,
+            "relative_rms_error": 0.009665453217979349,
+            "mean_abs_error": 0.00014375370168747908,
+            "max_abs_error": 0.0625,
+            "fraction_within_atol_0_01": 0.9999081191196236,
+            "bitwise_equal": false,
+            "elements": 380928,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_mlp_product.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/mlp_product.pt"
+        },
+        {
+          "stage": "layer_000/mlp.down_proj",
+          "historical_metrics": {
+            "pcc": 0.999973073088471,
+            "relative_rms_error": 0.007399764223635045,
+            "mean_abs_error": 0.0007810047949122588,
+            "max_abs_error": 0.0625
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999730730884707,
+            "relative_rms_error": 0.007399764223635045,
+            "mean_abs_error": 0.0007810047949122588,
+            "max_abs_error": 0.0625,
+            "fraction_within_atol_0_01": 0.9994329637096774,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000_mlp.down_proj.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/mlp.down_proj.pt"
+        },
+        {
+          "stage": "layer_000",
+          "historical_metrics": {
+            "pcc": 0.9999777063656379,
+            "relative_rms_error": 0.006678550741826819,
+            "mean_abs_error": 0.0008578788218719344,
+            "max_abs_error": 0.0625
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999777063656382,
+            "relative_rms_error": 0.006678550741826819,
+            "mean_abs_error": 0.0008578788218719344,
+            "max_abs_error": 0.0625,
+            "fraction_within_atol_0_01": 0.9991730720766129,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_000.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_000/output.pt"
+        },
+        {
+          "stage": "layer_001",
+          "historical_metrics": {
+            "pcc": 0.9999805258439095,
+            "relative_rms_error": 0.006536881843563033,
+            "mean_abs_error": 0.0013950268715439784,
+            "max_abs_error": 0.25
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999805258439093,
+            "relative_rms_error": 0.006536881843563033,
+            "mean_abs_error": 0.0013950268715439784,
+            "max_abs_error": 0.25,
+            "fraction_within_atol_0_01": 0.9946919102822581,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_001.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_001/output.pt"
+        },
+        {
+          "stage": "layer_002",
+          "historical_metrics": {
+            "pcc": 0.9999775015555388,
+            "relative_rms_error": 0.0072076294880430245,
+            "mean_abs_error": 0.001906698372500438,
+            "max_abs_error": 0.375
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999775015555392,
+            "relative_rms_error": 0.0072076294880430245,
+            "mean_abs_error": 0.001906698372500438,
+            "max_abs_error": 0.375,
+            "fraction_within_atol_0_01": 0.9902501260080645,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_002.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_002/output.pt"
+        },
+        {
+          "stage": "layer_003",
+          "historical_metrics": {
+            "pcc": 0.9999703280087686,
+            "relative_rms_error": 0.008151521243403839,
+            "mean_abs_error": 0.002486914291136688,
+            "max_abs_error": 0.5
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999703280087691,
+            "relative_rms_error": 0.008151521243403839,
+            "mean_abs_error": 0.002486914291136688,
+            "max_abs_error": 0.5,
+            "fraction_within_atol_0_01": 0.9837843371975806,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_003.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_003/output.pt"
+        },
+        {
+          "stage": "layer_004",
+          "historical_metrics": {
+            "pcc": 0.9999639270503949,
+            "relative_rms_error": 0.008819188936146657,
+            "mean_abs_error": 0.0032781047686453787,
+            "max_abs_error": 0.75
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999963927050395,
+            "relative_rms_error": 0.008819188936146657,
+            "mean_abs_error": 0.0032781047686453787,
+            "max_abs_error": 0.75,
+            "fraction_within_atol_0_01": 0.9656864289314516,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_004.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_004/output.pt"
+        },
+        {
+          "stage": "layer_005",
+          "historical_metrics": {
+            "pcc": 0.9999538988768991,
+            "relative_rms_error": 0.010021200590349177,
+            "mean_abs_error": 0.004203342952795567,
+            "max_abs_error": 0.75
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999953898876899,
+            "relative_rms_error": 0.010021200590349177,
+            "mean_abs_error": 0.004203342952795567,
+            "max_abs_error": 0.75,
+            "fraction_within_atol_0_01": 0.9283565398185484,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_005.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_005/output.pt"
+        },
+        {
+          "stage": "layer_006",
+          "historical_metrics": {
+            "pcc": 0.9999998553090477,
+            "relative_rms_error": 0.014344271642607077,
+            "mean_abs_error": 0.008685939648609248,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999998553090463,
+            "relative_rms_error": 0.014344271642607077,
+            "mean_abs_error": 0.008685939648609248,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.8381898941532258,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_006.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_006/output.pt"
+        },
+        {
+          "stage": "layer_007",
+          "historical_metrics": {
+            "pcc": 0.9999998305253535,
+            "relative_rms_error": 0.0143471977407293,
+            "mean_abs_error": 0.010572175525369184,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999998305253532,
+            "relative_rms_error": 0.0143471977407293,
+            "mean_abs_error": 0.010572175525369184,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.7461016255040323,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_007.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_007/output.pt"
+        },
+        {
+          "stage": "layer_008",
+          "historical_metrics": {
+            "pcc": 0.9999998014003034,
+            "relative_rms_error": 0.014350213747590022,
+            "mean_abs_error": 0.012124216980150631,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999998014003039,
+            "relative_rms_error": 0.014350213747590022,
+            "mean_abs_error": 0.012124216980150631,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.6659211189516129,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_008.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_008/output.pt"
+        },
+        {
+          "stage": "layer_009",
+          "historical_metrics": {
+            "pcc": 0.9999997781142946,
+            "relative_rms_error": 0.01435331653609124,
+            "mean_abs_error": 0.012634751176641833,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999997781142943,
+            "relative_rms_error": 0.01435331653609124,
+            "mean_abs_error": 0.012634751176641833,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.6477287046370968,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_009.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_009/output.pt"
+        },
+        {
+          "stage": "layer_010",
+          "historical_metrics": {
+            "pcc": 0.9999997356610023,
+            "relative_rms_error": 0.014356482531528892,
+            "mean_abs_error": 0.013352979351991727,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999997356610015,
+            "relative_rms_error": 0.014356482531528892,
+            "mean_abs_error": 0.013352979351991727,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.6194635206653226,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_010.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_010/output.pt"
+        },
+        {
+          "stage": "layer_011",
+          "historical_metrics": {
+            "pcc": 0.999999722537459,
+            "relative_rms_error": 0.014357334988443207,
+            "mean_abs_error": 0.014235413362902979,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999997225374572,
+            "relative_rms_error": 0.014357334988443207,
+            "mean_abs_error": 0.014235413362902979,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.5812358240927419,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_011.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_011/output.pt"
+        },
+        {
+          "stage": "layer_012",
+          "historical_metrics": {
+            "pcc": 0.9999996791356471,
+            "relative_rms_error": 0.014359107394597075,
+            "mean_abs_error": 0.015488800232208545,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999999679135647,
+            "relative_rms_error": 0.014359107394597075,
+            "mean_abs_error": 0.015488800232208545,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.5455519153225806,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_012.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_012/output.pt"
+        },
+        {
+          "stage": "layer_013",
+          "historical_metrics": {
+            "pcc": 0.999999670420128,
+            "relative_rms_error": 0.014360585768564582,
+            "mean_abs_error": 0.016315888793718432,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999996704201279,
+            "relative_rms_error": 0.014360585768564582,
+            "mean_abs_error": 0.016315888793718432,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.5146484375,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_013.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_013/output.pt"
+        },
+        {
+          "stage": "layer_014",
+          "historical_metrics": {
+            "pcc": 0.9999995271830097,
+            "relative_rms_error": 0.014367772514844813,
+            "mean_abs_error": 0.018927113870309004,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.99999952718301,
+            "relative_rms_error": 0.014367772514844813,
+            "mean_abs_error": 0.018927113870309004,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.4706637474798387,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_014.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_014/output.pt"
+        },
+        {
+          "stage": "layer_015",
+          "historical_metrics": {
+            "pcc": 0.9999995545632416,
+            "relative_rms_error": 0.014367943062743369,
+            "mean_abs_error": 0.019709960707733707,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999995545632413,
+            "relative_rms_error": 0.014367943062743369,
+            "mean_abs_error": 0.019709960707733707,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.4259308845766129,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_015.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_015/output.pt"
+        },
+        {
+          "stage": "layer_016",
+          "historical_metrics": {
+            "pcc": 0.9999789421077636,
+            "relative_rms_error": 0.011614665450919168,
+            "mean_abs_error": 0.023521228663382993,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999789421077642,
+            "relative_rms_error": 0.011614665450919168,
+            "mean_abs_error": 0.023521228663382993,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.39649225050403225,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_016.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_016/output.pt"
+        },
+        {
+          "stage": "layer_017",
+          "historical_metrics": {
+            "pcc": 0.9999787735335274,
+            "relative_rms_error": 0.011594991783463834,
+            "mean_abs_error": 0.02531353684683,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999787735335276,
+            "relative_rms_error": 0.011594991783463834,
+            "mean_abs_error": 0.02531353684683,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.3654076360887097,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_017.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_017/output.pt"
+        },
+        {
+          "stage": "layer_018",
+          "historical_metrics": {
+            "pcc": 0.9999788207009458,
+            "relative_rms_error": 0.011600082936665937,
+            "mean_abs_error": 0.026525696799639734,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999788207009455,
+            "relative_rms_error": 0.011600082936665937,
+            "mean_abs_error": 0.026525696799639734,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.33793787802419356,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_018.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_018/output.pt"
+        },
+        {
+          "stage": "layer_019",
+          "historical_metrics": {
+            "pcc": 0.9999787919305405,
+            "relative_rms_error": 0.011602785668216056,
+            "mean_abs_error": 0.02872328051636296,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999787919305414,
+            "relative_rms_error": 0.011602785668216056,
+            "mean_abs_error": 0.02872328051636296,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.3055301789314516,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_019.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_019/output.pt"
+        },
+        {
+          "stage": "layer_020",
+          "historical_metrics": {
+            "pcc": 0.9999787764137652,
+            "relative_rms_error": 0.011605836622787288,
+            "mean_abs_error": 0.030868436540326765,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999978776413766,
+            "relative_rms_error": 0.011605836622787288,
+            "mean_abs_error": 0.030868436540326765,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.28146263860887094,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_020.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_020/output.pt"
+        },
+        {
+          "stage": "layer_021",
+          "historical_metrics": {
+            "pcc": 0.9999787297078448,
+            "relative_rms_error": 0.01160989861645942,
+            "mean_abs_error": 0.0336748025109691,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999787297078442,
+            "relative_rms_error": 0.01160989861645942,
+            "mean_abs_error": 0.0336748025109691,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.25121282762096775,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_021.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_021/output.pt"
+        },
+        {
+          "stage": "layer_022",
+          "historical_metrics": {
+            "pcc": 0.9999786771425767,
+            "relative_rms_error": 0.011613352545048115,
+            "mean_abs_error": 0.03656429845479227,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999786771425769,
+            "relative_rms_error": 0.011613352545048115,
+            "mean_abs_error": 0.03656429845479227,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.22750756048387097,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_022.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_022/output.pt"
+        },
+        {
+          "stage": "layer_023",
+          "historical_metrics": {
+            "pcc": 0.9999785751445764,
+            "relative_rms_error": 0.011620400371127179,
+            "mean_abs_error": 0.04124725838342021,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999785751445773,
+            "relative_rms_error": 0.011620400371127179,
+            "mean_abs_error": 0.04124725838342021,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.19775390625,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_023.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_023/output.pt"
+        },
+        {
+          "stage": "layer_024",
+          "historical_metrics": {
+            "pcc": 0.9999784111551644,
+            "relative_rms_error": 0.01162924288933099,
+            "mean_abs_error": 0.04763114284123144,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999784111551646,
+            "relative_rms_error": 0.01162924288933099,
+            "mean_abs_error": 0.04763114284123144,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.16735446068548387,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_024.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_024/output.pt"
+        },
+        {
+          "stage": "layer_025",
+          "historical_metrics": {
+            "pcc": 0.9999781894226774,
+            "relative_rms_error": 0.011644362081297353,
+            "mean_abs_error": 0.05479535400386779,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999781894226761,
+            "relative_rms_error": 0.011644362081297353,
+            "mean_abs_error": 0.05479535400386779,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.1438933341733871,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_025.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_025/output.pt"
+        },
+        {
+          "stage": "layer_026",
+          "historical_metrics": {
+            "pcc": 0.9999779039292903,
+            "relative_rms_error": 0.011662975484072639,
+            "mean_abs_error": 0.06347584003402341,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999779039292905,
+            "relative_rms_error": 0.011662975484072639,
+            "mean_abs_error": 0.06347584003402341,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.12333826864919355,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_026.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_026/output.pt"
+        },
+        {
+          "stage": "layer_027",
+          "historical_metrics": {
+            "pcc": 0.9999774734183129,
+            "relative_rms_error": 0.0116928099917022,
+            "mean_abs_error": 0.07341641403975026,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999774734183121,
+            "relative_rms_error": 0.0116928099917022,
+            "mean_abs_error": 0.07341641403975026,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.10904422883064516,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_027.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_027/output.pt"
+        },
+        {
+          "stage": "layer_028",
+          "historical_metrics": {
+            "pcc": 0.999976865055976,
+            "relative_rms_error": 0.011733264351184686,
+            "mean_abs_error": 0.08504533311051707,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999768650559755,
+            "relative_rms_error": 0.011733264351184686,
+            "mean_abs_error": 0.08504533311051707,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.09919984879032258,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_028.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_028/output.pt"
+        },
+        {
+          "stage": "layer_029",
+          "historical_metrics": {
+            "pcc": 0.9999760759795525,
+            "relative_rms_error": 0.011786618795575837,
+            "mean_abs_error": 0.0981084807745872,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999760759795517,
+            "relative_rms_error": 0.011786618795575837,
+            "mean_abs_error": 0.0981084807745872,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.0911589591733871,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_029.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_029/output.pt"
+        },
+        {
+          "stage": "layer_030",
+          "historical_metrics": {
+            "pcc": 0.9999748691766467,
+            "relative_rms_error": 0.011864442710458068,
+            "mean_abs_error": 0.11490321097775333,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999974869176647,
+            "relative_rms_error": 0.011864442710458068,
+            "mean_abs_error": 0.11490321097775333,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.08446478074596774,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_030.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_030/output.pt"
+        },
+        {
+          "stage": "layer_031",
+          "historical_metrics": {
+            "pcc": 0.9999730552906536,
+            "relative_rms_error": 0.011995589680169826,
+            "mean_abs_error": 0.1349292387885432,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999730552906538,
+            "relative_rms_error": 0.011995589680169826,
+            "mean_abs_error": 0.1349292387885432,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.07796748991935484,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_031.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_031/output.pt"
+        },
+        {
+          "stage": "layer_032",
+          "historical_metrics": {
+            "pcc": 0.9999704177017592,
+            "relative_rms_error": 0.012192422017966656,
+            "mean_abs_error": 0.15949422890140164,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999704177017594,
+            "relative_rms_error": 0.012192422017966656,
+            "mean_abs_error": 0.15949422890140164,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.07263577368951613,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_032.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_032/output.pt"
+        },
+        {
+          "stage": "layer_033",
+          "historical_metrics": {
+            "pcc": 0.9999662168843352,
+            "relative_rms_error": 0.012540322322831707,
+            "mean_abs_error": 0.19012133056117642,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999662168843352,
+            "relative_rms_error": 0.012540322322831707,
+            "mean_abs_error": 0.19012133056117642,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.0674773185483871,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_033.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_033/output.pt"
+        },
+        {
+          "stage": "layer_034",
+          "historical_metrics": {
+            "pcc": 0.9999202483012427,
+            "relative_rms_error": 0.021016287287751605,
+            "mean_abs_error": 0.26081926784207743,
+            "max_abs_error": 192.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999202483012433,
+            "relative_rms_error": 0.021016287287751605,
+            "mean_abs_error": 0.26081926784207743,
+            "max_abs_error": 192.0,
+            "fraction_within_atol_0_01": 0.05967269405241935,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_034.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_034/output.pt"
+        },
+        {
+          "stage": "layer_035",
+          "historical_metrics": {
+            "pcc": 0.9995318472424466,
+            "relative_rms_error": 0.038358595272366576,
+            "mean_abs_error": 0.35756822363022833,
+            "max_abs_error": 160.0
+          },
+          "shape": [
+            1,
+            31,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9995318472424459,
+            "relative_rms_error": 0.038358595272366576,
+            "mean_abs_error": 0.35756822363022833,
+            "max_abs_error": 160.0,
+            "fraction_within_atol_0_01": 0.05317540322580645,
+            "bitwise_equal": false,
+            "elements": 126976,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/layer_035.pt",
+          "cuda_tensor": "encoder/cuda-fox/layer_035/output.pt"
+        },
+        {
+          "stage": "prompt_embeds",
+          "historical_metrics": {
+            "pcc": 0.9992962835959462,
+            "relative_rms_error": 0.0384463824120384,
+            "mean_abs_error": 0.3227842169649461,
+            "max_abs_error": 32.0
+          },
+          "shape": [
+            1,
+            17,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9992962835959462,
+            "relative_rms_error": 0.0384463824120384,
+            "mean_abs_error": 0.3227842169649461,
+            "max_abs_error": 32.0,
+            "fraction_within_atol_0_01": 0.05743049172794118,
+            "bitwise_equal": false,
+            "elements": 69632,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "encoder/tt-full/prompt_embeds.pt",
+          "cuda_tensor": "encoder/cuda-fox/prompt_embeds.pt"
+        }
+      ]
+    },
+    {
+      "module": "initial_noise_transform",
+      "scope": "historical isolated Box-Muller transform: CUDA consumes same radial and angular uniforms produced by TT; independent CUDA/TT RNGs are not compared",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "seed": 42,
+        "shape": [
+          1,
+          384,
+          64
+        ]
+      },
+      "rows": [
+        {
+          "stage": "Box-Muller Gaussian",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9999999956381098,
+            "relative_rms_error": 9.342891339595682e-05,
+            "mean_abs_error": 2.2252400716145835e-06,
+            "max_abs_error": 0.00390625,
+            "fraction_within_atol_0_01": 1.0,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed paired saved tensors in float64",
+          "tt_tensor": "noise/fox/paired_inputs.pt:gaussian",
+          "cuda_tensor": "noise/fox/cuda_gaussian.pt"
+        }
+      ],
+      "rng_distribution_and_repeatability": {
+        "shape": [
+          1,
+          384,
+          64
+        ],
+        "seed": 42,
+        "same_seed_bitwise": true,
+        "zero_seed_bitwise": true,
+        "different_seed_changes_output": true,
+        "sample_count": 262144,
+        "finite": true,
+        "mean": 0.006118296715860672,
+        "std": 0.9893846750895517,
+        "skewness": -0.011477971720615978,
+        "kurtosis": 3.0227227504150966,
+        "p_abs_gt_2": 0.041534423828125,
+        "p_abs_gt_3": 0.0029296875,
+        "ttnn_version": "0.65.1rc17.dev6333+h3.3",
+        "device_bdf": "0000:81:00.0",
+        "rng": "native TT uniforms and TT Box-Muller; no CPU/CUDA random tensor"
+      }
+    },
+    {
+      "module": "denoiser_isolated_components",
+      "scope": "historical isolated module tests with captured CUDA inputs at attention/MLP boundaries; these validate operators separately and are not the native integrated-run result",
+      "workload": {
+        "width": 256,
+        "height": 256,
+        "reference_steps": 2,
+        "tested_step": 0,
+        "seed": 42,
+        "sequence_tokens": 273,
+        "latent_tokens": 256
+      },
+      "rows": [
+        {
+          "stage": "img_norm1",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999988738333633,
+            "relative_rms_error": 0.0015172201693702376,
+            "mean_abs_error": 0.00020053956864719708,
+            "max_abs_error": 0.125,
+            "fraction_within_atol_0_01": 0.9963978079212454,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.img_norm1.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.img_norm1.pt",
+          "historical_metrics": {
+            "component": "img_norm1",
+            "shape": [
+              1,
+              273,
+              4096
+            ],
+            "pcc": 0.9999988738333628,
+            "max_abs_error": 0.125,
+            "mean_abs_error": 0.00020053955086041242,
+            "fraction_within_atol_0_01": 0.9963977932929993
+          }
+        },
+        {
+          "stage": "attn.to_q",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999938891734987,
+            "relative_rms_error": 0.012354475868812565,
+            "mean_abs_error": 0.05309760393760997,
+            "max_abs_error": 3.0,
+            "fraction_within_atol_0_01": 0.20542332016941392,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.attn.to_q.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.attn.to_q.pt",
+          "historical_metrics": {
+            "component": "attn.to_q",
+            "shape": [
+              1,
+              273,
+              4096
+            ],
+            "pcc": 0.9999938891734989,
+            "max_abs_error": 3.0,
+            "mean_abs_error": 0.05309760197997093,
+            "fraction_within_atol_0_01": 0.20542332530021667
+          }
+        },
+        {
+          "stage": "attn.to_k",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999930939142848,
+            "relative_rms_error": 0.012060354726510463,
+            "mean_abs_error": 0.06017213119458831,
+            "max_abs_error": 2.0,
+            "fraction_within_atol_0_01": 0.17152622767857142,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.attn.to_k.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.attn.to_k.pt",
+          "historical_metrics": {
+            "component": "attn.to_k",
+            "shape": [
+              1,
+              273,
+              4096
+            ],
+            "pcc": 0.9999930939142846,
+            "max_abs_error": 2.0,
+            "mean_abs_error": 0.06017213314771652,
+            "fraction_within_atol_0_01": 0.1715262234210968
+          }
+        },
+        {
+          "stage": "attn.to_v",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999894485128041,
+            "relative_rms_error": 0.012187861256689244,
+            "mean_abs_error": 0.03127858815062546,
+            "max_abs_error": 0.75,
+            "fraction_within_atol_0_01": 0.2654828082074176,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.attn.to_v.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.attn.to_v.pt",
+          "historical_metrics": {
+            "component": "attn.to_v",
+            "shape": [
+              1,
+              273,
+              4096
+            ],
+            "pcc": 0.999989448512804,
+            "max_abs_error": 0.75,
+            "mean_abs_error": 0.0312785878777504,
+            "fraction_within_atol_0_01": 0.2654828131198883
+          }
+        },
+        {
+          "stage": "img_mlp.gate_layer",
+          "shape": [
+            1,
+            273,
+            12288
+          ],
+          "metrics": {
+            "pcc": 0.9999901386212451,
+            "relative_rms_error": 0.01202678819276612,
+            "mean_abs_error": 0.0020300105395502075,
+            "max_abs_error": 0.125,
+            "fraction_within_atol_0_01": 0.9902385483440171,
+            "bitwise_equal": false,
+            "elements": 3354624,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.img_mlp.gate_layer.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.img_mlp.gate_layer.pt",
+          "historical_metrics": {
+            "component": "img_mlp.gate_layer",
+            "shape": [
+              1,
+              273,
+              12288
+            ],
+            "pcc": 0.9999901386212451,
+            "max_abs_error": 0.125,
+            "mean_abs_error": 0.0020300105679780245,
+            "fraction_within_atol_0_01": 0.9902385473251343
+          }
+        },
+        {
+          "stage": "img_mlp.proj",
+          "shape": [
+            1,
+            273,
+            12288
+          ],
+          "metrics": {
+            "pcc": 0.9999886444147517,
+            "relative_rms_error": 0.01225821210161674,
+            "mean_abs_error": 0.001791045028738801,
+            "max_abs_error": 0.09375,
+            "fraction_within_atol_0_01": 0.9965191329937424,
+            "bitwise_equal": false,
+            "elements": 3354624,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.img_mlp.proj.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.img_mlp.proj.pt",
+          "historical_metrics": {
+            "component": "img_mlp.proj",
+            "shape": [
+              1,
+              273,
+              12288
+            ],
+            "pcc": 0.9999886444147502,
+            "max_abs_error": 0.09375,
+            "mean_abs_error": 0.0017910451861098409,
+            "fraction_within_atol_0_01": 0.996519148349762
+          }
+        },
+        {
+          "stage": "img_mlp.out",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999896533854872,
+            "relative_rms_error": 0.061934360765115055,
+            "mean_abs_error": 0.01350330752888468,
+            "max_abs_error": 112.0,
+            "fraction_within_atol_0_01": 0.7108596969436813,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/hifi4_components/step_000/transformer/transformer_blocks.0.img_mlp.out.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.img_mlp.out.pt",
+          "historical_metrics": {
+            "component": "img_mlp.out",
+            "shape": [
+              1,
+              273,
+              4096
+            ],
+            "pcc": 0.999989653385488,
+            "max_abs_error": 112.0,
+            "mean_abs_error": 0.013503306545317173,
+            "fraction_within_atol_0_01": 0.7108597159385681
+          }
+        }
+      ]
+    },
+    {
+      "module": "denoiser_complete_matched_input_step",
+      "scope": "historical full denoiser step 0 from same initial CUDA latent and prompt context, followed by TT scheduler update; all 32 blocks are chained, with no intermediate block injection",
+      "workload": {
+        "width": 256,
+        "height": 256,
+        "reference_steps": 2,
+        "tested_step": 0,
+        "seed": 42,
+        "sequence_tokens": 273,
+        "latent_tokens": 256
+      },
+      "provenance_check": "Recomputed img_in relative RMS 0.005357837770134211 agrees with saved hardware report 0.005357838235795498; this is the 256x256 diagnostic, not the current 384x256 native run.",
+      "rows": [
+        {
+          "stage": "img_in",
+          "shape": [
+            1,
+            256,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999863590040078,
+            "relative_rms_error": 0.005357838086079169,
+            "mean_abs_error": 0.0015554092541734121,
+            "max_abs_error": 0.25,
+            "fraction_within_atol_0_01": 0.9763202667236328,
+            "bitwise_equal": false,
+            "elements": 1048576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/img_in.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/img_in.pt"
+        },
+        {
+          "stage": "modulation",
+          "shape": [
+            2,
+            16384
+          ],
+          "metrics": {
+            "pcc": 0.9999643501640854,
+            "relative_rms_error": 0.011230309351280872,
+            "mean_abs_error": 0.008055393129325239,
+            "max_abs_error": 0.109375,
+            "fraction_within_atol_0_01": 0.784210205078125,
+            "bitwise_equal": false,
+            "elements": 32768,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/modulation.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/modulation.pt"
+        },
+        {
+          "stage": "norm_out",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9981998594412452,
+            "relative_rms_error": 0.06200034088048799,
+            "mean_abs_error": 0.007406566880025727,
+            "max_abs_error": 0.859375,
+            "fraction_within_atol_0_01": 0.7959556719322345,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/norm_out.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/norm_out.pt"
+        },
+        {
+          "stage": "proj_out",
+          "shape": [
+            1,
+            273,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9993017677632487,
+            "relative_rms_error": 0.03752561801147394,
+            "mean_abs_error": 0.036058462637684724,
+            "max_abs_error": 0.69921875,
+            "fraction_within_atol_0_01": 0.19202152014652016,
+            "bitwise_equal": false,
+            "elements": 17472,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/proj_out.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/proj_out.pt"
+        },
+        {
+          "stage": "time_text_embed",
+          "shape": [
+            2,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999542698320396,
+            "relative_rms_error": 0.010440423052664878,
+            "mean_abs_error": 0.0003230518896089052,
+            "max_abs_error": 0.015625,
+            "fraction_within_atol_0_01": 0.9986572265625,
+            "bitwise_equal": false,
+            "elements": 8192,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/time_text_embed.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/time_text_embed.pt"
+        },
+        {
+          "stage": "transformer_blocks.0",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9998400358288805,
+            "relative_rms_error": 0.018224336496131067,
+            "mean_abs_error": 0.026889230918717883,
+            "max_abs_error": 120.0,
+            "fraction_within_atol_0_01": 0.3775138435782967,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.0.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.0.pt"
+        },
+        {
+          "stage": "transformer_blocks.1",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9998515933799526,
+            "relative_rms_error": 0.018257943298122213,
+            "mean_abs_error": 0.045412432021997025,
+            "max_abs_error": 112.0,
+            "fraction_within_atol_0_01": 0.21371426425137363,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.1.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.1.pt"
+        },
+        {
+          "stage": "transformer_blocks.10",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994614732542377,
+            "relative_rms_error": 0.07305421764395446,
+            "mean_abs_error": 0.27075351730290537,
+            "max_abs_error": 512.0,
+            "fraction_within_atol_0_01": 0.0788019760187729,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.10.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.10.pt"
+        },
+        {
+          "stage": "transformer_blocks.11",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994800761695886,
+            "relative_rms_error": 0.07259762491373362,
+            "mean_abs_error": 0.28802700843124723,
+            "max_abs_error": 576.0,
+            "fraction_within_atol_0_01": 0.07485280019459707,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.11.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.11.pt"
+        },
+        {
+          "stage": "transformer_blocks.12",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994739605654007,
+            "relative_rms_error": 0.07305242787802521,
+            "mean_abs_error": 0.298272114357529,
+            "max_abs_error": 576.0,
+            "fraction_within_atol_0_01": 0.07274496336996338,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.12.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.12.pt"
+        },
+        {
+          "stage": "transformer_blocks.13",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994519017170035,
+            "relative_rms_error": 0.07410847218321386,
+            "mean_abs_error": 0.30275669560346397,
+            "max_abs_error": 640.0,
+            "fraction_within_atol_0_01": 0.07133377690018315,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.13.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.13.pt"
+        },
+        {
+          "stage": "transformer_blocks.14",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994546870059868,
+            "relative_rms_error": 0.0745616413512636,
+            "mean_abs_error": 0.3045118545090793,
+            "max_abs_error": 640.0,
+            "fraction_within_atol_0_01": 0.07074354681776557,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.14.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.14.pt"
+        },
+        {
+          "stage": "transformer_blocks.15",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994621402777142,
+            "relative_rms_error": 0.07500375916628955,
+            "mean_abs_error": 0.29475617724523673,
+            "max_abs_error": 640.0,
+            "fraction_within_atol_0_01": 0.07258756868131869,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.15.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.15.pt"
+        },
+        {
+          "stage": "transformer_blocks.16",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994591901661717,
+            "relative_rms_error": 0.07612600939193896,
+            "mean_abs_error": 0.2835413664958914,
+            "max_abs_error": 640.0,
+            "fraction_within_atol_0_01": 0.07478125715430403,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.16.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.16.pt"
+        },
+        {
+          "stage": "transformer_blocks.17",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994647843433351,
+            "relative_rms_error": 0.07687866155691722,
+            "mean_abs_error": 0.2796121937625328,
+            "max_abs_error": 640.0,
+            "fraction_within_atol_0_01": 0.07524181547619048,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.17.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.17.pt"
+        },
+        {
+          "stage": "transformer_blocks.18",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994547918852884,
+            "relative_rms_error": 0.07818443481245935,
+            "mean_abs_error": 0.28240155284045665,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07489483173076923,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.18.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.18.pt"
+        },
+        {
+          "stage": "transformer_blocks.19",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994331038321662,
+            "relative_rms_error": 0.07917058600163664,
+            "mean_abs_error": 0.2765153069181313,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07781110491071429,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.19.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.19.pt"
+        },
+        {
+          "stage": "transformer_blocks.2",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9998250802800497,
+            "relative_rms_error": 0.020640497086245373,
+            "mean_abs_error": 0.06303677549790386,
+            "max_abs_error": 128.0,
+            "fraction_within_atol_0_01": 0.16102728651556777,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.2.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.2.pt"
+        },
+        {
+          "stage": "transformer_blocks.20",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994207691603053,
+            "relative_rms_error": 0.07995689401278218,
+            "mean_abs_error": 0.2728234949984823,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.08024625114468864,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.20.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.20.pt"
+        },
+        {
+          "stage": "transformer_blocks.21",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994055066485465,
+            "relative_rms_error": 0.0810730970789679,
+            "mean_abs_error": 0.2739326159604962,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.0803464114010989,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.21.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.21.pt"
+        },
+        {
+          "stage": "transformer_blocks.22",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993735920505732,
+            "relative_rms_error": 0.08176621384379683,
+            "mean_abs_error": 0.27473888876690145,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.08065672933836997,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.22.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.22.pt"
+        },
+        {
+          "stage": "transformer_blocks.23",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993514906294584,
+            "relative_rms_error": 0.08237243773963454,
+            "mean_abs_error": 0.2788296963941927,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07889677054716117,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.23.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.23.pt"
+        },
+        {
+          "stage": "transformer_blocks.24",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993287141995563,
+            "relative_rms_error": 0.08276832579565088,
+            "mean_abs_error": 0.28368259266346363,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07694096268315018,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.24.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.24.pt"
+        },
+        {
+          "stage": "transformer_blocks.25",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993323534869302,
+            "relative_rms_error": 0.08346171792889448,
+            "mean_abs_error": 0.28846868154023103,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07550115899725275,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.25.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.25.pt"
+        },
+        {
+          "stage": "transformer_blocks.26",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993084738105678,
+            "relative_rms_error": 0.08426451894475812,
+            "mean_abs_error": 0.2971866014562786,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.07236757383241758,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.26.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.26.pt"
+        },
+        {
+          "stage": "transformer_blocks.27",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993036064481913,
+            "relative_rms_error": 0.08488020886545211,
+            "mean_abs_error": 0.3103827877642225,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.06813043727106227,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.27.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.27.pt"
+        },
+        {
+          "stage": "transformer_blocks.28",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9992768232070607,
+            "relative_rms_error": 0.08569308268593155,
+            "mean_abs_error": 0.33506520841809695,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.06162270346840659,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.28.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.28.pt"
+        },
+        {
+          "stage": "transformer_blocks.29",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999251783665792,
+            "relative_rms_error": 0.08639771388046397,
+            "mean_abs_error": 0.3774740011004847,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.055078303857600736,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.29.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.29.pt"
+        },
+        {
+          "stage": "transformer_blocks.3",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9998022275801118,
+            "relative_rms_error": 0.022765134266967066,
+            "mean_abs_error": 0.08392738848208235,
+            "max_abs_error": 144.0,
+            "fraction_within_atol_0_01": 0.13111245850503664,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.3.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.3.pt"
+        },
+        {
+          "stage": "transformer_blocks.30",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9991888773157522,
+            "relative_rms_error": 0.08729459993322622,
+            "mean_abs_error": 0.45187349544263244,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.04976265596382784,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.30.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.30.pt"
+        },
+        {
+          "stage": "transformer_blocks.31",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9987098463242609,
+            "relative_rms_error": 0.07877644440234721,
+            "mean_abs_error": 0.6084005481251362,
+            "max_abs_error": 704.0,
+            "fraction_within_atol_0_01": 0.04751888736263736,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.31.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.31.pt"
+        },
+        {
+          "stage": "transformer_blocks.4",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.999673033223621,
+            "relative_rms_error": 0.030039583261326393,
+            "mean_abs_error": 0.10671890954292573,
+            "max_abs_error": 160.0,
+            "fraction_within_atol_0_01": 0.11847438043727106,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.4.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.4.pt"
+        },
+        {
+          "stage": "transformer_blocks.5",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9982622142077252,
+            "relative_rms_error": 0.08259511067035274,
+            "mean_abs_error": 0.17314867965575143,
+            "max_abs_error": 352.0,
+            "fraction_within_atol_0_01": 0.1085674579326923,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.5.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.5.pt"
+        },
+        {
+          "stage": "transformer_blocks.6",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9993633569677763,
+            "relative_rms_error": 0.0723552411056562,
+            "mean_abs_error": 0.2001937832141759,
+            "max_abs_error": 480.0,
+            "fraction_within_atol_0_01": 0.10244337368360806,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.6.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.6.pt"
+        },
+        {
+          "stage": "transformer_blocks.7",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994308076048514,
+            "relative_rms_error": 0.07095573184132406,
+            "mean_abs_error": 0.21305653157218823,
+            "max_abs_error": 480.0,
+            "fraction_within_atol_0_01": 0.09631750085851648,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.7.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.7.pt"
+        },
+        {
+          "stage": "transformer_blocks.8",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.99946159680358,
+            "relative_rms_error": 0.07155977570823867,
+            "mean_abs_error": 0.22361534790412246,
+            "max_abs_error": 480.0,
+            "fraction_within_atol_0_01": 0.09199630122481685,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.8.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.8.pt"
+        },
+        {
+          "stage": "transformer_blocks.9",
+          "shape": [
+            1,
+            273,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9994625377253473,
+            "relative_rms_error": 0.07238228194651289,
+            "mean_abs_error": 0.24345619081444492,
+            "max_abs_error": 480.0,
+            "fraction_within_atol_0_01": 0.08519166380494506,
+            "bitwise_equal": false,
+            "elements": 1118208,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/transformer_blocks.9.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/transformer_blocks.9.pt"
+        },
+        {
+          "stage": "txt_in",
+          "shape": [
+            1,
+            17,
+            4096
+          ],
+          "metrics": {
+            "pcc": 0.9999432654817559,
+            "relative_rms_error": 0.011164563827665126,
+            "mean_abs_error": 0.04284621408955632,
+            "max_abs_error": 64.0,
+            "fraction_within_atol_0_01": 0.5055434283088235,
+            "bitwise_equal": false,
+            "elements": 69632,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/txt_in.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/txt_in.pt"
+        },
+        {
+          "stage": "velocity_output",
+          "shape": [
+            1,
+            256,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.999416753723904,
+            "relative_rms_error": 0.03433252340133787,
+            "mean_abs_error": 0.034869961731601506,
+            "max_abs_error": 0.2109375,
+            "fraction_within_atol_0_01": 0.18994140625,
+            "bitwise_equal": false,
+            "elements": 16384,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/transformer/proj_out.pt:[:,17:,:]",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/transformer/output.pt:[:,17:,:]"
+        },
+        {
+          "stage": "scheduler.updated_latents",
+          "shape": [
+            1,
+            256,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9987575223493288,
+            "relative_rms_error": 0.05394211425366115,
+            "mean_abs_error": 0.034186153672635555,
+            "max_abs_error": 0.203125,
+            "fraction_within_atol_0_01": 0.19598388671875,
+            "bitwise_equal": false,
+            "elements": 16384,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/tt_full_dit_step0/step_000/scheduler/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_256_2step_seed42/step_000/scheduler/updated_latents.pt"
+        }
+      ]
+    },
+    {
+      "module": "vae_complete_decoder",
+      "scope": "historical complete decoder chain; CUDA and TT both start from identical final TT latent from earlier 384x256 20-step denoiser run; intermediate stage metrics accumulate decoder error",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "batch_size": 1,
+        "frames": 1,
+        "latent_channels": 64,
+        "output_channels": 4
+      },
+      "rows": [
+        {
+          "stage": "vae_input",
+          "shape": [
+            1,
+            64,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999978618558659,
+            "relative_rms_error": 0.002267466538488603,
+            "mean_abs_error": 0.002650876839955648,
+            "max_abs_error": 0.0625
+          },
+          "metrics": {
+            "pcc": 0.9999978618558659,
+            "relative_rms_error": 0.002267466538488603,
+            "mean_abs_error": 0.002650876839955648,
+            "max_abs_error": 0.0625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "post_quant_conv",
+          "shape": [
+            1,
+            64,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.999994045003584,
+            "relative_rms_error": 0.003718303210012322,
+            "mean_abs_error": 0.0029343999922275543,
+            "max_abs_error": 0.03125
+          },
+          "metrics": {
+            "pcc": 0.999994045003584,
+            "relative_rms_error": 0.003718303210012322,
+            "mean_abs_error": 0.0029343999922275543,
+            "max_abs_error": 0.03125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.conv_in",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999821317962655,
+            "relative_rms_error": 0.006157483742826489,
+            "mean_abs_error": 0.004068426865463455,
+            "max_abs_error": 0.09375
+          },
+          "metrics": {
+            "pcc": 0.9999821317962655,
+            "relative_rms_error": 0.006157483742826489,
+            "mean_abs_error": 0.004068426865463455,
+            "max_abs_error": 0.09375
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.resnets.0.norm1",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999738807852157,
+            "relative_rms_error": 0.007266561042622609,
+            "mean_abs_error": 0.0023903096684484305,
+            "max_abs_error": 0.0625
+          },
+          "metrics": {
+            "pcc": 0.9999738807852157,
+            "relative_rms_error": 0.007266561042622609,
+            "mean_abs_error": 0.0023903096684484305,
+            "max_abs_error": 0.0625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.resnets.0.conv1",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999765708133093,
+            "relative_rms_error": 0.00709597632055998,
+            "mean_abs_error": 0.016630311638841197,
+            "max_abs_error": 0.625
+          },
+          "metrics": {
+            "pcc": 0.9999765708133093,
+            "relative_rms_error": 0.00709597632055998,
+            "mean_abs_error": 0.016630311638841197,
+            "max_abs_error": 0.625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.resnets.0.norm2",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999708690807925,
+            "relative_rms_error": 0.007649662897617999,
+            "mean_abs_error": 0.001431958028492604,
+            "max_abs_error": 0.15625
+          },
+          "metrics": {
+            "pcc": 0.9999708690807925,
+            "relative_rms_error": 0.007649662897617999,
+            "mean_abs_error": 0.001431958028492604,
+            "max_abs_error": 0.15625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.resnets.0.conv2",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999729535225669,
+            "relative_rms_error": 0.0075380742462148,
+            "mean_abs_error": 0.0027314533093616505,
+            "max_abs_error": 0.1875
+          },
+          "metrics": {
+            "pcc": 0.9999729535225669,
+            "relative_rms_error": 0.0075380742462148,
+            "mean_abs_error": 0.0027314533093616505,
+            "max_abs_error": 0.1875
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.resnets.0",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999609800827365,
+            "relative_rms_error": 0.00892144895360905,
+            "mean_abs_error": 0.005253790946746314,
+            "max_abs_error": 0.21875
+          },
+          "metrics": {
+            "pcc": 0.9999609800827365,
+            "relative_rms_error": 0.00892144895360905,
+            "mean_abs_error": 0.005253790946746314,
+            "max_abs_error": 0.21875
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.attentions.0.norm",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999066408544128,
+            "relative_rms_error": 0.014109949381115863,
+            "mean_abs_error": 0.0006562357044096509,
+            "max_abs_error": 0.02734375
+          },
+          "metrics": {
+            "pcc": 0.9999066408544128,
+            "relative_rms_error": 0.014109949381115863,
+            "mean_abs_error": 0.0006562357044096509,
+            "max_abs_error": 0.02734375
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.attentions.0.to_qkv",
+          "shape": [
+            1,
+            3456,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999685748662115,
+            "relative_rms_error": 0.007995420929408952,
+            "mean_abs_error": 0.002534368826201427,
+            "max_abs_error": 0.0263671875
+          },
+          "metrics": {
+            "pcc": 0.9999685748662115,
+            "relative_rms_error": 0.007995420929408952,
+            "mean_abs_error": 0.002534368826201427,
+            "max_abs_error": 0.0263671875
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.attentions.0.proj",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999232477759273,
+            "relative_rms_error": 0.01943993171170294,
+            "mean_abs_error": 0.004356535802664304,
+            "max_abs_error": 0.078125
+          },
+          "metrics": {
+            "pcc": 0.9999232477759273,
+            "relative_rms_error": 0.01943993171170294,
+            "mean_abs_error": 0.004356535802664304,
+            "max_abs_error": 0.078125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block.attentions.0",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999309667761166,
+            "relative_rms_error": 0.011804940205947781,
+            "mean_abs_error": 0.007275401028218093,
+            "max_abs_error": 0.25
+          },
+          "metrics": {
+            "pcc": 0.9999309667761166,
+            "relative_rms_error": 0.011804940205947781,
+            "mean_abs_error": 0.007275401028218093,
+            "max_abs_error": 0.25
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.mid_block",
+          "shape": [
+            1,
+            1152,
+            1,
+            16,
+            24
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999068992025733,
+            "relative_rms_error": 0.0135033641146017,
+            "mean_abs_error": 0.008050774707010499,
+            "max_abs_error": 0.25
+          },
+          "metrics": {
+            "pcc": 0.9999068992025733,
+            "relative_rms_error": 0.0135033641146017,
+            "mean_abs_error": 0.008050774707010499,
+            "max_abs_error": 0.25
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.0.upsampler.resample.0",
+          "shape": [
+            1,
+            1152,
+            1,
+            32,
+            48
+          ],
+          "historical_metrics": {
+            "pcc": 0.9997059983029415,
+            "relative_rms_error": 0.024542151477309242,
+            "mean_abs_error": 0.007972812228318717,
+            "max_abs_error": 0.28125
+          },
+          "metrics": {
+            "pcc": 0.9997059983029415,
+            "relative_rms_error": 0.024542151477309242,
+            "mean_abs_error": 0.007972812228318717,
+            "max_abs_error": 0.28125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.0.avg_shortcut",
+          "shape": [
+            1,
+            1152,
+            1,
+            32,
+            48
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999068992022209,
+            "relative_rms_error": 0.0135033641146017,
+            "mean_abs_error": 0.008050774707010499,
+            "max_abs_error": 0.25
+          },
+          "metrics": {
+            "pcc": 0.9999068992022209,
+            "relative_rms_error": 0.0135033641146017,
+            "mean_abs_error": 0.008050774707010499,
+            "max_abs_error": 0.25
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.0",
+          "shape": [
+            1,
+            1152,
+            1,
+            32,
+            48
+          ],
+          "historical_metrics": {
+            "pcc": 0.999864363417412,
+            "relative_rms_error": 0.01647856730924414,
+            "mean_abs_error": 0.035607952538325834,
+            "max_abs_error": 0.828125
+          },
+          "metrics": {
+            "pcc": 0.999864363417412,
+            "relative_rms_error": 0.01647856730924414,
+            "mean_abs_error": 0.035607952538325834,
+            "max_abs_error": 0.828125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.1.upsampler.resample.0",
+          "shape": [
+            1,
+            1152,
+            1,
+            64,
+            96
+          ],
+          "historical_metrics": {
+            "pcc": 0.9993351763015276,
+            "relative_rms_error": 0.03712857382708391,
+            "mean_abs_error": 0.04255763856107714,
+            "max_abs_error": 1.0625
+          },
+          "metrics": {
+            "pcc": 0.9993351763015276,
+            "relative_rms_error": 0.03712857382708391,
+            "mean_abs_error": 0.04255763856107714,
+            "max_abs_error": 1.0625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.1.avg_shortcut",
+          "shape": [
+            1,
+            1152,
+            1,
+            64,
+            96
+          ],
+          "historical_metrics": {
+            "pcc": 0.9998643634176166,
+            "relative_rms_error": 0.01647856730924414,
+            "mean_abs_error": 0.035607952538325834,
+            "max_abs_error": 0.828125
+          },
+          "metrics": {
+            "pcc": 0.9998643634176166,
+            "relative_rms_error": 0.01647856730924414,
+            "mean_abs_error": 0.035607952538325834,
+            "max_abs_error": 0.828125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.1",
+          "shape": [
+            1,
+            1152,
+            1,
+            64,
+            96
+          ],
+          "historical_metrics": {
+            "pcc": 0.9996005090386827,
+            "relative_rms_error": 0.028428183210795634,
+            "mean_abs_error": 0.14541161905530048,
+            "max_abs_error": 3.919921875
+          },
+          "metrics": {
+            "pcc": 0.9996005090386827,
+            "relative_rms_error": 0.028428183210795634,
+            "mean_abs_error": 0.14541161905530048,
+            "max_abs_error": 3.919921875
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.2.upsampler.resample.0",
+          "shape": [
+            1,
+            576,
+            1,
+            128,
+            192
+          ],
+          "historical_metrics": {
+            "pcc": 0.9980558452488726,
+            "relative_rms_error": 0.0626906727796596,
+            "mean_abs_error": 0.09018045123580291,
+            "max_abs_error": 3.765625
+          },
+          "metrics": {
+            "pcc": 0.9980558452488726,
+            "relative_rms_error": 0.0626906727796596,
+            "mean_abs_error": 0.09018045123580291,
+            "max_abs_error": 3.765625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.2.avg_shortcut",
+          "shape": [
+            1,
+            576,
+            1,
+            128,
+            192
+          ],
+          "historical_metrics": {
+            "pcc": 0.9998416076714797,
+            "relative_rms_error": 0.018635928457739825,
+            "mean_abs_error": 0.11049259551671436,
+            "max_abs_error": 2.5
+          },
+          "metrics": {
+            "pcc": 0.9998416076714797,
+            "relative_rms_error": 0.018635928457739825,
+            "mean_abs_error": 0.11049259551671436,
+            "max_abs_error": 2.5
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.2",
+          "shape": [
+            1,
+            576,
+            1,
+            128,
+            192
+          ],
+          "historical_metrics": {
+            "pcc": 0.9994947999677835,
+            "relative_rms_error": 0.031815831036151876,
+            "mean_abs_error": 0.23108613864880884,
+            "max_abs_error": 16.75
+          },
+          "metrics": {
+            "pcc": 0.9994947999677835,
+            "relative_rms_error": 0.031815831036151876,
+            "mean_abs_error": 0.23108613864880884,
+            "max_abs_error": 16.75
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.3.upsampler.resample.0",
+          "shape": [
+            1,
+            288,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.9970081147482716,
+            "relative_rms_error": 0.07760078671141965,
+            "mean_abs_error": 0.14155472633083938,
+            "max_abs_error": 4.65625
+          },
+          "metrics": {
+            "pcc": 0.9970081147482716,
+            "relative_rms_error": 0.07760078671141965,
+            "mean_abs_error": 0.14155472633083938,
+            "max_abs_error": 4.65625
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.3.avg_shortcut",
+          "shape": [
+            1,
+            288,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.9994947999653915,
+            "relative_rms_error": 0.031815831036151876,
+            "mean_abs_error": 0.23108613864880884,
+            "max_abs_error": 16.75
+          },
+          "metrics": {
+            "pcc": 0.9994947999653915,
+            "relative_rms_error": 0.031815831036151876,
+            "mean_abs_error": 0.23108613864880884,
+            "max_abs_error": 16.75
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.3",
+          "shape": [
+            1,
+            288,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.9985480446623188,
+            "relative_rms_error": 0.05384661365913477,
+            "mean_abs_error": 0.49436467906667125,
+            "max_abs_error": 50.375
+          },
+          "metrics": {
+            "pcc": 0.9985480446623188,
+            "relative_rms_error": 0.05384661365913477,
+            "mean_abs_error": 0.49436467906667125,
+            "max_abs_error": 50.375
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.up_blocks.4",
+          "shape": [
+            1,
+            144,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.9998417867460795,
+            "relative_rms_error": 0.017782190877109277,
+            "mean_abs_error": 0.1539224113482676,
+            "max_abs_error": 15.609375
+          },
+          "metrics": {
+            "pcc": 0.9998417867460795,
+            "relative_rms_error": 0.017782190877109277,
+            "mean_abs_error": 0.1539224113482676,
+            "max_abs_error": 15.609375
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.norm_out",
+          "shape": [
+            1,
+            144,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.9999153318688797,
+            "relative_rms_error": 0.012262928125970763,
+            "mean_abs_error": 0.0022610173887200723,
+            "max_abs_error": 0.17578125
+          },
+          "metrics": {
+            "pcc": 0.9999153318688797,
+            "relative_rms_error": 0.012262928125970763,
+            "mean_abs_error": 0.0022610173887200723,
+            "max_abs_error": 0.17578125
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "decoder.conv_out",
+          "shape": [
+            1,
+            4,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.999965125082022,
+            "relative_rms_error": 0.008004811258766559,
+            "mean_abs_error": 0.002764556418393719,
+            "max_abs_error": 0.073974609375
+          },
+          "metrics": {
+            "pcc": 0.999965125082022,
+            "relative_rms_error": 0.008004811258766559,
+            "mean_abs_error": 0.002764556418393719,
+            "max_abs_error": 0.073974609375
+          },
+          "metric_source": "saved real hardware report; intermediate TT tensors not retained locally for recomputation",
+          "source_report": "vae/tt-full-decoder/report.json"
+        },
+        {
+          "stage": "output",
+          "shape": [
+            1,
+            4,
+            1,
+            256,
+            384
+          ],
+          "historical_metrics": {
+            "pcc": 0.999965703155296,
+            "relative_rms_error": 0.007911173229302826,
+            "mean_abs_error": 0.0027030046885556658,
+            "max_abs_error": 0.073974609375
+          },
+          "metrics": {
+            "pcc": 0.9999657031552841,
+            "relative_rms_error": 0.007911173229302826,
+            "mean_abs_error": 0.0027030046885556658,
+            "max_abs_error": 0.073974609375,
+            "fraction_within_atol_0_01": 0.9618148803710938,
+            "bitwise_equal": false,
+            "elements": 393216,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "vae/tt-full-decoder/output.pt",
+          "cuda_tensor": "vae/cuda-tt-latent-384x256/output.pt"
+        }
+      ]
+    },
+    {
+      "module": "denoiser_prior_matched_initial_20_step_trajectory",
+      "scope": "historical 20-step trajectory with same initial CUDA latent and prompt context; TT latents feed subsequent TT steps, so this measures accumulated denoising error, not isolated step error or current independent native outputs",
+      "workload": {
+        "width": 384,
+        "height": 256,
+        "steps": 20,
+        "seed": 42
+      },
+      "rows": [
+        {
+          "stage": "updated_latents_step_000",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9999976131355437,
+            "relative_rms_error": 0.002242846245951501,
+            "mean_abs_error": 0.0009135805691281954,
+            "max_abs_error": 0.015625,
+            "fraction_within_atol_0_01": 0.9961344401041666,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_000/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_000/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 0,
+            "pcc": 0.9999976131355427,
+            "ccc": 0.9999974835275643,
+            "rmse_over_reference_std": 0.002242858056475496,
+            "elements": 24576
+          }
+        },
+        {
+          "stage": "updated_latents_step_002",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9999881705093425,
+            "relative_rms_error": 0.005153622146505947,
+            "mean_abs_error": 0.0029704816018541655,
+            "max_abs_error": 0.0390625,
+            "fraction_within_atol_0_01": 0.96630859375,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_002/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_002/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 2,
+            "pcc": 0.9999881705093432,
+            "ccc": 0.9999866973348974,
+            "rmse_over_reference_std": 0.0051536772879720765,
+            "elements": 24576
+          }
+        },
+        {
+          "stage": "updated_latents_step_004",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9999675041632315,
+            "relative_rms_error": 0.008582392310387198,
+            "mean_abs_error": 0.005173364033301671,
+            "max_abs_error": 0.046875,
+            "fraction_within_atol_0_01": 0.8728434244791666,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_004/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_004/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 4,
+            "pcc": 0.9999675041632333,
+            "ccc": 0.9999630609451631,
+            "rmse_over_reference_std": 0.008582569712658581,
+            "elements": 24576
+          }
+        },
+        {
+          "stage": "updated_latents_step_009",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9994273685186285,
+            "relative_rms_error": 0.03434044911273327,
+            "mean_abs_error": 0.016102835536003113,
+            "max_abs_error": 0.29296875,
+            "fraction_within_atol_0_01": 0.459716796875,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_009/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_009/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 9,
+            "pcc": 0.9994273685186247,
+            "ccc": 0.9994064971081061,
+            "rmse_over_reference_std": 0.03434353663631494,
+            "elements": 24576
+          }
+        },
+        {
+          "stage": "updated_latents_step_014",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.995162028292618,
+            "relative_rms_error": 0.09835055558312965,
+            "mean_abs_error": 0.0387042493869861,
+            "max_abs_error": 0.98681640625,
+            "fraction_within_atol_0_01": 0.2491455078125,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_014/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_014/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 14,
+            "pcc": 0.9951620282926187,
+            "ccc": 0.9951613977610745,
+            "rmse_over_reference_std": 0.09837558561232451,
+            "elements": 24576
+          }
+        },
+        {
+          "stage": "updated_latents_step_019",
+          "shape": [
+            1,
+            384,
+            64
+          ],
+          "metrics": {
+            "pcc": 0.9915023425054735,
+            "relative_rms_error": 0.13137717338382102,
+            "mean_abs_error": 0.06612871249672025,
+            "max_abs_error": 1.90869140625,
+            "fraction_within_atol_0_01": 0.15791829427083334,
+            "bitwise_equal": false,
+            "elements": 24576,
+            "finite": true
+          },
+          "metric_source": "recomputed from paired saved tensors with CPU float64 accumulations",
+          "tt_tensor": "tt-results/fox_384x256_20step_seed42/steps/step_019/updated_latents.pt",
+          "cuda_tensor": "goldens/fox_384x256_20step_seed42/step_019/scheduler/updated_latents.pt",
+          "historical_metrics": {
+            "step": 19,
+            "pcc": 0.9915023425054711,
+            "ccc": 0.9914515448812447,
+            "rmse_over_reference_std": 0.13141917042139936,
+            "elements": 24576
+          }
+        }
+      ],
+      "saved_step_0_velocity": {
+        "pcc": 0.9996117208381886,
+        "ccc": 0.9995968806906268,
+        "rmse_over_reference_std": 0.028468242826590523,
+        "elements": 24576
+      }
+    }
+  ],
+  "limitations": [
+    "Current native TT and CUDA denoiser inputs differ because backend-native RNGs differ. No correctness PCC is reported between their denoiser trajectories or final images.",
+    "Only the deterministic prompt encoder has a direct correctness PCC between the two current independent integrated runs. A separate subsequent CUDA VAE oracle consumes the final native TT latent to isolate current decoder error; this does not inject activations into the native TT run.",
+    "Historical module comparisons cover 256x256 operator/full-step diagnostics and 384x256 VAE/full-trajectory diagnostics. They cannot substitute for matched-input per-module validation of the current native run at every boundary.",
+    "Most VAE intermediate TT tensors are not retained locally; their original valid finite PCC metrics are preserved with explicit source labels.",
+    "The encoder historical report contained rotary PCC values slightly above 1 from numerical roundoff. Paired rotary tensors were rechecked for exact equality and corrected to 1; raw values remain in historical_metrics.",
+    "High PCC does not imply all-element atol=0.01. Large encoder outliers can dominate correlation, so relative RMS and maximum absolute error are also reported.",
+    "No inference workload was changed or re-run while producing this report. CUDA is used only as a previously measured reference, and report calculations run on the CPU.",
+    "Fresh fork-path first-step validation at 384x256 deliberately uses captured CUDA inputs to measure denoiser accuracy. It is a separate component accuracy diagnostic and does not change the native integrated-run provenance. Individual current fork block outputs were not captured, so no new per-block PCC is inferred."
+  ]
+}
