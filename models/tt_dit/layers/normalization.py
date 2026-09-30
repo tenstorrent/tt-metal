@@ -211,6 +211,7 @@ class DistributedRMSNorm(Module):
         dynamic_bias=None,
         per_head_norm=False,
         dynamic_weight_includes_static=False,
+        dynamic_tile_row_map=None,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -249,6 +250,10 @@ class DistributedRMSNorm(Module):
         if dynamic_bias is not None and weight is None:
             msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
+
+        # dynamic_tile_row_map: the op reads tile row map[r] of dynamic_weight / dynamic_bias for input tile row r,
+        # so both may be small tables of tile rows. Passed only when set, so older builds keep working.
+        extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -292,6 +297,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            **extra,
         )
 
 

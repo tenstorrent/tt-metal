@@ -46,7 +46,10 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    // Row-major uint32 [1, 1, 1, >= tile rows]: per-token weight/bias tile row r is read from tile row map[r], so
+    // weight/bias may be a small table of tile rows instead of a full [N, H] tensor.
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.

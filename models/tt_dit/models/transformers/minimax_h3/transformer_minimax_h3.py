@@ -374,6 +374,8 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_key: tuple | None = None,
         reuse_stack: bool = False,
         reuse_attn_blocks: frozenset[int] | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -392,6 +394,8 @@ class MiniMaxH3Transformer3DModel(Module):
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
         reuse_stack / reuse_attn_blocks: cross-step reuse for this forward (step_reuse.py); eager path only, and
             only once a computed forward has filled the caches.
+        adaln_tile_map / adaln_expanded_indices: [1, 1, 1, .] integers from `adaln_tilerow.tilerow_remap`, sharded on
+            SP; used by MINIMAX_H3_ADALN_GATHER=tilerow (the norms fall back to the per-token gather without them).
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -444,6 +448,10 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_cos,
                 rope_sin,
                 tables,
+                adaln_tile_map=adaln_tile_map,
+                adaln_expanded_indices=(
+                    as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None
+                ),
                 traced=traced,
                 tracer_trace_key=pad_to,
                 **({} if traced or reuse_attn_blocks is None else {"reuse_attn_blocks": reuse_attn_blocks}),
@@ -514,9 +522,12 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         tables: list[list[ttnn.Tensor]] | None = None,
         reuse_attn_blocks: frozenset[int] | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # The one-hot gather matrix depends only on the row tags: build it once per forward, not once per block.
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2])
+        tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2])
         for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
@@ -528,10 +539,18 @@ class MiniMaxH3Transformer3DModel(Module):
                 tables=tables[i] if tables is not None else None,
                 onehot=onehot,
                 reuse_attn=reuse_attn_blocks is not None and i in reuse_attn_blocks,
+                tilerow=tilerow,
             )
         if onehot is not None:
             ttnn.deallocate(onehot)
+        if tilerow is not None:
+            ttnn.deallocate(tilerow[1])
         return hidden
+
+    @property
+    def adaln_tilerow(self) -> bool:
+        """Whether forward wants `adaln_tile_map` / `adaln_expanded_indices` (MINIMAX_H3_ADALN_GATHER=tilerow)."""
+        return self.transformer_blocks[0]._adaln_gather == "tilerow"
 
     def clear_step_cache(self) -> None:
         """Drop the cross-step reuse caches (call at the start of every request)."""

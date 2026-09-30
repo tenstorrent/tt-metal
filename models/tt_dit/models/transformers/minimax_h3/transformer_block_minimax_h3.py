@@ -145,7 +145,8 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # The six modulation gathers run as one-hot matmuls (exact, 3x cheaper than ttnn.embedding at 15 s);
-        # MINIMAX_H3_ADALN_GATHER=embedding restores the gather op.
+        # MINIMAX_H3_ADALN_GATHER=embedding restores the gather op. =tilerow hands the norms' scale/shift to the
+        # norm as a small expanded table plus a per-tile-row map (adaln_tilerow.py; exact); the gates stay matmuls.
         self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
         # The norms' static weight is multiplied into the (1 + scale) table rows rather than into the per-token
         # weight (two full-sequence multiplies fewer per block); MINIMAX_H3_FOLD_NORM_WEIGHT=0 restores the old order.
@@ -256,9 +257,20 @@ class MiniMaxH3TransformerBlock(Module):
 
     def onehot_table(self, adaln_indices: ttnn.Tensor, num_timesteps: int) -> ttnn.Tensor | None:
         """The one-hot gather matrix shared by every block of a forward, or None when gathers use ttnn.embedding."""
-        if self._adaln_gather != "matmul":
+        if self._adaln_gather not in ("matmul", "tilerow"):
             return None
         return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM)
+
+    def tilerow_tables(
+        self, tile_map: ttnn.Tensor | None, expanded_indices: ttnn.Tensor | None, num_timesteps: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
+        """`(tile_map, selector)` shared by every block of a forward under MINIMAX_H3_ADALN_GATHER=tilerow, else None.
+
+        `selector @ table` is the expanded table whose tile row `tile_map[r]` equals tile row `r` of the per-token gather.
+        """
+        if self._adaln_gather != "tilerow" or tile_map is None or expanded_indices is None:
+            return None
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM)
 
     def clear_attn_cache(self) -> None:
         if self._attn_delta is not None:
@@ -278,6 +290,7 @@ class MiniMaxH3TransformerBlock(Module):
         tables: list[ttnn.Tensor] | None = None,
         onehot: ttnn.Tensor | None = None,
         reuse_attn: bool = False,
+        tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -290,6 +303,7 @@ class MiniMaxH3TransformerBlock(Module):
             `MiniMaxH3Transformer3DModel.modulation_tables`); otherwise projected from `temb` here.
         onehot: the gather matrix from `onehot_table`, shared by all blocks of a forward; built here if absent.
         reuse_attn: add the cached attention-branch delta instead of running norm1 + attention (step_reuse.py).
+        tilerow: `(tile_map, selector)` from `tilerow_tables`; the norms then read their scale/shift through the map.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
@@ -297,11 +311,16 @@ class MiniMaxH3TransformerBlock(Module):
             tables = self._modulation_tables(temb)
 
         indices = self._gather_indices(adaln_indices)
-        if onehot is None and self._adaln_gather == "matmul":
+        if onehot is None and self._adaln_gather in ("matmul", "tilerow"):
             onehot = self._onehot(indices, tables[0].shape[0])
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], indices, onehot)
+
+        tile_map = tilerow[0] if tilerow is not None else None
+
+        def norm_modulation(param: int) -> ttnn.Tensor:
+            return modulation(param) if tilerow is None else self._gather_rows(tables[param], indices, tilerow[1])
 
         # 1. Modulated self-attention. The (1 + scale) and shift are handed to the norm as a per-token
         # dynamic weight and bias, so the fused norm op applies the modulation itself rather than the
@@ -313,9 +332,10 @@ class MiniMaxH3TransformerBlock(Module):
         else:
             normed = self.norm1(
                 spatial_1BND,
-                dynamic_weight=modulation(_SCALE_MSA),
-                dynamic_bias=modulation(_SHIFT_MSA),
+                dynamic_weight=norm_modulation(_SCALE_MSA),
+                dynamic_bias=norm_modulation(_SHIFT_MSA),
                 dynamic_weight_includes_static=self._fold_norm_weight,
+                dynamic_tile_row_map=tile_map,
             )
             # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
             # `residual + attn_out * gate` directly rather than the block adding it afterwards.
@@ -336,9 +356,10 @@ class MiniMaxH3TransformerBlock(Module):
         residual = spatial_1BND
         normed = self.norm2(
             spatial_1BND,
-            dynamic_weight=modulation(_SCALE_MLP),
-            dynamic_bias=modulation(_SHIFT_MLP),
+            dynamic_weight=norm_modulation(_SCALE_MLP),
+            dynamic_bias=norm_modulation(_SHIFT_MLP),
             dynamic_weight_includes_static=self._fold_norm_weight,
+            dynamic_tile_row_map=tile_map,
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.

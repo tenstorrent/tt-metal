@@ -73,6 +73,7 @@ from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from models.common.utility_functions import is_blackhole
 
@@ -97,6 +98,7 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MODALITY_NUM,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -265,6 +267,8 @@ class _BucketState:
     adaln: StateTensor = field(default_factory=StateTensor)
     tsi: StateTensor = field(default_factory=StateTensor)
     assembly_idx: StateTensor = field(default_factory=StateTensor)
+    adaln_tile_map: StateTensor = field(default_factory=StateTensor)
+    adaln_expanded: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -2448,7 +2452,24 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
-        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+        row_adaln = adaln_indices(layout.token_tags, row_slot)
+        state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+        tilerow_kwargs = {}
+        if transformer.adaln_tilerow:
+            # MINIMAX_H3_ADALN_GATHER=tilerow: the norms read scale/shift through a per-tile-row map.
+            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+            tile_map, expanded = tilerow_remap(
+                padded_adaln,
+                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                sp_factor=self.sp_factor,
+                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+            )
+            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+            tilerow_kwargs = {
+                "adaln_tile_map": state.adaln_tile_map.value,
+                "adaln_expanded_indices": state.adaln_expanded.value,
+            }
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
@@ -2523,6 +2544,7 @@ class MiniMaxH3Pipeline:
                 pad_to=rung,
                 traced=traced,
                 timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
+                **tilerow_kwargs,
                 **({} if traced else reuse_plan.kwargs(i)),
             )
 
