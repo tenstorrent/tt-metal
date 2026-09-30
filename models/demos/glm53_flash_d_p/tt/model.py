@@ -154,6 +154,15 @@ class TtGlmBlock:
             "ffn_norm": lambda ctx, x: norm["ffn_norm"](x),
             "ffn_residual": lambda ctx, x, h, y: residual(x, h, y),
         }
+        from models.demos.glm53_flash_d_p.tt import mhc_fused
+
+        if mhc_fused.mhc_impl() == "fused":
+            # GLM_MHC_IMPL=fused: ttnn.bringup.mhc_pre (hc + collapse in one op) and mhc_post (the residual mix)
+            fused = {w: mhc_fused.build_mhc_pre(mesh, loader, cfg, layer, w) for w in ("attn", "ffn")}
+            for w in ("attn", "ffn"):
+                steps[f"{w}_hc"] = lambda ctx, x, w=w: fused[w](x)
+                steps[f"{w}_collapse"] = lambda ctx, x, h: mhc_fused.collapse(h)
+                steps[f"{w}_residual"] = lambda ctx, x, h, y: mhc_fused.residual(x, h, y)
         self.stateful = []  # modules holding this layer's state (KDA, or indexer + MLA)
         if self.kda:
             from models.demos.glm53_flash_d_p.tt.kda_attention import build_kda_attention
