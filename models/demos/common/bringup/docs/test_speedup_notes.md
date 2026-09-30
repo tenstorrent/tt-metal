@@ -1,3 +1,39 @@
+<!-- PROMPT FOR A NEW SESSION: paste everything between the two lines into a fresh Claude Code session -->
+---
+Continue the bring-up test speed-up work: build F56, component tests without a review agent.
+
+Repo /localdev/dnijemcevic/tt-metal2. Start a NEW branch from origin/dnijemcevic/ernie45_prefill, named
+dnijemcevic/f56-component-checks (`git fetch origin && git checkout -b dnijemcevic/f56-component-checks
+origin/dnijemcevic/ernie45_prefill`). Do not commit to dnijemcevic/ernie45_prefill: another machine is using it for the
+Xing bring-up. That branch is forked from llk_helper_library: compare against origin/llk_helper_library, never main.
+
+Read first:
+- models/demos/common/bringup/docs/test_speedup_notes.md (this file): what was done (F49 swap tests, F55) and the
+  step-by-step recipe for F56 below. Follow the recipe.
+- hy4_bringup_time_study.html (repo root): where the time went and why.
+- The F49 work as the worked example: `git log --grep "\[F49\]"`, dev/BREADCRUMBS.md section F49,
+  testing/component.py (run_swap_test checks="steps"), testing/mutate.py, dev/f49_mutation_proof.py and its results
+  dev/f49_mutation_proof.md.
+
+Goal: component tests (C.*) check themselves well enough that the test-review agent is only needed for unusual steps,
+without letting any mistake slip through that a reviewed test would catch. Existing frozen tests must behave exactly
+as before (new checks are opt-in: checks=None keeps today's behaviour).
+
+How to test (in this order):
+1. CPU only first: selftests (`scripts/run_safe_pytest.sh --no-precompile --run-all
+   models/demos/common/bringup/selftest/`) and the mistake-injection proof on Hy4's reviewed component tests (CPU
+   reference with mesh=None, goldens in /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden). Requirement: the new
+   checks catch everything the reviewed test catches, and the unmutated reference passes.
+2. Then one short device check (one component per output kind), through scripts/run_safe_pytest.sh only.
+3. Write BREADCRUMBS F56 with the proof table. Make "no component review" the default only after I say OK.
+
+Rules: one device job at a time (check `ps -ef | grep -E "run_safe_pytest|tt-probe"` first); run run_safe_pytest.sh
+/ tt-probe.sh in the foreground; never run tt-smi -r unless I say so; commit each verified piece with explicit paths;
+never push unless I ask. Keep the scope to the recipe (don't over-engineer). Keep answers to me short and plain.
+Tell me up front how long you expect it to take, and report when done: what changed, the proof table, the
+device-check result, the commits.
+---
+
 # Faster bring-up testing: what was done, what remains
 
 Written 2026-09-30, after the Hy4 Preview run (layers 0-5, 2x2). Time study with the numbers:
