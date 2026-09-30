@@ -408,7 +408,7 @@ def _compute_and_send(
             out,
             rank,
             meta,
-            deallocate=(not runtime.config.use_trace) or runtime.config.dflash_enabled,
+            deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
         )
     if d2d_out is not None:
@@ -438,6 +438,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    before_first_chunk=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -466,6 +467,9 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
+        if before_first_chunk is not None:
+            before_first_chunk()
+            before_first_chunk = None
         t = _compute_and_send(
             runtime,
             kv_caches,
@@ -940,7 +944,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+    def _capture_trace() -> None:
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -949,6 +953,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    # Captured once the first chunk has arrived: the inbound socket op compiles on its first
+    # receive, and a program-cache entry created after the capture is a DRAM buffer the replay may
+    # overwrite.
+    traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
@@ -965,6 +974,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            before_first_chunk=_capture_trace if traced else None,
         )
     finally:
         import gc
