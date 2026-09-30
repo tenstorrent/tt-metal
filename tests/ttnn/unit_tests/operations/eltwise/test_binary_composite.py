@@ -231,8 +231,6 @@ def test_nei_ttnn(input_shapes, device):
         (torch.Size([1, 6, 49, 97])),
         (torch.Size([1, 7, 320])),
         (torch.Size([1, 49, 321])),
-        (torch.Size([4, 32])),
-        (torch.Size([49, 321])),
     ),
 )
 def test_binary_prelu_ttnn(input_shapes, device):

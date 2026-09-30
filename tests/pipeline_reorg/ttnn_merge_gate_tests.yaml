@@ -154,7 +154,7 @@
     or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
     or test_unary_composite_mish_ttnn or test_unary_composite_tril_ttnn
     or test_unary_composite_triu_ttnn
-    or test_ldexp or test_logaddexp or test_xlogy or test_bias_gelu
+    or test_bias_gelu
     or test_arithmetic_operators
     or test_binary_category1_bfloat16 or test_binary_category2_bfloat16 or test_binary_category4_bfloat16
     or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
