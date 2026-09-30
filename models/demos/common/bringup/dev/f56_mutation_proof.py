@@ -4,7 +4,8 @@
 """F56 proof, CPU only: do the built-in component checks (checks="auto") catch what the hand-reviewed component
 tests catch?
 
-    python models/demos/common/bringup/dev/f56_mutation_proof.py [--spec S] [--only C.x.y ...] [--out MD]
+    python models/demos/common/bringup/dev/f56_mutation_proof.py [--spec S] [--all | --only C.x.y ...] [--out MD]
+    (default output dev/f56_proof/<model>.md; the Hy4 hard cases run only for Hy4)
     python models/demos/common/bringup/dev/f56_mutation_proof.py --merge a.json b.json --out MD
 
 For each chosen frozen component test (STEP / LAYER parsed with ast) and each mistake, mesh None:
@@ -204,9 +205,12 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--kinds", nargs="*", default=None, help="standard kinds (default all that apply)")
     ap.add_argument("--no-sweep", action="store_true")
-    ap.add_argument("--out", default=str(Path(__file__).with_name("f56_mutation_proof.md")))
+    ap.add_argument("--out", default=None, help="default dev/f56_proof/<model>.md")
     ap.add_argument("--merge", nargs="*", default=None)
     a = ap.parse_args(argv)
+    if a.out is None:
+        a.out = str(Path(__file__).with_name("f56_proof") / f"{Spec.load(a.spec).model}.md")
+        Path(a.out).parent.mkdir(exist_ok=True)
     if a.merge is not None:
         res = [r for f in a.merge for r in json.loads(Path(f).read_text())["results"]]
         secs = sum(json.loads(Path(f).read_text())["seconds"] for f in a.merge)

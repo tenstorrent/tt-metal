@@ -739,44 +739,42 @@ processes) and `dev/f56_device_check.py` (device, ~10 min).
 - A step whose bf16 precision is too coarse to see 1 % noise fails its sweep and goes to review (the fixture's tiny
   attention). That is intended.
 
-**Proofs**
-- CPU mistake proof on 11 hand-reviewed Hy4 component tests (one per output kind + every known hard case), the 7
-  float kinds or idxshift, hard cases (eps, streamswap, addend1.02, noclamp, nobias, post_half), controls
-  (reference, bf16, top-k shuffle) and the sweep: `dev/f56_mutation_proof.md` (summary below).
-- Device check (`dev/f56_device_check.py`, Hy4 on the p150b 2x2, 2026-09-30): 6 passed, no false alarms:
+**Proofs (final code, 2026-09-30; supersede every earlier number in this section)**
+Per model: `dev/f56_proof/<model>.md` (every row; `dev/f56_mutation_proof.py --spec <spec> --all`). Device:
+`dev/f56_device_check.py` runs checks="auto" on every component test of the spec's model, at the bring-up settings
+(GEMMA4_SDPA_CFG=base, MIMO_SDPA_CFG=base: the settings the component tests gated; later perf picks lowered them).
 
-  | step (layer) | kind | vs CPU (limit) | vs golden (limit) | second inputs (worst) |
-  |---|---|---|---|---|
-  | attn_norm (0) | float | 0.0017 (0.0059) | 0.0017 (0.0076) | small 0.0019 |
-  | attn_residual (0) | float | 0 (0.0045) | 0.0027 (0.0072) | 0 |
-  | indexer (0) | index | overlap 0.9972, worst row 0.991 | 0.9971 | chunk0 1.0, layer5 0.9989 |
-  | attention (1) | float | 0.0064 (0.0111) | 0.0066 (0.0128) | big 0.0121, small 0.0092 (0.03) |
-  | router (1) | selection | overlap 0.9998, rel 6e-5 | overlap 0.9982, rel 0.0017 | mixed 0.9998 |
-  | experts (1), bfp8 | float | 0.0077 (0.0134) | 0.0080 (0.0157) | mixed 0.0107 (0.03) |
-- CPU proof result (`dev/f56_mutation_proof.md`, 2026-09-30, final code): ALL 42 reviewed Hy4 component tests
-  (dense_full 12, moe_full 15, moe_shared 15), 435 rows, about 1 h of runs in all (three processes).
-  - Mistakes 309: reviewed catches 307, new (`checks="auto"`) 308, old template 160. Caught by reviewed but not by
-    new: 0. Caught by new but not by reviewed: 1 (moe_shared attention, noise1e-2).
-  - Controls 84 (reference, bf16, top-k with the valid positions shuffled): new passes 84/84.
-  - Freeze sweeps: 41/42 pass (would freeze without a review). moe_full attention fails its sweep: 1 % noise is
-    within its bf16 precision limit (0.011), so neither new nor the reviewed test catches it; the sweep sends it to
-    the review, as intended.
-  - Hard cases, each caught by new and by reviewed, missed by old (except nobias): attn_norm eps 1e-6 (by the small
-    and layer5 inputs), q_a eps 1e-5 (small), attn_hc_pre stream swap at layer 0 (mixed only), attn_hc / ffn_hc
-    post gates halved, attn_residual / moe_combine addend x 1.02, experts without the SwiGLU clamp (golden and big),
-    router without its correction bias.
-  - The 3 errors are the old template on topk_shared (it raises without the shared top-k: why that test needed its
-    review); the new path gets the top-k through `swap_context` (the proof supplies it, as for F49).
-  - Found by the proof and fixed before this result (both commits on this branch):
-    1. the reviewed topk_shared test requires pads after the valid positions (sparse_sdpa reads a row up to its
-       first pad): the index checks now require it when the reference has it; device indexer re-checked: passes;
-    2. moe_shared attn_hc: its pre gate 0 is ~0 (max 3e-5), so a sign flip of that column moved the whole [S, 8]
-       output by 4e-6; the reviewed test checks every gate column. Narrow float outputs (<= 64 columns) now also get
-       a worst-column rel L2 limit (component_col 0.015; the Hy4 device iHC gates recorded <= 0.0075 per column).
-       The six attn_hc / ffn_hc tests were rerun with it: all catch it, sweeps pass.
-- Not proven: other models; weight-only bugs a step's output cannot show on any input. Owner decision pending:
-  switch the default to "none" (or keep the review for the first block type of a new model and skip it for block
-  types that repeat the steps).
+| model | tests | mistakes | reviewed catches | new catches | missed by new, caught by reviewed | controls pass | freeze without review | device check |
+|---|---|---|---|---|---|---|---|---|
+| hy4_preview_d_p | 42 | 309 | 307 | 308 | 0 | 84/84 | 41/42 | 42/42 |
+| glm53_flash_d_p | 38 | 260 | 257 | 258 | 0 | 76/76 | 36/38 | 38/38 |
+| gemma4_a4b_d_p | 28 | 196 | 118 | 195 | 0 | 56/56 | 27/28 | 26/28 |
+| mimo_v2_6_d_p | 20 | 140 | 115 | 140 | 0 | 40/40 | 19/20 | 18/20 |
+| mimo_v2_6_d_p_2x2 | 20 | 140 | 115 | 140 | 0 | 40/40 | 19/20 | 18/20 |
+| all | 148 | 1045 | 912 | 1041 | 0 | 296/296 | 142/148 | 142/148 |
+
+- Mistakes: the 7 float kinds or idxshift of testing/mutate.py on every test, plus the Hy4 hard cases (eps, stream
+  swap, addend x 1.02, no clamp, no router bias, post gates halved; Hy4 only: they patch its reference).
+- The 6 tests that go to a review (sweep fails): attention steps whose bf16 precision limit is above 1 % (Hy4 moe_full,
+  Gemma sliding, GLM kda_dense / kda_moe) and MiMo full_moe experts: 1 % noise is within their limit, so neither the
+  new checks nor the reviewed tests catch it. Intended.
+- The 6 device failures are real findings, not false alarms (each passes its own reviewed test, whose row limits are
+  +-3-5 %):
+  1. Gemma experts L0 / L5: a +1.0-1.5 % systematic scale (every row too large on the layer29 / mixed inputs), there
+     since bring-up (recorded gate row ratio 1.022). Not investigated further.
+  2. MiMo and MiMo 2x2 full attention L0 / L5: +0.3-1.0 % on every row (row norm ratio [1.0029, 1.0103]; at its gate
+     [0.9938, 1.0073]); it came with a change to MiMo's attention after its gate. Not the sdpa fork: MIMO_V_PAD=1 (stock
+     SDPA, V padded) gives bit-identical output. Candidates: the split qkv / kv weights and q_scale folding of commit
+     5cb48fa24c9 and its neighbours (not bisected).
+- Also found: Gemma's and MiMo's perf picks P.2 (SDPA config A: HiFi2, fp32 dest acc off, approx exp) cost Gemma
+  attention 2.5-3 x its bring-up precision (global 0.0080 -> 0.0205, sliding 0.0051 -> 0.0164); their gates only
+  reran the layer PCC rung, and no component test reruns after a perf pick.
+- Device-driven fixes, all generic (commits on this branch): per-column limits on the golden only and never below
+  4 x the whole-output limit; columns against their own norm; systematic scale up to half the step's error budget;
+  second-input floors (worst row 0.15, row norm 0.1); router row sums vs golden allow the golden's own rounding; the
+  precision model keeps aliases (views / in-place) and rounds only input-derived values.
+- Not proven: weight-only bugs no output shows; recipes whose device precision the bf16 model misses by far (bfp8
+  activations: those steps get loose limits or go to review via the sweep).
 
 ## F57 (2026-09-30): perf picks: accuracy first, the orchestrator's A/B report, the owner decides (Xing run1 P.3)
 Status: DONE (2f64c73fb7d, 508858edd42, 2765a6a6c33). Incident: P.3 (routed experts at HiFi2) spent ~1 h: the agent
