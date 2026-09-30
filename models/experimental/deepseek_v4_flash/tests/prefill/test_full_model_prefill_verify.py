@@ -76,7 +76,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill
 )
 from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT
-from models.experimental.deepseek_v4_flash.tt.prefill.model import DeepSeekV4PrefillModel
+from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4PrefillModel
 from models.experimental.deepseek_v4_flash.tt.prefill.weights import checkpoint_expert_provider, checkpoint_weights
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache

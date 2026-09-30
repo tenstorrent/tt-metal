@@ -45,6 +45,25 @@ def flatten_streams(streams: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.to_layout(rows, ttnn.TILE_LAYOUT)
 
 
+def wide_rms_norm(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
+    """Unweighted RMSNorm over the last dim of a TILE ``[1, 1, T, W]`` tensor, for very wide rows (``hc*D``).
+
+    ``ttnn.rms_norm``'s default program sizes its circular buffers by the row width, which at ``W = hc*D``
+    does not fit next to the decode model's persistent L1 buffers on the shared chips. Eltwise ops and a
+    row reduction only ever hold a few tiles per core. The mean of squares is taken in fp32.
+    """
+    x32 = ttnn.typecast(x, ttnn.float32)
+    sq = ttnn.multiply(x32, x32)
+    ttnn.deallocate(x32)
+    mean = ttnn.mean(sq, dim=-1, keepdim=True)  # [1, 1, T, 1]
+    ttnn.deallocate(sq)
+    rstd = ttnn.typecast(ttnn.rsqrt(ttnn.add(mean, eps)), x.dtype)
+    ttnn.deallocate(mean)
+    out = ttnn.multiply(x, rstd)
+    ttnn.deallocate(rstd)
+    return out
+
+
 class DeepSeekV4PrefillHyperConnection(DeepSeekV4Module):
     """ttnn prefill port of ``DeepseekV4HyperConnection`` (see the module docstring).
 
@@ -106,7 +125,7 @@ class DeepSeekV4PrefillHyperConnection(DeepSeekV4Module):
             raise ValueError("the prefill hyper-connection needs at least 2 tokens; single tokens are decode's")
 
         flat = flatten_streams(hidden_streams)  # [1, 1, T, hc*D]
-        normed = ttnn.rms_norm(flat, epsilon=self.norm_eps)
+        normed = wide_rms_norm(flat, self.norm_eps)
         ttnn.deallocate(flat)
         fused_w = self.fn(normed)  # [1, 1, T, (2+hc)*hc]
         ttnn.deallocate(normed)
