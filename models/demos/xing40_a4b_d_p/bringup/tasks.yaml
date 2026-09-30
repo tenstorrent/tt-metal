@@ -237,6 +237,13 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 0
+  frozen:
+    at: '2026-09-30T06:09:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_02_attn_collapse.py: 5fc75f05d29d8ad56b645b090e00149d9df0a5882bafd9a6e8d160e9377ce184
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.dense.attn_norm
   title: dense attn_norm (norm) on device, layer 0
   step: implement
