@@ -1690,6 +1690,7 @@ def run_ring_joint_sdpa_chunked(
     max_k_splits: int = 1,
     matmul_math_fidelity=None,
     segmented_accumulation: bool = False,
+    math_fidelity=None,
     kv_mean_offset: float = 0.0,
 ):
     """
@@ -1800,6 +1801,14 @@ def run_ring_joint_sdpa_chunked(
     worker_sub_device_id = runtime.worker_sub_device_id
     ccl_semaphore_handles = runtime.ccl_semaphore_handles
     compute_kernel_config = runtime.compute_kernel_config
+    if math_fidelity is not None:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            runtime.mesh_device.arch(),
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        )
 
     try:
         torch.manual_seed(CHUNKED_PREFILL_SEED)
@@ -1888,22 +1897,36 @@ def run_ring_joint_sdpa_chunked(
             )
             for q_chunk, k_chunk in qk_configs
         }
-        # The merge changes the accumulation order, so a split output identical to the unsplit one on every chunk
-        # means eligibility fell back and the split never ran.
-        unsplit_program_configs = (
-            {
+
+        # Each opt-in below changes the arithmetic, and each falls back silently when a config is ineligible. So
+        # the op also runs with just that option removed, and the outputs must differ on some chunk.
+        def feature_baseline(**overrides):
+            base = dict(
+                max_k_splits=max_k_splits,
+                matmul_math_fidelity=matmul_math_fidelity,
+                segmented_accumulation=segmented_accumulation,
+            )
+            base.update(overrides)
+            return {
                 (q_chunk, k_chunk): ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=sdpa_compute_grid,
                     q_chunk_size=q_chunk,
                     k_chunk_size=k_chunk,
                     exp_approx_mode=False,
+                    **base,
                 )
                 for q_chunk, k_chunk in qk_configs
             }
-            if max_k_splits > 1 and do_check and num_iterations == 1
-            else None
-        )
-        ksplit_differs_by_config = {}
+
+        feature_baselines = {}
+        if do_check and num_iterations == 1:
+            if max_k_splits > 1:
+                feature_baselines["K split"] = feature_baseline(max_k_splits=1)
+            if matmul_math_fidelity is not None:
+                feature_baselines["matmul_math_fidelity"] = feature_baseline(matmul_math_fidelity=None)
+            if segmented_accumulation and max_k_splits == 1:
+                feature_baselines["segmented accumulation"] = feature_baseline(segmented_accumulation=False)
+        feature_differs = {}
 
         use_device_determinism_compare = (
             num_iterations > 1 and chunk_size % ttnn.TILE_SIZE == 0 and d_v % ttnn.TILE_SIZE == 0
@@ -2361,10 +2384,10 @@ def run_ring_joint_sdpa_chunked(
                             e,
                             out_i,
                         )
-                        if unsplit_program_configs is not None:
-                            unsplit_out = run_chunk_call(
+                        for feature, baseline_configs in feature_baselines.items():
+                            baseline_out = run_chunk_call(
                                 config_id,
-                                unsplit_program_configs[(q_chunk_size, k_chunk_size)],
+                                baseline_configs[(q_chunk_size, k_chunk_size)],
                                 0,
                                 i,
                                 s,
@@ -2376,20 +2399,19 @@ def run_ring_joint_sdpa_chunked(
                                 persistent_output_buffer_v,
                                 kv_cache_batch_idx_arg,
                             )
-                            unsplit_i = to_host(unsplit_out, chunk_size)
+                            baseline_i = to_host(baseline_out, chunk_size)
                             if use_ring_mla:
-                                unsplit_i = unsplit_i[:, :, :, :d_v]
-                            ksplit_differs_by_config.setdefault(config_id, False)
-                            if not torch.equal(out_i, unsplit_i):
-                                ksplit_differs_by_config[config_id] = True
+                                baseline_i = baseline_i[:, :, :, :d_v]
+                            key = (config_id, feature)
+                            feature_differs[key] = feature_differs.get(key, False) or not torch.equal(out_i, baseline_i)
 
         if num_iterations > 1 and use_device_determinism_compare and determinism_mismatch_marker is not None:
             assert not device_mismatch_marker_is_set(
                 determinism_mismatch_marker
             ), "Chunked prefill produced output that differs from iteration 0"
 
-        for config_id, differs in ksplit_differs_by_config.items():
-            assert differs, f"{config_id}: max_k_splits={max_k_splits} output equals the unsplit op on every chunk"
+        for (config_id, feature), differs in feature_differs.items():
+            assert differs, f"{config_id}: output equals the run without {feature} on every chunk, so it never applied"
 
         for config_id, per_chunk_results in per_chunk_results_by_config.items():
             failures = [
@@ -4778,6 +4800,7 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             )
             return tt_out
 
+        segmentation_changed_output = False
         for i, chunk in enumerate(chunks):
             load_chunk(i)
             outputs = []
@@ -4793,6 +4816,9 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             assert torch.isfinite(segmented).all(), f"chunk {i}: segmented output is not finite"
             pcc_passed, pcc = comp_pcc(unsegmented, segmented, 0.9999)
             assert pcc_passed, f"chunk {i} (kv_actual_isl={chunk['kv_actual_isl']}): segmented vs unsegmented PCC {pcc}"
+            segmentation_changed_output |= not torch.equal(unsegmented, segmented)
+        # Segments merge in a different order, so identical output on every chunk means segmentation never applied.
+        assert segmentation_changed_output, "segmented output equals unsegmented on every chunk"
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
@@ -7763,6 +7789,25 @@ def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(tokens_per_devi
         max_k_splits=max_k_splits,
         use_ring_mla=True,
         matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+
+@pytest.mark.timeout(900)
+def test_ring_joint_attention_hifi_matmul_on_lofi_compute_config():
+    """A HiFi2 matmul override on a LoFi compute config. On the last K chunk normalize_row records a LoFi matmul
+    image between two P.V setups, so P.V must fully re-init rather than reuse it (it hung or went wrong from three
+    row groups). q192 gives three; the default inline normalize is the path that hits it. Head dim 128, since q192
+    with Gemma4's 512 overflows L1."""
+    tokens_per_device = 768
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, name="lofi_hifi2_d128", d_q=128, d_k=128, d_v=128),
+        chunk_size=chunk_size,
+        total_seq=2 * chunk_size,
+        qk_configs=[(192, 256)],
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        matmul_math_fidelity=ttnn.MathFidelity.HiFi2,
     )
 
 

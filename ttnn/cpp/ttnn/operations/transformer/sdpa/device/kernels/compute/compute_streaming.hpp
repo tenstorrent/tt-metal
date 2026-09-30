@@ -33,13 +33,21 @@ constexpr bool reduce_trigger_supported = true;
 #endif
 
 // SDPA_MATMUL_FIDELITY overrides the fidelity of the QK^T and softmax @ V matmuls. A LoFi replay image is
-// specific to the matmul's shape, so at LoFi each PV setup re-records it instead of reusing QK^T's.
+// specific to the matmul's shape, so each PV setup re-records it instead of reusing the last one whenever a LoFi
+// image can be live: a LoFi override, or a LoFi compute config, whose normalize_row records a LoFi image between
+// two PV setups. HiFi levels all record the same image, so HiFi over HiFi can reuse it.
 #ifdef SDPA_MATMUL_FIDELITY
 constexpr bool sdpa_matmul_fidelity_set = true;
 constexpr MathFidelity sdpa_matmul_fidelity = static_cast<MathFidelity>(SDPA_MATMUL_FIDELITY);
 #else
 constexpr bool sdpa_matmul_fidelity_set = false;
 constexpr MathFidelity sdpa_matmul_fidelity = MathFidelity::LoFi;
+#endif
+// The compute config's fidelity as seen by every TRISC (MATH_FIDELITY exists only on math and pack).
+#ifdef SDPA_COMPUTE_LOFI
+constexpr bool sdpa_compute_lofi = true;
+#else
+constexpr bool sdpa_compute_lofi = false;
 #endif
 
 ALWI void sdpa_mm_init(uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
@@ -61,7 +69,7 @@ ALWI void sdpa_mm_reinit(
 
 ALWI void sdpa_pv_mm_setup(
     uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr (sdpa_matmul_fidelity_set && sdpa_matmul_fidelity == MathFidelity::LoFi) {
+    if constexpr ((sdpa_matmul_fidelity_set && sdpa_matmul_fidelity == MathFidelity::LoFi) || sdpa_compute_lofi) {
         sdpa_mm_init(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
         sdpa_mm_reinit(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);

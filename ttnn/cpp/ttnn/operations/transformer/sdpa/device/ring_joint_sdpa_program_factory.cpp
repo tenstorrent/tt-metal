@@ -1863,6 +1863,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
+    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
+    if (math_fidelity == MathFidelity::LoFi) {
+        defines["SDPA_COMPUTE_LOFI"] = "1";
+    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
