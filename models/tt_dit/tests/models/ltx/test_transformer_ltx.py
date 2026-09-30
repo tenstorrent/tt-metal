@@ -2050,3 +2050,214 @@ def test_ltx_transformer_block_trace_perf(
     if dump:
         torch.save({"video": tt_v, "audio": tt_a}, dump)
     tracer.release_trace()
+
+
+def _ring_sdpa(attn, q, k, v, *, logical_n, program_config, is_cross):
+    """The ring-joint SDPA call of ``LTXAttention.forward`` with an explicit program config."""
+    sp_axis = attn.parallel_config.sequence_parallel.mesh_axis
+    ccl = attn.ccl_manager
+    out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        attn.dummy_joint_input,
+        attn.dummy_joint_input,
+        attn.dummy_joint_input,
+        persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.get_dtype()),
+        persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.get_dtype()),
+        joint_strategy="rear",
+        logical_n=logical_n,
+        is_cross=is_cross,
+        program_config=program_config,
+        compute_kernel_config=attn.sdpa_compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
+        num_links=ccl.num_links,
+        cluster_axis=sp_axis,
+        mesh_device=attn.mesh_device,
+        topology=ccl.topology,
+        subdevice_id=ccl.ccl_sub_device_id,
+        ccl_core_grid_offset=(attn.sdpa_worker_grid[0], 0),
+        use_column_major_ccl=True,
+    )
+    return out
+
+
+def _v2a_split_k(attn, q, k, v, *, key_bias, row_zeros):
+    """V2A cross-attention split over the SP-sharded keys instead of ring-passing video K/V.
+
+    Every device attends all audio queries to its local keys, then the partial softmax sums
+    are merged across SP by a shared row max and one reduce-scatter back to the Q shard.
+    Moves the audio Q (tiny) over the fabric instead of every device's video K/V.
+    ``key_bias`` is 0 on real keys and -1e9 on SP padding; ``row_zeros`` is a zero
+    (1, H, Nq, 32) tile row used to broadcast per-row stats across a tile width.
+    """
+    sp_axis = attn.parallel_config.sequence_parallel.mesh_axis
+    ccl = attn.ccl_manager
+    ckc = attn.sdpa_compute_kernel_config
+    q_all = ccl.all_gather_persistent_buffer(q, dim=2, mesh_axis=sp_axis)
+    # head_dim 64 makes the softmax scale 1/8, exact in bf16.
+    s = ttnn.matmul(ttnn.multiply(q_all, q.shape[3] ** -0.5), k, transpose_b=True, compute_kernel_config=ckc)
+    s = ttnn.add(s, key_bias)
+    m = ttnn.max(s, dim=3, keepdim=True)
+    p = ttnn.exp(ttnn.subtract(s, m))
+    l = ttnn.sum(p, dim=3, keepdim=True)
+    o = ttnn.matmul(p, v, compute_kernel_config=ckc)
+    m_all = ccl.all_gather_persistent_buffer(ttnn.add(row_zeros, m), dim=3, mesh_axis=sp_axis)
+    rescale = ttnn.exp(ttnn.subtract(m, ttnn.max(m_all, dim=3, keepdim=True)))
+    packed = ttnn.concat([ttnn.multiply(o, rescale), ttnn.add(row_zeros, ttnn.multiply(l, rescale))], dim=3)
+    packed = ccl.reduce_scatter_persistent_buffer(packed, dim=2, mesh_axis=sp_axis)
+    d = q.shape[3]
+    return ttnn.divide(packed[:, :, :, :d], packed[:, :, :, d : d + 1])
+
+
+def _time_traced(mesh_device, fn, n_ops):
+    """Per-call µs of ``fn`` replayed from a trace of ``n_ops`` back-to-back calls (min of 3 laps)."""
+    fn()
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(n_ops):
+        out = fn()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    laps = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        laps.append((time.perf_counter() - t0) * 1e6 / n_ops)
+    ttnn.release_trace(mesh_device, trace_id)
+    return min(laps), out
+
+
+def _sweep_compare(ref: ttnn.Tensor, out: ttnn.Tensor, *, composer, n_real: int) -> str:
+    """Max |out - ref| and relative L2 error over the real rows, reduced on device to keep readback small."""
+
+    def rows(t):
+        return ttnn.to_torch(t, mesh_composer=composer)[:, :, :n_real, :].double()
+
+    d = ttnn.subtract(out, ref)
+    maxabs = rows(ttnn.max(ttnn.abs(d), dim=3, keepdim=True)).max().item()
+    if maxabs == 0:
+        return "bitexact"
+    err = rows(ttnn.sum(ttnn.multiply(d, d), dim=3, keepdim=True)).sum()
+    norm = rows(ttnn.sum(ttnn.multiply(ref, ref), dim=3, keepdim=True)).sum()
+    return f"maxabs={maxabs:.4g} rel_l2={(err / norm).sqrt().item():.3g}"
+
+
+# Candidate (q_chunk, k_chunk) per stage for the video self-attn ring SDPA, and k_chunk for the
+# V2A cross ring SDPA (its q_chunk is the 32-row audio Q shard). The first entry is the shipped config.
+_RING_SWEEP = {
+    "stage_1": {
+        "self": [(96, 256)] + [(q, k) for q in (64, 96, 128, 160, 192, 256) for k in (128, 256, 384, 512)],
+        "cross_k": [512, 128, 256, 1024],
+    },
+    "stage_2": {
+        "self": [(192, 512)] + [(q, k) for q in (128, 160, 192, 224, 256, 320) for k in (256, 384, 512, 640)],
+        "cross_k": [512, 256, 1024, 2048],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param(
+            (4, 8), 1, 0, 2, {**ring_params_8k, **_BLOCK_TRACE_PARAMS}, ttnn.Topology.Ring, id="ring_bh_4x8_8k"
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+def test_ltx_ring_sdpa_chunk_sweep(
+    mesh_device, sp_axis, tp_axis, num_links, device_params, topology, F, H, W, request, reset_seeds
+) -> None:
+    """Traced per-op time of the video self-attn and V2A cross ring SDPA over chunk configs.
+
+    Logs one SWEEP line per config: µs per call and the output against the shipped config.
+    Also times the V2A split-K alternative (SWEEP v2a_splitk) against the shipped ring cross.
+    """
+    stage = next(s for s in _RING_SWEEP if s in request.node.callspec.id)
+    n_ops = int(os.environ.get("LTX_SWEEP_OPS", "10"))
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
+
+    tt_block = _make_tt_block(
+        mesh_device=mesh_device,
+        ccl_manager=_make_ccl_manager(mesh_device, num_links, topology),
+        parallel_config=_make_parallel_config(mesh_device, sp_axis, tp_axis),
+        is_fsdp=False,
+        has_audio=True,
+    )
+    attn_self, attn_v2a = tt_block.attn1, tt_block.video_to_audio_attn
+    shard = {sp_axis: 2, tp_axis: 1}
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+
+    def pc(q_chunk, k_chunk):
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=attn_self.sdpa_worker_grid,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
+        )
+
+    def rand_bhnd(n, d):
+        x = torch.randn(1, NUM_HEADS, n, d)
+        return bf16_tensor_2dshard(x, device=mesh_device, shard_mapping=shard)
+
+    q, k, v = (rand_bhnd(video_N, HEAD_DIM) for _ in range(3))
+    ref = None
+    for q_chunk, k_chunk in _RING_SWEEP[stage]["self"]:
+        try:
+            us, out = _time_traced(
+                mesh_device,
+                lambda: _ring_sdpa(
+                    attn_self, q, k, v, logical_n=video_N_real, program_config=pc(q_chunk, k_chunk), is_cross=False
+                ),
+                n_ops,
+            )
+        except Exception as e:  # an L1 overflow or unsupported chunk fails validation, not the device
+            logger.info(f"SWEEP {stage} self q={q_chunk} k={k_chunk} FAIL {str(e).splitlines()[0][:160]}")
+            continue
+        cmp = "ref" if ref is None else _sweep_compare(ref, out, composer=composer, n_real=video_N_real)
+        ref = ttnn.clone(out) if ref is None else ref
+        logger.info(f"SWEEP {stage} self q={q_chunk} k={k_chunk} us={us:.1f} {cmp}")
+    for t in (q, k, v) + ((ref,) if ref is not None else ()):
+        ttnn.deallocate(t)
+
+    aq = rand_bhnd(audio_N, AUDIO_HEAD_DIM)
+    ak, av = (rand_bhnd(video_N, AUDIO_HEAD_DIM) for _ in range(2))
+    cross_q = attn_v2a.cross_ring_sdpa_program_config.q_chunk_size
+    ref = None
+    for k_chunk in _RING_SWEEP[stage]["cross_k"]:
+        try:
+            us, out = _time_traced(
+                mesh_device,
+                lambda: _ring_sdpa(
+                    attn_v2a, aq, ak, av, logical_n=video_N_real, program_config=pc(cross_q, k_chunk), is_cross=True
+                ),
+                n_ops,
+            )
+        except Exception as e:
+            logger.info(f"SWEEP {stage} v2a q={cross_q} k={k_chunk} FAIL {str(e).splitlines()[0][:160]}")
+            continue
+        cmp = "ref" if ref is None else _sweep_compare(ref, out, composer=composer, n_real=audio_N_real)
+        ref = ttnn.clone(out) if ref is None else ref
+        logger.info(f"SWEEP {stage} v2a q={cross_q} k={k_chunk} us={us:.1f} {cmp}")
+
+    bias = torch.zeros(1, 1, 1, video_N)
+    bias[..., video_N_real:] = -1e9
+    key_bias = bf16_tensor(bias, device=mesh_device, mesh_axis=sp_axis, shard_dim=3)
+    row_zeros = bf16_tensor(torch.zeros(1, NUM_HEADS, audio_N, 32), device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    try:
+        us, out = _time_traced(
+            mesh_device, lambda: _v2a_split_k(attn_v2a, aq, ak, av, key_bias=key_bias, row_zeros=row_zeros), n_ops
+        )
+        cmp = _sweep_compare(ref, out, composer=composer, n_real=audio_N_real)
+        logger.info(f"SWEEP {stage} v2a_splitk us={us:.1f} {cmp}")
+    except Exception as e:
+        logger.info(f"SWEEP {stage} v2a_splitk FAIL {str(e).splitlines()[0][:300]}")
