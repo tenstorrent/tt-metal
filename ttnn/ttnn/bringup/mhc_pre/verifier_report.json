@@ -1,0 +1,2289 @@
+{
+  "summary": {
+    "total": 206,
+    "supported_pass": 106,
+    "supported_fail": 1,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 98,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 1
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X32x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X32x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X64x1024-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X64x1024-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x128x4096-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x128x4096-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X2048x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X2048x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x2x256x8192-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x2x256x8192-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X17x512-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X17x512-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x100x4096-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x100x4096-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1000x7168-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1000x7168-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x28672-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x28672-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1024x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1024x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2560x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2560x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x4096x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x4096x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x77x10240-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x77x10240-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x333x24576-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x333x24576-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x10240-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x16384-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x20480-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x24576-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x28672-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x7168-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_small_magnitude_streams[T64_nC4096]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_small_magnitude_streams[T640_nC7168]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_large_magnitude_streams[T64_nC4096]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_large_magnitude_streams[T640_nC7168]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_large_sinkhorn_logits[T640_nC7168]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_identical_streams[T64_nC4096]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_identical_streams[T640_nC7168]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_comb_depth_chain[fp32]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X32x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X32x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X64x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X64x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x128x4096-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x128x4096-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x640x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X2048x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X2048x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x2x256x8192-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x2x256x8192-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X17x512-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X17x512-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x100x4096-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x100x4096-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1000x7168-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1000x7168-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x28672-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x28672-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1024x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1024x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2560x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2560x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x4096x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x4096x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x1280x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x512x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x256x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x2048x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x77x10240-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x77x10240-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x333x24576-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op[X1x1x333x24576-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "BFLOAT16",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x256x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x512x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x640x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1024x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x1280x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2048x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x2560x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x10240-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x20480-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x24576-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x28672-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_golden.py::test_op_loose[X1x1x4096x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-weight_dtype=FLOAT32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_large_sinkhorn_logits[T64_nC4096]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "weight_dtype": "FLOAT32",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned"
+        },
+        "status": "failed",
+        "failure_category": "numerical-bug"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/mhc_pre/test_regression.py::test_comb_depth_chain[bf16]",
+        "test_name": "test_comb_depth_chain[bf16]",
+        "status": "skipped"
+      }
+    ]
+  }
+}
