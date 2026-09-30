@@ -156,9 +156,14 @@ int main()
                 break;
         }
 
+#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
+        constexpr std::uint32_t poll_period_us = 1;
+#else
+        constexpr std::uint32_t poll_period_us = 100;
+#endif
         // Poll about every 100 us and spin on NOPs in between: each poll is an L1 read, and the old wall clock wait kept
         // the debug register bus busy. Both changed the timing of the kernel under test.
-        for (std::uint32_t i = 0; i < 100 * ARCH_CYCLE_MICRO_SECOND; ++i)
+        for (std::uint32_t i = 0; i < poll_period_us * ARCH_CYCLE_MICRO_SECOND; ++i)
         {
             asm volatile("nop");
         }
