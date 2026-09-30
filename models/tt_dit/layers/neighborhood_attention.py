@@ -602,6 +602,52 @@ def neighborhood_attention_3d_bricked_w_sharded(
         grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels))
         return exchange(grid5, lane)
 
+    def widened_bricked_tiles(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
+        """K/V halo for the keep-bricked path with the band itself never leaving tiles.
+
+        Only the ``halo_br`` edge bricks of each brick row take the row-major exchange: padding
+        ``[first | last]`` puts the left neighbour's ``last`` on its left and the right neighbour's
+        ``first`` on its right, which are this chip's two halos. A brick is one tile row, so the
+        resident tensor is a concat of whole tiles along ``W_br``.
+        """
+        halo_br = halo // brick[2]
+        rows = batch * t_br * h_br
+        grid = ttnn.reshape(tensor, (rows, w_br, SITES_PER_BRICK, channels))
+        with timing_tree.span(device, f"{lane}: edges", category=timing_tree.RESHAPE, deep=True):
+            first = ttnn.slice(grid, [0, 0, 0, 0], [rows, halo_br, SITES_PER_BRICK, channels])
+            last = ttnn.slice(grid, [0, w_br - halo_br, 0, 0], [rows, w_br, SITES_PER_BRICK, channels])
+            edges = ttnn.concat([first, last], dim=1)
+            ttnn.deallocate(first)
+            ttnn.deallocate(last)
+            edge_rows = ttnn.to_layout(edges, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(edges)
+        parts = _halo_split(SITES_PER_BRICK * channels, edge_rows.element_size())
+        with timing_tree.span(device, f"{lane}: halo-exchange", category=timing_tree.ALLGATHER, deep=True):
+            split = ttnn.reshape(
+                edge_rows, (batch, t_br, h_br, 2 * halo_br * parts, SITES_PER_BRICK * channels // parts)
+            )
+            exchanged = _halo_exchange(
+                ccl_manager,
+                split,
+                dims=[3],
+                pad_left=[halo_br * parts],
+                pad_right=[halo_br * parts],
+                axes=[sp_axis],
+                neighbor_sems=[semaphore],
+                num_links=[num_links],
+            )
+        with timing_tree.span(device, f"{lane}: halo tilize+concat", category=timing_tree.RESHAPE, deep=True):
+            halos = ttnn.to_layout(
+                ttnn.reshape(exchanged, (rows, 4 * halo_br, SITES_PER_BRICK, channels)), ttnn.TILE_LAYOUT
+            )
+            left = ttnn.slice(halos, [0, 0, 0, 0], [rows, halo_br, SITES_PER_BRICK, channels])
+            right = ttnn.slice(halos, [0, 3 * halo_br, 0, 0], [rows, 4 * halo_br, SITES_PER_BRICK, channels])
+            ttnn.deallocate(halos)
+            resident_tiles = ttnn.concat([left, grid, right], dim=1)
+            ttnn.deallocate(left)
+            ttnn.deallocate(right)
+        return ttnn.reshape(resident_tiles, (batch, 1, bricked_sites, channels))
+
     def widened(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
         """This chip's K or V shard plus a halo of each neighbour's edge, in op layout.
 
@@ -615,7 +661,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
         _tp_trace(device, f"{lane}: to_bricked_grid done -> {tuple(grid5.shape)}")
         return exchange(grid5, lane)
 
-    widen = widened_bricked if already_bricked else widened
+    if already_bricked:
+        widen = widened_bricked_tiles if single_head_tiles else widened_bricked
+    else:
+        widen = widened
     with timing_tree.span(device, "halo+brick-permute (k,v)", category=timing_tree.RESHAPE, deep=True):
         key_op = widen(key, "k")
         value_op = widen(value, "v")
