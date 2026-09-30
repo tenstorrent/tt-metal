@@ -49,15 +49,14 @@ namespace ckernel::sfpu {
 // APPROXIMATION_MODE: only affects the reciprocal NR iteration count.
 // ======================================================================
 
-// Asymptotic path: shared machinery lives in ckernel_sfpu_bessel_common.h; this
-// wrapper carries P's coefficients (fit on y ∈ [1/92, 0.1], max rel err 1.052e-9
-// in float64), the 2^32 rescale folded into each coefficient (exact power of two,
-// so the emitted constants change but no mantissa does), and the final sign
-// fix-up — i1 is odd, i0 is not.
+// Asymptotic path: shared machinery lives in ckernel_sfpu_bessel_common.h,
+// which also applies the 2^32 rescale to the coefficients; this wrapper carries
+// P's unscaled coefficients (fit on y ∈ [1/92, 0.1], max rel err 1.052e-9 in
+// float64) and the final sign fix-up — i1 is odd, i0 is not.
 //
-// exp_abs · rsqrt_y peaks at 2.2e29 for |x|=92, so the rescaled polynomial
-// multiply is the only operation here that can overflow — which is correct,
-// because that is where i1 itself leaves FP32.
+// Inside _bessel_asymptotic_, exp_abs · rsqrt_y peaks at 2.2e29 for |x|=92, so
+// the rescaled polynomial multiply is the only operation that can overflow —
+// which is correct, because that is where i1 itself leaves FP32.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
 #ifdef INP_FLOAT32
     const sfpi::vFloat mag = _bessel_asymptotic_<true>(

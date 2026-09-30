@@ -23,12 +23,12 @@ namespace ckernel::sfpu {
 // exp(|x|) leaves FP32 at 88.72284 but i0/i1 do not until ≈91.90 — the
 // asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/24 divisor. EXP2_DOWNSCALE
 // evaluates exp(|x|)/2^EXP2_DOWNSCALE (folded into exp's bias constant on the
-// BF16 path, one exact integer add on the FP32 path's exponent), the matching
-// 2^EXP2_DOWNSCALE is folded into P's coefficients by the caller. With
-// EXP2_DOWNSCALE=32 the exp intermediate peaks at 2.1e30 for |x|=92 instead of
-// 9.0e39, and the only operation that can still overflow is the final rescaled
-// multiply — which is where i_n itself leaves FP32, so overflowing there is the
-// correct answer.
+// BF16 path, one exact integer add on the FP32 path's exponent), and
+// _bessel_asymptotic_ multiplies the matching 2^EXP2_DOWNSCALE into P's
+// coefficients, so callers pass them unscaled. With EXP2_DOWNSCALE=32 the exp
+// intermediate peaks at 2.1e30 for |x|=92 instead of 9.0e39, and the only
+// operation that can still overflow is the final rescaled multiply — which is
+// where i_n itself leaves FP32, so overflowing there is the correct answer.
 // ======================================================================
 
 // 1/sqrt(x) via Quake-style magic constant + two Newton refinements
@@ -44,10 +44,15 @@ sfpi_inline sfpi::vFloat _rsqrt_quake_newton_23b_(const sfpi::vFloat x) {
     return c * sfpi::addexp(y, -1) + y;
 }
 
-// Computes exp(|x|)/2^EXP2_DOWNSCALE · 1/sqrt(|x|) · P(1/|x|).
-// Callers fold the matching 2^EXP2_DOWNSCALE into each c_k (an exact power of
-// two — the emitted constants change but no mantissa does), so the return
-// value is the correctly-scaled asymptotic i_n(|x|).
+// Computes exp(|x|)/2^EXP2_DOWNSCALE · 1/sqrt(|x|) · 2^EXP2_DOWNSCALE·P(1/|x|),
+// the correctly-scaled asymptotic i_n(|x|). Callers pass P's coefficients
+// c0..c5 unscaled: the 2^EXP2_DOWNSCALE is multiplied into each c_k below (an
+// exact power of two, so the emitted constants change but no mantissa does).
+//
+// Precondition: the unsafe exp variants skip their range guards, so the caller
+// must bound |x| to keep the biased result exponent |x|/ln2 + 127 -
+// EXP2_DOWNSCALE below 255, i.e. |x| < (128 + EXP2_DOWNSCALE)·ln2 (110.9 at
+// the default of 32). i1 clamps at 92, which needs EXP2_DOWNSCALE >= 5.
 //
 // INP_FLOAT32 selects between the FP32-accurate and BF16 21-bit exp variants,
 // matching the caller's dtype macro. The rsqrt and poly evaluation are
