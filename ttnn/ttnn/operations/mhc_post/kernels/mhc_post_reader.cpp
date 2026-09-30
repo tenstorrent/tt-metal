@@ -4,49 +4,19 @@
 // mhc_post reader (NCRISC, NoC0).
 //
 // Per segment (one token-tile row of this core's unit range):
-//   load_coefficients — read the raw post / comb tiles of row r into cb_coef_raw (one barrier), then
-//                       expand them into n * P half-packed column-broadcast fp32 tiles in cb_coef_bcast
-//                       (layout: mhc_post_common.hpp — term t of stream j in half t%2 of tile j*P + t/2;
-//                       term 0 = post(rho, j), term 1+i = comb(rho, i*n + j)).
-//                       The expansion is scheduled inside the read-barrier shadow of the segment's first
-//                       data block (block reads issued, expansion done, then the barrier).
 //   load_block        — per block of block_col_tiles columns: B F tiles (slot c) and n*B X tiles
 //                       (slot i*B + c), valid columns only, ONE barrier, nominal pushes.
+//   load_coefficients — only when the host's COEF_EXPANDER knob names the reader (expand_here); otherwise the
+//                       writer owns it (mhc_post_coef_expand.hpp). Here the raw post / comb reads ride block 0's
+//                       barrier, and the expansion runs in the read shadow of block 1 (block 0 is already
+//                       pushed; compute starts on it as soon as stream 0's coefficients land). A single-block
+//                       segment expands right after block 0.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "mhc_post_common.hpp"
-
-namespace {
-
-constexpr uint32_t FACE_HW = 16;
-constexpr uint32_t FACE_ELEMS = FACE_HW * FACE_HW;
-
-// Half-tile column-broadcast expansion: every element (rho, gamma) of half `half` (gamma in
-// [16*half, 16*half + 16)) of the fp32 tile at dst_tile_addr becomes raw(rho, col). See mhc_post_common.hpp.
-// The half is two contiguous faces (2*fh + half, fh = row half), each 16 rows x 16 words; one raw load per
-// row feeds 16 unrolled word stores (no per-element address math, no per-row helper call).
-FORCE_INLINE void expand_half(uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t half) {
-#pragma GCC unroll 1
-    for (uint32_t fh = 0; fh < 2; ++fh) {
-        const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_tile_addr) +
-                                                 (2 * fh) * FACE_ELEMS + (col % FACE_HW) + (col / FACE_HW) * FACE_ELEMS;
-        volatile tt_l1_ptr uint32_t* dst =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile_addr) + (2 * fh + half) * FACE_ELEMS;
-#pragma GCC unroll 1
-        for (uint32_t r = 0; r < FACE_HW; ++r) {
-            const uint32_t bits = src[r * FACE_HW];
-#pragma GCC unroll 16
-            for (uint32_t w = 0; w < FACE_HW; ++w) {
-                dst[w] = bits;
-            }
-            dst += FACE_HW;
-        }
-    }
-}
-
-}  // namespace
+#include "mhc_post_coef_expand.hpp"
 
 void kernel_main() {
     // ---- compile-time args ----
@@ -64,15 +34,14 @@ void kernel_main() {
     constexpr uint32_t cb_coef_raw = get_compile_time_arg_val(11);
     constexpr uint32_t cb_coef_bcast = get_compile_time_arg_val(12);
     constexpr uint32_t coef_tiles_per_stream = get_compile_time_arg_val(13);  // P = ceil((n+1)/2)
-    constexpr auto sublayer_args = TensorAccessorArgs<14>();
+    constexpr bool expand_here = get_compile_time_arg_val(14) != 0;           // COEF_EXPANDER == reader
+    constexpr auto sublayer_args = TensorAccessorArgs<15>();
     constexpr auto residual_args = TensorAccessorArgs<sublayer_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
 
-    static_assert(tile_rows == 2 * FACE_HW, "mhc_post reader: expansion assumes 32x32 tiles of 16x16 faces");
+    static_assert(tile_rows == 2 * mhc_post::FACE_HW, "mhc_post: expansion assumes 32x32 tiles of 16x16 faces");
 
-    constexpr uint32_t num_coef_tiles = n * coef_tiles_per_stream;
-    constexpr uint32_t num_raw_tiles = post_tiles_per_row + comb_tiles_per_row;
     constexpr uint32_t residual_row_tiles = n * col_tiles_per_row;
     constexpr uint32_t residual_block_tiles = n * block_col_tiles;
 
@@ -88,6 +57,16 @@ void kernel_main() {
     const auto residual_acc = TensorAccessor(residual_args, residual_addr, residual_page_bytes);
     const auto post_acc = TensorAccessor(post_args, post_addr, coef_page_bytes);
     const auto comb_acc = TensorAccessor(comb_args, comb_addr, coef_page_bytes);
+    mhc_post::CoefExpander<
+        n,
+        coef_tiles_per_stream,
+        post_tiles_per_row,
+        comb_tiles_per_row,
+        coef_page_bytes,
+        cb_coef_raw,
+        cb_coef_bcast,
+        decltype(post_acc)>
+        coefs(post_acc, comb_acc);
 
     // Issue the async reads of one data block (no barrier) into already-reserved CB windows.
     auto issue_block_reads = [&](uint32_t row, uint32_t col_start, uint32_t valid_cols) {
@@ -115,54 +94,33 @@ void kernel_main() {
     while (!walker.done()) {
         const mhc_post::Segment seg = walker.next();
         const uint32_t blocks = mhc_post::num_blocks(seg.col_tiles, block_col_tiles);
-
-        // ---- load_coefficients, part 1: raw post / comb tiles of this token row ----
-        cb_reserve_back(cb_coef_raw, num_raw_tiles);
-        const uint32_t raw_post_addr = get_write_ptr(cb_coef_raw);
-        const uint32_t raw_comb_addr = raw_post_addr + post_tiles_per_row * coef_page_bytes;
-        noc_async_read(post_acc.get_noc_addr(seg.row * post_tiles_per_row), raw_post_addr, coef_page_bytes);
-        noc_async_read(comb_acc.get_noc_addr(seg.row * comb_tiles_per_row), raw_comb_addr, coef_page_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_coef_raw, num_raw_tiles);
-        cb_wait_front(cb_coef_raw, num_raw_tiles);
+        const uint32_t expand_block = blocks > 1 ? 1 : 0;
 
         for (uint32_t block_idx = 0; block_idx < blocks; ++block_idx) {
             const uint32_t valid = mhc_post::block_valid_col_tiles(seg.col_tiles, block_col_tiles, block_idx);
             const uint32_t col_start = seg.col0 + block_idx * block_col_tiles;
 
-            // ---- load_block: issue reads ----
             cb_reserve_back(cb_sublayer_tiles, block_col_tiles);
             cb_reserve_back(cb_residual_tiles, residual_block_tiles);
-            issue_block_reads(seg.row, col_start, valid);
-
-#ifdef ABL_NO_EXPAND
-            if (false) {
-#else
-            if (block_idx == 0) {
-#endif
-                // ---- load_coefficients, part 2: expansion in the first block's read-barrier shadow ----
-                cb_reserve_back(cb_coef_bcast, num_coef_tiles);
-                const uint32_t bcast_base = get_write_ptr(cb_coef_bcast);
-                for (uint32_t j = 0; j < n; ++j) {
-                    for (uint32_t t = 0; t <= n; ++t) {
-                        const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
-                        const uint32_t raw_col = t == 0 ? j : (t - 1) * n + j;
-                        const uint32_t tile = j * coef_tiles_per_stream + mhc_post::coef_tile_in_stream(t);
-                        expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, mhc_post::coef_half(t));
-                    }
+            if constexpr (expand_here) {
+                if (block_idx == 0) {
+                    coefs.issue_raw_reads(seg.row);  // shares block 0's barrier
                 }
             }
-
-            noc_async_read_barrier();  // data block
-            if (block_idx == 0) {
-#ifdef ABL_NO_EXPAND
-                cb_reserve_back(cb_coef_bcast, num_coef_tiles);
-#endif
-                cb_push_back(cb_coef_bcast, num_coef_tiles);
-                cb_pop_front(cb_coef_raw, num_raw_tiles);
+            issue_block_reads(seg.row, col_start, valid);
+            if constexpr (expand_here) {
+                if (block_idx == expand_block && block_idx > 0) {
+                    coefs.expand();  // raw tiles landed with block 0; in block 1's read shadow
+                }
             }
+            noc_async_read_barrier();
             cb_push_back(cb_sublayer_tiles, block_col_tiles);
             cb_push_back(cb_residual_tiles, residual_block_tiles);
+            if constexpr (expand_here) {
+                if (block_idx == expand_block && block_idx == 0) {
+                    coefs.expand();  // single-block segment
+                }
+            }
         }
     }
 }

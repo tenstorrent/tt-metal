@@ -22,14 +22,16 @@ TILE_HW = 32
 # ---- CB slots (semantic names) ----
 CB_SUBLAYER_TILES = 0  # F block tiles              reader  -> compute
 CB_RESIDUAL_TILES = 1  # X block tiles (n streams)  reader  -> compute
-CB_COEF_RAW = 2  # raw post / comb tiles of one token row, reader-private scratch
-CB_COEF_BCAST = 3  # n + n^2 column-broadcast fp32 coefficient tiles, reader -> compute
+CB_COEF_RAW = 2  # raw post / comb tiles of one token row, private scratch of the COEF_EXPANDER kernel
+CB_COEF_BCAST = 3  # n * P half-packed column-broadcast fp32 coefficient tiles, COEF_EXPANDER -> compute
 CB_OUTPUT_TILES = 16  # X' block tiles (n streams) compute -> writer
 
 # ---- Block-model knobs (single source of truth) ----
 BLOCK_TOKEN_TILES = 1  # a block never spans two token rows (realized by segments)
-DEPTH_IN = 2  # blocks in flight on cb_sublayer_tiles / cb_residual_tiles
-DEPTH_OUT = 2  # blocks in flight on cb_output_tiles
+DEPTH_IN = int(
+    __import__("os").environ.get("MHC_DIN", 2)
+)  # TEMP blocks in flight on cb_sublayer_tiles / cb_residual_tiles
+DEPTH_OUT = int(__import__("os").environ.get("MHC_DOUT", 2))  # TEMP blocks in flight on cb_output_tiles
 COEF_DEPTH = 2  # token-row coefficient sets in flight on cb_coef_bcast
 L1_BUDGET_BYTES = 1 << 20  # CB budget per core
 MAX_BLOCK_COL_TILES = None  # optional cap on block_col_tiles (None = coarsest L1 fit); overlap perf lamp
@@ -38,8 +40,15 @@ MAX_BLOCK_COL_TILES = None  # optional cap on block_col_tiles (None = coarsest L
 # data tiles at n = 4; the kernel derives its window layout from DEST_AUTO_LIMIT. False (SyncHalf, 4
 # slots) compiles only for n <= 2 (the kernel static_asserts the fit).
 DST_FULL_SYNC = True
+# Which DM kernel runs load_coefficients (raw post / comb read + column-broadcast expansion) and is therefore
+# the single producer of cb_coef_bcast: "writer" (BRISC, idle until the first output block; keeps the reader a
+# pure stream) or "reader" (NCRISC, expansion in the read shadow of block 1).
+COEF_EXPANDER = "writer"
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
 
+assert COEF_EXPANDER in ("reader", "writer")
+# The writer loads segment s+1's set while compute still holds segment s's: two sets in flight.
+assert COEF_EXPANDER == "reader" or COEF_DEPTH >= 2, "writer-side expansion needs COEF_DEPTH >= 2"
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
 
 
@@ -59,7 +68,9 @@ def _work_assignment(grid_size, total_units):
         core_group_2,
         units_per_core_g1,
         units_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
+    ) = ttnn.split_work_to_cores(
+        grid_size, total_units, row_wise=__import__("os").environ.get("MHC_POST_COLWISE") is None
+    )
     assignment = []
     start = 0
     for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
@@ -136,8 +147,11 @@ def create_program_descriptor(
     )
     assert block_col_tiles_fit >= 1, "mhc_post: coefficient set + one column block does not fit L1_BUDGET_BYTES"
     block_col_tiles = min(block_col_tiles_fit, _max_segment_col_tiles(assignment, col_tiles_per_row))
-    if MAX_BLOCK_COL_TILES is not None:
-        block_col_tiles = max(1, min(block_col_tiles, MAX_BLOCK_COL_TILES))
+    import os
+
+    _mb = int(os.environ["MHC_POST_MAXB"]) if os.environ.get("MHC_POST_MAXB") else MAX_BLOCK_COL_TILES  # TEMP
+    if _mb is not None:
+        block_col_tiles = max(1, min(block_col_tiles, _mb))
 
     # ---- circular buffers ----
     cbs = [
@@ -164,13 +178,29 @@ def create_program_descriptor(
         CB_COEF_RAW,
         CB_COEF_BCAST,
         coef_tiles_per_stream,
+        int(COEF_EXPANDER == "reader"),
     ]
     for t in (input_tensor, residual, post, comb):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     # ---- writer ----
-    writer_ct = [n, col_tiles_per_row, block_col_tiles, output_page, CB_OUTPUT_TILES]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct = [
+        n,
+        col_tiles_per_row,
+        block_col_tiles,
+        output_page,
+        CB_OUTPUT_TILES,
+        post_tiles_per_row,
+        comb_tiles_per_row,
+        coef_page,
+        TILE_HW,
+        CB_COEF_RAW,
+        CB_COEF_BCAST,
+        coef_tiles_per_stream,
+        int(COEF_EXPANDER == "writer"),
+    ]
+    for t in (output_tensor, post, comb):
+        writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
     # ---- compute ----
     compute_ct = [
@@ -192,7 +222,7 @@ def create_program_descriptor(
     o_addr = output_tensor.buffer_address()
     for core, start, count in assignment:
         reader_rt[core.x][core.y] = [f_addr, x_addr, p_addr, m_addr, start, count]
-        writer_rt[core.x][core.y] = [o_addr, start, count]
+        writer_rt[core.x][core.y] = [o_addr, start, count, p_addr, m_addr]
         compute_rt[core.x][core.y] = [start, count]
 
     # UnpackToDestFp32 on every Float32 CB compute reads with copy_tile (derived from the CB format).

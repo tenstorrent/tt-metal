@@ -293,6 +293,9 @@ ALWI void mix_tail_window(uint32_t j, uint32_t col0, uint32_t rem, bool& data_fi
 // mix_block: all n output streams of one block.
 ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
     for (uint32_t j = 0; j < n; ++j) {
+        // The reader pushes the coefficient set one stream at a time (P tiles each); stream j needs streams
+        // 0..j. Cumulative, so a no-op after the segment's first block.
+        cb_wait_front(cb_coef_bcast, (j + 1) * coef_tiles_per_stream);
         uint32_t col0 = 0;
         for (; col0 + WINDOW_COL_TILES <= valid_col_tiles; col0 += WINDOW_COL_TILES) {
             mix_window<WINDOW_COL_TILES>(j, col0, data_first);
@@ -319,7 +322,6 @@ void kernel_main() {
         const mhc_post::Segment seg = walker.next();
         const uint32_t blocks = mhc_post::num_blocks(seg.col_tiles, block_col_tiles);
 
-        cb_wait_front(cb_coef_bcast, num_coef_tiles);  // this row's expanded coefficient set
         for (uint32_t block_idx = 0; block_idx < blocks; ++block_idx) {
             const uint32_t valid = mhc_post::block_valid_col_tiles(seg.col_tiles, block_col_tiles, block_idx);
             cb_wait_front(cb_sublayer_tiles, block_col_tiles);
