@@ -548,7 +548,11 @@ class Gemma4Model:
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    cache_dtype=ttnn.bfloat16,
+                    # GEMMA4_KV_BFP8=1: bfp8_b paged KV halves both the
+                    # pool DRAM (the serving 32K-rung rim OOM) and decode's
+                    # KV-read bytes (roofline L1: ~43 -> ~20 ms/step at full
+                    # ladder occupancy). Default off until needle-gated.
+                    cache_dtype=(ttnn.bfloat8_b if os.environ.get("GEMMA4_KV_BFP8", "0") == "1" else ttnn.bfloat16),
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
