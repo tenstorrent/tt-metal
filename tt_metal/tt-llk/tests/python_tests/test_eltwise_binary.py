@@ -41,6 +41,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
+    PER_FACE_HANDOFF,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
@@ -138,6 +139,7 @@ def test_eltwise_binary(
     transpose_srca,
     input_dimensions,
     tile_dimensions,
+    per_face_handoff: bool = False,
 ):
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
         pytest.skip("SrcA transpose is not supported with scalar broadcast")
@@ -267,6 +269,7 @@ def test_eltwise_binary(
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
             DEST_SYNC(),
+            PER_FACE_HANDOFF(per_face_handoff),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -346,6 +349,7 @@ def test_eltwise_binary_bfp4_b(
     math_op,
     input_dimensions,
     tile_dimensions,
+    per_face_handoff: bool = False,
 ):
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
@@ -463,6 +467,7 @@ def test_eltwise_binary_bfp4_b(
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
             DEST_SYNC(),
+            PER_FACE_HANDOFF(per_face_handoff),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -689,6 +694,7 @@ def test_eltwise_binary_dest_reuse(
     tile_dimensions,
     input_dimensions,
     output_dimensions,
+    per_face_handoff: bool = False,
 ):
     prepared = _prepare_dest_reuse_inputs(
         formats, input_dimensions, output_dimensions, tile_dimensions
@@ -707,6 +713,7 @@ def test_eltwise_binary_dest_reuse(
             DEST_SYNC(),
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
+            PER_FACE_HANDOFF(per_face_handoff),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
@@ -777,6 +784,7 @@ def test_eltwise_binary_int8_format(
     math_op,
     input_dimensions,
     tile_dimensions,
+    per_face_handoff: bool = False,
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -867,6 +875,7 @@ def test_eltwise_binary_int8_format(
             BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
             DEST_SYNC(),
+            PER_FACE_HANDOFF(per_face_handoff),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
@@ -909,3 +918,77 @@ def test_eltwise_binary_int8_format(
         golden_tensor, res_tensor, formats.output_format, print_errors=False
     )
     assert test_passed, "Assert against golden failed"
+
+
+# The switched form of the Blackhole hand-off: both threads publish and consume one source bank per 16-row face
+# (SrcDvalid::PerFace, the program behind the compute API's ELTWISE_BINARY_PER_FACE_HANDOFF, which binary_ng uses for
+# one tile per DEST section at LoFi). The standard two-operand path over the 16-bit and 8-bit format pairs, all ops
+# and fidelities, both DEST modes, 32x32 tiles, no transpose (a transposed SrcA is per-face already).
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    formats=lambda dest_acc: _get_valid_formats(dest_acc),
+    broadcast_type=[BroadcastType.None_],
+    math_op=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    transpose_srca=[Transpose.No],
+    input_dimensions=[[256, 32]],
+    tile_dimensions=[[32, 32]],
+)
+def test_eltwise_binary_per_face_handoff(
+    dest_acc,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    input_dimensions,
+    tile_dimensions,
+):
+    test_eltwise_binary(
+        dest_acc,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        input_dimensions,
+        tile_dimensions,
+        per_face_handoff=True,
+    )
+
+
+# The switched form on the dest-reuse path: both reuse directions, all ops, bf16 and fp32, 32x32 tiles, the 8-output
+# tile shape that reaches dst_index 7.
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    formats=lambda math_op: input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    ),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[512, 32]],
+    output_dimensions=[[256, 32]],
+)
+def test_eltwise_binary_dest_reuse_per_face_handoff(
+    reuse_dest_type,
+    math_op,
+    formats,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+):
+    test_eltwise_binary_dest_reuse(
+        reuse_dest_type,
+        math_op,
+        formats,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        per_face_handoff=True,
+    )

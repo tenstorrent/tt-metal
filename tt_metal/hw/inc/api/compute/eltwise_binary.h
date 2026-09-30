@@ -23,10 +23,25 @@ namespace detail {
 // bank holding every face of the tile (one UNPACR and one data valid per operand per tile, SrcDvalid::PerTile) and
 // the math consumes it with one MOP run per tile; these helpers pass that choice to both threads. Wormhole and
 // Quasar publish per face and their wrappers take no such argument.
+//
+// A kernel that defines ELTWISE_BINARY_PER_FACE_HANDOFF before including this header, as a constant expression that
+// evaluates to true, keeps the per-face hand-off on Blackhole (one data valid per 16-row face, the program of the
+// other architectures). The per-tile hand-off writes a tile's eight row blocks back to back; a kernel that computes
+// one tile per DEST section at LoFi packs one cycle per tile slower with it, because the packer reads the other DEST
+// half while that burst lands, and gains nothing from it there (its LoFi pipeline is unpack-bound), so such a kernel
+// defines the switch, for example as (get_compile_time_arg_val(0) == 1 && MATH_FIDELITY == MathFidelity::LoFi). The
+// multiply above LoFi and the dest-reuse ops are faster with the per-tile hand-off in every measured configuration.
+#if defined(ARCH_BLACKHOLE)
+#if defined(ELTWISE_BINARY_PER_FACE_HANDOFF)
+constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_FACE_HANDOFF) ? SrcDvalid::PerFace : SrcDvalid::PerTile;
+#else
+constexpr SrcDvalid BINARY_SRC_DVALID = SrcDvalid::PerTile;
+#endif
+#endif
 #ifdef TRISC_UNPACK
 ALWI void binary_unpack_AB_init(uint32_t icb0, uint32_t icb1) {
 #if defined(ARCH_BLACKHOLE)
-    llk_unpack_AB_init<BroadcastType::NONE, SrcDvalid::PerTile>(icb0, icb1, Transpose::None);
+    llk_unpack_AB_init<BroadcastType::NONE, BINARY_SRC_DVALID>(icb0, icb1, Transpose::None);
 #else
     llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None);
 #endif
@@ -35,7 +50,7 @@ ALWI void binary_unpack_AB_init(uint32_t icb0, uint32_t icb1) {
 template <bool acc_to_dest, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_unpack_A_init(uint32_t icb) {
 #if defined(ARCH_BLACKHOLE)
-    llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest, false /* unpack_to_dest */, SrcDvalid::PerTile>(
+    llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest, false /* unpack_to_dest */, BINARY_SRC_DVALID>(
         false, false, icb);
 #else
     llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest>(false, false, icb);
@@ -47,7 +62,7 @@ ALWI void binary_unpack_A_init(uint32_t icb) {
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_math_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest) {
 #if defined(ARCH_BLACKHOLE)
-    llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, math_fidelity, reuse_dest, SrcDvalid::PerTile>(
+    llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, math_fidelity, reuse_dest, BINARY_SRC_DVALID>(
         icb0, icb1, acc_to_dest);
 #else
     llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, math_fidelity, reuse_dest>(
@@ -68,7 +83,7 @@ ALWI void binary_math(uint32_t icb0, uint32_t icb1, uint32_t idst) {
         is_fp32_dest_acc_en,
         math_fidelity,
         reuse_dest,
-        SrcDvalid::PerTile>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
+        BINARY_SRC_DVALID>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
 #else
     llk_math_eltwise_binary<eltwise_binary_type, BroadcastType::NONE, is_fp32_dest_acc_en, math_fidelity, reuse_dest>(
         icb0, icb1, idst, true /* clear_fp32_dst_acc */);

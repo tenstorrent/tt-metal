@@ -19,9 +19,10 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 // The unpack and the math thread hand each operand tile over as one source bank (SrcDvalid::PerTile). A transposed
-// SrcA operand keeps the per-face unpack program, so both threads use SrcDvalid::PerFace for it; the broadcast forms
-// and the partial faces fall back to the per-face program inside the LLK for either value.
-#define ELTWISE_BINARY_PER_FACE_DVALID(params) ((params).UNPACK_TRANSPOSE_FACES || (params).UNPACK_TRANSPOSE_WITHIN_FACE)
+// SrcA operand keeps the per-face unpack program, so both threads use SrcDvalid::PerFace for it, and the per_face_handoff
+// variant (the switched form behind the compute API's ELTWISE_BINARY_PER_FACE_HANDOFF) uses it for every operand; the
+// broadcast forms and the partial faces fall back to the per-face program inside the LLK for either value.
+#define ELTWISE_BINARY_PER_FACE_DVALID(params) (per_face_handoff || (params).UNPACK_TRANSPOSE_FACES || (params).UNPACK_TRANSPOSE_WITHIN_FACE)
 
 #ifdef LLK_TRISC_UNPACK
 

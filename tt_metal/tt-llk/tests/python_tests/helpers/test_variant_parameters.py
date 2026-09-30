@@ -744,6 +744,17 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class PER_FACE_HANDOFF(TemplateParameter):
+    """Blackhole eltwise binary: hand each operand tile over per 16-row face (SrcDvalid::PerFace on both threads, the
+    switched form behind ELTWISE_BINARY_PER_FACE_HANDOFF) instead of as one source bank per tile."""
+
+    per_face_handoff: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool per_face_handoff = {str(self.per_face_handoff).lower()};"
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 
