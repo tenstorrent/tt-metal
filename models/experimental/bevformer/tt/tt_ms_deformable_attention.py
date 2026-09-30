@@ -32,6 +32,19 @@ from loguru import logger
 ENABLE_LOGGING = False
 
 
+def fp32_grid_sample_config(device):
+    """grid_sample's own defaults (HiFi4, no approximation, no packer L1 accumulation) with
+    fp32 accumulation of its weighted 4-corner sum. ``init_device_compute_kernel_config``'s
+    defaults are LoFi with approximation, so they are spelled out."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 def multi_scale_deformable_attn_ttnn(
     value,
     value_spatial_shapes,
@@ -154,7 +167,7 @@ class TTMSDeformableAttention:
         params=None,
         *,
         spatial_shapes,
-        grid_dtype=ttnn.bfloat16,
+        grid_dtype=None,
         grid_sample_compute_config=None,
     ):
         """
@@ -173,12 +186,14 @@ class TTMSDeformableAttention:
             spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
                 module: it is folded into the sampling-offset Linear here and forward takes
                 no shapes of its own. Features at a different resolution require a new
-                instance.
-            grid_dtype: Dtype of the sampling grid, i.e. of the reference-point bias and the
-                sum it is added to. In bfloat16 a point in (0.5, 1) moves in steps of 2^-8,
-                0.8 px on a 200-wide map. float32 keeps the grid sub-pixel exact; the
-                sampling-offset Linear stays bfloat16, its error being relative to the small
-                offsets. grid_sample reads float32 grids directly.
+                instance. The fold consumes ``params.sampling_offsets``, so ``params`` serve
+                one instance.
+            grid_dtype: Dtype of the sampling grid: the sampling-offset Linear emits it and the
+                reference points are cast to it. None keeps the Linear's own output dtype and
+                the reference points' dtype. In bfloat16 a point in (0.5, 1) moves in steps of
+                2^-8, 0.8 px on a 200-wide map; float32 keeps the grid position sub-pixel
+                accurate (grid_sample reads float32 coordinates; only its bilinear weights are
+                bfloat16).
             grid_sample_compute_config: Passed to grid_sample; see
                 :func:`multi_scale_deformable_attn_ttnn`.
 
@@ -256,17 +271,26 @@ class TTMSDeformableAttention:
         for level, (h, w) in enumerate(spatial_shapes.tolist()):
             scale[:, level, :, 0] = 2.0 / float(w)
             scale[:, level, :, 1] = 2.0 / float(h)
+        # In float32, then cast back: a bfloat16 2/W is off by up to 0.2%, the same for every
+        # offset, where rounding the product alone is unbiased.
         scale_tt = ttnn.from_torch(
-            scale.reshape(1, out_features), device=self.device, dtype=weight.dtype, layout=ttnn.TILE_LAYOUT
+            scale.reshape(1, out_features), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
 
+        def fold(tensor):
+            folded = ttnn.mul(ttnn.typecast(tensor, ttnn.float32), scale_tt)
+            return ttnn.typecast(folded, tensor.dtype) if tensor.dtype != ttnn.float32 else folded
+
         bias = getattr(sampling_offsets, "bias", None)
-        folded_weight = ttnn.mul(weight, scale_tt)
-        folded_bias = ttnn.mul(bias, scale_tt) if bias is not None else None
+        folded_weight = fold(weight)
+        folded_bias = fold(bias) if bias is not None else None
         ttnn.deallocate(scale_tt)
         ttnn.deallocate(weight)
         if bias is not None:
             ttnn.deallocate(bias)
+        # A second instance built from these params now fails the check above instead of
+        # reading deallocated tensors.
+        self.params.sampling_offsets = None
         return folded_weight, folded_bias
 
     def _grid_bias(self, reference_points, depth_levels):
@@ -286,10 +310,9 @@ class TTMSDeformableAttention:
         block = depth_levels * 2
         groups = self.num_heads * self.num_levels * (self.num_points // depth_levels)
 
-        ref = reference_points
-        if ref.dtype != self.grid_dtype:
-            ref = ttnn.typecast(ttnn.to_layout(ref, ttnn.TILE_LAYOUT), self.grid_dtype)
-        ref = ttnn.to_layout(ref, ttnn.ROW_MAJOR_LAYOUT)
+        ref = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+        if self.grid_dtype is not None and ref.dtype != self.grid_dtype:
+            ref = ttnn.typecast(ref, self.grid_dtype)
         ref = ttnn.reshape(ref, (bs, num_queries, 1, block))
         ref = ttnn.mul(ref, 2.0)
         ref = ttnn.sub(ref, 1.0)
@@ -381,9 +404,9 @@ class TTMSDeformableAttention:
         # here, so the extent-2 coordinate axis never sits in a tiled dimension where it would
         # pad 2 -> 32. Materializing (heads, levels, points, 2) is deferred until after the add.
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
-        if sampling_offsets.dtype != self.grid_dtype:
-            sampling_offsets = ttnn.typecast(sampling_offsets, self.grid_dtype)
+        sampling_offsets = ttnn.linear(
+            query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias, dtype=self.grid_dtype
+        )
         sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT)
 
         if ENABLE_LOGGING:
