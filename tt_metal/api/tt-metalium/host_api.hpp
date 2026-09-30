@@ -72,13 +72,6 @@ void SetRootDir(const std::string& root_dir);
 size_t GetNumAvailableDevices();
 
 /**
- * Returns whether Tenstorrent devices are in a Galaxy cluster
- *
- * Return value: bool
- */
-bool IsGalaxyCluster();
-
-/**
  * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
  *
  * Return value: size_t
@@ -171,26 +164,6 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig>& config);
 
 // clang-format off
-/**
- * Creates a data movement or compute kernel from source code with the given config and adds it to the program.
- *
- * Return value: Kernel ID (uintptr_t)
- *
- * | Argument           | Description                                                                                                                          | Type                                                                    | Valid Range | Required |
- * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------|----------|
- * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                               |             | Yes      |
- * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                                     |             | Yes      |
- * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                |             | Yes      |
- * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig, ComputeConfig> &                 |             | Yes      |
- */
-// clang-format on
-KernelHandle CreateKernelFromString(
-    Program& program,
-    const std::string& kernel_src_code,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig>& config);
-
-// clang-format off
 // ==================================================
 //                  HOST API: buffers
 // ==================================================
@@ -233,7 +206,6 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 // clang-format off
 /**
  * Update the total size of the circular buffer at the given circular buffer handle. Updating a program-local circular buffer requires all circular buffers in the program to be reallocated.
- * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
  *
  * Return value: void
  *
@@ -265,7 +237,6 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 // clang-format off
 /**
  * Update the address of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
- * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
  *
  * Return value: void
  *
@@ -280,26 +251,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
-
-// clang-format off
-/**
- * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
- *
- * Return value: void
- *
- * | Argument   | Description                                                                              | Type                         | Valid Range | Required |
- * |------------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
- * | program    | The program containing the circular buffer                                               | Program &                    |             | Yes      |
- * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
- * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
- * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
- */
-// clang-format on
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
-
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**
@@ -439,20 +390,6 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 // clang-format on
 [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
 void DeallocateBuffer(Buffer& buffer);
-
-// clang-format off
-/**
-*  Gives the specified program ownership of the buffer: the buffer will remain on device at least until the program is enqueued. This is required for asynchronous Command Queues.
-*
-*  Return value: void
-*
-*  | Argument | Description                                  | Type                           | Valid Range | Required |
-*  |----------|----------------------------------------------|--------------------------------|-------------|----------|
-*  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
-*  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
-*/
-// clang-format on
-void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program);
 
 // clang-format off
 // ==================================================

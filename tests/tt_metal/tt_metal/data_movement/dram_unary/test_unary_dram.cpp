@@ -16,6 +16,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

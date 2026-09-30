@@ -16,6 +16,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

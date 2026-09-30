@@ -37,6 +37,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt;

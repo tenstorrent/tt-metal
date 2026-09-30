@@ -22,9 +22,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/debug/debug_helpers.hpp"
+#include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.

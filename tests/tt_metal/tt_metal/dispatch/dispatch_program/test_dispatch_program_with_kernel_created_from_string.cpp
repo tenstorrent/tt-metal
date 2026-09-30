@@ -5,13 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "program_with_kernel_created_from_string_fixture.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -85,7 +85,6 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     const std::string& kernel_src_code = R"(
     #include "api/debug/dprint.h"
     #include "api/dataflow/dataflow_api.h"
-
     void kernel_main() {
 
         DPRINT("Hello, I am running a void ethernet kernel.\n");

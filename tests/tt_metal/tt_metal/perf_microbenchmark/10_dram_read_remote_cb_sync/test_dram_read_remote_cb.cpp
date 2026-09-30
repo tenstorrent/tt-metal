@@ -54,6 +54,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt;

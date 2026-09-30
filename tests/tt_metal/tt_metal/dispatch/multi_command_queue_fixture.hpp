@@ -12,10 +12,11 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/host_api/device_queries.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

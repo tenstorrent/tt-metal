@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "impl/program/program_impl.hpp"
 
 #if defined(__linux__)
 #include <sys/prctl.h>

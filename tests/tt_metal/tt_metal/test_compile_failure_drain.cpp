@@ -41,11 +41,12 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 
 #include "jit_build/build.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {

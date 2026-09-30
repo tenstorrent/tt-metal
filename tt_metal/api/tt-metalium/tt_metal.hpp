@@ -14,7 +14,6 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -30,8 +29,6 @@ class IDevice;
 class Program;
 
 namespace detail {
-
-bool DispatchStateCheck(bool isFastDispatch);
 
 [[deprecated("Use distributed::MeshDevice::create_unit_meshes instead. This API will be removed after 2026-09-27.")]]
 std::map<ChipId, IDevice*> CreateDevices(
@@ -59,20 +56,6 @@ std::map<ChipId, IDevice*> CreateDevices(
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
- * Release ownership of the MetalContext singleton instance.
- *
- * The MetalContext is created when a hal function is called or a MeshDevice or IDevice are created. Only one process
- * can have a MetalContext at any one time. This function destroys the MetalContext instance, releasing all associated
- * resources and allowing another process to create a new MetalContext.
- * All devices must be closed before calling this function.
- *
- * After calling this function, the MetalContext will be re-created on the next access.
- *
- * Return value: void
- */
-void ReleaseOwnership();
-
-/**
  * Returns a pointer to an active device with the given ID, NULL otherwise
  *
  * Return value: IDevice*
@@ -83,64 +66,6 @@ void ReleaseOwnership();
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
 IDevice* GetActiveDevice(ChipId device_id);
-
-/**
- * Copies data from a host buffer into the specified buffer
- *
- * Return value: void
- *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
- * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | buffer      | Buffer to send data to                          | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
- * buffer               | Yes      |
- */
-void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
-/**
- * Copies data from a host buffer into the specified buffer
- *
- * Return value: void
- *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
- * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | buffer      | Buffer to send data to                          | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data from                | std::vector<DType> &    | Host buffer size must match
- * buffer               | Yes      |
- */
-template <typename DType>
-void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
-    WriteToBuffer(
-        buffer,
-        ttsl::Span<const uint8_t>(
-            reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
-}
-template <typename DType>
-void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DType>& host_buffer) {
-    WriteToBuffer(*buffer, host_buffer);
-}
-
-void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
-/**
- * Copies data from a buffer into a host buffer
- *
- * Return value: void
- *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
- * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
- */
-template <typename DType>
-void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
-    auto buffer_size = buffer.size();
-    TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
-    host_buffer.resize(buffer.size() / sizeof(DType));
-    ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
-}
-template <typename DType>
-void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
-    ReadFromBuffer(*buffer, host_buffer);
-}
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
 /**
@@ -252,72 +177,6 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
 
 // clang-format off
 /**
- * Copies data from a host buffer into a buffer within the device DRAM channel
- *
- * Return value: bool
- *
- * | Argument     | Description                                            | Data type                | Valid range                               | required |
- * |--------------|--------------------------------------------------------|--------------------------|-------------------------------------------|----------|
- * | device       | The device whose DRAM to write data into               | IDevice*                 |                                           | Yes      |
- * | dram_channel | Channel index of DRAM to write into                    | int                      | On Grayskull, [0, 7] inclusive            | Yes      |
- * | address      | Starting address on DRAM channel to begin writing data | uint32_t                 | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      |
- * | host_buffer  | Buffer on host to copy data from                       | std::span<const uint8_t> | Host buffer must be fully fit DRAM buffer | Yes      |
- */
-// clang-format on
-bool WriteToDeviceDRAMChannel(
-    IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
-/**
- * Copies data from a host buffer into a buffer within the device DRAM channel
- *
- * Return value: bool
- *
- * | Argument     | Description                                            | Data type             | Valid range |
- * required |
- * |--------------|--------------------------------------------------------|-----------------------|-------------------------------------------|----------|
- * | device       | The device whose DRAM to write data into               | IDevice*              | | Yes      | |
- * dram_channel | Channel index of DRAM to write into                    | int                   | On Grayskull, [0, 7]
- * inclusive            | Yes      | | address      | Starting address on DRAM channel to begin writing data | uint32_t
- * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
- * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
- */
-bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
-
-// clang-format off
-/**
- * Copy data from a device DRAM channel to a host buffer
- *
- * Return value: bool
- *
- * | Argument     | Description                                                  | Data type             | Valid range                    | required |
- * |--------------|--------------------------------------------------------------|-----------------------|--------------------------------|----------|
- * | device       | The device whose DRAM to read data from                      | IDevice*              |                                | Yes      |
- * | dram_channel | Channel index of DRAM to read from                           | int                   | On Grayskull, [0, 7] inclusive | Yes      |
- * | address      | Starting address on DRAM channel from which to begin reading | uint32_t              |                                | Yes      |
- * | host_buffer  | Buffer on host to copy data into                             | std::span<uint8_t>    |                                | Yes      |
- */
-// clang-format on
-bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
-
-/**
- * Copy data from a device DRAM channel to a host buffer
- *
- * Return value: bool
- *
- * | Argument     | Description                                                  | Data type             | Valid range
- * | required |
- * |--------------|--------------------------------------------------------------|-----------------------|--------------------------------|----------|
- * | device       | The device whose DRAM to read data from                      | IDevice*              | | Yes      |
- * | dram_channel | Channel index of DRAM to read from                           | int                   | On Grayskull,
- * [0, 7] inclusive | Yes      | | address      | Starting address on DRAM channel from which to begin reading |
- * uint32_t              |                                | Yes      | | size         | Size of buffer to read from
- * device in bytes                  | uint32_t              |                                | Yes      | | host_buffer
- * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
- */
-bool ReadFromDeviceDRAMChannel(
-    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
-
-// clang-format off
-/**
  * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
  *
  * Return value: bool
@@ -355,8 +214,6 @@ bool WriteToDeviceL1(
     uint32_t address,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
-
-bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
 
 // clang-format off
 /**
@@ -402,8 +259,6 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
-
-bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
 /**
  * Return the name of the architecture present.

@@ -8,7 +8,6 @@
 #include <tt-metalium/program.hpp>
 
 #include "impl/buffers/circular_buffer.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/kernel_compile_utils.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build.hpp"
@@ -31,6 +30,7 @@
 #include <type_traits>
 #include <unordered_set>
 #include <variant>
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental {
 

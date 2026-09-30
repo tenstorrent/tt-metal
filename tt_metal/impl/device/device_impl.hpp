@@ -4,15 +4,21 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <unordered_set>
+#include <vector>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
+#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -288,5 +294,23 @@ private:
 
     friend class experimental::DispatchContext;
 };
+
+namespace detail {
+
+bool DispatchStateCheck(bool isFastDispatch);
+
+void ReleaseOwnership();
+
+bool WriteToDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
+
+bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
+bool ReadFromDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+
+bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
+
+}  // namespace detail
 
 }  // namespace tt::tt_metal

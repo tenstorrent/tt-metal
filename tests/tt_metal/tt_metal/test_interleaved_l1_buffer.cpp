@@ -10,8 +10,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 

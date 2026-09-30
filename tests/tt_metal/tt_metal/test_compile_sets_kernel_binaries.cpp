@@ -13,17 +13,17 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/device/device_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using std::vector;
 using namespace tt;

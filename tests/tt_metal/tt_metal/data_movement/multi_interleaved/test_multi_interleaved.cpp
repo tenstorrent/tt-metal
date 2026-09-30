@@ -11,6 +11,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

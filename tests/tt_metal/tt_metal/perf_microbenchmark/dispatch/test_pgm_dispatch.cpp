@@ -34,7 +34,6 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -46,6 +45,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "llrt/hal_types.hpp"
+#include "impl/kernels/kernel.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;

@@ -7,7 +7,6 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <set>
 #include <string>
@@ -24,8 +23,8 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

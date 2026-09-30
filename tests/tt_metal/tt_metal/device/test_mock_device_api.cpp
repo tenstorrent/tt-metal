@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include <cstdlib>
@@ -25,6 +24,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

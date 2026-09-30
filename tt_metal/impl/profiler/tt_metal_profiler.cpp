@@ -55,7 +55,6 @@
 #include "program.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
-#include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
@@ -66,6 +65,8 @@
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
 #include "tools/profiler/noc_event_profiler_utils.hpp"
+#include "program/program_impl.hpp"
+#include "kernels/kernel.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push

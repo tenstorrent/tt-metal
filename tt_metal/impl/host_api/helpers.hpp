@@ -11,7 +11,9 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace tt::tt_metal::detail {
+namespace tt::tt_metal {
+
+namespace detail {
 
 inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
     ZoneScoped;
@@ -24,4 +26,6 @@ inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, Cor
         specified_core_spec);
 }
 
-}  // namespace tt::tt_metal::detail
+}  // namespace detail
+
+}  // namespace tt::tt_metal

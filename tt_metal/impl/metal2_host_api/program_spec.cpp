@@ -27,7 +27,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
-#include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -40,6 +39,7 @@
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental {
 

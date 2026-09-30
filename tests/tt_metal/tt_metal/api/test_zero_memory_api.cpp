@@ -37,7 +37,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -51,6 +50,7 @@
 #include "metal2_host_api/test_helpers.hpp"
 
 #include "gtest/gtest.h"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

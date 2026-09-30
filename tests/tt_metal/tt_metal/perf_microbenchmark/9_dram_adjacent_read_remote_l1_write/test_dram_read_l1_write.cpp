@@ -47,6 +47,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;

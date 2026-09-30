@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <random>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <cmath>
@@ -48,6 +47,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/int8.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

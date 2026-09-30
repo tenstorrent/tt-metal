@@ -14,6 +14,8 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal::slow_dispatch {
 

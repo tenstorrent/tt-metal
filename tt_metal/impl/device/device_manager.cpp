@@ -11,7 +11,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_metal.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
 #include "dprint_server.hpp"

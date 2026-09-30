@@ -21,13 +21,13 @@
 #include "device/device_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
-#include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

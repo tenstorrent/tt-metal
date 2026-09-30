@@ -41,6 +41,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 namespace {

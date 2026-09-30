@@ -12,7 +12,6 @@
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
-#include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include "impl/buffers/global_semaphore_impl.hpp"
@@ -43,7 +42,6 @@
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
-#include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -75,6 +73,10 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "kernels/kernel.hpp"
+#include "host_api/device_queries.hpp"
+#include "host_api/helpers.hpp"
+#include "buffers/buffer_impl.hpp"
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"
@@ -292,13 +294,6 @@ bool WriteToDeviceL1(
         address,
         std::span(reinterpret_cast<const std::uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(uint32_t)),
         core_type);
-}
-
-bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    metal_ctx.get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
-    return true;
 }
 
 bool ReadFromDeviceL1(
@@ -1442,20 +1437,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
     circular_buffer->assign_global_address();
 }
 
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
-    circular_buffer->assign_global_address();
-}
-
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().set_globally_allocated_address_and_total_size(tensor, total_size);
-    circular_buffer->assign_global_address();
-}
-
 uint32_t CreateSemaphore(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
     return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
@@ -1522,12 +1503,6 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 }
 
 void DeallocateBuffer(Buffer& buffer) { buffer.impl().deallocate(buffer); }
-
-void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
-    detail::DispatchStateCheck(metal_ctx.rtoptions().get_fast_dispatch());
-    program.impl().add_buffer(buffer);
-}
 
 void SetRuntimeArgs(
     const Program& program,

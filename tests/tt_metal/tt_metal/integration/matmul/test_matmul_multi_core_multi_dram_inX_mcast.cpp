@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -43,6 +42,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

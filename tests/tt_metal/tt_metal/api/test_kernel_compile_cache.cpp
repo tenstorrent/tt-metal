@@ -21,7 +21,6 @@
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"

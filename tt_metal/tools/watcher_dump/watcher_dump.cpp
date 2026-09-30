@@ -18,6 +18,7 @@
 #include "impl/dispatch/debug_tools.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include <impl/debug/watcher_server.hpp>
+#include "impl/device/device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -19,8 +19,8 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
