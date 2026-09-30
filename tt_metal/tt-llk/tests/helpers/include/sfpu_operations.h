@@ -212,6 +212,15 @@ void call_unary_typecast_operation_init()
 #endif
     }
     else if constexpr (
+        (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::Int32)
+    {
+#if defined(ARCH_BLACKHOLE)
+        SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_int32, (APPROX_MODE));
+#else
+        SFPU_UNARY_INIT(typecast);
+#endif
+    }
+    else if constexpr (
         (IN == DataFormat::Float32 || IN == DataFormat::Float16_b || IN == DataFormat::Bfp8_b || IN == DataFormat::Bfp4_b) && OUT == DataFormat::UInt8)
     {
         SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint8, (APPROX_MODE));

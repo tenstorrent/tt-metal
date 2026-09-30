@@ -181,47 +181,47 @@ inline void calculate_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_int32() {
+    // Truncation toward zero, saturation to INT32_MAX and INT32_MIN by the sign (NaN by its sign bit), zero for
+    // |in| < 1 and for zero and denormal inputs: 15 instructions per row of 32 datums, one fewer than the previous
+    // form, with the same result for every input (checked bit for bit against the previous form by an emulation of
+    // the instructions' functional models over five million inputs, and on the card by the edge test in
+    // test_eltwise_unary_typecast.py). The sign is folded in two's complement as (m ^ s) - s with s = in >> 31
+    // (arithmetic), the saturation value INT32_MAX comes from vConstIntPrgm0 (init_typecast_fp32_to_int32) and
+    // the same fold turns it into INT32_MIN for a negative input, and the range test keeps its own register so the
+    // shift amount needs no second adjustment. Requires init_typecast_fp32_to_int32.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        // result = 0
+        // result = 0 (stays for |in| < 1, zero and denormals, whose lanes the exponent test disables below)
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
+        // s = in >> 31 (arithmetic): 0 for a positive input, -1 for a negative one
+        // (SFPSHFT mod1 = ARG_IMM | ARITHMETIC | ARG_IMM_USE_VC: shift the VC register by the immediate)
+        TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG4, 7);
 
         // exp = in.Exp (LaneEnabled = exp >= 0)
         TTI_SFPEXEXP(
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
-        // result = INT_MIN
-        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
-        // exp -= 31 (LaneEnabled = exp < 31)
+        // shift = exp - 23
+        TTI_SFPIADD(-23 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // exp -= 31 (LaneEnabled = exp < 31); the saturating lanes keep a non-negative value here
         TTI_SFPIADD(-31 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
-        // exp += 8
-        TTI_SFPIADD(8, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        // result = exman(in, sfpi::MantissaMode::ImplicitOne) << (exp - 23)
+        // result = exman(in, sfpi::MantissaMode::ImplicitOne) << shift
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
 
-        // LaneEnabled = in < 0
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-        // result = -result (two's complement)
-        TTI_SFPIADD(
-            0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        // A positive input cannot legitimately produce a negative int32, so the only lanes this
-        // matches are the positive overflows that the INT_MIN constant above saturated the wrong
-        // way: the same constant serves both signs and the negate only fires for in < 0.
-        // Decrementing wraps INT_MIN to INT_MAX.
-        // LaneEnabled = in >= 0, the complement of the negate's in < 0. SFPSETCC compares the
-        // register as a signed int32, so LT0 and GTE0 partition every bit pattern and one
-        // SFPCOMPC is exactly equivalent to re-enabling all lanes and re-testing the sign.
-        TTI_SFPCOMPC(0, 0, 0, 0);
-        // LaneEnabled &= result < 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-        // result -= 1
-        TTI_SFPIADD(-1 & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // result ^= s: the first half of the sign fold (0 stays 0 whatever the sign)
+        TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
+        // LaneEnabled = exp - 31 >= 0: the saturating lanes (|in| >= 2^31, infinities and NaN); the fold's first
+        // half of INT32_MAX is INT32_MAX for a positive input and INT32_MIN for a negative one
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        // s = result - s: the second half of the fold (m for a positive input, -m for a negative one)
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
 
@@ -658,6 +658,15 @@ inline void init_typecast_fp32_to_fp16b() {
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
     sfpi::vConstIntPrgm2 = 0xffff0000;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_fp32_to_int32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    // INT32_MAX for the saturating lanes of calculate_typecast_fp32_to_int32 (its sign fold makes INT32_MIN of it
+    // for a negative input)
+    sfpi::vConstIntPrgm0 = std::numeric_limits<std::int32_t>::max();
 }
 
 template <bool APPROXIMATION_MODE>

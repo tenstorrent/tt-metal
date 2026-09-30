@@ -78,6 +78,10 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.Float32, DataFormat.UInt16, DestAccumulation.Yes),
     # fp32_to_fp16b: a plain loop in every Dest mode (Float32 in -> dest_acc=Yes, unpack to Dest).
     (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    # fp32_to_int32 and fp32_to_uint32 from a bf16 input (Int32 / UInt32 out -> dest_acc=Yes): the integer
+    # arithmetic bodies, the heaviest production typecasts.
+    (DataFormat.Float16_b, DataFormat.Int32, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.UInt32, DestAccumulation.Yes),
 ]
 
 
