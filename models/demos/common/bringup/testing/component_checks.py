@@ -11,7 +11,7 @@ generically, chosen by the kind of the step's output:
                 (<= component_row), every row's norm ratio (1 +- component_ratio), the median row norm ratio
                 (1 +- component_bias: a systematic scale), and every column's rel L2 over the rows (an iHC gate near 0
                 with its sign flipped moves nothing else), each column against its own limit: the rule below applied
-                to the precision model's error in that column. The rel L2 limit follows the step's precision: the CPU step
+                to the precision model's error in that column, without the cap; on the golden input only. The rel L2 limit follows the step's precision: the CPU step
                 run with every float intermediate rounded to bf16 (bf16 inputs and output; a model of a correct device
                 step, fp32 accumulation inside each op) has rel L2 e vs the fp32 step; the limit is
                 component_calib x e (component_calib_low for the step kinds in ``tests.low_precision_kinds``, default
@@ -182,8 +182,8 @@ def rel_limit(lim, e, low: bool):
     cap would cut it, the looser limit may let a mistake through, and the sweep then sends the test to a review).
     e is one error (the whole output) or a tensor of them (one per column)."""
     k = lim["component_calib_low"] if low else lim["component_calib"]
-    if isinstance(e, torch.Tensor):
-        return torch.maximum((k * e).clamp(lim["component_floor"], lim["component_rel"]), lim["component_margin"] * e)
+    if isinstance(e, torch.Tensor):  # per column: no cap (the worst of thousands of columns sits above the mean)
+        return torch.maximum((k * e).clamp_min(lim["component_floor"]), lim["component_margin"] * e)
     return max(lim["component_floor"], min(lim["component_rel"], k * e), lim["component_margin"] * e)
 
 
@@ -224,11 +224,12 @@ def float_limits(lim, f: float, rel_lim: float, model: dict | None, second: bool
     there for structural bugs (a wrong epsilon, stream order, a clamp: errors of 0.1 and more), not for precision: its
     rel limit is at least component_second_rel and it has no bias limit (a correct device drifts on synthetic scales;
     Hy4 attention x 1e-3: rel 0.009, bias -0.0075). col_lim: the per-column rel limits (rel_limit of the precision
-    model's per-column errors), the same floor for a second input."""
+    model's per-column errors, no cap), on the golden input only: on synthetic inputs a correct device's single
+    columns stray far from the model (Hy4 attention L1, one of 6144 columns: 0.043 on permuted, 0.14 on x 1e-3)."""
     out = {
         "rel": max(rel_lim, lim["component_second_rel"]) if second else rel_lim,
         "row": f * lim["component_row"],
-        "col": None if col_lim is None else (col_lim.clamp_min(lim["component_second_rel"]) if second else col_lim),
+        "col": None if second else col_lim,  # the golden input only (Hy4 attention on x 1e-3 inputs: one column 0.14)
         "ratio": f * lim["component_ratio"],
         "bias": math.inf if second else f * lim["component_bias"],
     }
