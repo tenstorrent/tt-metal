@@ -9,6 +9,9 @@ Per chip (r, c): streams [1, 1, S/4, 4 x 1792] fp32 (tt/layout.py, stream-major)
 (replicated over axis 1) -> out [1, 1, S/4, 1792] fp32, the chip's rows and hidden columns. The column split carries
 through, so there is no collective and no weight. fp32 multiply + 3 x addcmul (glm53 tt/collapse.py:TtHcCollapse,
 deepseek_v3_d_p tt/mhc/tt_mhc.py:_mix), no host work.
+
+XING_HC_IMPL (tt/mhc.py) = fused (default): one ttnn.bringup.mhc_pre_xing(hc, x, coefficients_given=True) program
+(y = sum_i pre_i x_i, fp32 SFPU multiply-adds, exact fp32 unpack); composed: the slice / multiply / addcmul chain.
 """
 
 from __future__ import annotations
@@ -16,13 +19,30 @@ from __future__ import annotations
 import ttnn
 
 from .layout import HC
+from .mhc import hc_impl
 
 
 class TtHcCollapse:
-    def __init__(self, n: int = HC, out_dtype=ttnn.float32):
+    def __init__(self, n: int = HC, out_dtype=ttnn.float32, impl: str | None = None):
         self.n, self.out_dtype = n, out_dtype
+        self.impl = impl or hc_impl()
+
+    def _fused(self, x: ttnn.Tensor, hc: ttnn.Tensor) -> ttnn.Tensor:
+        xs = x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32)
+        hs = hc if hc.dtype == ttnn.float32 else ttnn.typecast(hc, ttnn.float32)
+        _, y = ttnn.bringup.mhc_pre_xing(hs, xs, n=self.n, coefficients_given=True)
+        for a, b in ((xs, x), (hs, hc)):
+            if a is not b:
+                ttnn.deallocate(a)
+        if self.out_dtype != ttnn.float32:
+            y32 = y
+            y = ttnn.typecast(y32, self.out_dtype)
+            ttnn.deallocate(y32)
+        return y
 
     def __call__(self, x: ttnn.Tensor, hc: ttnn.Tensor) -> ttnn.Tensor:
+        if self.impl == "fused":
+            return self._fused(x, hc)
         s4, w = x.shape[-2], x.shape[-1] // self.n
         dram = ttnn.DRAM_MEMORY_CONFIG
         y = None
