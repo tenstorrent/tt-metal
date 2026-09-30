@@ -24,7 +24,8 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor(
     const Tensor& post,
     const Tensor& comb,
     const Tensor& output,
-    const tt::tt_metal::ComputeConfigDescriptor& compute_config);
+    const tt::tt_metal::ComputeConfigDescriptor& compute_config,
+    bool comb_transposed = true);
 
 struct MhcPostProgramFactory {
     // Cache miss: build the whole descriptor.
