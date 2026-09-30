@@ -87,6 +87,10 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  *   false (default): Normal operation without signaling
  *   true: Signal SFPU semaphore for pipelining with subsequent operations
  *
+ * With signal_output the math thread posts the FPU->SFPU semaphore once per output_granularity output tiles on the
+ * last k tile, nt_dim / output_granularity posts per call. The Tensix semaphore counts to 15, so nt_dim /
+ * output_granularity must be at most 15 (the LLK asserts it).
+ *
  * Usage pattern for partial K:
  *   for (k = 0; k < num_k_subblocks - 1; k++) {
  *     sdpa_custom_mm_reuse_dest_srcb_block(..., false);  // Accumulate without signaling

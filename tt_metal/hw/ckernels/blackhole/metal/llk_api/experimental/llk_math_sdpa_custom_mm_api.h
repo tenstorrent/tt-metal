@@ -18,6 +18,8 @@ inline void llk_math_sdpa_custom_mm_init(
     _llk_math_sdpa_custom_mm_init_<transpose>(operandB_face_r_dim, ct_dim);
 }
 
+// signal_granularity: output tiles per FPU->SFPU post on the last k step. ct_dim / signal_granularity posts per call
+// must fit the 4-bit Tensix semaphore (at most 15); the LLK asserts it.
 template <std::uint32_t signal_granularity = 1>
 inline void llk_math_sdpa_custom_mm(
     const std::uint32_t operandA,

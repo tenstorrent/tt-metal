@@ -56,6 +56,11 @@ ALWI void sdpa_custom_mm_block_init_short(
 
 // configure_mask_extent supports masks spanning ct_dim*2 SrcB rows and restores
 // the Q operand's face height before the subsequent matmul unpack.
+//
+// The math thread posts the FPU->SFPU semaphore once per signal_granularity output tiles on the last k step, so a call
+// posts ct_dim / signal_granularity times. The Tensix semaphore counts to 15: ct_dim / signal_granularity must be at
+// most 15 (the LLK asserts it), and a consumer that takes its tokens only after the matmul has finished sees every post
+// of the call before its first get. compute_sdpa_chunk checks the same bound at compile time for the fused chunk.
 template <bool read_transposed = false, std::uint32_t signal_granularity = 1, bool configure_mask_extent = false>
 ALWI void sdpa_custom_mm_block(
     const std::uint32_t in0_cb_id,

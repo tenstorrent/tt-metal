@@ -143,6 +143,10 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         if (signal_output && i == kt_dim - 1)
         {
             LLK_ASSERT(nt_dim % output_granularity == 0, "nt_dim must be divisible by output_granularity for FPU->SFPU output signal counts to balance");
+            // The Tensix semaphore counts to 15; the posts of one call must fit it (see llk_math_sdpa_custom_mm.h).
+            LLK_ASSERT(
+                nt_dim / output_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+                "nt_dim / output_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
             for (std::uint32_t j = 0; j < nt_dim / output_granularity; j++)
             {
                 for (std::uint32_t g = 0; g < output_granularity; g++)
