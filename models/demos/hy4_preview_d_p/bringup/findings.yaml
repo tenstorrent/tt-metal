@@ -36,3 +36,24 @@ findings:
     matmuls (fp32 output for gate / o_proj) runs ~39 TFLOPS. tt/attention.py:mm_program_config (in0_block_w 16, output
     block 8 x 8, per-core M / N over the 11x10 grid) gives 2.29 / 2.28 / 0.80 ms with output bit-identical to the default
     config. HY4_ATTN_MM=default keeps the old configs. sparse_sdpa is now the largest attention cost.
+- id: X3-profiler-buffer-timeline
+  task: X.3
+  kind: INFRA
+  title: the profile timeline needs a profiler buffer above 1000 programs; Hy4 layers 0-5 run 1177 per chip per chunk
+  detail: >-
+    X.3 failed only on timeline_ok (timeline got 1170-1172 programs per chip, op mode counted 1177). The device
+    profiler's DRAM buffer holds 1000 programs per RISC per core by default (12 words each); the timeline run reads it
+    once per chunk, so cores that run every program drop markers and some tail programs vanish. Not a module bug, and
+    the fix role's allowed paths (ttnn/ttnn/bringup, knowledge, breadcrumbs, findings) cannot fix it cleanly. With
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 on the same test_profile command the timeline aligns: device 461.4 ms =
+    kernels 459.3 + gaps 2.0 (chip 2), host dispatch 131.2 ms, 829 op rows, test PASS. Needs a framework or gate-env
+    change (set the count before the mesh opens when the op profile is on).
+- id: X3-positions-precompile-double-run
+  task: X.3
+  kind: INFRA
+  title: test_positions without --no-precompile runs positions 4x too far and hangs (spec mutated by the collect pass)
+  detail: >-
+    Running the X.3 gate by hand (no --no-precompile) the precompile collect pass ran test_positions once, which raises
+    target.seq in memory to 209920; the real pass then chose positions 0, 204800, 409600, 614400, 819200 and hung at
+    the fifth. With --no-precompile (as the orchestrator runs perf-step gates) positions are 0..204800 and it passes
+    (448 / 484 / 520 / 548 / 578 ms). Framework-side; no model change.
