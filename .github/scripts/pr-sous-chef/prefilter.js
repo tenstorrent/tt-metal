@@ -47,6 +47,11 @@ const COOLDOWN_MS = 60 * 60 * 1000;
 // queues can hold a job QUEUED much longer; 90 min keeps nudges from firing during a
 // merely slow (not stuck) pipeline.
 const PENDING_CHECK_MAX_AGE_MS = 90 * 60 * 1000;
+// NEW vs upstream: age past which an unmatched `copilot_work_started` (no later `finished`
+// or `finished_failure`) is treated as stale rather than "still running" (see Filter 2).
+// Same 90 min reasoning as PENDING_CHECK_MAX_AGE_MS above it: sessions run up to 59 min per
+// the COOLDOWN_MS comment, so 90 min is well past a genuine one but still bounded.
+const SESSION_STALE_MS = 90 * 60 * 1000;
 // Upstream default: a PR with zero changed files 24h after creation is "stalled".
 const ZERO_DIFF_AGE_MS = 24 * 60 * 60 * 1000;
 // NEW vs upstream: after this many actionable nudges on one PR, stop mentioning Copilot
@@ -226,6 +231,8 @@ async function run({ github, context, core }) {
       // latest copilot_work_* timeline event is copilot_work_started.
       const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
       let session = 'none';
+      let sessionAt = null;
+      let lastStartedAt = null;
       // Nudge-count baseline (the documented RESET): a maintainer puts a handed-off PR back
       // under Sous Chef by removing `copilot-flow-handoff`. Only nudges and hand-off comments
       // posted AFTER the most recent such removal count; everything before it is history.
@@ -235,12 +242,29 @@ async function run({ github, context, core }) {
       let nudgeBaseline = 0;
       for (const ev of timeline) {
         if (typeof ev.event !== 'string') continue;
-        if (ev.event.startsWith('copilot_work_')) session = ev.event;
+        if (ev.event.startsWith('copilot_work_')) {
+          session = ev.event; sessionAt = ev.created_at || null;
+          if (ev.event === 'copilot_work_started') lastStartedAt = ev.created_at || null;
+        }
         if (ev.event === 'unlabeled' && (ev.label?.name || '').toLowerCase() === HANDOFF_LABEL) {
           nudgeBaseline = Math.max(nudgeBaseline, new Date(ev.created_at || 0).getTime());
         }
       }
-      if (session === 'copilot_work_started') { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
+      // A `copilot_work_started` with no later `copilot_work_finished*` normally means the
+      // session is genuinely running (comment above: up to 59 min). But the finished event is
+      // occasionally never emitted at all (observed on PR #58341: started 05:23, no commit or
+      // finished event for 2h+) and this filter has no other way to notice — unlike Filter 1's
+      // checks-pending, which self-heals once a check actually completes. Without an age cutoff
+      // a dropped finished event blocks the PR forever. SESSION_STALE_MS is deliberately looser
+      // than PENDING_CHECK_MAX_AGE_MS: a real session can legitimately run close to 59 min, and
+      // being slow to unstick a merely-slow one is much cheaper than nudging Copilot mid-session.
+      if (session === 'copilot_work_started') {
+        const startedAt = sessionAt ? new Date(sessionAt).getTime() : null;
+        const stale = startedAt !== null && now - startedAt >= SESSION_STALE_MS;
+        if (!stale) { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
+        counters.session_stale_override = (counters.session_stale_override || 0) + 1;
+        core.info(`#${number}: copilot_work_started at ${sessionAt} has no finished event after ${SESSION_STALE_MS / 60000} min; treating the session as stale, not blocking`);
+      }
 
       // ALL issue comments (REST, paginated, newest first). They are the persistence for
       // the nudge cap, the cooldown and the hand-off marker, so a recency window is not
@@ -249,6 +273,41 @@ async function run({ github, context, core }) {
       const comments = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const afterBaseline = (c) => new Date(c.created_at).getTime() > nudgeBaseline;
+
+      // Memoized: the silent-session check below (Filter 4) may need review threads before an
+      // eligible PR otherwise would, but must not fetch them twice. Cursor-paginated -- a PR
+      // with more threads than one page must not silently lose the older ones: an old,
+      // still-unanswered thread is exactly what a nudge exists for.
+      let threadNodesCache = null;
+      const fetchThreadNodes = async () => {
+        if (threadNodesCache) return threadNodesCache;
+        const nodes = [];
+        let cursor = null;
+        let pageGuard = 0;
+        do {
+          const res = await github.graphql(`
+            query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100, after: $after) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { id isResolved isOutdated path
+                      comments { totalCount }
+                      firstComment: comments(first: 1) { nodes { author { login __typename } body createdAt url } }
+                      lastComment: comments(last: 1) { nodes { author { login __typename } body createdAt } } }
+                  }
+                }
+              }
+            }`, { owner, repo, number, after: cursor });
+          const conn = res?.repository?.pullRequest?.reviewThreads;
+          if (!conn) throw new Error('GraphQL response has no reviewThreads connection');
+          nodes.push(...(conn.nodes || []));
+          cursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+        } while (cursor && pageGuard++ < MAX_THREAD_PAGES);
+        if (cursor) throw new Error(`review threads exceed ${MAX_THREAD_PAGES * 100}; refusing to decide on a partial list`);
+        threadNodesCache = nodes;
+        return nodes;
+      };
       // Filter 3 (new) — handed off to humans after the nudge cap: label OR trusted marker
       // comment newer than the baseline (either alone is enough; both are written together
       // below). A hand-off comment from BEFORE the label was removed is the previous cycle's
@@ -280,7 +339,44 @@ async function run({ github, context, core }) {
       // nudge (head unchanged since) blocks — and only one from THIS cycle: a nudge older
       // than the reset baseline belongs to the previous, handed-off cycle, and the
       // maintainer's label removal is itself the instruction to try again.
-      if (!nudgeCapped && comments.length && isNudge(comments[0]) && afterBaseline(comments[0]) && !conflicting && headDate <= new Date(comments[0].created_at).getTime()) {
+      const lastCommentIsUnansweredNudge = comments.length && isNudge(comments[0]) && afterBaseline(comments[0]);
+      const noPushSinceLastNudge = lastCommentIsUnansweredNudge && headDate <= new Date(comments[0].created_at).getTime();
+      // Second tt-metal refinement (PR #58341, 2026-09-29): a session that STARTS and FINISHES
+      // (or fails) entirely after the nudge, with no push and no reply either, means Copilot
+      // tried and silently produced nothing -- e.g. the "GitHub engine reported fetch failed"
+      // write-back error observed there. `session`/`sessionAt` can only be a finished/failed
+      // event here (a `copilot_work_started` with no later finished event already `continue`d
+      // at Filter 2, unless stale). The old code treated this identically to "still working,
+      // wait" and blocked forever: Filter 4 never lets a second nudge through, so a silently
+      // failed nudge could never progress toward a working retry OR the nudge cap. A silent
+      // session is evidence the last nudge already failed, not a reason to keep waiting on it.
+      //
+      // "No reply" here must mean no reply ANYWHERE, not just no top-level issue comment:
+      // `comments` (from `issues.listComments`) does not include inline review-thread replies,
+      // and Copilot answering a review thread without pushing is a real, non-silent outcome
+      // (review round below already defines "Copilot replied" as the thread's last comment
+      // being Copilot's -- mirrored here, not reinvented). `fetchThreadNodes()` is memoized so
+      // this check and the later, unconditional review-thread section never fetch it twice.
+      let silentSessionSinceNudge = false;
+      if (noPushSinceLastNudge && sessionAt !== null &&
+          (session === 'copilot_work_finished' || session === 'copilot_work_finished_failure') &&
+          new Date(sessionAt).getTime() > new Date(comments[0].created_at).getTime()) {
+        const nudgeTime = new Date(comments[0].created_at).getTime();
+        const threadsForSilenceCheck = await fetchThreadNodes();
+        const repliedInThread = threadsForSilenceCheck.some(t => {
+          const last = t.lastComment?.nodes?.[0];
+          const total = t.comments?.totalCount ?? 0;
+          return total > 1 && isCopilotCodingAgent(last?.author?.login) && new Date(last?.createdAt || 0).getTime() > nudgeTime;
+        });
+        if (repliedInThread) {
+          core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) replied in a review thread; not treating as silent`);
+        } else {
+          silentSessionSinceNudge = true;
+          counters.silent_session_since_nudge = (counters.silent_session_since_nudge || 0) + 1;
+          core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) after the last nudge produced no push and no reply anywhere; not blocking on it`);
+        }
+      }
+      if (!nudgeCapped && noPushSinceLastNudge && !conflicting && !silentSessionSinceNudge) {
         counters.filtered_last_comment_from_sous_chef++; reasons[number] = 'last comment is an unanswered sous-chef nudge (no push since)'; continue;
       }
       // Filter 5 — cooldown since the last actionable nudge (also delays a hand-off).
@@ -302,33 +398,9 @@ async function run({ github, context, core }) {
         }
       }
 
-      // ALL review threads, cursor-paginated. A PR with more threads than one page must not
-      // silently lose the older ones: an old, still-unanswered thread is exactly what a
-      // nudge exists for.
-      const threadNodes = [];
-      let threadCursor = null;
-      guard = 0;
-      do {
-        const res = await github.graphql(`
-          query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-            repository(owner: $owner, name: $repo) {
-              pullRequest(number: $number) {
-                reviewThreads(first: 100, after: $after) {
-                  pageInfo { hasNextPage endCursor }
-                  nodes { id isResolved isOutdated path
-                    comments { totalCount }
-                    firstComment: comments(first: 1) { nodes { author { login __typename } body createdAt url } }
-                    lastComment: comments(last: 1) { nodes { author { login __typename } body createdAt } } }
-                }
-              }
-            }
-          }`, { owner, repo, number, after: threadCursor });
-        const conn = res?.repository?.pullRequest?.reviewThreads;
-        if (!conn) throw new Error('GraphQL response has no reviewThreads connection');
-        threadNodes.push(...(conn.nodes || []));
-        threadCursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
-      } while (threadCursor && guard++ < MAX_THREAD_PAGES);
-      if (threadCursor) throw new Error(`review threads exceed ${MAX_THREAD_PAGES * 100}; refusing to decide on a partial list`);
+      // ALL review threads. Reuses the Filter 4 silent-session check's fetch when it already
+      // ran one (memoized in fetchThreadNodes above); otherwise this is the first fetch.
+      const threadNodes = await fetchThreadNodes();
 
       // Commits of the PR (sha -> commit date) for `verifyFix`. Fetched only when a bot
       // thread could be resolvable, to spare API calls on simple PRs.
@@ -423,7 +495,10 @@ async function run({ github, context, core }) {
           core.info(`#${number}: hand-off skipped: ${staleReason}`);
           continue;
         }
-        const body = buildHandoffComment({ pr, nudgeCount: nudges.length, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now });
+        const body = buildHandoffComment({
+          pr, nudgeCount: nudges.length, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now,
+          silentSession: silentSessionSinceNudge ? { startedAt: lastStartedAt, endedAt: sessionAt, outcome: session } : null
+        });
         try {
           await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
           core.info(`#${number}: posted the hand-off comment (${nudges.length} nudges)`);
@@ -522,7 +597,7 @@ async function run({ github, context, core }) {
 // Deterministic hand-off comment (no at-mention anywhere: it must not start a session, and
 // must not look like a nudge to `isNudge`, which is why "Copilot nudges" is written without
 // the `@`).
-function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now }) {
+function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now, silentSession = null }) {
   const hours = Math.round((now - new Date(pr.createdAt).getTime()) / 3600000);
   const lines = [
     HANDOFF_MARKER,
@@ -537,6 +612,12 @@ function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, fai
   for (const t of unansweredAll.slice(0, 10)) lines.push(`- Review thread by ${t.reviewer} with no reply from Copilot${t.url ? `: ${t.url}` : ''}`);
   if (unansweredAll.length > 10) lines.push(`- … and ${unansweredAll.length - 10} more unanswered review thread(s).`);
   for (const c of needsMaintainerApproval.slice(0, 5)) lines.push(`- Waiting for a maintainer to approve the run: ${c.url ? `[${c.name}](${c.url})` : c.name}.`);
+  // Distinguishes "Copilot never got the nudge" from "Copilot tried and its write-back silently
+  // failed" -- without this a maintainer has to reconstruct the timeline by hand (as happened
+  // on PR #58341) to tell the two apart.
+  if (silentSession) {
+    lines.push(`- The last nudge's Copilot session ran (${silentSession.startedAt || '?'} → ${silentSession.endedAt || '?'}, ended \`${silentSession.outcome}\`) but produced no new commit and no reply -- its write-back likely failed rather than nothing happening.`);
+  }
   lines.push('',
     `A maintainer should take the PR over, give Copilot direct guidance in a comment (an at-mention from a maintainer with write access starts a new session), or close it. To put the PR back under PR Sous Chef, remove the \`${HANDOFF_LABEL}\` label: only nudges posted after that removal count toward the next cap of ${MAX_NUDGES_PER_PR}, so this comment can stay as history (deleting it is neither needed nor sufficient).`,
     '',
@@ -548,7 +629,7 @@ module.exports = {
   run,
   // exported for prefilter.test.js
   FLOW_LABEL, HANDOFF_LABEL, HANDOFF_MARKER, WORKFLOW_ID, MAX_NUDGES_PER_PR, MAX_ELIGIBLE,
-  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, PRE_ACTIVATION_LOGIN,
+  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, SESSION_STALE_MS, PRE_ACTIVATION_LOGIN,
   matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
   makeIdentity, verifyFix, buildHandoffComment
 };

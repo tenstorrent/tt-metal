@@ -27,8 +27,11 @@ description: |
 
 on:
   # Upstream runs every 15 minutes too. The pre-activation script is plain code (no model,
-  # no credits) and `skip-if-no-match` below exits before it when no flow PR is open, so
-  # the cadence only costs anything while a flow PR is actually non-draft and stalled.
+  # no credits). `skip-if-no-match` below only gates the downstream agent job's `if:`, not
+  # pre-activation's own later steps -- identity/checkout/prefilter below are explicitly
+  # `if:`-gated on it too (2026-09-29 fix; without that gate they ran, and prefilter re-ran
+  # its own GitHub search plus a full per-PR GraphQL/REST evaluation, on every tick and every
+  # issue_comment repo-wide even when nothing matched, which is what actually costs API calls).
   schedule: every 15m
   workflow_dispatch:
   # `/souschef` on a PR comment forces a look at that PR now (e.g. a maintainer just
@@ -64,6 +67,14 @@ on:
   steps:
     - name: Resolve the identity Sous Chef nudges are posted as
       id: identity
+      # Gated on skip-if-no-match (2026-09-29): identity/checkout/prefilter are otherwise
+      # unconditional, so every tick -- 96/day from the schedule alone, plus every
+      # issue_comment repo-wide -- ran the full per-PR GraphQL/REST evaluation even with
+      # zero flow PRs open. `activated` (this job's own output) already ANDs in
+      # skip_no_match_check_ok, so gating these three steps on it changes no downstream
+      # behavior; it only skips work whose result was already going to be ignored. Safe for
+      # `/souschef` too: the frontmatter already documents that case as a silent no-op.
+      if: steps.check_skip_if_no_match.outputs.skip_no_match_check_ok == 'true'
       # The `add-comment` safe output below posts with GH_AW_AGENT_TOKEN when that secret
       # is provisioned (a PAT of a Copilot-enabled maintainer — the only kind of author
       # whose `@copilot` mention actually starts a coding-agent session, see the
@@ -91,6 +102,7 @@ on:
           core.info(`Sous Chef comments are authored as: ${login} (GH_AW_AGENT_TOKEN ${process.env.AGENT_TOKEN_SET === 'true' ? 'set' : 'not set'})`);
           core.setOutput('login', login);
     - name: Check out the prefilter script
+      if: steps.check_skip_if_no_match.outputs.skip_no_match_check_ok == 'true'
       # The prefilter is a repo file (.github/scripts/pr-sous-chef/prefilter.js), not an
       # inline script: GitHub Actions caps a step input at 21 KB (gh-aw enforces it at
       # compile time) and a file can be unit-tested against the real gh-aw sanitizer
@@ -106,6 +118,7 @@ on:
         persist-credentials: false
     - name: Prefilter and rank copilot-flow PRs
       id: prefilter
+      if: steps.check_skip_if_no_match.outputs.skip_no_match_check_ok == 'true'
       # See .github/scripts/pr-sous-chef/prefilter.js for the logic and every constant
       # (cooldown, caps, allowlists). It fails closed per PR: a PR whose state could not be
       # read is skipped this tick.
