@@ -39,3 +39,12 @@
 - Driver (g15blx02): tmp/drive32.sh, log tmp/drive32.log. Job 865 = S2 split-K; then S1 split-K, S1 self, S2 self,
   one at a time, stops on first failure; ends with DRIVE32_DONE. Job IDs are the JOB[...] lines.
 - Read results: `ssh g14blx03 'tt-device-mcp logs -n 100000 <ID>' | grep SWEEP | sed 's/.*SWEEP/SWEEP/'`.
+
+## 2026-09-30 18:5x, S2 split-K measured (blx03 job 865)
+- Test PASSED; the wrapper exited 2 only because I edited tmp/blx03_sweep.sh while bash was reading it. SWEEP numbers valid.
+- stage_2 (5 ops): self q=192 k=512 4586.0 us (ref); V2A ring cross q=32 k=512 838.1 us, host_rel_l2 0.0268;
+  V2A split-K 1638.3 us, rel_l2 vs ring 0.0789, host_rel_l2 0.0777. Split-K is 2x slower and 3x less accurate: rejected at S2.
+- Driver part 2: tmp/drive32b.sh (log tmp/drive32b.log, ends DRIVE32B_DONE): S1 self 96,608/96,416 plus S1 split-K in one job,
+  then S2 self 384,256/192,448/128,608. It waits while any smarton job runs on blx03 (t-other job 867/869 were ahead).
+- Next: read JOB[...] ids in tmp/drive32b.log, grep SWEEP. If a self config beats ref by more than noise (~1-2%) and is bit-exact,
+  set it in attention_ltx.py ring_sdpa_chunk_by_n and run block A/B. Otherwise report "shipped configs already optimal".
