@@ -76,6 +76,20 @@ inline void matmul_configure_addrmod(
     }
         .set(ADDR_MOD_5);
 
+#ifdef MM_MATH_ONE_MOP
+    if constexpr (THROTTLE_LEVEL == 0 && !is_high_fidelity(math_fidelity))
+    {
+        // One-MOP variant (rt_dim=1, reuse_a, full tiles): end of a non-last tile. Reset SrcA/SrcB row counters and
+        // advance the dest carriage return by one 32x32 tile (64 rows), so no SETC16 is needed per tile.
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb = {.incr = 0, .clr = 1, .cr = 1},
+            .dest = {.incr = 64, .clr = 0, .cr = 1},
+        }
+            .set(ADDR_MOD_3);
+    }
+#endif
+
     if constexpr (THROTTLE_LEVEL)
     {
         // reset all, including fidelity
@@ -308,6 +322,11 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
+#ifdef MM_MATH_ONE_MOP
+// Set by _llk_math_matmul_init_: non-zero when the programmed MOP is the one-MOP variant (covers ct_dim tiles per run).
+static std::uint32_t matmul_one_mop_ct = 0; // ct_dim the one-MOP variant was programmed for (0: not programmed)
+#endif
+
 template <MathFidelity math_fidelity>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
@@ -428,6 +447,28 @@ inline void matmul_configure_mop(
                 }
             }
         });
+
+#ifdef MM_MATH_ONE_MOP
+    matmul_one_mop_ct = 0;
+    if constexpr (!high_fidelity)
+    {
+        if (rt_dim == 1 && reuse_a && replay_buf_len == 16)
+        {
+            // One MOP run = ct_dim tiles. Each iteration: the first 15 MVMULs of the tile from the replay buffer, then the
+            // 16th MVMUL (CLR_A) with ADDR_MOD_3 (next dest tile). The last iteration uses the stock 16th MVMUL (ADDR_MOD_5).
+            ckernel_template one_mop(
+                1 /* outer loop */,
+                ct_dim /* inner loop */,
+                lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
+                TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0));
+            one_mop.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0));
+            one_mop.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0));
+            one_mop.program();
+            matmul_one_mop_ct = ct_dim;
+            return;
+        }
+    }
+#endif
 
     // TODO: can we commonize this?
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
@@ -734,6 +775,19 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
+#ifdef MM_MATH_ONE_MOP
+    if constexpr (THROTTLE_LEVEL == 0 && !is_high_fidelity(math_fidelity))
+    {
+        if (matmul_one_mop_ct != 0 && matmul_one_mop_ct == ct_dim && rt_dim == 1)
+        {
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+            ckernel_template::run();
+            // Clear srcB at end of reuse
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+            return;
+        }
+    }
+#endif
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim

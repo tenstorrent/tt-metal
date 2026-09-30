@@ -649,6 +649,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    {
+        // Experiment P22: one-MOP math matmul for rt=1 LoFi; default ON (INT2i); env TT_MM_MATH_ONE_MOP=0 disables.
+        const char* mm_one_mop_env = std::getenv("TT_MM_MATH_ONE_MOP");
+        if (mm_one_mop_env == nullptr || std::string(mm_one_mop_env) != "0") {
+            mm_kernel_defines["MM_MATH_ONE_MOP"] = "1";
+        }
+    }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
@@ -2228,6 +2235,13 @@ create_program_mcast_in0_in1(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    {
+        // Experiment P22: one-MOP math matmul for rt=1 LoFi; default ON (INT2i); env TT_MM_MATH_ONE_MOP=0 disables.
+        const char* mm_one_mop_env = std::getenv("TT_MM_MATH_ONE_MOP");
+        if (mm_one_mop_env == nullptr || std::string(mm_one_mop_env) != "0") {
+            mm_kernel_defines["MM_MATH_ONE_MOP"] = "1";
+        }
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
