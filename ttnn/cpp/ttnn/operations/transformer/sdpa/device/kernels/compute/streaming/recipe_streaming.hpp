@@ -374,10 +374,13 @@ void blocked_matmul_and_pack(
 // keeps its compensated fold.
 #if defined(SDPA_PROTO_PA) && !defined(SDPA_RECIPE_FP32)
 #define SDPA_PA 1
+#ifndef SDPA_PA_DBG
+#define SDPA_PA_DBG 0
+#endif
 #define PA_PV_BEGIN(pv_cb, acc)                     \
     do {                                            \
         pack_reconfig_data_format(pv_cb);           \
-        PACK((llk_pack_reconfig_l1_acc((acc) ? 1 : 0))); \
+        PACK((llk_pack_reconfig_l1_acc(((acc) && !(SDPA_PA_DBG & 1)) ? 1 : 0))); \
     } while (0)
 #define PA_PV_END(restore_cb)                 \
     do {                                      \
@@ -392,6 +395,9 @@ constexpr bool sdpa_perf_zones = false;
 #endif
 
 #ifdef SDPA_PA
+#ifndef SDPA_PA_DBG
+#define SDPA_PA_DBG 0
+#endif
 #ifndef SDPA_PROTO_PA_TAU
 #define SDPA_PROTO_PA_TAU 20.0f
 #endif
@@ -402,7 +408,7 @@ namespace ckernel::sfpu {
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_pa_bias() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    constexpr float bias = SDPA_PROTO_PA_TAU / __builtin_bit_cast(float, scale_fp32);
+    constexpr float bias = (SDPA_PA_DBG & 2) ? 0.0f : SDPA_PROTO_PA_TAU / __builtin_bit_cast(float, scale_fp32);
     for (int i = 0; i < 32; ++i) {
         sfpi::vFloat m = sfpi::dst_reg[0];
         sfpi::dst_reg[0] = m + bias;

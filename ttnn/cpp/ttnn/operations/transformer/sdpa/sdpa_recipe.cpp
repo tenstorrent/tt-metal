@@ -168,6 +168,9 @@ ProgramDescriptor recipe_compute_program(
     }
     if (proto_pa) {
         compute.defines.emplace_back("SDPA_PROTO_PA", "1");
+        if (const char* dbg = std::getenv("SDPA_PA_DBG")) {
+            compute.defines.emplace_back("SDPA_PA_DBG", dbg);
+        }
     }
     if (policy.selection.recipe == Recipe::D) {
         compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");
