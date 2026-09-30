@@ -17,7 +17,7 @@ namespace sfpu {
 // Computes the reciprocal of a floating point value x.
 // max_iter specifies the number of Newton-Raphson iterations.
 // max_iter = 2: sufficient for faithful FP32 rounding in the normal input/output domain.
-// max_iter = 1: with round_to_bf16 and the BF16-tuned seed from sfpu_reciprocal_init,
+// max_iter = 1: with round_to_bf16 and the matching opt-in seed from sfpu_reciprocal_init,
 //               correctly rounds BF16 inputs with normal BF16 reciprocals (≤0.5 ULP).
 // max_iter = 0: this has the same effect as max_iter=1 at the moment;
 //               it may be replaced with a cheaper approximation in future.
@@ -111,15 +111,22 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
 }
 
-template <bool APPROXIMATE = false>
+template <bool APPROXIMATE = false, bool round_to_bf16 = false>
 sfpi_inline void sfpu_reciprocal_init() {
-    // Fit y = k2 - k1*x + k0*x**2 over [1,2), constraining the one-step
-    // Newton result to the correct BF16 rounding intervals. With Wormhole
-    // FMA semantics, all 128 normalized BF16 inputs round correctly after
-    // one step; two steps remain faithful for all FP32 mantissas (<0.890 ULP).
-    sfpi::vConstFloatPrgm0 = 0.32133400440216064453125f;
-    sfpi::vConstFloatPrgm1 = 1.4514148235321044921875f;
-    sfpi::vConstFloatPrgm2 = 2.1200883388519287109375f;
+    if constexpr (round_to_bf16) {
+        // Fit y = k2 - k1*x + k0*x**2 over [1,2), constraining the one-step
+        // Newton result to the correct BF16 rounding intervals. All 128
+        // normalized BF16 inputs round correctly with Wormhole FMA semantics.
+        sfpi::vConstFloatPrgm0 = 0.32133400440216064453125f;
+        sfpi::vConstFloatPrgm1 = 1.4514148235321044921875f;
+        sfpi::vConstFloatPrgm2 = 2.1200883388519287109375f;
+    } else {
+        // Shared minimax seed for unrounded one- and two-step reciprocals,
+        // including intermediate reciprocals in compound BF16 operations.
+        sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;
+        sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;
+        sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -127,7 +134,9 @@ inline void calculate_reciprocal() {
     _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/>
+// BF16 rounding is an explicit opt-in: compound callers may pass false for
+// is_fp32_dest_acc_en even when their reciprocal intermediate is FP32.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/, bool round_to_bf16 = false>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
@@ -136,7 +145,7 @@ void recip_init() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE, round_to_bf16>();
 }
 
 }  // namespace sfpu

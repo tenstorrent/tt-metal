@@ -29,11 +29,17 @@ template <
     ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile_init() {
     [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    MATH(constexpr bool approximate = approximation == ReciprocalApproxMode::Default
+                                          ? APPROX
+                                          : approximation == ReciprocalApproxMode::Approximate;)
+#ifdef ARCH_WORMHOLE
+    // Match the explicit BF16 rounding in calculate_reciprocal. Other users
+    // of the shared reciprocal helper retain its default minimax constants.
     MATH(SFPU_UNARY_INIT_FN(
-        reciprocal,
-        sfpu::recip_init,
-        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
-         is_fp32_dest_acc_en)));
+        reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en, !approximate && !is_fp32_dest_acc_en)));
+#else
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en)));
+#endif
 }
 // clang-format off
 /**
