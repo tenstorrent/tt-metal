@@ -184,6 +184,7 @@ class Gemma4TokenizerEncoderPair:
         # Encode capture must be last when the pipeline also traces denoise/VAE/audio — see
         # ``defer_trace_capture`` / ``open_trace_gate`` (same contract as the Gemma-3 pair).
         self._trace_gate_open = True
+        self._trace_captured = False
 
     @property
     def sequence_length(self) -> int:
@@ -209,6 +210,12 @@ class Gemma4TokenizerEncoderPair:
     def open_trace_gate(self) -> None:
         """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
         self._trace_gate_open = True
+
+    def capture_trace(self) -> None:
+        """Capture the encode trace now, on a placeholder prompt, so the first request after the
+        gate opens replays it instead of paying the ~1.7s capture."""
+        if self._encoder_trace and self._trace_gate_open and not self._trace_captured:
+            self.encode(["warmup"])
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.
@@ -404,14 +411,11 @@ class Gemma4TokenizerEncoderPair:
             # src_idx/keep_mask are dim-independent → shared by both connectors.
             src_idx, keep_mask = self.video_connector.build_indices(attention_mask, seq)
 
+            traced = self._encoder_trace and self._trace_gate_open
             video_dev, audio_dev = self._encode_device(
-                tt_ids,
-                tt_gemma_mask,
-                fe_mask,
-                src_idx,
-                keep_mask,
-                traced=self._encoder_trace and self._trace_gate_open,
+                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=traced
             )
+            self._trace_captured |= traced
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (
                 ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None

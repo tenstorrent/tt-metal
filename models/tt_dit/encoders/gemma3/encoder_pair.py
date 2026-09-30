@@ -163,6 +163,7 @@ class GemmaTokenizerEncoderPair:
         # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
         # gate once they are done, which makes the encode the last capture taken.
         self._trace_gate_open = True
+        self._trace_captured = False
 
     def embedding_cache_identity(self) -> dict:
         """Bind prompt outputs to their source weights, tokenizer and compute policy.
@@ -257,6 +258,12 @@ class GemmaTokenizerEncoderPair:
     def open_trace_gate(self) -> None:
         """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
         self._trace_gate_open = True
+
+    def capture_trace(self) -> None:
+        """Capture the encode trace now, on a placeholder prompt, so the first request after the
+        gate opens replays it instead of paying the capture."""
+        if self._encoder_trace and self._trace_gate_open and not self._trace_captured:
+            self.encode(["warmup"])
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.
@@ -437,9 +444,10 @@ class GemmaTokenizerEncoderPair:
         tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
         fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
         src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
-        return self._encode_device(
-            tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
-        )
+        traced = self._encoder_trace and self._trace_gate_open
+        out = self._encode_device(tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=traced)
+        self._trace_captured |= traced
+        return out
 
     def encode_to_device_buffers(self, prompt: str, video_buffer: ttnn.Tensor, audio_buffer: ttnn.Tensor) -> None:
         """Copy a fresh static encode into caller-owned, preallocated DiT inputs.
