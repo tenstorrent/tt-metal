@@ -233,29 +233,37 @@ TEST(MatmulAutoConfig, LargeBlockKDepth) {
 }
 
 // Interleaved 2D goes no shallower than the legacy selection's K depth (Kt / grid width), with the same
-// output blocks, where L1 allows
+// output blocks, where L1 allows, unless packer L1 accumulation is on and both inputs are 16-bit
 TEST(MatmulAutoConfig, TwoDKDepthAtLeastLegacy) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
         for (const auto& s : shapes()) {
-            const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N);
-            for (const auto& c : candidates(p, hw)) {
-                if (c.family != Family::Mcast2D || p.Kt % hw.grid.x != 0) {
-                    continue;
-                }
-                const uint32_t legacy = p.Kt / hw.grid.x;
-                if (c.blocking.in0_block_w >= legacy) {
-                    continue;
-                }
-                // Shallower only when legacy's depth (or any deeper divisor of it) doesn't fit L1
-                for (uint32_t k = c.blocking.in0_block_w + 1; k <= legacy; ++k) {
-                    if (legacy % k != 0) {
+            for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
+                for (bool l1_acc : {false, true}) {
+                    auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
+                    p.packer_l1_acc = l1_acc;
+                    if (l1_acc && in1 == tt::DataFormat::Float16_b) {
                         continue;
                     }
-                    auto deeper = c.blocking;
-                    deeper.in0_block_w = k;
-                    EXPECT_GT(circular_buffer_bytes(p, hw, Family::Mcast2D, deeper), hw.l1_cb_budget)
-                        << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " k=" << k;
+                    for (const auto& c : candidates(p, hw)) {
+                        if (c.family != Family::Mcast2D || p.Kt % hw.grid.x != 0) {
+                            continue;
+                        }
+                        const uint32_t legacy = p.Kt / hw.grid.x;
+                        if (c.blocking.in0_block_w >= legacy) {
+                            continue;
+                        }
+                        // Shallower only when legacy's depth (or any deeper divisor of it) doesn't fit L1
+                        for (uint32_t k = c.blocking.in0_block_w + 1; k <= legacy; ++k) {
+                            if (legacy % k != 0) {
+                                continue;
+                            }
+                            auto deeper = c.blocking;
+                            deeper.in0_block_w = k;
+                            EXPECT_GT(circular_buffer_bytes(p, hw, Family::Mcast2D, deeper), hw.l1_cb_budget)
+                                << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " k=" << k;
+                        }
+                    }
                 }
             }
         }
@@ -389,6 +397,7 @@ TEST(MatmulAutoConfig, FamilyChoice) {
     struct Expected {
         Shape shape;
         Family family;
+        tt::DataFormat in1 = tt::DataFormat::Float16_b;
     };
     const std::vector<Expected> expected = {
         {{1, 1, 32, 4096, 14336}, Family::Mcast1DIn0},   // decode: M is one tile row
@@ -404,11 +413,11 @@ TEST(MatmulAutoConfig, FamilyChoice) {
         {{48, 48, 1024, 1024, 64}, Family::Reuse},       // gpt2-style transpose_a attention
         {{32, 32, 704, 704, 704}, Family::Mcast2D},      // #25502: Reuse would re-read B for every M slice
         {{2, 2, 1024, 64, 512}, Family::Mcast2D},        // few large batch matrices
-        {{4, 4, 256, 2048, 7168}, Family::Mcast2D},      // #31743: batched with wide N, looped over batch
+        {{4, 4, 256, 2048, 7168}, Family::Mcast2D, tt::DataFormat::Bfp4_b},  // #31743: batched, wide N, looped
     };
     for (const auto& e : expected) {
         const auto& s = e.shape;
-        const auto chosen = choose_candidate(make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
+        const auto chosen = choose_candidate(make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, e.in1), hw);
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(e.family))
             << "b=" << s.batch_a << "/" << s.batch_b << " M=" << s.M << " K=" << s.K << " N=" << s.N;

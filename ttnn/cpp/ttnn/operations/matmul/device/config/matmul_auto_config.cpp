@@ -276,11 +276,17 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 
 // Raises a 2D blocking's K depth to at least the legacy selection's, keeping its output blocks: legacy splits K
 // into as many blocks as the grid is wide (in0_block_w = Kt / grid width when that divides K), shrinking it
-// to a divisor until L1 fits. Where legacy's K blocks are deeper, v2's shallower ones were slower on large
-// output blocks (each K block spills and reloads the partial sums of the whole output block), so v2 doesn't
-// go shallower than legacy; where v2's are already deeper, this leaves them.
+// to a divisor until L1 fits. Where v2's are already deeper, this leaves them.
+// Each K block ends by packing the partial sums of the whole output block, and without packer L1 accumulation
+// reloads them too; deeper blocks pay that less often but make the first block's inputs, which nothing
+// overlaps, larger. Deeper wins where the per-block cost is large next to a block's inputs: accumulation off
+// (pack and reload), or block-float inputs (fewer bytes per K tile). With accumulation on and 16-bit inputs,
+// the shallower depth was as fast or faster on every 2D case measured, so the depth is left as is.
 void deepen_to_legacy_k_depth(const Problem& p, const HardwareDesc& hw, Blocking& b) {
     if (p.Kt % hw.grid.x != 0) {
+        return;
+    }
+    if (p.packer_l1_acc && !is_block_float(p.in0_format) && !is_block_float(p.in1_format)) {
         return;
     }
     for (uint32_t k : divisors_desc(p.Kt / hw.grid.x)) {
@@ -811,12 +817,7 @@ uint32_t fidelity_multiplier(MathFidelity fidelity) {
     }
 }
 
-std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& hw) {
-    const auto all = candidates(p, hw);
-    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
-        // The layout already fixed the family
-        return all.empty() ? std::nullopt : std::optional<Candidate>(all.front());
-    }
+std::optional<Candidate> choose_family(const Problem& p, const std::vector<Candidate>& all) {
     auto find = [&](Family family) -> const Candidate* {
         for (const auto& c : all) {
             if (c.family == family) {
@@ -843,6 +844,30 @@ std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& h
     return std::nullopt;
 }
 
+// A 2D layout whose per-core blocks are one tile tall or wide multicasts single tiles along that axis, so the
+// reuse the rules above count on isn't there: the roofline estimate picks the family instead (ties to the
+// earlier family: 2D, 1D in0, 1D in1, Reuse).
+bool one_tile_2d(const Candidate& c) {
+    return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
+}
+
+std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& hw) {
+    const auto all = candidates(p, hw);
+    if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
+        // The layout already fixed the family
+        return all.empty() ? std::nullopt : std::optional<Candidate>(all.front());
+    }
+    auto chosen = choose_family(p, all);
+    if (!chosen || !one_tile_2d(*chosen)) {
+        return chosen;
+    }
+    auto key = [&](const Candidate& c) {
+        return std::make_pair(roofline(p, hw, c.family, c.blocking).cycles(), static_cast<int>(c.family));
+    };
+    return *std::min_element(
+        all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
+}
+
 }  // namespace
 
 // Per-core roofline estimate, in cycles, of a blocked candidate: the largest of
@@ -850,9 +875,9 @@ std::optional<Candidate> choose_by_rules(const Problem& p, const HardwareDesc& h
 //    shorter than 8 rows still take a full 8-row pass of the engine);
 //  - NoC: the input bytes the busiest core receives (its rows of A and columns of B, once per output block
 //    that uses them);
-//  - DRAM: the input bytes read from DRAM in total (the mcast layouts read A once per output column block and
-//    B once per output row block; Reuse reads A once and B once per M slice of a batch), over the chip's
-//    bandwidth.
+//  - DRAM: the bytes read from and written to DRAM in total (the mcast layouts read A once per output column
+//    block and B once per output row block; Reuse reads A once and B once per M slice of a batch; the output
+//    is written once), over the chip's bandwidth.
 RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     const double a_bytes = in0_tile_bytes(p);
     const double b_bytes = in1_tile_bytes(p);
@@ -883,7 +908,9 @@ RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, 
         a_total = double(p.batch_a) * p.Mt * Kt * a_passes;
         b_total = (p.batch_b > 1 ? double(p.batch_b) : loops) * Kt * p.Nt * b_passes;
     }
-    const double dram_bytes = (p.a.in_l1 ? 0.0 : a_total * a_bytes) + (p.b.in_l1 ? 0.0 : b_total * b_bytes);
+    const double out_total = double(std::max(p.batch_a, p.batch_b)) * p.Mt * p.Nt;
+    const double dram_bytes = (p.a.in_l1 ? 0.0 : a_total * a_bytes) + (p.b.in_l1 ? 0.0 : b_total * b_bytes) +
+                              (p.out.in_l1 ? 0.0 : out_total * out_tile_bytes(p, p.out_format));
     return {products * cycles_per_product, received / hw.noc_bytes_per_cycle, dram_bytes / hw.dram_bytes_per_cycle};
 }
 

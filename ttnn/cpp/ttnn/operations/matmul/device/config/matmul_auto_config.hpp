@@ -174,7 +174,7 @@ uint32_t circular_buffer_bytes(const Problem& problem, const HardwareDesc& hw, F
 struct RooflineTerms {
     double compute = 0;  // the busiest core's tile products
     double noc = 0;      // input bytes the busiest core receives
-    double dram = 0;     // input bytes read from DRAM, chip-wide
+    double dram = 0;     // bytes read from and written to DRAM, chip-wide
     double cycles() const { return std::max({compute, noc, dram}); }
 };
 RooflineTerms roofline(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
