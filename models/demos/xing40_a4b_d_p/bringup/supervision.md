@@ -95,3 +95,10 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   fix) and wrote a fresh embed cache; the L.s4096 gate then spun in the cache hit again, and so did the fix agent's
   second run. Stopped orchestrator, fix agent and test; overseer fix in tt/model.py: TtEmbedding cache=False by default
   (fresh build 1.5 s), stale cache moved aside; resumed (L.s4096 precheck re-runs the rung).
+- 17:10-17:45 L.s4096 PASS d21120da8d5 (min layer 0.9954, final 0.9977, logits 0.9988, state 0.9976, 0 host transfers).
+  L.s16384 first gate failed on "No space left on device" (home 9.4 G quota full; JIT kernel builds); the fix agent
+  cleared the uv download cache (3.2 G, regenerable), no model change: PASS dda19f93ad7 (min layer 0.9934, final
+  0.9985, top5 1.0). L.last PASS 9885c95b1f5 (50k golden prefix + device 51200..56320: min layer 0.993, final 0.9985,
+  logits 0.9991, state 0.9997, top1 0.969, top5 1.0). Paused before L.s56320 and moved the JIT kernel cache off home:
+  copied ~/.cache/tt-metal-cache (3.6 G) to /localdev/dnijemcevic/tt-metal-cache; the orchestrator now runs with
+  TT_METAL_CACHE=/localdev/dnijemcevic (rtoptions appends tt-metal-cache). Resumed.
