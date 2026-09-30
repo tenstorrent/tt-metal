@@ -19,7 +19,10 @@ start x sp / 8: chunk 1280 at 0 / 12800 / 128000). Cache fill before the measure
 * ``tiled``: real forwards of the first ``start / TILE_PERIODS`` tokens, then those compressed-KV and index-K rows
   are copied on device ``TILE_PERIODS`` times to fill the cache up to ``start`` (the window carries are the last
   forward chunk's). Real-text value statistics at a tenth of the fill time; positions (RoPE) inside the copies
-  repeat, which timing does not depend on. ``S1_tiled`` against ``S1`` validates it.
+  repeat, which timing does not depend on. ``S1_tiled`` against ``S1`` validates it;
+* ``tiled1``: the same from one forward chunk (``start / chunk`` copies). For profiled runs: the Tracy host op log
+  of a run is cut after ~6,700 ops (observed; a 10-chunk fill loses the measured phases' signposts).
+  ``S2_tiled1`` against ``S2_forward`` validates it.
 
 Tests:
 
@@ -72,6 +75,7 @@ SCENARIOS = {  # id: (chunk, chunk start, cache fill)
     "S1_tiled": (5120, 51200, "tiled"),
     "S2": (5120, 512000, "tiled"),
     "S2_forward": (5120, 512000, "forward"),
+    "S2_tiled1": (5120, 512000, "tiled1"),
     "slice_S0": (1280, 0, "none"),
     "slice_S1": (1280, 12800, "forward"),
     "slice_S2": (1280, 128000, "tiled"),
@@ -229,7 +233,7 @@ class ScenarioStack:
         """Fill the state up to ``start`` (``fill``); afterwards ``state.start == start``."""
         if self.fill == "none":
             return
-        end = self.start if self.fill == "forward" else self.start // TILE_PERIODS
+        end = {"forward": self.start, "tiled": self.start // TILE_PERIODS, "tiled1": self.chunk}[self.fill]
         assert end % self.chunk == 0 and self.start % end == 0
         t0 = time.perf_counter()
         for first in range(0, end, self.chunk):
@@ -239,7 +243,7 @@ class ScenarioStack:
             ttnn.ReadDeviceProfiler(self.mesh_device)
             self.state.advance(self.chunk)
             _event(f"fill chunk {first // self.chunk + 1}/{end // self.chunk} {time.perf_counter() - t1:.1f}s")
-        if self.fill == "tiled":
+        if self.fill != "forward":
             self._tile(end)
         assert self.state.start == self.start
         _event(f"fill {self.fill} to {self.start} done {time.perf_counter() - t0:.1f}s")
