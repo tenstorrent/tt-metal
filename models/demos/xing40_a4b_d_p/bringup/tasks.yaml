@@ -1492,6 +1492,14 @@ tasks:
     kind: mlp
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T15:36:31'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_shared_expert.py: b7fea5fdc7bad32340a8ded1e8f26b2c93d2f25f97e1b78379fa2c4c0e74dc9c
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.12
   title: 'moe block with steps 1-12 on device (last: shared_expert)'
   step: implement
