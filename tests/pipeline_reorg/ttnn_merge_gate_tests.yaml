@@ -139,9 +139,16 @@
     tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
+<<<<<<< HEAD
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
+=======
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_ldexp
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_logaddexp_ops
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_xlogy
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py::test_bias_gelu
+>>>>>>> fef07380786 (binary test cleanup)
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
     or test_gelu or test_silu or test_01_volume_sin
