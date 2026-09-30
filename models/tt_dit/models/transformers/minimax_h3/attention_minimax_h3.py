@@ -152,6 +152,29 @@ class MiniMaxH3Attention(Module):
     # is not.
     plain_windowed_sdpa_chunk_sizes = (384, 256)
 
+    # ...and the same rule re-measured at 14 heads per device, which is what a 1x4 sees (56 heads
+    # fractured over TP=4). q-chunk choice is a core-fill question -- `heads x ceil(seq/q_chunk)`
+    # work items spread over 110 SDPA cores -- so the optimum moves with the per-device head count,
+    # and a sweep at 56 does not select for the 1x4. Re-swept at 14 heads on ONE chip (same
+    # sequence, same per-device heads, no fabric in the way) at both lengths the p300x2 server
+    # exposes:
+    #
+    #   length | q=256,k=256 | q=384,k=256 (the 56-head pick) | q=512,k=128
+    #   19328  |  31.68 ms   |  26.37 ms                      |  23.27 ms
+    #   37760  | 113.77 ms   | 101.98 ms                      |  97.06 ms
+    #
+    # (512, 128) wins by 11.8% at 19328 and 5.1% at 37760, where at 56 heads it LOSES to (384, 256)
+    # by 1.1%. Fewer heads means fewer work items, so the tail of `items / 110` costs relatively
+    # more and a wider q -- fewer, larger items -- pays; k drops to 128 because (512, 256) does not
+    # build (1.90 MB of L1 against 1.57 MB) and k is the cheaper half to give up.
+    #
+    # The threshold is set between the two measured points rather than fitted: 56 heads keeps
+    # (384, 256), anything at or below 16 per device takes (512, 128). No mesh in this bring-up
+    # lands between them (TP is 1 or 4), so the exact cut only matters to a future TP=2 (28 heads),
+    # which keeps the 56-head pick until someone measures it.
+    plain_windowed_sdpa_chunk_sizes_few_heads = (512, 128)
+    plain_windowed_few_heads_max = 16
+
     def __init__(
         self,
         *,
@@ -373,9 +396,10 @@ class MiniMaxH3Attention(Module):
         the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
 
         `windowed` caps k at 256 so the on-device mask CB fits in L1. A windowed call on the DiT's
-        own attention also takes its measured (q, k) from `plain_windowed_sdpa_chunk_sizes`; the
-        token refiner passes a window too but is built `is_sequence_parallel=False` and keeps the
-        generic rule -- see that constant.
+        own attention takes its measured (q, k) from `plain_windowed_sdpa_chunk_sizes` at 56 heads
+        per device and from `plain_windowed_sdpa_chunk_sizes_few_heads` at 16 or fewer -- the
+        optimum moves with the per-device head count, see those constants. The token refiner passes
+        a window too but is built `is_sequence_parallel=False` and keeps the generic rule.
         """
         key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
@@ -384,7 +408,10 @@ class MiniMaxH3Attention(Module):
             if measured is not None:
                 q_chunk, k_chunk = measured
             elif windowed and self.is_sequence_parallel:
-                q_pref, k_pref = self.plain_windowed_sdpa_chunk_sizes
+                if self.n_local_heads <= self.plain_windowed_few_heads_max:
+                    q_pref, k_pref = self.plain_windowed_sdpa_chunk_sizes_few_heads
+                else:
+                    q_pref, k_pref = self.plain_windowed_sdpa_chunk_sizes
                 q_chunk = max(tile, min(q_pref, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(k_pref, (seq_local // tile) * tile))
             else:

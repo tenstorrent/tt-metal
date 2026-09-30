@@ -23,27 +23,42 @@ from models.tt_dit.models.transformers.minimax_h3.attention_minimax_h3 import Mi
 # Galaxy PER-DEVICE lengths, so all three must come from the plain-windowed rule.
 P150_SERVED_LENGTHS = (19328, 22464, 37760)
 
+# The two the p300x2 server exposes, a subset of the above. On the 1x4 the DiT fractures its 56
+# heads over TP=4, so each device runs the SAME packed length with 14 heads, and the chunk-size
+# optimum is different there -- see `plain_windowed_sdpa_chunk_sizes_few_heads`.
+P300X2_SERVED_LENGTHS = (19328, 37760)
 
-def _attn_stub(*, is_sequence_parallel=True):
+P150_LOCAL_HEADS = 56  # TP=1
+P300X2_LOCAL_HEADS = 14  # 56 // TP=4
+
+
+def _attn_stub(*, is_sequence_parallel=True, n_local_heads=P150_LOCAL_HEADS):
     """The narrowest object `_sdpa_program_config` can run against.
 
     `is_sequence_parallel` is what separates the DiT's attention from the token refiner's: the
     refiner is constructed `is_sequence_parallel=False` (token_refiner_minimax_h3.py), and BOTH pass
-    a window, so it is the only thing that tells them apart.
+    a window, so it is the only thing that tells them apart. `n_local_heads` is `num_heads //
+    tp_factor` and is what separates p150 from p300x2 on the same served length.
     """
     return SimpleNamespace(
         _sdpa_program_configs={},
         measured_sdpa_chunk_sizes=MiniMaxH3Attention.measured_sdpa_chunk_sizes,
         plain_windowed_sdpa_chunk_sizes=MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes,
+        plain_windowed_sdpa_chunk_sizes_few_heads=MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes_few_heads,
+        plain_windowed_few_heads_max=MiniMaxH3Attention.plain_windowed_few_heads_max,
         is_sequence_parallel=is_sequence_parallel,
+        n_local_heads=n_local_heads,
         full_grid=ttnn.CoreCoord(11, 10),
         sdpa_worker_grid=(10, 10),
     )
 
 
-def _config(seq_local, *, ring, windowed, is_sequence_parallel=True):
+def _config(seq_local, *, ring, windowed, is_sequence_parallel=True, n_local_heads=P150_LOCAL_HEADS):
     return MiniMaxH3Attention._sdpa_program_config(
-        _attn_stub(is_sequence_parallel=is_sequence_parallel), seq_local, ring=ring, windowed=windowed
+        _attn_stub(is_sequence_parallel=is_sequence_parallel, n_local_heads=n_local_heads),
+        seq_local,
+        ring=ring,
+        windowed=windowed,
     )
 
 
@@ -53,6 +68,32 @@ def test_served_1x1_lengths_take_the_measured_windowed_chunks(seq_local):
     assert (cfg.q_chunk_size, cfg.k_chunk_size) == MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes
     # The whole grid, not the ring path's reserved-column grid.
     assert (cfg.compute_with_storage_grid_size.x, cfg.compute_with_storage_grid_size.y) == (11, 10)
+
+
+@pytest.mark.parametrize("seq_local", P300X2_SERVED_LENGTHS)
+def test_served_1x4_lengths_take_the_few_heads_windowed_chunks(seq_local):
+    """p300x2's real config: same lengths as p150, 14 heads per device instead of 56.
+
+    Measured at both: (512, 128) beats the 56-head pick by 11.8% at 19328 and 5.1% at 37760.
+    """
+    cfg = _config(seq_local, ring=False, windowed=True, n_local_heads=P300X2_LOCAL_HEADS)
+    assert (cfg.q_chunk_size, cfg.k_chunk_size) == MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes_few_heads
+
+
+@pytest.mark.parametrize("seq_local", P150_SERVED_LENGTHS)
+def test_the_few_heads_rule_leaves_p150_alone(seq_local):
+    """The whole point of gating on head count: 56 heads per device must not move.
+
+    Asserted against the literal pair, not the constant, so that editing either constant cannot
+    make this test agree with itself.
+    """
+    cfg = _config(seq_local, ring=False, windowed=True, n_local_heads=P150_LOCAL_HEADS)
+    assert (cfg.q_chunk_size, cfg.k_chunk_size) == (384, 256)
+
+
+def test_the_few_heads_threshold_sits_between_the_two_measured_points():
+    """14 is inside the few-heads regime and 56 is outside it, with room on both sides."""
+    assert P300X2_LOCAL_HEADS <= MiniMaxH3Attention.plain_windowed_few_heads_max < P150_LOCAL_HEADS
 
 
 # The refiner's real presentation lengths: `MINIMAX_H3_REF2VA_PRESENTATION_RUNGS` pads to 1024 and
