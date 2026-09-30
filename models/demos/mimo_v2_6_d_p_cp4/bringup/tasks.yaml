@@ -154,6 +154,13 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T23:23:00'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attn_norm.py: d44486146c7c9cc617398001d67849627e761be782a2aadbc129d25fb0d14ab8
+      /home/sjovic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 16e0ef60439c47052a9bf2543ea23258b17ea715224d1f9e30e037294a43e9bd
 - id: S.full_dense.01
   title: 'full_dense block with steps 1-1 on device (last: attn_norm)'
   step: implement
