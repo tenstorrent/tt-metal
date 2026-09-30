@@ -1010,15 +1010,26 @@ def passed_test(
         # No step budget, so nothing above measured one; these are the ops on the
         # tolerance metric whose drift no number watches. Measured after the verdict,
         # never read back into it, and one distance serves both consumers.
-        unenrolled = ulp_distance(golden_tensor, res_tensor)
-        _record_ulp_measurement(unenrolled, mask=None)
-        if _ULP_REPORT:
-            logger.info(
-                "ULP report — {}",
-                ulp_verdict_message(
-                    golden_tensor, res_tensor, unenrolled, output_data_format
-                ),
+        if golden_tensor.shape != res_tensor.shape:
+            # `torch.isclose` broadcast these; `ulp_distance` refuses a shape mismatch.
+            # Raising here would turn a pass into an error under flags that must not
+            # be able to change a verdict, so neither consumer gets a measurement.
+            logger.warning(
+                "ULP report skipped — golden {} and result {} differ in shape; the "
+                "verdict above compared them broadcast",
+                tuple(golden_tensor.shape),
+                tuple(res_tensor.shape),
             )
+        else:
+            unenrolled = ulp_distance(golden_tensor, res_tensor)
+            _record_ulp_measurement(unenrolled, mask=None)
+            if _ULP_REPORT:
+                logger.info(
+                    "ULP report — {}",
+                    ulp_verdict_message(
+                        golden_tensor, res_tensor, unenrolled, output_data_format
+                    ),
+                )
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare

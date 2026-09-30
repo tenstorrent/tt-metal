@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple, Union
