@@ -13,6 +13,7 @@ struct CopyParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     bool backwards = false;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct CopyInputs {

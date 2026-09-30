@@ -34,6 +34,12 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
     if (sharded && !tilized) {
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
     }
+    // Explicit worker grids are also used beside resident sub-device workspaces
+    // (for example Galaxy's GCB). Wide rows need the bounded staging factory,
+    // rather than two complete vocabulary-sized rows in static L1 CBs.
+    if (operation_attributes.sub_core_grids.has_value() && !tilized && input_unit_size > 65536) {
+        return false;
+    }
 
     const uint32_t input_alignment = input_tensor.buffer()->alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
@@ -77,6 +83,9 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
+    if (operation_attributes.sub_core_grids.has_value()) {
+        TT_FATAL(operation_attributes.sub_core_grids->num_cores() > 0, "copy sub_core_grids must not be empty");
+    }
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::BFLOAT8_B or
@@ -203,9 +212,10 @@ CopyDeviceOperation::tensor_return_value_t copy(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
-    bool backwards) {
+    bool backwards,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<CopyDeviceOperation>(
-        CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
+        CopyParams{output_mem_config, output_dtype, backwards, sub_core_grids}, CopyInputs{input, preallocated_output});
 }
 
 }  // namespace ttnn::prim

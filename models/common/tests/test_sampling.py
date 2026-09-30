@@ -51,15 +51,17 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
         log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
     )
     compiled = []
+    output = object()
 
     def run_sampling(scratch, *, penalties_on, tt_out_tok, count_tokens):
+        assert tt_out_tok is output, "Warmup must use the same explicit output as capture"
         assert not count_tokens, "Warmup must not add dummy samples to request history"
         if penalties_on:
             scratch.sub_(2.0)
         compiled.append(penalties_on)
 
     sampling._run_sampling = run_sampling
-    sampling.precompile(logits, all_configs=all_configs)
+    sampling.precompile(logits, tt_out_tok=output, all_configs=all_configs)
 
     assert compiled
     torch.testing.assert_close(logits, original, rtol=0, atol=0)
@@ -67,6 +69,19 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     assert sampling.tt_sampling._force_argmax_sampling is True
     assert log_probs.logprobs_enabled == [False]
     assert log_probs.num_logprobs == [0]
+
+
+@pytest.mark.parametrize("force_argmax", [False, True])
+def test_sampling_trace_output_requires_configured_batch(force_argmax):
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.tt_sampling = SimpleNamespace(max_batch_size=32, force_argmax_sampling=force_argmax)
+    sampling._trace_token_outputs = {False: object(), True: object()}
+    logits = SimpleNamespace(shape=ttnn.Shape((1, 1, 32, 64)))
+    assert sampling._trace_token_output(logits, None) is sampling._trace_token_outputs[force_argmax]
+    with pytest.raises(ValueError, match="Pad logits to the configured sampling batch"):
+        sampling._trace_token_output(SimpleNamespace(shape=ttnn.Shape((1, 1, 16, 64))), None)
+    supplied = object()
+    assert sampling._trace_token_output(logits, supplied) is supplied
 
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):

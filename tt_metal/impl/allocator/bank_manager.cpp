@@ -663,6 +663,21 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(
     return adjusted_abs_addr;
 }
 
+std::optional<DeviceAddr> BankManager::lowest_occupied_address_excluding(
+    uint32_t bank_id, const std::unordered_set<DeviceAddr>& ignored_addresses) const {
+    const auto* allocator = get_allocator_from_id(AllocatorDependencies::AllocatorID{0});
+    if (allocator == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<DeviceAddr> lowest;
+    for (const auto& [begin, end] : allocator->allocated_addresses()) {
+        if (!ignored_addresses.contains(begin) && (!lowest || begin < *lowest)) {
+            lowest = begin;
+        }
+    }
+    return lowest ? std::make_optional(*lowest + bank_offset(bank_id)) : std::nullopt;
+}
+
 Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     return alloc ? alloc->get_statistics() : Statistics();
