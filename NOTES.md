@@ -22,3 +22,8 @@ blx03 broker: device HELD (degraded), 8/32 chips off PCIe after our t41 job 904 
 auto-recovery (bridge-reset, glx_reset) failing. Did NOT relaunch the driver: no autonomous submitter while the
 device is flaky and a pause may come. On resume: check steer/pause, confirm broker not HELD and no smarton job,
 then relaunch `setsid nohup bash ~/fasth3/t37/drive37.sh > ~/fasth3/t37/drive37.log 2>&1 &` on blx03.
+
+## 2026-09-30 20:51 UTC (woken, still held)
+blx03 broker still HELD (degraded) 25 min after reboot: 8/32 chips off PCIe, bridge-reset and glx_reset keep
+failing (jobs 906-912). No job submitted, driver not relaunched. Waiting on the broker hold to clear
+(retry_when checks that "HELD" is gone from the RUNNING section of `tt-device-mcp status 1` on blx03).
