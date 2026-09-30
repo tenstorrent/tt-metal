@@ -91,14 +91,24 @@ def _sp_trace_region_size():
     return (256 if _sp_impl_name() == "sc" else 64) * 1024 * 1024
 
 
+# Default worker_l1_size for every SP (1,4) mesh open: 1461248 (framework default on Blackhole) - 64 KiB. Grows the
+# dispatch kernel-config ring from 70656 B to 136192 B: removes the ~110-140 us/die of launch gaps behind the big
+# ChunkGdnFused programs (TTFT -0.15 ms) and speeds the TP4 traced decode (decode(7) 40.0 -> 36.1 ms).
+_SP_DEFAULT_WORKER_L1_SIZE = 1395712
+
+
 def _sp_worker_l1_kwargs():
-    """QWEN36_SP_WORKER_L1_SIZE env var: worker_l1_size (bytes) for every SP (1,4) mesh open. Unset / "0" ->
-    the framework default (nothing passed; 1461248 B on Blackhole). worker_l1_size sets where the
+    """QWEN36_SP_WORKER_L1_SIZE env var: worker_l1_size (bytes) for every SP (1,4) mesh open. Unset ->
+    _SP_DEFAULT_WORKER_L1_SIZE (1395712); "default" or "0" -> the framework default (nothing passed;
+    1461248 B on Blackhole, 70656 B ring); any other integer is used as is. worker_l1_size sets where the
     allocator's L1 starts (worker_l1_unreserved_start = 1536 KiB - worker_l1_size), so a SMALLER value
-    grows the dispatch kernel-config ring buffer ([MEM_MAP_END=40960, unreserved_start); default 69 KiB)
-    by the same amount and takes that much L1 away from the allocator. See _sp_log_ring."""
+    grows the dispatch kernel-config ring buffer ([MEM_MAP_END=40960, unreserved_start); framework default
+    69 KiB) by the same amount and takes that much L1 away from the allocator (hard limit: ring <= ~185 KB
+    with the TP4 decode model's L1 buffers). See _sp_log_ring."""
     raw = os.environ.get("QWEN36_SP_WORKER_L1_SIZE")
-    if raw is None or raw.strip() in ("", "0"):
+    if raw is None or raw.strip() == "":
+        return {"worker_l1_size": _SP_DEFAULT_WORKER_L1_SIZE}
+    if raw.strip().lower() in ("0", "default"):
         return {}
     return {"worker_l1_size": int(raw)}
 
@@ -109,7 +119,8 @@ def _sp_log_ring(mesh):
         base = ttnn._ttnn.reports.get_device_info(mesh).address_at_first_l1_cb_buffer
         logger.info(
             f"[sp] L1 allocator base={base} -> dispatch kernel-config ring={base - 40960} B "
-            f"(QWEN36_SP_WORKER_L1_SIZE={os.environ.get('QWEN36_SP_WORKER_L1_SIZE')!r})"
+            f"(QWEN36_SP_WORKER_L1_SIZE={os.environ.get('QWEN36_SP_WORKER_L1_SIZE')!r}, "
+            f"worker_l1_size kwargs={_sp_worker_l1_kwargs()})"
         )
     except Exception as e:  # diagnostics only
         logger.warning(f"[sp] could not read the L1 allocator base: {e}")
