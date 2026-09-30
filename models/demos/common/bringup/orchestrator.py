@@ -5,6 +5,7 @@
 
     python -m models.demos.common.bringup.orchestrator run --spec S [--until ID] [--only ID] [--model M]
     python -m models.demos.common.bringup.orchestrator resume --spec S      # STOPPED tasks become runnable again
+    python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject|--rerun --spec S
 
 Per task:
   scripted step (goldens, box, integrate, perf; no role)  run the gate; on failure hand the log to a ``fix`` agent
@@ -29,6 +30,21 @@ Per task:
                                                            request is a failed attempt. After the debugger's attempts,
                                                            one last implement attempt may still defer instead of STOPPED
   approval needed (plan) or opportunity list written       the run stops for a person (exit 3)
+  perf pick (step perf with a role, F57)                   no gate before or after the agent. The agent makes the
+                                                           change behind its switch and runs the frozen tests once
+                                                           (accuracy first, roles.yaml). Then the orchestrator runs
+                                                           the A/B report: per config, off (tasks.yaml ``ab.env``)
+                                                           and on, every frozen test of the gate, the ladder at the
+                                                           ``ab_rungs`` (default: the gate's rung and the spec's last
+                                                           rung) and one plain profile, each into
+                                                           runs/<run>/ab/<task>/<old|new>/<name>/, and writes
+                                                           table.md there and the record to state.json (``ab``). The
+                                                           task waits for the owner (exit 3): ``decide --accept`` runs
+                                                           the gate on resume and commits on PASS (dropping a failing
+                                                           frozen test from the gate is the owner's edit);
+                                                           ``--reject`` reverts the change, the task becomes REJECTED
+                                                           (done: dependents run); ``--rerun`` measures again. A new
+                                                           brief or switch voids the report (the agent runs again)
 
 After every agent step: the tree diff must stay inside the paths the brief allowed, no command may reach the device
 except through the safe runners, and the knowledge files must keep their format. A violation fails the attempt.
@@ -56,11 +72,15 @@ from string import Template
 import yaml
 
 from models.demos.common.bringup.core import freeze as F
+from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.gate import (
+    SAFE_HANG_RC,
     _is_direct_pytest,
     _program,
     _segments,
     format_paths,
+    gate_command,
+    gate_env,
     gate_outputs,
     git_commit,
     log_dir,
@@ -74,6 +94,7 @@ from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
+from models.demos.common.bringup.testing import accuracy_guard
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
@@ -163,6 +184,16 @@ PRIOR_TEXT = {
 BRINGUP_OPS = "ttnn/ttnn/bringup"
 # A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
 TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
+# Perf picks (F57): the A/B report's lines. A component / swap check that fails prints "FAIL <metric>: <values> (...)".
+FAILED_CHECK = re.compile(r"^FAIL\s+\S.*$", re.M)
+LADDER_TEST = "models/demos/common/bringup/tests/test_ladder.py"
+AB_ROWS = (  # (row, ladder metric); pcc_layer_* is the minimum over the layers
+    ("min layer PCC", "pcc_layer_*"),
+    ("final hidden PCC", "pcc_final_hidden"),
+    ("logits PCC (tail)", "pcc_logits_tail"),
+    ("top1", "top1_match"),
+    ("top5", "top5_overlap"),
+)
 
 
 def now() -> str:
@@ -344,6 +375,7 @@ class Orchestrator:
         self.echo = echo
         self.roles = yaml.safe_load((HERE / "briefs" / "roles.yaml").read_text())
         self.pause_file = self.run_dir / "PAUSE"
+        self.last_changed: list[str] = []  # the files the last agent run changed
 
     # ---- policy
     def common_paths(self) -> list[str]:
@@ -565,7 +597,8 @@ class Orchestrator:
             problems.append(f"agent exited rc={rc} is_error={info['is_error']}")
         problems += command_violations(info["commands"], self.spec.repo)
         pats = self.allowed_paths(task, role)
-        outside = [p for p in changed_since(before, dirty(self.spec.repo)) if not allowed(p, pats)]
+        self.last_changed = changed_since(before, dirty(self.spec.repo))
+        outside = [p for p in self.last_changed if not allowed(p, pats)]
         if outside:
             problems.append(f"changed files outside the allowed paths (revert them): {outside}")
         ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
@@ -813,6 +846,265 @@ class Orchestrator:
         self.echo(f"  [{tid}] STOPPED (infrastructure): {why}")
         return STOPPED
 
+    # ---- perf picks (F57): the agent makes the change; the orchestrator measures it on vs off; the owner decides
+    def perf_pick(self, task: dict) -> bool:
+        return task.get("step") == "perf" and bool(task.get("role"))
+
+    def ab_key(self, task: dict) -> str:
+        """What a report and a decision are about: the pick's brief and switch. An edit of the gate (the owner dropping
+        a frozen test) keeps them; a new brief is a new change."""
+        import hashlib
+
+        keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs")}
+        return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+    def ab_record(self, task: dict) -> dict | None:
+        rec = self.led.state().get(task["id"], {}).get("ab")
+        return rec if isinstance(rec, dict) and rec.get("key") == self.ab_key(task) else None
+
+    def perf_step(self, task: dict) -> int:
+        """A perf pick: agent (the change behind its switch, the frozen tests once, no profile), then the A/B report,
+        then WAITING FOR A PERSON until ``decide``; accept runs the gate and commits, reject reverts (REJECTED)."""
+        tid = task["id"]
+        rec = self.ab_record(task)
+        if rec and rec.get("decision") == "accept":
+            return self.perf_accept(task, rec)
+        if rec and rec.get("decision") == "reject":
+            return self.perf_reject(task, rec)
+        if rec and rec.get("decision") == "rerun":  # measure the same change again (e.g. after a board reset)
+            rec = self.ab_report(task, rec.get("changed") or [])
+            self.led.update(tid, ab=rec, status="TODO", reason=[rec["why"]])
+            return self._human(task, rec["why"])
+        if rec:
+            return self._human(task, rec["why"])
+        changed = self.perf_agent(task)
+        if changed is None:
+            return STOPPED
+        rec = self.ab_report(task, changed)
+        self.led.update(tid, ab=rec, status="TODO", reason=[rec["why"]])
+        return self._human(task, rec["why"])
+
+    def perf_agent(self, task: dict) -> list[str] | None:
+        """The perf role until one attempt ends without problems; the files it changed, or None (STOPPED)."""
+        tid, pol, previous, changed = task["id"], self.policy(task, "perf"), "", set()
+        for attempt in range(1, pol["attempts"] + 1):
+            self.led.update(tid, status="RUNNING", attempt=attempt, role="perf", waiting=None)
+            accuracy_guard.clear(self.spec, tid)  # the marker is per attempt
+            problems = self.run_agent(task, "perf", attempt, self.brief(task, "perf", attempt, previous))
+            changed |= set(self.last_changed)
+            if not problems:
+                return sorted(changed)
+            previous = "\n".join(problems)
+        why = f"perf failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
+        self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{tid}] STOPPED: {why}")
+        return None
+
+    def run_cmd(self, cmd: str, env: dict, log: Path) -> int:
+        """One device command of an A/B report, run like a gate command (shell, repo root, through the safe runner)."""
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "w") as f:
+            f.write(f"$ {cmd}\n")
+            f.flush()
+            return subprocess.run(
+                cmd, shell=True, cwd=self.spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT
+            ).returncode
+
+    def ab_rungs(self, task: dict) -> list[str]:
+        """tasks.yaml ``ab_rungs``, else the rung the gate runs (or ``last``) and the spec's last (full-target) rung."""
+        if task.get("ab_rungs"):
+            return list(task["ab_rungs"])
+        names = [r["name"] for r in self.spec.data.get("ladder") or []]
+        m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
+        return list(dict.fromkeys(r for r in (m.group(1) if m else "last", names[-1] if names else None) if r in names))
+
+    def ab_report(self, task: dict, changed: list[str]) -> dict:
+        """Per config (off = ``ab.env``, the old path; on = the tree as the agent left it), each into its own results
+        dir runs/<run>/ab/<task>/<old|new>/: every frozen test of the gate (all of them, not stopping at the first
+        failure), the ladder at every A/B rung, and one plain profile. Then table.md and the ledger record."""
+        tid, ab = task["id"], task.get("ab") or {}
+        d = self.run_dir / "ab" / tid
+        old = {k: str(v) for k, v in (ab.get("env") or {}).items()}
+        rec = {"key": self.ab_key(task), "at": now(), "changed": changed, "env": old, "table": str(d / "table.md")}
+        rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, note="")
+        owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
+        # each command of the gate as the gate runs it (gate_command: no precompile pass for a perf step)
+        segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
+        tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
+        prof_cmd = next((re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x), None)
+        base = gate_env(self.spec, self.led, tid)
+        base[accuracy_guard.AB_ENV] = "1"  # the profile guard lets the orchestrator's own profile through
+        for k in list(old) + ["BRINGUP_PROFILE_OPS"]:
+            base.pop(k, None)
+        sides = ([("old", old)] if old else []) + [("new", {})]
+        if not owned:
+            rec["note"] = "the agent changed nothing under the task's paths (its summary and BREADCRUMBS say why)"
+            sides = []
+        elif not old:
+            rec["note"] = "no `ab` switch in tasks.yaml: the change is measured on only"
+
+        def run(side, name, cmd, extra):
+            out = d / side / name
+            M.reset(tid, out)
+            self.echo(f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}")
+            rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(out)}, **extra), out / f"{name}.log")
+            text = (out / f"{name}.log").read_text(errors="replace")
+            sig = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
+            if sig or rc == SAFE_HANG_RC:
+                raise InfraStop(tid, sig.group(0) if sig else f"{name} hung (rc {rc})")
+            return rc, {k: v["value"] for k, v in M.load(tid, out).items()}, text
+
+        try:
+            for side, env in sides:
+                for i, cmd in enumerate(tests):
+                    name = Path(next((w for w in cmd.split() if w.endswith(".py")), f"test{i}")).stem
+                    rc, _, text = run(side, name, cmd, env)
+                    checks = [m.strip() for m in FAILED_CHECK.findall(text)][:12]
+                    rec["tests"].setdefault(name, {})[side] = {"rc": rc, "checks": checks}
+                for rung in rec["rungs"]:
+                    cmd = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
+                    rc, got, _ = run(side, rung, cmd, dict(env, BRINGUP_RUNG=rung))
+                    rec["ladder"].setdefault(rung, {})[side] = dict(self.ab_summary(got), rc=rc)
+                if prof_cmd:
+                    rc, got, _ = run(side, "profile", prof_cmd, env)
+                    keys = ["device_ms_total", "pcc_chunk_out"] + [
+                        k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
+                    ]
+                    rec["profile"][side] = dict({k: got.get(k) for k in dict.fromkeys(keys)}, rc=rc)
+        except InfraStop as e:
+            rec["note"] = f"stopped early: {e.sig} (reset the board; `decide --task {tid} --rerun` measures again)"
+        rec["gate_on"] = self.gate_on(task, rec, d)
+        (d / "table.md").parent.mkdir(parents=True, exist_ok=True)
+        (d / "table.md").write_text(self.ab_table(task, rec))
+        verdict = "PASS" if rec["gate_on"]["ok"] else "FAIL"
+        rec["why"] = (
+            f"apply {tid} or not? A/B table at {rec['table']}; the gate with the change on would {verdict}"
+            + (f" ({rec['note']})" if rec["note"] else "")
+            + f"; then: python -m models.demos.common.bringup.orchestrator decide --task {tid} --accept|--reject"
+            + f" --spec {self.spec.path}, and resume"
+        )
+        self.echo(f"  [{tid}] A/B report: {rec['table']}")
+        return rec
+
+    def gate_on(self, task: dict, rec: dict, d: Path) -> dict:
+        """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics."""
+        from models.demos.common.bringup.core.gate import check_metrics
+
+        m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
+        runs = {n: r.get("new") for n, r in rec["tests"].items()}  # what the gate itself runs, with the change on
+        runs.update({m.group(1): rec["ladder"].get(m.group(1), {}).get("new")} if m and rec["ladder"] else {})
+        runs.update({"profile": rec["profile"].get("new")} if rec["profile"] else {})
+        got = {}
+        for n in runs:
+            got.update(M.load(task["id"], d / "new" / n))
+        ok, lines = check_metrics(task["gate"].get("metrics") or {}, got)
+        failing = [
+            f"{n}: not run" if r is None else f"{n}: exit code {r['rc']}" for n, r in runs.items() if not r or r["rc"]
+        ]
+        failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x]
+        return {"ok": ok and bool(runs) and not failing, "failing": failing}
+
+    @staticmethod
+    def ab_summary(got: dict) -> dict:
+        out = {}
+        for label, key in AB_ROWS:
+            if key.endswith("*"):
+                vals = {k: v for k, v in got.items() if k.startswith(key[:-1]) and v is not None}
+                if vals:
+                    k = min(vals, key=vals.get)
+                    out[label], out["min layer"] = vals[k], k[len(key) - 1 :]
+            elif got.get(key) is not None:
+                out[label] = got[key]
+        return out
+
+    def ab_table(self, task: dict, rec: dict) -> str:
+        fmt = lambda v: "-" if v is None else f"{v:.4f}" if isinstance(v, float) else str(v)  # noqa: E731
+        sides = [("new", "on"), ("old", "off")]
+        old = " ".join(f"{k}={v}" for k, v in rec["env"].items()) or "(no ab switch)"
+        out = [
+            f"# {task['id']}: {task['title']} -- apply or not?",
+            "",
+            f"on = the tree as the agent left it; off = `{old}` (the old path). {rec['at']}.",
+        ]
+        if rec["note"]:
+            out += ["", f"Note: {rec['note']}"]
+        out += ["", "## Frozen accuracy tests of the gate (component metric vs its limit)", ""]
+        out += ["| test | on | off |", "|---|---|---|"]
+        for name, r in rec["tests"].items():
+            cell = lambda s: "-" if s not in r else ("pass" if r[s]["rc"] == 0 else f"FAIL (rc {r[s]['rc']})")  # noqa
+            out.append(f"| {name} | {cell('new')} | {cell('old')} |")
+        for name, r in rec["tests"].items():
+            for side, label in sides:
+                out += [f"- {name} {label}: {c}" for c in (r.get(side) or {}).get("checks", [])]
+        rungs = rec["rungs"]
+        out += ["", "## End to end (ladder)", ""]
+        out += ["| | " + " | ".join(f"{r} {lbl}" for r in rungs for _, lbl in sides) + " |"]
+        out += ["|---|" + "---|" * (2 * len(rungs))]
+        for label, _ in AB_ROWS + (("exit code", "rc"),):
+            cells = []
+            for r in rungs:
+                for side, _ in sides:
+                    row = rec["ladder"].get(r, {}).get(side)
+                    v = None if row is None else row.get("rc" if label == "exit code" else label)
+                    ok = label == "min layer PCC" and v is not None
+                    cells.append(f"{v:.4f} ({row.get('min layer')})" if ok else fmt(v))
+            out.append(f"| {label} | " + " | ".join(cells) + " |")
+        if rec["profile"]:
+            gate = task["gate"].get("metrics") or {}
+            out += ["", "## Device time, one plain profile per config (ms per chunk)", ""]
+            out += ["| | on | off |", "|---|---|---|"]
+            keys = [k for k in rec["profile"].get("new", rec["profile"].get("old", {})) if k != "rc"]
+            for k in keys + ["rc"]:
+                lbl = {"device_ms_total": "device_ms_total (e2e chunk)", "rc": "exit code"}.get(k, k)
+                lbl += f" (gate {gate[k]})" if k in gate else ""
+                vals = [rec["profile"].get(s, {}).get(k) for s, _ in sides]
+                ms = k.startswith("device_ms_")
+                out.append(
+                    f"| {lbl} | " + " | ".join(f"{v:.1f}" if ms and v is not None else fmt(v) for v in vals) + " |"
+                )
+        g = rec["gate_on"]
+        out += ["", f"## Gate with the change on: {'PASS' if g['ok'] else 'FAIL'}", ""]
+        out += [f"- {x}" for x in g["failing"]]
+        out += ["", f"Logs: {self.run_dir / 'ab' / task['id']}", ""]
+        return "\n".join(out)
+
+    def perf_accept(self, task: dict, rec: dict) -> int:
+        """The owner applies the change: the gate (as tasks.yaml now has it) runs and commits the change on a PASS."""
+        tid = task["id"]
+        res = self.gate(tid)
+        if res.verdict == "PASS":
+            return self._after(task)
+        why = (
+            f"accepted, but the gate fails with the change on:\n{res.summary()}\nDrop the failing frozen test from the "
+            f"gate in tasks.yaml or change a threshold (the owner's edit), then resume; or decide --task {tid} --reject"
+        )
+        return self._human(task, why)
+
+    def perf_reject(self, task: dict, rec: dict) -> int:
+        """The owner declines the change: the agent's files under the task's paths go back to HEAD, the task is
+        REJECTED (a done status: its dependents run), and the decision is committed."""
+        tid, repo = task["id"], self.spec.repo
+        owned = [p for p in rec.get("changed") or [] if allowed(p, list(task.get("paths") or []))]
+        tracked = [p for p in owned if subprocess.run(["git", "cat-file", "-e", f"HEAD:{p}"], cwd=repo).returncode == 0]
+        if tracked:
+            subprocess.run(["git", "checkout", "HEAD", "--", *tracked], cwd=repo, check=True)
+        for p in set(owned) - set(tracked):
+            (repo / p).unlink(missing_ok=True)
+        why = f"rejected by the owner on the A/B report {rec['table']}; reverted {len(owned)} files (old path)"
+        self.led.update(
+            tid, status="REJECTED", reason=[why], waiting=None, history_add={"t": now(), "status": "REJECTED"}
+        )
+        accuracy_guard.clear(self.spec, tid)
+        with self.led.locked():
+            sha = git_commit(
+                self.spec,
+                [rel(self.spec, self.led.state_path)],
+                f"[{self.spec.tag}][{tid}] {task['title']} (rejected by the owner)",
+                why,
+            )
+        self.echo(f"  [{tid}] REJECTED: {why}" + (f" -> {sha}" if sha else ""))
+        return DONE
+
     def step(self, tid: str) -> int:
         task = self.led.task(tid)
         role = task.get("role") or ROLE_OF_STEP.get(task.get("step"))
@@ -825,6 +1117,8 @@ class Orchestrator:
                 self.led.update(tid, status="STOPPED", reason=[reason], history_add={"t": now(), "status": "STOPPED"})
                 return STOPPED
             task = self.led.task(tid)
+        if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
+            return self.perf_step(task)
         plan_written = task.get("approval") == "plan" and (self.spec.bringup_dir / "plan.yaml").exists()
         if role is None or plan_written:
             # A scripted step, or a plan written by an earlier run: gate it; an agent only sees it after a failure.
@@ -901,17 +1195,40 @@ class Orchestrator:
                 return DONE
 
 
+def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
+    """The owner's answer to a perf pick's A/B report; ``resume`` then applies it (perf_step)."""
+    import getpass
+
+    rec = orch.ab_record(orch.led.task(tid))
+    if not rec:
+        print(f"{tid}: no A/B report for the current brief and switch (tasks.yaml); nothing to decide")
+        return 1
+    orch.led.update(tid, ab=dict(rec, decision=decision, decided=now(), by=getpass.getuser(), note=note))
+    then = {"accept": "the gate runs and commits the change", "reject": "the change is reverted, the task REJECTED"}
+    print(f"{tid}: {decision} recorded; `resume`: {then.get(decision, 'the A/B report is measured again')}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["run", "resume", "pause"])
+    ap.add_argument("command", choices=["run", "resume", "pause", "decide"])
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
     ap.add_argument("--until", help="stop after this task")
     ap.add_argument("--only", help="run just this task (if runnable)")
     ap.add_argument("--model")
     ap.add_argument("--attempts", type=int, default=None, help="override every role's attempt budget")
+    ap.add_argument("--task", help="decide: the perf pick")
+    how = ap.add_mutually_exclusive_group()
+    for d in ("accept", "reject", "rerun"):
+        how.add_argument(f"--{d}", dest="decision", action="store_const", const=d, help=f"decide: {d}")
+    ap.add_argument("--note", default="", help="decide: stored with the decision")
     a = ap.parse_args(argv)
     spec = Spec.load(a.spec)
     orch = Orchestrator(spec, model=a.model)
+    if a.command == "decide":
+        if not a.task or not a.decision:
+            ap.error("decide needs --task and one of --accept / --reject / --rerun")
+        return decide(orch, a.task, a.decision, a.note)
     if a.command == "pause":
         orch.pause_file.write_text(now() + "\n")
         print(f"pause requested: the running orchestrator stops before its next task ({orch.pause_file})")

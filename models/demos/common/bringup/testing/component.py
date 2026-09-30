@@ -39,6 +39,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.interface import run_block
+from models.demos.common.bringup.testing import accuracy_guard
 from models.demos.common.bringup.testing.harness import (
     compare,
     component_golden,
@@ -98,7 +99,14 @@ def run_component_test(
     if checks not in (None, "auto"):
         raise ValueError(f"checks={checks!r}: None or 'auto'")
     if checks == "auto":
-        return _run_auto(s, step, layer, mesh, compare_mode, thr, metric)
+        ok = _run_auto(s, step, layer, mesh, compare_mode, thr, metric)
+    else:
+        ok = _run_golden(s, step, layer, mesh, compare_mode, thr, metric)
+    accuracy_guard.note(s, ok)  # a perf pick that fails its frozen test is never profiled (testing/accuracy_guard.py)
+    return ok
+
+
+def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     ref_hooks = s.hooks()
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
@@ -414,4 +422,5 @@ def run_swap_test(
             ok = _check_step(s, block_type, layer, st, seen[st.output], same_input[name], golden, bridged[name]) and ok
         if last is not None:
             ok = _check_tail(s, ref, layer, steps, last, seen, same_input[last.name], snapshot) and ok
+    accuracy_guard.note(s, ok)
     return ok
