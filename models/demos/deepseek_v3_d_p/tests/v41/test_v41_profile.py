@@ -13,7 +13,8 @@ its start past its ``BOOK_TOKENS`` tokens (S2's chunk at 512000 is novel tokens 
 
 Scenarios (``SCENARIOS``, the DeepSeek-V3.2 / GLM ``tests/sparse_mla/test_sparse_mla_perf.py`` set): a 5120-token
 chunk at start 0 (empty cache), 51200 and 512000; ``slice_*``: V3.2's per-chip Galaxy slice on LoudBox (chunk and
-start x sp / 8: chunk 1280 at 0 / 12800 / 128000). Cache fill before the measured chunk:
+start x sp / 8: chunk 1280 at 0 / 12800 / 128000; not collected on Galaxy). Galaxy ids (``GALAXY_MESH``: torus-xy-8x4,
+fabric2d-mesh-4x8; bead 8y7.13.4) skip without 32 chips. Cache fill before the measured chunk:
 
 * ``forward``: real forwards of every earlier chunk of the text through the same six blocks (``state.advance``);
 * ``tiled``: real forwards of the first ``start / TILE_PERIODS`` tokens, then those compressed-KV and index-K rows
@@ -52,9 +53,10 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import on_galaxy
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import EXPERT_DTYPES, _weights
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_perf import LAYERS
-from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import MESH, capture
+from models.demos.deepseek_v3_d_p.tests.v41.test_v41_trace import GALAXY_MESH, MESH, capture
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
@@ -227,9 +229,15 @@ class ScenarioStack:
 SCENARIO_IDS = list(SCENARIOS)
 
 
+def _galaxy_slice(mesh_device, scenario, **_) -> bool:
+    """``slice_*`` are LoudBox proxies of a Galaxy chip's slice; on a Galaxy the full scenarios run instead."""
+    return on_galaxy(mesh_device) and scenario.startswith("slice_")
+
+
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("scenario", SCENARIO_IDS)
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.uncollect_if(pred=_galaxy_slice)
 def test_v41_block_profile(mesh_device, device_params, scenario):
     stack = ScenarioStack(mesh_device, scenario)
     blocks, chunk = stack.blocks, stack.chunk
@@ -281,7 +289,8 @@ def test_v41_block_profile(mesh_device, device_params, scenario):
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("scenario", SCENARIO_IDS)
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH + GALAXY_MESH, indirect=True)
+@pytest.mark.uncollect_if(pred=_galaxy_slice)
 def test_v41_scenario_traced(mesh_device, device_params, scenario):
     stack = ScenarioStack(mesh_device, scenario)
     blocks, chunk = stack.blocks, stack.chunk
@@ -307,7 +316,9 @@ def test_v41_scenario_traced(mesh_device, device_params, scenario):
         ttnn.synchronize_device(mesh_device)
         untraced[layer] = (time.perf_counter() - t0) * 1e3
     workload = M.Workload(chunk=chunk, start=stack.start)
-    layout = {(2, 4): M.LOUDBOX_2X4, (4, 2): M.LOUDBOX_4X2}[tuple(mesh_device.shape)]
+    layout = {(2, 4): M.LOUDBOX_2X4, (4, 2): M.LOUDBOX_4X2, (8, 4): M.GALAXY_8X4, (4, 8): M.GALAXY_4X8}[
+        tuple(mesh_device.shape)
+    ]
     total = {"traced_min_ms": 0.0, "model_opt_ms": 0.0, "model_cons_ms": 0.0, "model_target_ms": 0.0}
     for layer in LAYERS:
         x, pre = inputs[layer]
