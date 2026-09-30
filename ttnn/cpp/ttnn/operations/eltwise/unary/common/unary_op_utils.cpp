@@ -269,6 +269,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "leaky_relu_tile_init();",
                 fmt::format("leaky_relu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::ELU:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f800000u) {
+                return {"elu_tt_poly_bf16_tile_init();", fmt::format("elu_tt_poly_bf16_tile({}, 0x3f800000u);", idst)};
+            }
+#endif
+
             return {"elu_tile_init();", fmt::format("elu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::GELU:
             return {
@@ -640,6 +647,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
         case UnaryOpType::CELU:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f800000u) {
+                return {
+                    "celu_tt_poly_bf16_tile_init();",
+                    fmt::format("celu_tt_poly_bf16_tile({}, 0x3f800000u, 0x3f800000u);", idst)};
+            }
+#endif
+
             return {
                 "celu_tile_init();",
                 fmt::format(
@@ -747,6 +763,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::SELU: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 2 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f867d5fu &&
+                std::bit_cast<uint32_t>(params[1]) == 0x3fd62d7du) {
+                return {
+                    "selu_tt_poly_bf16_tile_init();",
+                    fmt::format("selu_tt_poly_bf16_tile({}, 0x3f867d5fu, 0x3fd62d7du);", idst)};
+            }
+#endif
+
             TT_FATAL(params.size() == 2, "Expected selu to take 2 parameters");
             float param1 = params[1];
             return {
