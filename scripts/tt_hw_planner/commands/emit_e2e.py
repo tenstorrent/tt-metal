@@ -2339,8 +2339,30 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     }
     # The gate resets the device from the MCP server's own process; without the run stamp it would
     # count its failures under a different run than this one (see device_recovery.stamp_run).
-    if _os.environ.get("PERF_MCP_RUN_ID"):
-        mcp_env["PERF_MCP_RUN_ID"] = _os.environ["PERF_MCP_RUN_ID"]
+    # THE RUN NEEDS AN IDENTITY BEFORE ITS FIRST DEVICE WORK, AND emit-e2e NEVER TOOK ONE.
+    #
+    # This copied the stamp only `if` the environment already held one -- and nothing in this process
+    # ever set it, so the condition was always false and the gate was launched unstamped. Two things
+    # rode on that and both were silently disabled:
+    #
+    #   * device_recovery's counters scope to the stamp, and stamp_run's own docstring records what
+    #     an empty one costs: "an emit-e2e run's three failed resets left reset_fails=3 there, and
+    #     every later emit-e2e refused to reset at all."
+    #   * the correctness cache keys on it, so `_correctness_key` returned None for every driver-side
+    #     gate -- it could neither record a pass nor reuse one. The agent's own gate runs under a
+    #     process that IS stamped, so the two sides used different key spaces and the ~70 min
+    #     correctness run was paid twice per round, every round, with the cache unable to help.
+    #
+    # stamp_run() is idempotent and never overwrites, so an operator's value still wins and a
+    # supervisor restart does not get a fresh budget.
+    try:
+        from models.experimental.perf_automation.agent.device_recovery import stamp_run
+
+        _run_id = stamp_run()
+    except Exception:  # noqa: BLE001 - no identity is survivable; silently losing one is not
+        _run_id = _os.environ.get("PERF_MCP_RUN_ID", "")
+    if _run_id:
+        mcp_env["PERF_MCP_RUN_ID"] = _run_id
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "e2e-mcp")
     cfg_path = thp_dir / f".e2e_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
     cfg_path.write_text(_json.dumps(cfg, indent=2))
