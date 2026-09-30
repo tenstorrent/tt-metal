@@ -91,3 +91,7 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   table takes 1.5 s fresh; its cache hit with an mmap-backed input never finishes (a cloned input hits in 0.6 s): the
   stale 940 MB embed tensorbin written by the first run made every later load spin. Moved the cache files to
   runs/run1/stale_cache, added a known_issues entry (fix: no cache_file_name for the embedding, or clone). Resumed.
+- 16:50-17:05 L.s4096: M.1 had passed on the orchestrator's precheck (no agent ran, so nobody applied the known-issue
+  fix) and wrote a fresh embed cache; the L.s4096 gate then spun in the cache hit again, and so did the fix agent's
+  second run. Stopped orchestrator, fix agent and test; overseer fix in tt/model.py: TtEmbedding cache=False by default
+  (fresh build 1.5 s), stale cache moved aside; resumed (L.s4096 precheck re-runs the rung).
