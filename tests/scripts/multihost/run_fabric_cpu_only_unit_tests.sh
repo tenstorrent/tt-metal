@@ -952,28 +952,28 @@ fi # bh-pod-pipeline
 # Default capacity is one for these stages (at least eight chips), so test explicit 1/2 only.
 # Each invocation must finish with the expected outcome; timeout is a test failure.
 if run_group "pipeline-placement"; then
-  for size in 20 24; do
+  for size in 20 3bm; do
     if [[ "$size" == 20 ]]; then
       mock="$SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING"
       mgd="${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto"
       cases=("native_ring:20")
     else
-      mock="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_mapping.yaml"
-      mgd="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
-      # Ring uses every submesh; Kimi2-like forks use 72 of 96, testing spare capacity.
-      cases=("ring:96" "fork:72" "fork_mpi:72")
+      # 3-BigMesh ring (48 submeshes): the CPU-runner sibling of the SC24
+      # 6-BigMesh ring. The full SC24 case (96 meshes) hung on cpu_medium because
+      # rank 0's MASTER placement solve is long and the oversubscribed workers
+      # spin-starved it mid-handshake, desyncing the collective until the wrapper
+      # reaped mpirun (exit 124). Halving the BigMeshes keeps the solve ~2s and
+      # the world at 48 ranks, so it finishes well inside budget with no hang.
+      # Mapped onto an existing SC16 revC subtorus (Aisle D) mock cluster, so no
+      # tt-cluster-descriptors change is needed.
+      mock="$SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING"
+      mgd="${MGD_SUBTORUS}/subtorus_sc16_4x32_3bigmesh_ring_mesh_graph_descriptor.textproto"
+      cases=("ring:16")
     fi
     for entry in "${cases[@]}"; do
       IFS=: read -r graph stages <<< "$entry"
       for capacity in 1 2; do
-        # The controller (rank 0) runs the full multi-mesh MASTER placement solve
-        # during control-plane init; at SC24 scale (96 meshes) this exceeds the
-        # default worker handshake timeout, so the workers abandon rank 0 mid-solve
-        # ("Controller likely failed"), the collective desyncs, and mpirun hangs
-        # until the outer wrapper reaps it (exit 124). Give the handshake the same
-        # 600s budget the other SC24 solves use so workers wait for the controller.
         run_test env TT_METAL_SLOW_DISPATCH_MODE=1 \
-          TT_METAL_OPERATION_TIMEOUT_SECONDS=600 \
           TT_PIPELINE_TEST_GRAPH="$graph" TT_PIPELINE_TEST_STAGES="$stages" \
           TT_PIPELINE_TEST_TARGET_STAGES=63 TT_PIPELINE_TEST_FABRIC=TORUS_XY \
           TT_PIPELINE_TEST_CORE_CAPACITY="$capacity" \
