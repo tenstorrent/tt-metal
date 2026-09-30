@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <vector>
 #include <map>
 #include <memory>
@@ -28,7 +29,7 @@
 
 namespace tt::tt_metal {
 
-// Exercises the device Semaphore class end-to-end across all three mechanisms. The
+// Exercises the device Semaphore class end-to-end across all four mechanisms. The
 // host resolves each semaphore's mechanism from a binder-topology census,
 // with nothing configurable on the SemaphoreSpec, so every test builds the shape
 // that makes the census pick the mechanism under test.
@@ -43,14 +44,17 @@ protected:
     const std::string kernel_path_census = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
     const std::string kernel_path_remote = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
     const std::string kernel_path_slot_probe = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_slot_probe.cpp";
+    const std::string kernel_path_compute = "tests/tt_metal/tt_metal/test_kernels/compute/test_compute_semaphore.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     std::vector<uint32_t> result;
 
+    virtual bool arch_supported() const { return arch_ == tt::ARCH::QUASAR; }
+
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        if (arch_ != tt::ARCH::QUASAR) {
+        if (!arch_supported()) {
             GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its DM specs set no config_1xx";
         }
         mesh_device_ = devices_[0];
@@ -508,6 +512,104 @@ protected:
         return {result[0], result[1]};
     }
 
+    // COMPUTE_ATOMIC: runs test_compute_semaphore.cpp as the only binder and returns its first `n_report` report words.
+    // Pattern D (`in` non-empty) also writes the input tiles, poisons the ring and output, and returns the output tiles
+    // in `out`. Region offsets mirror the kernel's kDInOffset / kDMidOffset / kDOutOffset.
+    static constexpr uint32_t kComputeDepth = 4;  // kernel kDepth, passed as the semaphore's max_value
+    static constexpr uint32_t kComputeMaxTiles = 8;
+    static constexpr uint32_t kTileWords = 32 * 32 * 2 / 4;
+    static constexpr uint32_t kInOffset = 0x40000;
+    static constexpr uint32_t kMidOffset = kInOffset + kComputeMaxTiles * kTileWords * 4;
+    static constexpr uint32_t kOutOffset = kMidOffset + kComputeDepth * kTileWords * 4;
+
+    struct ComputeRun {
+        uint32_t pattern = 0;
+        uint32_t thread_sel = 0;
+        uint32_t num_iters = 0;
+        uint32_t nosync = 0;
+        uint32_t batch = 1;
+        uint32_t max_value = 0;
+    };
+
+    std::vector<uint32_t> run_compute(
+        const ComputeRun& run, uint32_t n_report, std::vector<uint32_t> in = {}, std::vector<uint32_t>* out = nullptr) {
+        std::vector<uint32_t> zero_report(8, 0u);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero_report);
+        if (!in.empty()) {
+            std::vector<uint32_t> poison((kComputeDepth + kComputeMaxTiles) * kTileWords, kNoReport);
+            slow_dispatch::WriteToL1(*mesh_device_, core, report_addr + kInOffset, in);
+            slow_dispatch::WriteToL1(*mesh_device_, core, report_addr + kMidOffset, poison);  // mid and out
+        }
+
+        experimental::SemaphoreSpec sem{.unique_id = experimental::SemaphoreSpecName{"sem"}, .target_nodes = core};
+        sem.advanced_options.max_value = run.max_value;
+        const experimental::KernelSpecName COMPUTE{"compute"};
+        const experimental::KernelSpec ks{
+            .unique_id = COMPUTE,
+            .source = kernel_path_compute,
+            .num_threads = 1,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
+            .compile_time_args =
+                {{"pattern", run.pattern},
+                 {"thread_sel", run.thread_sel},
+                 {"nosync", run.nosync},
+                 {"batch", run.batch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_iters", "report_addr"}},
+            .hw_config = experimental::ComputeHardwareConfig{},  // double-buffered DST (pattern D: SyncHalf)
+        };
+        experimental::ProgramSpec spec{
+            .name = "sem_compute_atomic",
+            .kernels = {ks},
+            .semaphores = {sem},
+            .work_units = {{.name = "main", .kernels = {COMPUTE}, .target_nodes = core}},
+        };
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                core, {{"num_iters", run.num_iters}, {"report_addr", report_addr}}),
+        }};
+        experimental::SetProgramRunArgs(program, params);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, n_report * sizeof(uint32_t), result);
+        if (out != nullptr) {
+            slow_dispatch::ReadFromL1(
+                *mesh_device_, core, report_addr + kOutOffset, in.size() * sizeof(uint32_t), *out);
+        }
+        return result;
+    }
+
+    // Pattern D: num_tiles distinct Float16_b tiles through the ring. Returns the report; `mismatched` is the
+    // number of output tiles that differ from the input.
+    std::vector<uint32_t> run_compute_datacopy(uint32_t num_tiles, uint32_t nosync, uint32_t& mismatched) {
+        // Tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F): exact through a datacopy, distinct per tile.
+        std::vector<uint32_t> in(num_tiles * kTileWords);
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            for (uint32_t w = 0; w < kTileWords; ++w) {
+                const uint32_t lo = 0x4000u + (t << 7) + ((2 * w) & 0x7Fu);
+                const uint32_t hi = 0x4000u + (t << 7) + ((2 * w + 1) & 0x7Fu);
+                in[t * kTileWords + w] = (hi << 16) | lo;
+            }
+        }
+        std::vector<uint32_t> out;
+        auto report = run_compute(
+            {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kComputeDepth}, 4, in, &out);
+        mismatched = 0;
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            const auto first = t * kTileWords;
+            if (!std::equal(out.begin() + first, out.begin() + first + kTileWords, in.begin() + first)) {
+                ++mismatched;
+            }
+        }
+        return report;
+    }
+
     bool has_second_node() const {
         const auto grid = mesh_device_->compute_with_storage_grid_size();
         return grid.x >= 2 || grid.y >= 2;
@@ -520,6 +622,12 @@ protected:
     static constexpr uint32_t kNoReport = 0xDEADBEEFu;  // sentinel: outside every SemScope value
     static uint32_t scope_val(SemScope s) { return static_cast<uint32_t>(s); }
     uint32_t census_ring_word_{kNoReport};
+};
+
+// COMPUTE_ATOMIC tests: compute kernel only (no DM specs), so they also run on Blackhole.
+class SemScopeComputeFixture : public SemScopeFixture {
+protected:
+    bool arch_supported() const override { return arch_ == tt::ARCH::QUASAR || arch_ == tt::ARCH::BLACKHOLE; }
 };
 
 // A read-only observer binds the semaphore from a second node, forcing the NoC path; a
@@ -1129,4 +1237,142 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
     }) << "binding the same semaphore twice in one kernel must be rejected (it double-counts the census)";
 }
 
+// ---- COMPUTE_ATOMIC: the Tensix hardware semaphore, UNPACK <-> PACK ----
+// Index UNPACK_OPERAND_SYNC on Blackhole, PACK_UNPACK on Quasar. One kernel (test_compute_semaphore.cpp),
+// patterns A, D, E selected by the `pattern` compile-time arg.
+
+// Pattern E iterations: Blackhole runs long; the emulator's slow consumer keeps Quasar short
+// (64 = 16 ring capacities).
+static uint32_t bounded_producer_iters(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE ? 1024u : 64u; }
+
+// Pattern A: one thread drives set/up/down/wait/wait_min/value through a known value sequence. Run
+// once on UNPACK and once on PACK -- the same primitive must work from either thread.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicSelfCheckUnpack) {
+    const auto r = run_compute({.pattern = 0, .thread_sel = 0}, 6);
+    log_info(
+        LogTest,
+        "UNPACK self-check: pass={} v(after up5)={} v(after down3)={} v(after up1)={} fail_step={}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4]);
+    EXPECT_EQ(r[1], 5u);
+    EXPECT_EQ(r[2], 2u);
+    EXPECT_EQ(r[3], 3u);
+    EXPECT_EQ(r[0], 1u) << "UNPACK primitive self-check failed at step " << r[4];
+}
+
+TEST_F(SemScopeComputeFixture, TestComputeAtomicSelfCheckPack) {
+    const auto r = run_compute({.pattern = 0, .thread_sel = 2}, 6);
+    log_info(
+        LogTest,
+        "PACK self-check: pass={} v(after up5)={} v(after down3)={} v(after up1)={} fail_step={}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4]);
+    EXPECT_EQ(r[1], 5u);
+    EXPECT_EQ(r[2], 2u);
+    EXPECT_EQ(r[3], 3u);
+    EXPECT_EQ(r[0], 1u) << "PACK primitive self-check failed at step " << r[4];
+}
+
+// Pattern D: compute-only two-hop datacopy through a 4-slot L1 ring, no data-movement kernels. The host
+// writes distinct 32x32 Float16_b tiles straight into L1, poisons the ring and the output, and checks
+// out == in bit for bit. The semaphore is the only thing ordering PACK's write of each slot before
+// UNPACK's read of it.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicDatacopy) {
+    uint32_t mismatched = 0;
+    const auto r = run_compute_datacopy(kComputeMaxTiles, /*nosync=*/0, mismatched);
+    log_info(LogTest, "datacopy: packed={} final_sem={} mismatched_tiles={}", r[0], r[2], mismatched);
+    EXPECT_EQ(r[0], kComputeMaxTiles) << "PACK did not finish every tile";
+    EXPECT_EQ(r[2], 0u) << "semaphore did not settle to 0 -- up/down unbalanced";
+    EXPECT_EQ(mismatched, 0u) << "output != input: UNPACK read the ring before PACK's writes landed";
+}
+
+// Negative control: without semaphore operations, UNPACK reads each slot before PACK writes it, so the
+// output must NOT equal the input. If this passes the positive test above is not a detector.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicDatacopyNoSyncControl) {
+    uint32_t mismatched = 0;
+    const auto r = run_compute_datacopy(kComputeMaxTiles, /*nosync=*/1, mismatched);
+    log_info(
+        LogTest, "datacopy no-sync control: packed={} mismatched_tiles={} / {}", r[0], mismatched, kComputeMaxTiles);
+    EXPECT_EQ(r[0], kComputeMaxTiles);
+    EXPECT_GT(mismatched, 0u) << "unsynchronized datacopy came out correct -- the positive test is not a detector";
+}
+
+// Pattern E: PACK gates each up() with wait_not_full() against a capacity of kComputeDepth; the slow UNPACK
+// consumer's high-water mark must stay at the capacity and nothing may be lost. Report: produced, consumed,
+// high-water mark, final value, UNPACK timeout.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicBoundedProducer) {
+    const uint32_t num_iters = bounded_producer_iters(arch_);
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer: produced={} consumed={} high_water={} final={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out -- a post was lost";
+    EXPECT_EQ(r[1], num_iters) << "UNPACK did not consume every credit";
+    EXPECT_LE(r[2], kComputeDepth) << "producer ran past the capacity -- wait_not_full() did not hold it";
+    EXPECT_GE(r[2], 2u) << "consumer was never behind -- the test did not exercise back-pressure";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
+
+// Batched: wait_not_full(2); up(2) against the same capacity. Takes the RISC-poll form of wait_not_full
+// (no SEMWAIT condition for "room for n"; on Quasar it settles on the CSR Sync busy bit); the high-water
+// mark must still stay at the capacity. A wait that only reserved one slot would let up(2) reach
+// kComputeDepth + 1.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicBoundedProducerBatched) {
+    const uint32_t num_iters = bounded_producer_iters(arch_);
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .batch = 2, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer, batch 2: produced={} consumed={} high_water={} final={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out -- a post was lost";
+    EXPECT_EQ(r[1], num_iters) << "UNPACK did not consume every credit";
+    EXPECT_LE(r[2], kComputeDepth) << "batched producer ran past the capacity -- wait_not_full(2) reserved too little";
+    EXPECT_GE(r[2], 2u) << "consumer was never behind -- the test did not exercise back-pressure";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
+
+// Same run without wait_not_full().
+// Blackhole: negative control. PACK races to the 15-credit hardware ceiling (high-water mark above the
+// capacity) and the posts beyond it are dropped, so UNPACK cannot consume them all. If this passes the
+// positive test above is not a detector.
+// Quasar SEMPOST back-pressure: even without wait_not_full(), all credits survive
+// and the value stays at the programmed maximum. Unlike Blackhole, this is not a negative control
+// for wait_not_full(); it checks the hardware behavior on which completion of this run depends.
+TEST_F(SemScopeComputeFixture, TestComputeAtomicBoundedProducerNoWaitControl) {
+    constexpr uint32_t num_iters = 64;  // small: on Blackhole the consumer's timeout is the expected exit
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .nosync = 1, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer no-wait control: produced={} consumed={} high_water={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        EXPECT_GT(r[2], kComputeDepth) << "ungated producer never exceeded the capacity -- the positive test cannot "
+                                          "tell wait_not_full() from nothing";
+        EXPECT_LT(r[1], num_iters) << "every post survived without back-pressure -- saturation was not reached";
+        return;
+    }
+    EXPECT_EQ(r[0], num_iters) << "PACK did not finish every post";
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out waiting for a credit";
+    EXPECT_EQ(r[1], num_iters) << "Quasar lost a post at capacity";
+    EXPECT_EQ(r[2], kComputeDepth) << "expected hardware back-pressure at the programmed maximum";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
 }  // namespace tt::tt_metal
