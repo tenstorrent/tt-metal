@@ -428,6 +428,11 @@ def test_pipeline_distilled(
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
                 run(prompt=replay_prompt(extra + 2), number=extra + 2, seed=seed)
+            # LTX_SEEDS=0,1,2: one more replay per seed on the default prompt, written as ..._seed<N>.mp4,
+            # so a multi-seed reference set shares one load and one trace capture.
+            for s in filter(None, os.environ.get("LTX_SEEDS", "").split(",")):
+                logger.info(f"=== traced seed pass (seed {s}, pure replay) ===")
+                run(prompt=prompt, number=f"seed{s}", seed=int(s))
             # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
             # the timed gens because the dump forces the slower float readback instead of the yuv path.
             ref_frames = os.environ.get("LTX_REF_FRAMES")
