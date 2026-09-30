@@ -149,7 +149,7 @@ verify:
 # The chunked section below is a DRAFT: every {{...}} is a placeholder for a number measured on the republish build.
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. It is built for coding: 111 tokens/s per user on SPEED-Bench coding prompts at one user (119 on `single-user-dflash2`, 77 with the default thinking mode on) vs 36 plain. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. It is built for coding: 112 tokens/s per user on SPEED-Bench coding prompts at one user (119 on `single-user-dflash2`, 76 with the default thinking mode on) vs 36 plain. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
   quickstart: |
     ### Drafter weights (once, before the first `serve`)
 
@@ -168,9 +168,8 @@ card:
 
     ### Profiles
 
-    * `batch8-dflash2` (default): up to 8 concurrent requests. 7 drafts per step while up to 4 are live, 3 at 5 to 8; the switch happens at runtime and does not change any output.
+    * `batch8-dflash2` (default): up to 8 concurrent requests. 7 drafts per step while up to 4 are live, 3 at 5 to 8; the switch happens at runtime and does not change any output. A long prompt (8,192 tokens or more) that arrives while earlier requests decode is prefilled in 2,048-token chunks between their steps, so they keep streaming (worst pause 0.5-0.6 s instead of about 5 s) at the cost of that prompt's own time to first token.
     * `single-user-dflash2`: one request at a time; fastest for a single user.
-    * `batch8-dflash2-chunked`: `batch8-dflash2` for interactive traffic with long prompts; a long prompt joins in 2,048-token chunks between the other users' steps instead of pausing them (section below).
 
     ```bash
     tt-model serve changh95/qwen3.8-27b-dflash2-p300x2 --profile single-user-dflash2   # default: batch8-dflash2
@@ -187,82 +186,65 @@ card:
 
     | ISL | OSL | 1 user | 2 users | 4 users | 8 users | plain 1 user |
     |---|---|---|---|---|---|---|
-    | 128 | 128 | 56.2 (56.2) | 100.7 (53.1) | 182.2 (46.2) | 271.5 (34.9) | 32.3 |
-    | 1,024 | 128 | 53.3 (53.3) | 98.4 (49.9) | 158.8 (42.3) | 243.6 (31.3) | 31.3 |
-    | 2,048 | 128 | 51.6 (51.7) | 86.5 (44.4) | 131.8 (34.8) | 194.3 (24.9) | 30.7 |
-    | 4,096 | 128 | 45.8 (45.8) | 76.6 (38.8) | 103.5 (26.9) | 135.0 (17.1) | 28.8 |
-    | 8,192 | 128 | 35.1 (35.1) | 52.8 (26.5) | 71.8 (18.1) | 80.4 (10.4) | 25.9 |
-    | 16,384 | 128 | 26.0 (26.0) | 33.8 (17.1) | 40.9 (10.3) | 45.2 (5.7) | 21.2 |
-    | 32,768 | 128 | 16.1 (16.1) | 19.8 (10.2) | 22.0 (5.6) | 23.3 (2.9) | 15.1 |
-    | 65,536 | 128 | 9.7 (9.7) | 10.3 (5.2) | 10.7 (2.7) | 9.8 (1.2) | 9.2 |
+    | 128 | 128 | 56.1 (56.2) | 100.6 (53.1) | 182.3 (46.2) | 273.2 (35.1) | 32.3 |
+    | 1,024 | 128 | 53.6 (53.6) | 99.0 (50.2) | 159.6 (42.5) | 244.0 (31.4) | 31.3 |
+    | 2,048 | 128 | 51.4 (51.4) | 86.6 (44.4) | 131.5 (34.8) | 194.3 (24.9) | 30.7 |
+    | 4,096 | 128 | 45.7 (45.8) | 76.7 (38.8) | 102.8 (26.7) | 134.9 (17.1) | 28.8 |
+    | 8,192 | 128 | 35.0 (35.0) | 53.2 (26.7) | 68.8 (17.8) | 80.1 (10.4) | 25.9 |
+    | 16,384 | 128 | 26.0 (26.0) | 33.5 (16.9) | 38.5 (10.2) | 44.0 (5.7) | 21.2 |
+    | 32,768 | 128 | 16.3 (16.3) | 19.7 (10.2) | 22.1 (5.6) | 23.3 (2.9) | 15.1 |
+    | 65,536 | 128 | 9.7 (9.7) | 10.3 (5.2) | 10.7 (2.7) | 9.8 (1.3) | 9.2 |
     | 131,072 | 128 | 4.4 (4.4) | 4.6 (2.3) | 4.7 (1.2) | – | 4.6 |
-    | 128 | 1024 | 51.4 (51.4) | 86.7 (43.9) | 168.1 (49.1) | 297.3 (41.8) | 32.6 |
-    | 8,192 | 1024 | 57.6 (57.6) | 63.3 (33.3) | 125.5 (36.3) | 198.5 (30.1) | 31.1 |
-    | 10,000 | 1024 | 58.5 (58.5) | 64.5 (33.9) | 102.1 (33.5) | 185.8 (26.3) | 30.9 |
+    | 128 | 1024 | 51.4 (51.4) | 86.8 (43.9) | 168.3 (49.2) | 297.8 (41.9) | 32.6 |
+    | 8,192 | 1024 | 57.5 (57.5) | 62.7 (33.0) | 123.3 (36.0) | 196.9 (29.8) | 31.1 |
+    | 10,000 | 1024 | 58.5 (58.5) | 63.6 (33.4) | 100.1 (33.1) | 184.0 (26.0) | 30.9 |
 
-    * A dash = the KV pool does not seat that many users at that length (the workflow skips the point). At 1 to 4 users the server drafts 7 tokens per step; at 5 to 8, 3 per step.
+    * A dash = the KV pool does not seat that many users at that length (the workflow skips the point). At 1 to 4 users the server drafts 7 tokens per step; at 5 to 8, 3 per step. Long prompts (8k tokens or more) that arrive while other users decode are prefilled in 2,048-token chunks, which keeps the other users' tokens flowing and raises that prompt's own TTFT.
 
     ### `single-user-dflash2`, one user
 
     | ISL | OSL | TTFT ms | TPOT ms | t/s/u | plain t/s/u |
     |---|---|---|---|---|---|
-    | 128 | 128 | 134 | 15.0 | 62.7 | 32.3 |
-    | 1,024 | 128 | 183 | 14.2 | 64.3 | 31.3 |
-    | 2,048 | 128 | 304 | 16.0 | 54.9 | 30.7 |
-    | 4,096 | 128 | 594 | 17.5 | 45.4 | 28.8 |
-    | 8,192 | 128 | 1,187 | 16.1 | 39.6 | 25.9 |
-    | 16,384 | 128 | 2,460 | 17.0 | 27.7 | 21.2 |
-    | 32,768 | 128 | 5,073 | 21.2 | 16.5 | 15.1 |
-    | 65,536 | 128 | 11,163 | 20.8 | 9.3 | 9.2 |
-    | 131,072 | 128 | 26,055 | 12.1 | 4.6 | 4.6 |
-    | 128 | 1024 | 135 | 12.1 | 82.1 | 32.6 |
-    | 8,192 | 1024 | 1,197 | 17.9 | 52.5 | 31.1 |
-    | 10,000 | 1024 | 1,515 | 14.3 | 63.6 | 30.9 |
+    | 128 | 128 | 135 | 16.2 | 58.5 | 32.3 |
+    | 1,024 | 128 | 182 | 16.3 | 56.8 | 31.3 |
+    | 2,048 | 128 | 300 | 16.9 | 52.4 | 30.7 |
+    | 4,096 | 128 | 597 | 18.4 | 43.8 | 28.8 |
+    | 8,192 | 128 | 1,184 | 20.0 | 34.4 | 25.9 |
+    | 16,384 | 128 | 2,436 | 19.5 | 26.1 | 21.2 |
+    | 32,768 | 128 | 5,077 | 18.4 | 17.3 | 15.1 |
+    | 65,536 | 128 | 11,109 | 18.7 | 9.5 | 9.2 |
+    | 131,072 | 128 | 26,006 | 17.2 | 4.5 | 4.6 |
+    | 128 | 1024 | 134 | 12.5 | 79.0 | 32.6 |
+    | 8,192 | 1024 | 1,182 | 11.2 | 80.9 | 31.1 |
+    | 10,000 | 1024 | 1,493 | 11.4 | 77.9 | 30.9 |
+
+    * Median of 3 runs per row; the run-to-run spread is at most 2.3% on TTFT, 2.0% on TPOT and 1.2% on t/s/u. (The plain column is unchanged from the published card.)
 
     ### Code (SPEED-Bench `coding`, 80 prompts; greedy; answers end at EOS), t/s (tok/s per user); speed-up per user
 
     | thinking | users | `batch8-dflash2` | `single-user-dflash2` | plain | speed-up |
     |---|---|---|---|---|---|
-    | off | 1 | 84 (111) | 95 (119) | 35 (36) | 3.3× |
-    | off | 2 | 152 (107) | – | – | – |
-    | off | 4 | 247 (102) | – | – | – |
-    | off | 8 | 233 (60) | – | 111 (23) | 2.6× |
-    | on | 1 | 73 (77) | 80 (83) | – | – |
-    | on | 2 | 143 (76) | – | – | – |
-    | on | 4 | 268 (73) | – | – | – |
-    | on | 8 | 397 (55) | – | 218 (29) | 1.9× |
+    | off | 1 | 84 (112) | 95 (119) | 35 (36) | 3.3× |
+    | off | 8 | 211 (59) | – | 111 (23) | 2.6× |
+    | on | 1 | 73 (76) | 80 (83) | – | – |
+    | on | 8 | 396 (55) | – | 218 (29) | 1.9× |
 
-    * Per-user speed = 1000 / mean time per output token (decode only); `t/s` = aggregate output tokens per second over the run, which includes prefill and the gaps between a user's requests. `thinking off` passes `"chat_template_kwargs": {"enable_thinking": false}`; `thinking on` is the served default (the harness's prompts), with answers capped at 4,096 tokens. Speed-up = per-user speed of the faster speculative profile over plain decode at the same user count.
 
-    ### `batch8-dflash2-chunked`: long prompts while others decode
+    * Per-user speed = 1000 / mean time per output token (decode only); `t/s` = aggregate output tokens per second over the run, which includes prefill and the gaps between a user's requests. `thinking off` passes `"chat_template_kwargs": {"enable_thinking": false}`; `thinking on` is the served default (the harness's prompts), with answers capped at 4,096 tokens. Requests are greedy (`temperature` 0). Speed-up = per-user speed of the faster speculative profile over plain decode at the same user count.
 
-    Same model, drafter and 8 slots as `batch8-dflash2`. The difference is how a long prompt joins. In `batch8-dflash2`, a prompt is prefilled in one go and every other user stops decoding until it finishes. In this profile, a prompt longer than 2,048 tokens that arrives while others are decoding is prefilled in 2,048-token chunks, one chunk every 4 speculative steps, so the other users keep decoding. A short prompt can share a chunk step. With nobody else decoding, the prompt is prefilled whole, exactly as in `batch8-dflash2`.
+    ### Chat (SPEED-Bench `qa`, `roleplay`, `writing`, `humanities`, 80 prompts each; greedy), tok/s per user
 
-    * Pick it for interactive multi-user chat where long documents arrive now and then. Keep `batch8-dflash2` for batch jobs and bursts of long prompts.
-    * What it costs: the long prompt's own time to first token goes up ({{TTFT_32K_OFF}} s -> {{TTFT_32K_ON}} s at 32k tokens), and so does total time when several long prompts arrive at once (burst table below).
-    * Output: lossless like `batch8-dflash2` (the greedy trajectory, up to bf16 near-ties). When the KV pool fills and vLLM preempts a request, the preempted request is recomputed through prefill, as it is without chunking; chunking makes that more likely because a partly prefilled prompt holds its blocks longer. At boot the server warns that the 525K-token pool is smaller than 8 × 262,144.
+    | thinking | category | 1 user `batch8-dflash2` | 1 user `single-user-dflash2` | 8 users `batch8-dflash2` (t/s total) | code, same column |
+    |---|---|---|---|---|---|
+    | off | qa | 61 | 64 | 44 (344) | 112 / 119 / 59 |
+    | off | roleplay | 59 | 63 | 33 (248) | |
+    | off | writing | 60 | 64 | 49 (365) | |
+    | off | humanities | 64 | 65 | 42 (215) | |
+    | on | qa | 72 | 78 | 54 (421) | 76 / 83 / 55 |
+    | on | roleplay | 65 | 70 | 49 (373) | |
+    | on | writing | 67 | 73 | 52 (387) | |
+    | on | humanities | 63 | 67 | 49 (341) | |
 
-    #### Mixed load, `batch8-dflash2` -> `batch8-dflash2-chunked`
+    * Per-user speed = 1000 / mean time per output token. Thinking on caps answers at 4,096 tokens. The drafter accepts fewer tokens on chat than on code: 3.3-3.7 tokens committed per verify step, against 4.8-5.0 for code, with thinking off at 1 user. The step itself costs the same (about 52-55 ms). Plain decode runs at about 31-33 tok/s per user at these lengths.
 
-    Each row's users decode continuously (128-token prompts, 1,024-token answers, one request after another) while a long prompt arrives every 20 s, alternating 8k and 32k tokens. A pause is the longest gap between two tokens of a decoding user.
-
-    | decoding users | worst pause for decoding users (s) | decoding users' t/s/u during a long prefill | 32k-prompt TTFT (s) | aggregate t/s |
-    |---|---|---|---|---|
-    | 1 | {{ML1_GAP_OFF}} -> {{ML1_GAP_ON}} | {{ML1_DEC_OFF}} -> {{ML1_DEC_ON}} | {{ML1_TTFT_OFF}} -> {{ML1_TTFT_ON}} | {{ML1_AGG_OFF}} -> {{ML1_AGG_ON}} |
-    | 4 | {{ML4_GAP_OFF}} -> {{ML4_GAP_ON}} | {{ML4_DEC_OFF}} -> {{ML4_DEC_ON}} | {{ML4_TTFT_OFF}} -> {{ML4_TTFT_ON}} | {{ML4_AGG_OFF}} -> {{ML4_AGG_ON}} |
-    | 7 | {{ML7_GAP_OFF}} -> {{ML7_GAP_ON}} | {{ML7_DEC_OFF}} -> {{ML7_DEC_ON}} | {{ML7_TTFT_OFF}} -> {{ML7_TTFT_ON}} | {{ML7_AGG_OFF}} -> {{ML7_AGG_ON}} |
-    | 7 (coding prompts) | {{ML7C_GAP_OFF}} -> {{ML7C_GAP_ON}} | {{ML7C_DEC_OFF}} -> {{ML7C_DEC_ON}} | {{ML7C_TTFT_OFF}} -> {{ML7C_TTFT_ON}} | {{ML7C_AGG_OFF}} -> {{ML7C_AGG_ON}} |
-    | 6 + a 512-token prompt every 3 s | {{MLR_GAP_OFF}} -> {{MLR_GAP_ON}} | {{MLR_DEC_OFF}} -> {{MLR_DEC_ON}} | {{MLR_TTFT_OFF}} -> {{MLR_TTFT_ON}} | {{MLR_AGG_OFF}} -> {{MLR_AGG_ON}} |
-
-    #### Long prompts in a burst (all sent at once), `batch8-dflash2` vs `batch8-dflash2-chunked`
-
-    | prompts | `batch8-dflash2`: total time (s) / t/s | `batch8-dflash2-chunked`: total time (s) / t/s | t/s change |
-    |---|---|---|---|
-    | 4 × 8k | {{B8K4_OFF_T}} / {{B8K4_OFF_TPS}} | {{B8K4_ON_T}} / {{B8K4_ON_TPS}} | {{B8K4_D}} |
-    | 8 × 8k | {{B8K8_OFF_T}} / {{B8K8_OFF_TPS}} | {{B8K8_ON_T}} / {{B8K8_ON_TPS}} | {{B8K8_D}} |
-    | 4 × 32k | {{B32K4_OFF_T}} / {{B32K4_OFF_TPS}} | {{B32K4_ON_T}} / {{B32K4_ON_TPS}} | {{B32K4_D}} |
-    | 8 × 32k | {{B32K8_OFF_T}} / {{B32K8_OFF_TPS}} | {{B32K8_ON_T}} / {{B32K8_ON_TPS}} | {{B32K8_D}} |
-
-    * The random-prompt grid above was measured on `batch8-dflash2`. On `batch8-dflash2-chunked`, with a single user, the grid equals `batch8-dflash2` because the prompt is prefilled whole ({{GRID_CHUNKED_NOTE}}).
-    * Burst-oriented use of this profile: the tt-model arguments after the repo id go to vLLM, and the last `--additional-config` wins, so pass the whole object with `"chunked_prefill_burst_longs": 2` added. With 2 or more long prompts waiting, each is prefilled whole, as in `batch8-dflash2`, which brings back both its burst throughput and its pauses:
-      `tt-model serve changh95/qwen3.8-27b-dflash2-p300x2 --profile batch8-dflash2-chunked --additional-config '{"tt": {"fabric_config": "FABRIC_1D", "trace_region_size": 1073741824, "l1_small_size": 24576, "sample_on_device_mode": "decode_only", "prefill_chunk_tokens": 2048, "chunked_prefill_decode_steps": 4, "chunked_prefill_burst_longs": 2}}'`
+    * The plain columns are the plain package's published measurements (2026-09-12).
