@@ -149,12 +149,20 @@ class MiniMaxH3TransformerBlock(Module):
             )
         )
 
+        # HiFi2 + fp32 destination accumulate is the default because it is the right answer for a
+        # bf16 weight. A profile that narrows the weights may also want to narrow the arithmetic, so
+        # the two matmul precision knobs come from the quant policy when it sets them -- see
+        # `MiniMaxH3QuantProfile.compute_kernel_kwargs`. No profile, or a profile that leaves them
+        # unset, gets exactly these defaults.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            **{
+                "math_fidelity": ttnn.MathFidelity.HiFi2,
+                "math_approx_mode": True,
+                "fp32_dest_acc_en": True,
+                "packer_l1_acc": True,
+                **quant.compute_kernel_kwargs(),
+            },
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.

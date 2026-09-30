@@ -92,6 +92,10 @@ _QUANT_BY_WEIGHTS = {
     "checkpoint": None,
     "checkpoint_bf8": "bf8_weights",
     "checkpoint_bf8_out": "bf8_weights_bf8_out",
+    # Same weights and the same cache as checkpoint_bf8_out -- only the matmul arithmetic differs
+    # (no fp32 destination accumulate), which is why it needs its own PCC row and cannot be inferred
+    # from the bf8_out one.
+    "checkpoint_bf8_out_nofp32acc": "bf8_weights_bf8_out_nofp32acc",
 }
 NUM_REFINER_LAYERS = 2
 IN_CHANNELS = 24
@@ -454,6 +458,23 @@ def _prepare_tt_inputs(
         # understated a hundredfold would be measuring it where it cannot matter.
         pytest.param(
             15, 74, 448, (8, 8), (), "checkpoint_bf8_out", 50, None, id="golden_shape_full_depth_real_weights_bf8_out"
+        ),
+        # The same storage policy with fp32 destination accumulation off -- worth 3.0% of a block's
+        # device time at the served p150 shape. Arithmetic precision is the one axis this test exists
+        # to bound, and it is a DEPTH question: one matmul accumulating in bf16 rather than fp32 is a
+        # small error, and what matters is whether 50 blocks of it stay inside the bar the quantized
+        # rows already hold. (LoFi, the bigger 9.6% win, was measured here too and scored 0.9863 --
+        # under the bar, so it is not offered as a profile.)
+        pytest.param(
+            15,
+            74,
+            448,
+            (8, 8),
+            (),
+            "checkpoint_bf8_out_nofp32acc",
+            50,
+            None,
+            id="golden_shape_full_depth_real_weights_bf8_out_nofp32acc",
         ),
         # THE PRODUCTION p150 PATH, which nothing measured numerically before: full depth, real
         # checkpoint, real published Turbo adapter, and the quantized weights the adapter is merged

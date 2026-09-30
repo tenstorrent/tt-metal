@@ -10,6 +10,8 @@ then one of them silently reads the other's weights back into a Parameter of the
 field that changes what gets written therefore has to change the cache tag.
 """
 
+from dataclasses import replace
+
 import pytest
 
 import ttnn
@@ -47,9 +49,62 @@ def test_presets_resolve_by_name_and_reject_typos(expect_error):
         resolve_quant_profile("bf8")
 
 
-def test_cache_tags_are_distinct_for_every_shipped_preset():
-    tags = {name: PRESETS[name]().cache_tag for name in PRESETS}
-    assert len(set(tags.values())) == len(tags), tags
+# The fields that decide what bytes the device-weight cache holds. `mm_math_fidelity` and
+# `mm_fp32_dest_acc_en` are deliberately absent: they change how the matmul unit reads a stored tile,
+# not what is stored, so two profiles that differ only in them must share a cache directory.
+STORAGE_FIELDS = ("qkv_dtype", "out_dtype", "ff_dtype", "activation_dtype", "pin_output_bf16", "bf16_blocks")
+
+
+def _storage(profile) -> tuple:
+    return tuple(getattr(profile, field) for field in STORAGE_FIELDS)
+
+
+def test_a_cache_tag_is_never_shared_by_two_DIFFERENT_storage_policies():
+    """The invariant is per-BYTES, not per-preset.
+
+    This used to assert that every shipped preset had a tag of its own, which held only while the
+    policy was pure storage. `bf8_weights_bf8_out_nofp32acc` writes byte-identical tensorbins to
+    `bf8_weights_bf8_out` and differs only in arithmetic, so it SHOULD share the directory -- reusing
+    the cache is most of why it costs 110 s to build rather than 240 s. What must never happen is the
+    original failure: two policies that write different bytes landing in one directory, where one
+    silently reads the other's weights back into a Parameter of the wrong dtype.
+    """
+    by_tag: dict[str, list[tuple[str, tuple]]] = {}
+    for name in PRESETS:
+        profile = PRESETS[name]()
+        by_tag.setdefault(profile.cache_tag, []).append((name, _storage(profile)))
+    for tag, entries in by_tag.items():
+        distinct = {storage for _, storage in entries}
+        assert len(distinct) == 1, f"cache tag {tag!r} is shared by differing storage policies: {entries}"
+
+
+def test_the_arithmetic_only_preset_shares_its_storage_twin_cache():
+    """Stated as its own check, because it is an intent and not a coincidence."""
+    base = MiniMaxH3QuantProfile.bf8_weights_bf8_out()
+    fast = MiniMaxH3QuantProfile.bf8_weights_bf8_out_nofp32acc()
+    assert _storage(fast) == _storage(base)
+    assert fast.cache_tag == base.cache_tag
+    assert fast.name != base.name
+
+
+def test_compute_kernel_kwargs_are_empty_unless_the_policy_sets_them():
+    """Every profile that says nothing about arithmetic must leave the block's defaults alone."""
+    for name in PRESETS:
+        profile = PRESETS[name]()
+        expected = {} if name != "bf8_weights_bf8_out_nofp32acc" else {"fp32_dest_acc_en": False}
+        assert profile.compute_kernel_kwargs() == expected, name
+
+
+def test_compute_kernel_kwargs_pass_through_a_fidelity_when_one_is_set():
+    profile = MiniMaxH3QuantProfile.bf8_weights_bf8_out()
+    assert profile.compute_kernel_kwargs() == {}
+    lofi = replace(profile, mm_math_fidelity=ttnn.MathFidelity.LoFi, mm_fp32_dest_acc_en=True)
+    assert lofi.compute_kernel_kwargs() == {
+        "math_fidelity": ttnn.MathFidelity.LoFi,
+        "fp32_dest_acc_en": True,
+    }
+    # ... and it is still the same weights on disk.
+    assert lofi.cache_tag == profile.cache_tag
 
 
 @pytest.mark.parametrize(

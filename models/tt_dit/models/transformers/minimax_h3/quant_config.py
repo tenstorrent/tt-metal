@@ -72,6 +72,16 @@ class MiniMaxH3QuantProfile:
     activation_dtype: ttnn.DataType | None = None
     pin_output_bf16: bool = False
     bf16_blocks: tuple[int, ...] = ()
+    # Arithmetic precision, as opposed to storage precision. `None` on both means "whatever the
+    # block has always done" -- HiFi2 with fp32 destination accumulation -- so every profile that
+    # does not mention them, and the no-profile bf16 path, builds exactly the model it built before.
+    #
+    # These are a POLICY knob and not a free one: they decide how many mantissa passes the matmul
+    # unit makes over a bfloat8_b tile and whether the destination register accumulates in fp32, so
+    # they belong beside the weight dtypes rather than hardcoded in the block. Stage 05 listed the
+    # fidelity sweep as not-measured precisely because there was no knob here to sweep.
+    mm_math_fidelity: ttnn.MathFidelity | None = None
+    mm_fp32_dest_acc_en: bool | None = None
 
     @property
     def cache_tag(self) -> str:
@@ -129,6 +139,19 @@ class MiniMaxH3QuantProfile:
             "pin_output_bf16": self.pin_output_bf16,
         }
 
+    def compute_kernel_kwargs(self) -> dict:
+        """``init_device_compute_kernel_config`` overrides for the block's four matmuls.
+
+        Only the keys this profile actually sets, so the block keeps its own defaults for the rest
+        and an unset profile is indistinguishable from no profile at all.
+        """
+        kwargs = {}
+        if self.mm_math_fidelity is not None:
+            kwargs["math_fidelity"] = self.mm_math_fidelity
+        if self.mm_fp32_dest_acc_en is not None:
+            kwargs["fp32_dest_acc_en"] = self.mm_fp32_dest_acc_en
+        return kwargs
+
     def stack_bytes(self, *, hidden_size: int, inner_dim: int, ffn_dim: int, num_layers: int) -> float:
         """Device bytes the block stack's four linears take under this profile.
 
@@ -174,6 +197,36 @@ class MiniMaxH3QuantProfile:
         )
 
     @staticmethod
+    def bf8_weights_bf8_out_nofp32acc() -> MiniMaxH3QuantProfile:
+        """``bf8_weights_bf8_out`` with the block matmuls' fp32 destination accumulate turned off.
+
+        Same 20.5 GB and the SAME cached tensorbins -- this changes the arithmetic, not the storage,
+        so ``cache_tag`` is deliberately unchanged and a device-weight cache written under
+        ``bf8_weights_bf8_out`` is reused as-is.
+
+        fp32 destination accumulation halves the usable destination-register tiles, which costs
+        blocking freedom on the four large block matmuls, and it buys precision the INPUTS cannot
+        carry: a bfloat8_b tile is an 8-bit mantissa against one shared exponent per 16 values, so
+        the accumulator is not what bounds the error. Measured on one real block at the served p150
+        shape (1344x768 x73, 22464 padded rows, three warm samples each):
+
+            HiFi2 + fp32_dest_acc   262.62 ms   (the default)
+            HiFi2                   254.71 ms   (-3.0%, this profile)
+            LoFi  + fp32_dest_acc   239.20 ms   (-8.9%)
+            LoFi                    237.45 ms   (-9.6%)
+
+        LoFi is the bigger win and is deliberately NOT offered: at full depth on the real checkpoint
+        it scores video PCC 0.9863 against the 0.99 bar every quantized row here holds, i.e. it costs
+        0.0064 of PCC against ``bf8_weights_bf8_out``'s 0.9927. Dropping to one mantissa pass over a
+        bf8 tile is a real fidelity loss and 50 blocks accumulate it; the accumulator width is not.
+        """
+        return replace(
+            MiniMaxH3QuantProfile.bf8_weights_bf8_out(),
+            name="bf8_weights_bf8_out_nofp32acc",
+            mm_fp32_dest_acc_en=False,
+        )
+
+    @staticmethod
     def bf4_ff(bf16_blocks: tuple[int, ...] = ()) -> MiniMaxH3QuantProfile:
         """``bf8_weights_bf8_out`` with the two feed-forward linears dropped to bf4: 12.0 GB.
 
@@ -212,10 +265,15 @@ class MiniMaxH3QuantProfile:
 PRESETS = {
     "bf8_weights": MiniMaxH3QuantProfile.bf8_weights,
     "bf8_weights_bf8_out": MiniMaxH3QuantProfile.bf8_weights_bf8_out,
+    "bf8_weights_bf8_out_nofp32acc": MiniMaxH3QuantProfile.bf8_weights_bf8_out_nofp32acc,
     "bf4_ff": MiniMaxH3QuantProfile.bf4_ff,
     # bf4 feed-forward with the first and last block pinned back to bf16 -- the sweep's accuracy
     # escape hatch, 385 MB a block. Named here so it is reachable from a command line.
-    "bf4_ff_keep_ends": lambda: MiniMaxH3QuantProfile.bf4_ff(bf16_blocks=(0, -1)),
+    #
+    # The `replace` is not cosmetic: `bf4_ff()` names itself "bf4_ff" whatever `bf16_blocks` it is
+    # given, so without it this preset resolves to a profile that calls itself by the other preset's
+    # name, and `name` is what every run's RESULT json records as the policy it ran under.
+    "bf4_ff_keep_ends": lambda: replace(MiniMaxH3QuantProfile.bf4_ff(bf16_blocks=(0, -1)), name="bf4_ff_keep_ends"),
     "bf16": MiniMaxH3QuantProfile.bf16,
 }
 
