@@ -24,6 +24,8 @@ state.json: {task id: {status, attempts, last_run, duration_s, rc, metrics, log,
 
 DEFERRED (F46): a component the implement agent deferred to the op code generator (plan/op_request.py). It stays on
 the CPU reference through the bridge (testing/cpu_bridge.py), so for its dependents it counts like PASS.
+
+REJECTED (F57): a perf pick the owner declined on its A/B report; the change was reverted. Done for its dependents.
 """
 
 from __future__ import annotations
@@ -36,8 +38,8 @@ from pathlib import Path
 
 import yaml
 
-STATUSES = ("TODO", "RUNNING", "PASS", "FAIL", "HANG", "BLOCKED", "STOPPED", "DEFERRED")
-DONE_STATUSES = ("PASS", "DEFERRED")  # a dependent may run after either
+STATUSES = ("TODO", "RUNNING", "PASS", "FAIL", "HANG", "BLOCKED", "STOPPED", "DEFERRED", "REJECTED")
+DONE_STATUSES = ("PASS", "DEFERRED", "REJECTED")  # a dependent may run after any
 
 
 def satisfied(status: str | None) -> bool:
