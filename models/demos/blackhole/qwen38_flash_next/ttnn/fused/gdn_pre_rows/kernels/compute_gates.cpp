@@ -81,7 +81,7 @@ ALWI void gates() {
         add_binary_tile_init();
         add_binary_tile<ckernel::DstRoundingMode::NearestEven>(dst0, dst1, dst0);
         softplus_tile_init();
-        softplus_tile(dst0, F_ONE, F_ONE, F_TWENTY);
+        qwen38_softplus_tile(dst0, F_ONE, F_ONE, F_TWENTY);
         copy_tile(CB_CONST, CONST_NEG_EXP_A, dst1);
         mul_binary_tile_init();
         mul_binary_tile(dst0, dst1, dst0);
