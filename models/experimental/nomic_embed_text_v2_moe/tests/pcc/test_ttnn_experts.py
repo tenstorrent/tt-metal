@@ -20,6 +20,7 @@ from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe import NomicExperts
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
+    DECORRELATED_PCC,
     MOE_LAYER,
     TOKEN_SHAPES,
     dense_routing,
@@ -29,20 +30,36 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.experts import (
-    MAX_TILE_ROWS_MEASURED_SAFE,
-    MAX_TILE_ROWS_PER_CORE,
+    MAX_TOKENS_PER_PASS,
+    TOKEN_MAJOR_MAX_TOKENS,
     TtNomicExperts,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import expert_w1_transposed_config
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
-# Two chained matmuls, one 768-deep and one 3072-deep, in bfloat16.
+# Two chained matmuls, one 768-deep and one 3072-deep, with bfloat8_b weights and intermediate.
 MODULE_PCC = 0.998
 
 # The shared-bias offset the wrong placement leaves behind. Measured well above this; PCC cannot
 # see it at all.
 BIAS_MISPLACEMENT_MAX_ABS = 1e-3
+
+# Splits that change the arithmetic: the two pass layouts run different programs over the same
+# products, the transposed ones pick K blocks by pass size, and only they write the w2 output in
+# bfloat8_b. Over seeds 0..7 at TOKEN_SHAPES and (3, 100), a token-major split scores 0.99976 at
+# worst against the whole transposed pass, 0.99980 with that output in bfloat16.
+LAYOUT_SWITCH_PCC = 0.9995
+
+# The same splits, token by token: the error norm of a token's output relative to its norm in the
+# whole pass. Measured at 5.4e-02 at worst over the same seeds and shapes. A token zeroed or
+# crushed at a pass boundary scores 1.0, and PCC over the whole output hardly moves for it.
+LAYOUT_SWITCH_TOKEN_ERROR = 0.15
+
+# TOKEN_SHAPES plus a transposed pass off the tile grid: 300 tokens, padded to 320.
+EXPERT_SHAPES = [*TOKEN_SHAPES, (3, 100)]
 
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp.experts."
 
@@ -77,7 +94,7 @@ def run_both(device, config, reference, tt_experts, batch, seqlen):
     return ref, ttnn.to_torch(out).float().reshape(batch, seqlen, config.hidden_size), dense
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", EXPERT_SHAPES)
 def test_experts(device, config, reference, tt_experts, batch, seqlen):
     """Every token through every expert, gated by the routing and summed."""
     ref, got, _ = run_both(device, config, reference, tt_experts, batch, seqlen)
@@ -85,47 +102,60 @@ def test_experts(device, config, reference, tt_experts, batch, seqlen):
     assert_with_pcc(ref, got, MODULE_PCC)
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", EXPERT_SHAPES)
 def test_the_expert_reduce_covers_every_token(device, config, reference, tt_experts, batch, seqlen):
-    """fast_reduce_nc reports the tile-padded row count, so the module has to slice back to T.
+    """The expert sum keeps the logical token count in both layouts.
 
-    At T=74 it returns 96 rows with the trailing 22 zero. Left unsliced the logical shape is
-    wrong even though the data is right, and the error would surface as a shape mismatch several
-    modules later. Off-tile token counts are in TOKEN_SHAPES for exactly this.
+    Left to allocate its output, fast_reduce_nc reports the tile-padded count, 96 rows at T=74
+    with the trailing 22 zero, so the module hands it an output of the logical shape. A wrong
+    logical shape would surface as a shape mismatch several modules later. 2x37 and 3x100 are
+    off-tile token counts in each layout for exactly this.
     """
     ref, got, _ = run_both(device, config, reference, tt_experts, batch, seqlen)
 
     assert got.shape == ref.shape
-    # No all-zero token rows: a token dropped by a bad slice would leave one behind.
+    # No all-zero token rows: a dropped token would leave one behind.
     assert (got.abs().sum(dim=-1) > 0).all()
 
 
-def test_the_pass_size_keeps_one_output_tile_row_per_core(device, config, tt_config, tt_experts):
-    """The pass size has to hold per_core_M at 1, which is what avoids the matmul hang.
+def test_one_pass_covers_the_largest_perf_shape(config, tt_config, tt_experts):
+    """8x512 runs as one pass, and the transposed w1 keeps its measured blocking at that size.
 
-    A regression here hangs the board rather than failing an assert, so the derivation is pinned
-    rather than probed; tt/experts.py carries the mechanism. The 110-tile cap is pinned apart
-    from the per-core rule because the boundary did not move with the requested core grid, so
-    deriving from the core count alone would silently raise the limit on a wider board. The
-    operand widths are pinned because what must stay 1 is h_dim * w_dim, making the bound joint
-    in M and N: at 32 tile rows, N=3072 passes and N=4096 hangs.
+    The pass size caps the w1 intermediate; past it the token axis is split. At 4096 tokens a core
+    holds 13 token tiles, taken in N blocks of 2 beside a 14-tile M block. The config halves the N
+    block until its buffers fit, so a pass size L1 cannot hold shows up here as a block of 1.
     """
-    cores = tt_config.core_grid.x * tt_config.core_grid.y
+    assert tt_experts.max_tokens_per_pass == MAX_TOKENS_PER_PASS >= 8 * 512
+    w1 = expert_w1_transposed_config(
+        config.hidden_size // ttnn.TILE_SIZE,
+        MAX_TOKENS_PER_PASS,
+        tt_config.matmul_weight_dtype(OpGroup.EXPERT_W1),
+        tt_config.activation_dtype,
+        tt_config.expert_intermediate_dtype,
+        tt_config.core_grid,
+        tt_config.l1_cb_bytes,
+        tt_config.compute_kernel_config(OpGroup.EXPERT_W1),
+    )
+    assert w1.N_block_size > 1
 
-    assert tt_experts.max_tokens_per_pass == min(cores, MAX_TILE_ROWS_MEASURED_SAFE) * ttnn.TILE_SIZE
-    assert tt_experts.max_tokens_per_pass <= MAX_TILE_ROWS_MEASURED_SAFE * ttnn.TILE_SIZE
-    assert MAX_TILE_ROWS_PER_CORE == 1
-    assert (config.hidden_size, config.intermediate_size) == (768, 3072)
+
+def pass_layouts(tokens: int, pass_size: int) -> set[str]:
+    """The layouts the passes of a split take: TOKEN_MAJOR_MAX_TOKENS decides each by its size."""
+    sizes = [min(pass_size, tokens - begin) for begin in range(0, tokens, pass_size)]
+    return {"token-major" if size <= TOKEN_MAJOR_MAX_TOKENS else "transposed" for size in sizes}
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_chunking_the_token_axis_does_not_change_the_answer(device, config, reference, tt_experts, batch, seqlen):
-    """Splitting the token axis has to be exact, not merely close.
+    """Splitting the token axis has to be exact where the programs allow it, and close elsewhere.
 
     Each pass runs the same weights over a disjoint slice and the shared bias is added once to
-    the assembled result, so the split is arithmetically a no-op. Forcing a small pass size on a
-    shape that fits in one is the only way to compare both paths on the same input: the shapes
-    that chunk for real cannot be run unchunked, that being the geometry that hangs. The pass
+    the assembled result, so the split is arithmetically a no-op. Token-major passes take K in
+    one block whatever their size, so splits that stay token-major must agree bit for bit. The
+    transposed programs pick their K blocks by pass size, which reorders the accumulation, so a
+    split with a transposed pass agrees to LAYOUT_SWITCH_PCC, and each token to
+    LAYOUT_SWITCH_TOKEN_ERROR, the bound that sees a defect at one boundary. Forcing a small pass
+    size on a shape that fits in one is the only way to compare them on the same input. The pass
     sizes cover tile-aligned and unaligned, and the smallest puts a boundary inside a sequence.
     """
     tokens = batch * seqlen
@@ -134,16 +164,51 @@ def test_chunking_the_token_axis_does_not_change_the_answer(device, config, refe
         dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts), device
     )
 
-    whole = ttnn.to_torch(tt_experts(x, dense)).float()
-
+    results = {}
     for pass_size in (tokens, tokens // 2 + 1, 64, 30):
         tt_experts.max_tokens_per_pass = pass_size
-        chunked = ttnn.to_torch(tt_experts(x, dense)).float()
+        results[pass_size] = ttnn.to_torch(tt_experts(x, dense)).float()
+
+    whole = results[tokens]
+    token_major = [(size, got) for size, got in results.items() if pass_layouts(tokens, size) == {"token-major"}]
+    for pass_size, chunked in results.items():
         assert chunked.shape == whole.shape, f"pass size {pass_size} changed the shape"
-        assert torch.equal(chunked, whole), (
-            f"pass size {pass_size} ({-(-tokens // pass_size)} passes) changed the result: "
-            f"max abs {float((chunked - whole).abs().max()):.3e}"
+        assert compute_pcc(chunked, whole) > LAYOUT_SWITCH_PCC, f"pass size {pass_size} moved the result"
+        token_error = (chunked - whole).norm(dim=-1) / whole.norm(dim=-1)
+        assert token_error.max() < LAYOUT_SWITCH_TOKEN_ERROR, (
+            f"pass size {pass_size} moved token {int(token_error.argmax())} "
+            f"by {float(token_error.max()):.3e} of its norm"
         )
+    for pass_size, chunked in token_major[1:]:
+        first_size, first = token_major[0]
+        assert torch.equal(chunked, first), (
+            f"token-major pass sizes {first_size} and {pass_size} differ: "
+            f"max abs {float((chunked - first).abs().max()):.3e}"
+        )
+
+
+@pytest.mark.parametrize("batch, seqlen", [(3, 100), (5, 37)])
+def test_the_padding_of_x_does_not_reach_the_output(device, config, tt_experts, batch, seqlen):
+    """Whatever the tile padding of x holds, a transposed pass returns the same result.
+
+    The transpose turns the padding rows of x into padding token columns, and 16 columns of the
+    bfloat8_b w1 output, GELU and w2 output share one exponent, so the last real tokens share
+    theirs with that padding. Nothing keeps it zero: flattening an off-tile batch or slicing a
+    pass leaves it unset, so the module zeroes it. Without that fill the 1e4 here crushes real
+    tokens of the last tile toward zero, an error of 1.0 of their norm, and module PCC is 0.984
+    at 3x100.
+    """
+    tokens = batch * seqlen
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
+    dense = to_device(
+        dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts), device
+    )
+
+    clean = ttnn.to_torch(tt_experts(x, dense))
+    # In place: the fill writes the padding of x itself.
+    poisoned = ttnn.to_torch(tt_experts(ttnn.fill_implicit_tile_padding(x, 1e4), dense))
+
+    assert torch.equal(clean, poisoned)
 
 
 def test_shared_bias_is_added_after_the_weighted_sum(device, config, tt_config, state_dict, reference):
@@ -190,12 +255,14 @@ def test_shared_bias_is_added_after_the_weighted_sum(device, config, tt_config, 
     assert compute_max_abs_error(got, correct) < compute_max_abs_error(got, inside_the_loop)
 
 
-def test_transposed_expert_weights_are_a_shape_error(device, config, tt_config, state_dict, expect_error):
-    """Negative control: pack_expert_weights is what makes the w2 misorientation loud.
+@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 512)])
+def test_misoriented_w2_decorrelates(device, config, tt_config, state_dict, reference, batch, seqlen):
+    """Negative control: in this module the w2 misorientation is silent, so PCC is the guard.
 
-    Viewing w2 as (E, H, F) rather than (E, F, H) is an equally legal reshape, since E*F*H is
-    symmetric in those two, and in torch the wrong slab plus a .T typechecks and returns noise.
-    As a 4D operand there is no .T to paper over it and the matmul's inner dimensions disagree.
+    TtNomicExperts keeps w2 transposed per expert, (E, H, F). The checkpoint's (E*F, H) block
+    viewed as (E, H, F) rather than (E, F, H) has that same shape, since E*F*H is symmetric in F
+    and H, so every matmul typechecks with it. It has to decorrelate instead, in both layouts:
+    1x128 runs token-major, 2x512 transposed.
     """
     experts = TtNomicExperts(device, config, tt_config, state_dict, PREFIX)
     experts.w2 = to_device(
@@ -204,12 +271,9 @@ def test_transposed_expert_weights_are_a_shape_error(device, config, tt_config, 
         .unsqueeze(0)
         .contiguous(),
         device,
-        dtype=tt_config.weight_dtype,
+        dtype=tt_config.matmul_weight_dtype(OpGroup.EXPERT_W2),
     )
-    tokens = 128
 
-    with expect_error(RuntimeError, "width of the first tensor must be equal to the height"):
-        experts(
-            to_device(torch.randn(1, 1, tokens, config.hidden_size), device),
-            to_device(dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, -1), device),
-        )
+    ref, got, _ = run_both(device, config, reference, experts, batch, seqlen)
+
+    assert compute_pcc(ref, got) < DECORRELATED_PCC

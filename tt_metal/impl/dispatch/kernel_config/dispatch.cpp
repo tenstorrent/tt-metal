@@ -141,7 +141,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.my_downstream_cb_sem_id = 0;  // unused
 
-        static_config_.prefetch_h_max_credits = 0;                   // unused prefetch_downstream_buffer_pages
+        static_config_.prefetch_h_max_credits = 0;  // unused prefetch_downstream_buffer_pages
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
@@ -579,6 +579,11 @@ void DispatchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
+
+    if (get_dispatch_query_manager_ref().fds_signalling_enabled()) {
+        defines["FDS_SIGNALLING"] = "1";
+    }
+
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
