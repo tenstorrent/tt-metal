@@ -286,3 +286,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   asserts the geometry matches the chunk it is called with.
 - Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
   (`BRINGUP_HYBRID=1` for the hybrid harness).
+
+## L.s16384 fix.1 (ladder s16384, chunk 8192)
+- Failure was environmental: `$HOME` (9.4G quota) was 100 % full, so JIT builds of the dispatch fork kernels
+  failed (`No space left on device` under `~/.cache/tt-metal-cache`). No model code changed.
+- Freed space: `uv cache clean` (3.2G uv download cache); removed the partly written
+  `kernels/{reader_worker_dispatch,writer_worker_dispatch,writer_sender_dispatch}` under
+  `~/.cache/tt-metal-cache/1149597549032367152` (truncated ELFs). Home at 64 % after.
+- Gate result (real pass; the zeros printed first come from the precompile collect pass): worst layer pcc 0.9934,
+  worst state pcc 0.9973, final hidden pcc 0.9985, top1 0.967, top5 1.0, host transfers per layer 0.
+  Chunk 1 [8192,16384) took 89 s warm.
+- Watch: the JIT cache (~3 GB, one 2.8G hash dir) keeps growing on the home quota; check `df -h $HOME` before long rungs.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py`
