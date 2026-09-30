@@ -168,6 +168,9 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const auto buffer_address = input_tensor.mesh_buffer().address();
 
     for (const auto& coordinate : distributed::MeshCoordinateRange(view.shape())) {
+        if (!mesh_device_->is_local(coordinate)) {
+            continue;
+        }
         auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
