@@ -217,10 +217,12 @@ def pytest_addoption(parser):
         "--ulp-measure",
         default=None,
         metavar="PATH",
-        help="Append one JSON row per comparison (test, variant, measured max ULP and "
-        "lane counts) to PATH, for folding a full sweep back into the budget table. "
-        "PATH is created and truncated at session start. Reporting only: it cannot "
-        "change a verdict.",
+        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
+        "PATH for each comparison made right after exactly one accuracy_contract "
+        "lookup in the same test, on a variant that ran with the dest_acc it names. "
+        "The exhaustive sweep skips tolerance cells before comparing, and under "
+        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
+        "and truncated at session start. Reporting only: it cannot change a verdict.",
     )
     parser.addoption(
         "--ulp-emit",

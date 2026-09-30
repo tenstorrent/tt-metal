@@ -530,22 +530,48 @@ _RECORD_TEST_ORDER: bool = False
 #: against a p99 of 1.
 _ULP_REPORT: bool = False
 
-#: Set by ``--ulp-measure=<path>``: append one JSON row per comparison, so a full sweep
-#: can be folded straight back into the budget table. Like ``_ULP_REPORT`` it is written
-#: after the verdict and never read back into one, so it cannot change a result.
+#: Set by ``--ulp-measure=<path>``: append one JSON row per comparison that follows
+#: exactly one ``accuracy_contract`` lookup in the same test, on a variant that ran as
+#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep skips tolerance
+#: cells before comparing and, under ``--ulp-emit``, returns before comparing at all, so
+#: those write nothing. Like ``_ULP_REPORT`` it is written after the verdict and never
+#: read back into one, so it cannot change a result.
 _ULP_MEASURE_PATH: Optional[str] = None
 
+#: Set once a recorder write has failed, so the warning is printed once per process.
+_ULP_MEASURE_WARNED: bool = False
 
-def _record_ulp_measurement(distance, *, mask, output_data_format) -> None:
+
+def _promoted(in_fmt, out_fmt, dest) -> bool:
+    """Whether TestConfig ran this variant with another ``dest_acc`` than it names: on
+    Wormhole and Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest,
+    so a ``No`` request runs the ``Yes`` kernel -- against a golden a driver built for
+    ``No``."""
+    from .chip_architecture import ChipArchitecture, get_chip_architecture
+    from .data_format_inference import is_format_combination_outlier
+
+    if in_fmt is None or out_fmt is None or dest is None:
+        return False
+    return get_chip_architecture() != ChipArchitecture.QUASAR and (
+        is_format_combination_outlier(in_fmt, out_fmt, dest)
+    )
+
+
+def _record_ulp_measurement(distance, *, mask) -> None:
     """Append the worst measurable lane of one comparison, tagged with its variant.
 
     ``ulp_stats`` rather than a bare ``max()``, so the number is the one the log
     reports: unmeasurable lanes excluded and the caller's ``mask`` respected. The
     variant is ``accuracy_contract``'s last query, consumed here so a comparison that
     never went through the registry cannot inherit it. No row is written when the query
-    is missing, ambiguous, or from another test: a lost datapoint is recoverable, a
-    budget folded back under the wrong variant is not.
+    is missing, ambiguous, from another test, or names a ``dest_acc`` TestConfig did not
+    run (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under
+    the wrong variant is not.
+
+    A failed write warns once and is otherwise ignored: a full disk must not turn into a
+    failing test, or hide a failing comparison's summary.
     """
+    global _ULP_MEASURE_WARNED
     if not _ULP_MEASURE_PATH:
         return
     from . import sfpu_accuracy_budget as budget
@@ -555,19 +581,26 @@ def _record_ulp_measurement(distance, *, mask, output_data_format) -> None:
     if query is None or ambiguous or query[0] != budget._current_test():
         return
     test_id, op, in_fmt, out_fmt, approx, dest = query
+    if _promoted(in_fmt, out_fmt, dest):
+        return
     stats = ulp_stats(distance, mask)
     row = {
         "test": test_id,
         "op": op,
         "in": getattr(in_fmt, "name", None),
-        "out": getattr(out_fmt, "name", None) or output_data_format.name,
+        "out": out_fmt.name,
         "approx": getattr(approx, "name", None),
         "dest": getattr(dest, "name", None),
         # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
         **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
     }
-    with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row) + "\n")
+    try:
+        with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+    except OSError as exc:
+        if not _ULP_MEASURE_WARNED:
+            _ULP_MEASURE_WARNED = True
+            logger.warning("--ulp-measure: cannot write {}: {}", _ULP_MEASURE_PATH, exc)
 
 
 # Per-format params for _mxfp_block_aware_compare:
@@ -931,9 +964,7 @@ def passed_test(
         # Ranked without the lanes the floor accepted -- they hold the largest step
         # counts by construction, so ranking every lane names one that passed.
         ranked = ulp_selected & ~ulp_rescued
-        _record_ulp_measurement(
-            ulp_distances, mask=ranked, output_data_format=output_data_format
-        )
+        _record_ulp_measurement(ulp_distances, mask=ranked)
 
         def _ulp_summary():
             return ulp_verdict_message(
@@ -979,9 +1010,7 @@ def passed_test(
         # tolerance metric whose drift no number watches. Measured after the verdict,
         # never read back into it, and one distance serves both consumers.
         unenrolled = ulp_distance(golden_tensor, res_tensor)
-        _record_ulp_measurement(
-            unenrolled, mask=None, output_data_format=output_data_format
-        )
+        _record_ulp_measurement(unenrolled, mask=None)
         if _ULP_REPORT:
             logger.info(
                 "ULP report — {}",

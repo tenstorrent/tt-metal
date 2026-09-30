@@ -434,6 +434,10 @@ def accuracy_contract(
     required, unlike the other dimensions: it is the one where the numbers explicitly do
     not transfer, so defaulting it would resolve an unknown chip straight against the
     :data:`MEASURED_ARCH` table.
+
+    Not a pure lookup: every call also publishes the variant as :data:`LAST_QUERY` for
+    the ``--ulp-measure`` recorder, and a second call in the same test marks it
+    ambiguous, dropping that test's reading. Resolve once, right before the comparison.
     """
     # Built before the enrolment fallback, so a miswired driver -- a string arch, a bool
     # dest_acc -- fails on every op, not only once its op is enrolled.
