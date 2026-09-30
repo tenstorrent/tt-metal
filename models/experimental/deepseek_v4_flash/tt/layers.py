@@ -23,7 +23,37 @@ from .system_config import active_system_config
 from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
-from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb as _make_matmul_decode_gcb
+
+# How every GCB built here was made, keyed by ``id(gcb)``, so a model can drop its GCBs (freeing their L1)
+# and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`).
+_GCB_RECIPES: dict[int, tuple] = {}
+_GCB_SERIAL = [0]
+
+
+def _recorded_gcb(build: Callable, *args, **kwargs):
+    gcb = build(*args, **kwargs)
+    _GCB_SERIAL[0] += 1
+    _GCB_RECIPES[id(gcb)] = (_GCB_SERIAL[0], build, args, kwargs)
+    return gcb
+
+
+def make_matmul_decode_gcb(*args, **kwargs):
+    return _recorded_gcb(_make_matmul_decode_gcb, *args, **kwargs)
+
+
+def take_gcb_recipe(gcb) -> tuple:
+    """``(serial, recipe)`` for ``gcb``, forgotten here: the caller is about to drop the buffer."""
+    entry = _GCB_RECIPES.pop(id(gcb), None)
+    if entry is None:
+        raise RuntimeError("this GCB was not built through layers.py, so it cannot be rebuilt after a release")
+    return entry[0], entry[1:]
+
+
+def build_gcb_from_recipe(recipe: tuple):
+    """A fresh GCB identical to the one ``recipe`` (from :func:`take_gcb_recipe`) described."""
+    build, args, kwargs = recipe
+    return _recorded_gcb(build, *args, **kwargs)
 
 
 def fused_rms_norm_gamma_memory_config(n: int, core_grid: ttnn.CoreRangeSet) -> ttnn.MemoryConfig:
@@ -326,7 +356,9 @@ def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int =
     ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=None)
     bank_to_receivers = _bank_to_receivers(num_b_cores, device, ring_cols)
     size = num_pages * decode_gcb_page_bytes(specs, dtype)
-    return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, size)
+    return _recorded_gcb(
+        ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher, device, bank_to_receivers, size
+    )
 
 
 def _dram_banks_for(num_b_cores: int, device) -> int:

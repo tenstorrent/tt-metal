@@ -32,11 +32,14 @@ Three deviations from the reference, all forced by the on-device decode scope:
 
 import collections
 import contextlib
+import gc
 import math
 import os
 import queue
 import threading
-from typing import Optional
+import time
+from dataclasses import dataclass, field
+from typing import Callable, Optional, Sequence
 
 import torch
 import ttnn
@@ -62,14 +65,24 @@ from .decode.paged_cache import (
     plan_pool_blocks,
 )
 from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
-from .decode.decoder_layer import DeepSeekV4DecoderLayer
+from .decode.decoder_layer import DeepSeekV4DecoderLayer, _strip_prefix
 from .embedding import DeepSeekV4Embedding
 from .decode.hyperconnection import DeepSeekV4HyperHead
-from .layers import DeepSeekV4RMSNorm
+from .layers import DeepSeekV4RMSNorm, Linear, build_gcb_from_recipe, take_gcb_recipe
 from .decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
+from .prefill.attention import (
+    ALIGNMENT,
+    COMPRESSED_SPARSE_ATTENTION,
+    HEAVILY_COMPRESSED_ATTENTION,
+    SLIDING_ATTENTION,
+    PrefillAttentionState,
+    PrefillStaticStep,
+)
+from .prefill.decoder_layer import DeepSeekV4PrefillDecoderLayer, load_norm_gamma
+from .prefill.hyperconnection import flatten_streams, wide_rms_norm
 from .quant import dequantize_weight
-from .system_config import SystemConfig, load_system_config, set_active_system_config
-from .weight_cache import WeightCache, _as_cache
+from .system_config import SystemConfig, active_system_config, load_system_config, set_active_system_config
+from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 from .weight_loader import DeepseekV4WeightLoader
 
 
@@ -169,6 +182,88 @@ def _d2h_page_plan(numel: int, elem_bytes: int, page_cap_bytes: int, pcie_alignm
     )
 
 
+def _create_socket_pair(from_submesh, to_submesh, socket_l1_bytes: int):
+    """Directed L1 D2D socket pair ``(sender, receiver)`` between two 1xTP submeshes.
+
+    Cores (0,0) and (0,1) of every rank, one socket each, rank ``r`` to rank ``r``, with
+    ``socket_l1_bytes`` of L1 per core. The ``*_direct_async`` ops only push a handshake page
+    through the FIFO and write the payload straight into the receiver's tensor, so the payload
+    may be far larger than the FIFO.
+    """
+    socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_l1_bytes)
+    socket_connections = []
+    for coord in ttnn.MeshCoordinateRange(from_submesh.shape):
+        for core in (ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)):
+            socket_connections.append(
+                ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, core), ttnn.MeshCoreCoord(coord, core))
+            )
+    socket_config = ttnn.SocketConfig(socket_connections, socket_memconfig)
+    return ttnn.create_socket_pair(from_submesh, to_submesh, socket_config)
+
+
+_PACKAGE = __name__.rsplit(".tt.", 1)[0]
+
+
+def _is_gcb(value) -> bool:
+    return type(value).__name__ == "global_circular_buffer"
+
+
+def _is_l1_tensor(value) -> bool:
+    return (
+        isinstance(value, ttnn.Tensor)
+        and value.storage_type() == ttnn.StorageType.DEVICE
+        and value.is_allocated()
+        and value.memory_config().buffer_type == ttnn.BufferType.L1
+    )
+
+
+def _gcb_holders(root, match: Callable = _is_gcb) -> dict[int, tuple]:
+    """``id(value) -> (value, [holder])`` for every ``match``-ing value (GCBs by default) reachable from
+    ``root`` through this package's objects, dicts and lists; a holder is ``(container, key, is_attribute)``."""
+    found: dict[int, tuple] = {}
+    seen: set[int] = set()
+    stack = [root]
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, dict):
+            items, is_attr = list(obj.items()), False
+        elif isinstance(obj, (list, tuple)):
+            items, is_attr = list(enumerate(obj)), False
+        elif type(obj).__module__.startswith(_PACKAGE) and hasattr(obj, "__dict__"):
+            items, is_attr = list(vars(obj).items()), True
+        else:
+            continue
+        for key, value in items:
+            if not match(value):
+                stack.append(value)
+                continue
+            if isinstance(obj, tuple):
+                raise RuntimeError(f"a {type(value).__name__} held in a tuple cannot be released and restored in place")
+            found.setdefault(id(value), (value, []))[1].append((obj, key, is_attr))
+    return found
+
+
+def prefill_bias_slots(prefill) -> dict:
+    """``layer -> (c_bias_slots, i_bias_slots)`` of a prefill model's CSA layers, for
+    :meth:`DeepSeekV4Model.commit_prefill_state`."""
+    return {
+        li: (getattr(layer.self_attn, "c_bias_slots", None), getattr(layer.self_attn, "i_bias_slots", None))
+        for li, layer in enumerate(prefill.layers)
+        if prefill.config.layer_types[li] == COMPRESSED_SPARSE_ATTENTION
+    }
+
+
+def _assign_holder(holder: tuple, value) -> None:
+    container, key, is_attr = holder
+    if is_attr:
+        object.__setattr__(container, key, value)
+    else:
+        container[key] = value
+
+
 def _dspark_enabled() -> bool:
     """Whether to build the idle-row DSpark MTP link (see :class:`DeepSeekV4Model`).
 
@@ -226,8 +321,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
         num_prefetch_pages: Optional[int] = None,
         system_config: Optional[SystemConfig] = None,
         tp_size: int = 1,
+        num_stages: Optional[int] = None,
+        submeshes: Optional[Sequence[ttnn.MeshDevice]] = None,
     ):
         """Build the V4-Flash model off the checkpoint.
+
+        ``submeshes`` (with ``use_submeshes``) reuses ``1 x tp_size`` stage meshes the caller already created on
+        ``full_device`` -- e.g. the ones a prefill model ran on, so its state can be committed on device -- instead
+        of creating them here.
 
         Caching: pass either a pre-built ``cache`` :class:`WeightCache` or a ``cache_dir``
         (the model builds ``WeightCache(cache_dir)`` and owns the per-layer ``layers.N`` /
@@ -244,7 +345,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ``tp_size`` groups adjacent chips into ``1 x tp_size`` pipeline stages and forwards
         it to attention and MoE; their outputs are replicated, so every rank-to-rank socket
         carries the corresponding copy to the next stage. TP4 uses two stages (8 chips) on
-        both an 8-chip mesh and a larger Galaxy mesh, the remaining chips staying idle.
+        both an 8-chip mesh and a larger Galaxy mesh, the remaining chips staying idle,
+        unless ``num_stages`` asks for more (8 x TP4 spans a whole 32-chip Galaxy, which is
+        what lets the prefill model share the decode chips, see :meth:`build_prefill`).
 
         The attention projections (with their compressor) and the MoE shared expert run on
         DRISC-prefetched weights instead of a DRAM->L1 copy per call, so decode must run
@@ -285,6 +388,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
+        # GCBs dropped by :meth:`release_prefetch_buffers`: ``[(serial, recipe, holders)]``, or None.
+        self._released_gcbs: Optional[list] = None
+        self._evicted_l1: list = []
         if cache is None and cache_dir is not None:
             cache = WeightCache(cache_dir)
         cache = _as_cache(cache)
@@ -301,7 +407,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         pipeline_devices = system_config.pipeline.resolve_num_devices(self.mesh_devices)
         # TP4 latency path: two 1x4 stages (8 chips). Extra chips on a larger mesh
         # (e.g. Galaxy32) stay idle so they do not add socket hops.
-        if use_submeshes and tp_size == 4:
+        if num_stages is not None:
+            if num_stages < 1 or num_stages * tp_size > pipeline_devices:
+                raise ValueError(
+                    f"num_stages={num_stages} x TP{tp_size} does not fit the {pipeline_devices} pipeline devices"
+                )
+            pipeline_devices = num_stages * tp_size
+        elif use_submeshes and tp_size == 4:
             pipeline_devices = min(pipeline_devices, 2 * tp_size)
         if pipeline_devices % tp_size:
             raise ValueError(f"pipeline uses {pipeline_devices} devices, which is not divisible by tp_size {tp_size}")
@@ -344,7 +456,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 f"{pipeline_group_size or self.num_submeshes}, {self.pipeline_stages} populated)"
             )
             self.submeshes = []
-            if tp_size == 1:
+            if submeshes is not None:
+                if len(submeshes) != self.num_submeshes:
+                    raise ValueError(f"got {len(submeshes)} submeshes for {self.num_submeshes} pipeline stages")
+                self.submeshes = list(submeshes)
+            elif tp_size == 1:
                 full_device.reshape(ttnn.MeshShape(1, self.mesh_devices))
                 for i in range(self.num_submeshes):
                     self.submeshes.append(full_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, i)))
@@ -585,29 +701,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return weights
 
     def _create_socket_pair(self, from_submesh, to_submesh):
-        """Directed L1 D2D socket pair ``(sender, receiver)`` between two 1xTP submeshes,
-        same core map as the pipeline handoffs: cores (0,0) and (0,1) of every rank, one
-        socket each, in ``pipeline.socket_l1_bytes`` of L1 per core. Carries the pipeline
-        handoff payload -- residual streams ``[B, 1, hc, D]`` row-major plus the fused
-        packet ``[1,1,1,_pkt_w]`` -- and, on the tap submesh, the packed ``[B, 3, hc, D]``
-        MTP residuals."""
-        socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, self.system_config.pipeline.socket_l1_bytes)
-        socket_connections = []
-        for coord in ttnn.MeshCoordinateRange(from_submesh.shape):
-            socket_connections.append(
-                ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
-                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
-                )
-            )
-            socket_connections.append(
-                ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
-                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
-                )
-            )
-        socket_config = ttnn.SocketConfig(socket_connections, socket_memconfig)
-        return ttnn.create_socket_pair(from_submesh, to_submesh, socket_config)
+        """Directed L1 D2D socket pair ``(sender, receiver)`` between two 1xTP submeshes
+        (see :func:`_create_socket_pair`). Carries the pipeline handoff payload -- residual
+        streams ``[B, 1, hc, D]`` row-major plus the fused packet ``[1,1,1,_pkt_w]`` -- and,
+        on the tap submesh, the packed ``[B, 3, hc, D]`` MTP residuals."""
+        return _create_socket_pair(from_submesh, to_submesh, self.system_config.pipeline.socket_l1_bytes)
 
     def _init_mtp_link(self) -> None:
         """Park DSpark/MTP on the first idle 1xTP row and open one socket to it.
@@ -761,6 +859,87 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for device in devices:
             ttnn.experimental.stop_tensor_prefetcher(device)
             ttnn.synchronize_device(device)
+
+    @property
+    def prefetch_buffers_released(self) -> bool:
+        return self._released_gcbs is not None
+
+    def release_prefetch_buffers(self) -> None:
+        """Stop the DRISC senders and free every weight-prefetch GCB, returning their L1 to the device.
+
+        The GCBs are permanent L1 allocations on the receiver cores (hundreds of KB per core), which is room
+        prefill's wide ops need. Every holder of a GCB (the per-device mapping, each ``LinearDecode``) is
+        cleared so the last reference goes and the buffer is freed; :meth:`restore_prefetch_buffers` builds
+        identical ones and hands them back. Decode's other resident L1 tensors (the CSA windows, position
+        bias, ...) are parked on host the same way and uploaded back. Decode cannot run in between.
+
+        Only before the first :meth:`decode_traced`: stopping the prefetcher discards the prefetch requests
+        the decode traces recorded, so captured traces would stall on replay. Idempotent.
+        """
+        if self._released_gcbs is not None:
+            return
+        if self._traced_captured:
+            raise RuntimeError(
+                "release the prefetch buffers before the first decode_traced(): stopping the prefetcher drops the "
+                "prefetch requests the captured decode traces replay"
+            )
+        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
+        for device in devices:
+            ttnn.synchronize_device(device)
+            ttnn.experimental.stop_tensor_prefetcher(device)
+        released = []
+        for gcb, holders in _gcb_holders(self).values():
+            serial, recipe = take_gcb_recipe(gcb)
+            for holder in holders:
+                _assign_holder(holder, None)
+            released.append((serial, recipe, holders))
+        gcb = None
+        # A cached matmul_decode program keeps a copy of its GCB in its operation attributes, which holds the
+        # L1 allocation alive after every Python reference is gone.
+        for device in devices:
+            device.clear_program_cache()
+        evicted = []
+        for tensor, holders in _gcb_holders(self, _is_l1_tensor).values():
+            memory_config, device = tensor.memory_config(), tensor.device()
+            parked = ttnn.from_device(tensor)
+            ttnn.deallocate(tensor)
+            for holder in holders:
+                _assign_holder(holder, parked)
+            evicted.append((memory_config, device, parked, holders))
+        tensor = parked = None
+        gc.collect()
+        self._released_gcbs = released
+        self._evicted_l1 = evicted
+        if os.environ.get("DEEPSEEK_V4_DUMP_L1", "0") == "1":
+            for i, device in enumerate(devices):
+                ttnn.synchronize_device(device)
+                ttnn.dump_device_memory_state(device, prefix=f"after_release_sm{i}_")
+        logger.info(
+            f"prefetch buffers released: {len(released)} GCB(s) and {len(evicted)} L1 tensor(s) parked on host "
+            f"on {len(devices)} device(s)"
+        )
+
+    def restore_prefetch_buffers(self) -> None:
+        """Rebuild the GCBs :meth:`release_prefetch_buffers` freed (in their original order) and restart the
+        DRISC senders. Idempotent."""
+        released, self._released_gcbs = self._released_gcbs, None
+        if released is None:
+            return
+        for _, recipe, holders in sorted(released, key=lambda entry: entry[0]):
+            gcb = build_gcb_from_recipe(recipe)
+            for holder in holders:
+                _assign_holder(holder, gcb)
+        evicted, self._evicted_l1 = self._evicted_l1, []
+        for memory_config, device, parked, holders in evicted:
+            tensor = ttnn.to_device(parked, device, memory_config=memory_config)
+            for holder in holders:
+                _assign_holder(holder, tensor)
+        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
+        for device in devices:
+            ttnn.experimental.start_tensor_prefetcher(device)
+        for device in devices:
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        logger.info(f"prefetch buffers restored: {len(released)} GCB(s)")
 
     def _expert_provider(self, layer_idx: int):
         """Host expert provider for one routed MoE layer: ``(gate_up [2I, D], down
@@ -2621,3 +2800,1499 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         for pos in positions:
             self.replay_traced(int(pos))
+
+    def decode_prompt_traced(
+        self, token_ids, start_pos: int, on_output: Optional[Callable[[int, torch.Tensor], None]] = None
+    ) -> Optional[torch.Tensor]:
+        """Feed known tokens ``token_ids`` at ``start_pos, start_pos + 1, ...`` through traced decode
+        (prefill-via-decode) without waiting for one step's output before feeding the next.
+
+        Every step's traces are queued up front, a writer thread pushes the input packets (the H2D
+        FIFO paces it) and the calling thread reads the outputs in order, so the submesh pipeline holds
+        as many steps as it has stages. ``on_output(i, out)`` sees step ``i``'s ``[B, 1, N]`` output as
+        it arrives. Returns the last step's output (``None`` for no tokens).
+        """
+        ids = [token_ids[i] for i in range(len(token_ids))]
+        if not ids:
+            return None
+        start_pos = int(start_pos)
+        out = None
+        if not self._traced_captured or self._eager_decode:
+            # The capture consumes packets itself, and eager steps run on the packet writer: one at a time.
+            out = self.decode_traced(ids[0], start_pos)
+            if on_output is not None:
+                on_output(0, out)
+            if self._eager_decode:
+                for i in range(1, len(ids)):
+                    out = self.decode_traced(ids[i], start_pos + i)
+                    if on_output is not None:
+                        on_output(i, out)
+                return out
+            ids, first = ids[1:], 1
+            if not ids:
+                return out
+        else:
+            first = 0
+        positions = range(start_pos + first, start_pos + first + len(ids))
+        self.ensure_session_capacity(positions[-1])
+        self.replay_traced_ahead(positions)
+
+        error: list[BaseException] = []
+
+        def _write() -> None:
+            try:
+                for token_id, pos in zip(ids, positions):
+                    self.write_step_packet(token_id, pos)
+            except BaseException as exc:  # surfaced by the caller after the join
+                error.append(exc)
+
+        writer = threading.Thread(target=_write, name="decode-prompt-writer", daemon=True)
+        writer.start()
+        try:
+            for i in range(len(ids)):
+                if error:
+                    break
+                out = self.read_decoded_output()
+                if on_output is not None:
+                    on_output(first + i, out)
+        finally:
+            writer.join()
+        if error:
+            raise error[0]
+        return out
+
+    # -- prefill: the decode chips, the decode experts, the decode buffers as its state -- #
+    def build_prefill(self, rope: dict, weights: dict, lm_head=None, **kwargs) -> "DeepSeekV4PrefillModel":
+        """Build the :class:`DeepSeekV4PrefillModel` on this model's own pipeline stages.
+
+        Every prefill layer lives on the submesh of the decode layer it mirrors and reads that layer's
+        routed experts in place; the embedding table (and ``lm_head``, when given) are shared too, so the
+        prefill adds only its own attention / router / shared-expert layouts. ``weights`` is
+        :func:`~.prefill.weights.checkpoint_weights`; ``kwargs`` go to the prefill constructor.
+
+        Build it right after :meth:`prepare_static_decode` and before the first :meth:`decode_traced`
+        (and :meth:`DeepSeekV4PrefillModel.prepare_traced_prefill` there too, when prefill is traced, with the
+        prefetch buffers released so the capture sees the L1 prefill runs with), so its weights and
+        persistent buffers are allocated before any decode trace exists.
+        """
+        if not self.use_submeshes:
+            raise NotImplementedError("prefill shares the decode pipeline stages: build with use_submeshes=True")
+        self.prefill_model = DeepSeekV4PrefillModel(
+            self.config,
+            weights,
+            self.first_device,
+            rope,
+            experts=[layer.mlp.experts for layer in self.layers],
+            num_layers=self.num_layers,
+            tp_size=self.tp_size,
+            layer_devices=self.layer_devices,
+            embedding_weight=self.embed_tokens.embedding_weight,
+            lm_head=lm_head,
+            **kwargs,
+        )
+        return self.prefill_model
+
+    def prefill(
+        self,
+        input_ids,
+        session_id: int,
+        chunk_size: int = 1024,
+        traced: bool = False,
+        on_chunk: Optional[Callable[[int, int, int, float], None]] = None,
+        progress: Optional[Callable[[str], None]] = None,
+        capture_token: int = 0,
+    ) -> ttnn.Tensor:
+        """Prefill ``input_ids`` (a multiple of ``ALIGNMENT`` tokens) into session ``session_id``.
+
+        With the prefetch GCBs released (:meth:`release_prefetch_buffers`, a no-op if they already are), runs
+        :meth:`build_prefill`'s model over the prompt (replaying its traces with ``traced=True``); then restores
+        the GCBs, captures the decode traces with a throw-away step of ``capture_token`` if they do not exist
+        yet (its scratch cache writes are overwritten next), and commits the attention state into the decode
+        buffers (:meth:`commit_prefill_state`). The next :meth:`decode_traced` continues at ``len(input_ids)``.
+        Returns the prompt's last-token logits ``[1, 1, 1, V]``: on the last stage, or on the host with ``traced``.
+        """
+        prefill = getattr(self, "prefill_model", None)
+        if prefill is None:
+            raise RuntimeError("call build_prefill() first")
+        self.release_prefetch_buffers()
+        if traced:
+            logits, states = prefill.prefill_traced(input_ids, on_chunk=on_chunk)
+        else:
+            logits, states = prefill.prefill(input_ids, chunk_size=chunk_size, on_chunk=on_chunk)
+        prefill.synchronize("prefill done")
+        self.restore_prefetch_buffers()
+        if not self._traced_captured:
+            self.decode_traced(capture_token, 0)
+        self.commit_prefill_state(states, session_id, progress=progress)
+        return logits
+
+    def commit_prefill_state(
+        self,
+        states: list[PrefillAttentionState],
+        session_id: int,
+        progress: Optional[Callable[[str], None]] = None,
+        bias_slots: Optional[dict] = None,
+    ) -> int:
+        """Write a prefill's per-layer ``states`` into the decode buffers of ``session_id``; returns ``T``.
+
+        ``bias_slots`` (``layer -> (c_bias_slots, i_bias_slots)``, see :func:`prefill_bias_slots`) is all this
+        needs of the prefill model, so a caller that freed it can still commit; default: the :meth:`build_prefill`
+        model's.
+
+        Prefill and decode share every layer's submesh, so this is a device-side rewrite (nothing crosses the
+        host). What goes where, for a prompt of ``T`` tokens (``T`` a multiple of ``sliding_window``, so no
+        compressor window is half full and ring slot ``j`` holds token ``T - W + j``):
+
+        * sliding / CSA: ``kv_tail`` then ``compressed_kv`` fill ``scache.kv`` rows ``[0, W)`` and
+          ``[W, W + T/cr)`` (as many entries as the dense buffer holds; the rest are zeroed);
+        * HCA: the same ring + entries axis, block by block through the session's page table, into the pool;
+        * CSA overlap: the Ca half of ``prev_kv`` / ``prev_gate``. Prefill keeps the gate with the compressor
+          ``position_bias`` added, decode adds it inside ``csa_pool_window``, so the bias is subtracted; the
+          Cb half is neutral (zero kv, ``_MASK_NEG`` gate). The half-open ``win_*`` need nothing;
+        * CSA lightning indexer (when prefill ran it): the index keys fill ``idx_key_cache`` and the entries
+          ``comp_kv`` (identity page table), and the indexer compressor's overlap fills ``idx_prev_*``.
+
+        The session must be active and the decode traces captured (so the throw-away capture step's scratch
+        writes are the ones overwritten). The buffers are written in place; the traces keep their addresses.
+        """
+        note = progress or (lambda message: None)
+        config = self.config
+        if bias_slots is None:
+            prefill = getattr(self, "prefill_model", None)
+            if prefill is None:
+                raise RuntimeError("call build_prefill() first, or pass bias_slots")
+            bias_slots = prefill_bias_slots(prefill)
+        if not self.paged:
+            raise RuntimeError("call prepare_static_decode() first")
+        if len(states) < self.num_layers:
+            raise ValueError(f"need {self.num_layers} layer states, got {len(states)}")
+        lengths = {state.seq_len for state in states[: self.num_layers]}
+        if len(lengths) != 1:
+            raise ValueError(f"layer states disagree on the prompt length: {sorted(lengths)}")
+        total = lengths.pop()
+        if total <= 0 or total % ALIGNMENT:
+            raise ValueError(f"prefilled length {total} must be a positive multiple of {ALIGNMENT}")
+        with_indexer = all(
+            state.idx_keys is not None
+            for state, layer_type in zip(states, config.layer_types[: self.num_layers])
+            if layer_type == COMPRESSED_SPARSE_ATTENTION
+        )
+        if self._indexer_active() and not with_indexer and self._index_sparse_step(total):
+            raise ValueError(
+                f"a prompt of {total} tokens already needs the CSA lightning indexer in decode, whose key cache "
+                "prefill does not fill (build the prefill with lightning_indexer=True, or prefill at most "
+                "index_topk * compress_rate - 1 tokens)"
+            )
+
+        self.ensure_session_capacity(total - 1)
+        for sm in self.submeshes_io:
+            for li in sm["layers"]:
+                state, layer_type = states[li], config.layer_types[li]
+                if list(state.kv_tail.device().get_device_ids()) != list(sm["device"].get_device_ids()):
+                    raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                scache = sm["scaches"][li]
+                c_bias, i_bias = bias_slots.get(li, (None, None))
+                note(f"commit layer {li + 1}/{self.num_layers} ({layer_type}) on decode submesh {sm['index']}")
+                if layer_type == HEAVILY_COMPRESSED_ATTENTION:
+                    self._commit_paged_kv(sm, li, session_id, state)
+                else:
+                    self._commit_dense_kv(scache, li, state)
+                if layer_type == COMPRESSED_SPARSE_ATTENTION:
+                    self._commit_csa_overlap(
+                        scache.prev_kv, scache.prev_gate, state.csa_prev_kv, state.csa_prev_gate, c_bias
+                    )
+                    if state.idx_keys is not None and scache.idx_key_cache is not None:
+                        self._commit_index_keys(scache, state)
+                        self._commit_csa_overlap(
+                            scache.idx_prev_kv,
+                            scache.idx_prev_gate,
+                            state.idx_prev_kv,
+                            state.idx_prev_gate,
+                            i_bias,
+                        )
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        note("prefill state committed")
+        return total
+
+    @staticmethod
+    def _overwrite(dst: ttnn.Tensor, src: ttnn.Tensor) -> None:
+        """Copy ``src`` into the persistent ``dst`` (same shape / dtype / layout), keeping ``dst``'s address."""
+        if tuple(src.shape) != tuple(dst.shape):
+            raise ValueError(f"cannot write a {tuple(src.shape)} tensor into a {tuple(dst.shape)} buffer")
+        if src.memory_config() == dst.memory_config():
+            ttnn.copy(src, dst)
+        else:
+            ttnn.to_memory_config(src, dst.memory_config(), output_tensor=dst)
+
+    @staticmethod
+    def _stack_rows(parts: list, rows: int, width: int, device) -> ttnn.Tensor:
+        """ROW_MAJOR ``[1, 1, n_i, width]`` ``parts`` stacked on the row axis, zero-padded to ``rows`` (a new tensor)."""
+        used = sum(p.shape[2] for p in parts)
+        if used > rows:
+            raise ValueError(f"{used} rows do not fit a {rows}-row buffer")
+        if used < rows:
+            pad = ttnn.zeros(
+                [1, 1, rows - used, width], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            parts = [*parts, pad]
+        if len(parts) == 1:
+            return ttnn.clone(parts[0])
+        return ttnn.concat(parts, dim=2)
+
+    def _commit_dense_kv(self, scache, li: int, state: PrefillAttentionState) -> None:
+        """Ring + entries into a sliding / CSA layer's dense ``scache.kv`` (TILE ``[1, 1, rows, Dh]``)."""
+        w = self.sliding_window
+        _, _, rows, dh = scache.kv.shape
+        parts, scratch = [state.kv_tail], []
+        entries = state.compressed_kv
+        if entries is not None:
+            fit = min(entries.shape[2], rows - w)
+            if fit < entries.shape[2]:
+                if state.idx_keys is None:
+                    raise ValueError(
+                        f"layer {li}: {w + entries.shape[2]} KV rows do not fit the decode buffer's {rows} "
+                        f"(the dense CSA buffer holds {rows - w} compressed entries)"
+                    )
+                # The indexer path reads comp_kv; the dense buffer only needs the entries it can hold.
+                entries = ttnn.slice(entries, [0, 0, 0, 0], [1, 1, fit, dh])
+                scratch.append(entries)
+            parts.append(entries)
+        stacked = self._stack_rows(parts, rows, dh, scache.kv.device())
+        tiled = ttnn.to_layout(stacked, ttnn.TILE_LAYOUT)
+        self._overwrite(scache.kv, tiled)
+        for t in (*scratch, stacked, tiled):
+            ttnn.deallocate(t)
+
+    def _commit_paged_kv(self, sm: dict, li: int, session_id: int, state: PrefillAttentionState) -> None:
+        """Ring + entries into an HCA layer's block pool, one block per ``fill_cache`` at its physical index."""
+        layer_type = self.config.layer_types[li]
+        group = self._paged_groups[layer_type]
+        page_row = self._require_paged().page_row(session_id, layer_type)[0].tolist()
+        block, dh = group.block_size, self.config.head_dim
+        parts = [state.kv_tail] + ([state.compressed_kv] if state.compressed_kv is not None else [])
+        blocks = math.ceil(sum(p.shape[2] for p in parts) / block)
+        stacked = self._stack_rows(parts, blocks * block, dh, sm["device"])
+        axis = ttnn.to_layout(stacked, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(stacked)
+        pool = sm["pools"][li]
+        for logical in range(blocks):
+            physical = page_row[logical]
+            if physical == 0:
+                raise RuntimeError(f"logical block {logical} of {layer_type} is unmapped: capacity was not ensured")
+            rows = ttnn.slice(axis, [0, 0, logical * block, 0], [1, 1, (logical + 1) * block, dh])
+            ttnn.fill_cache(pool, rows, physical)
+            ttnn.deallocate(rows)
+        ttnn.deallocate(axis)
+
+    def _commit_csa_overlap(
+        self,
+        kv_dst: ttnn.Tensor,
+        gate_dst: ttnn.Tensor,
+        kv_src: ttnn.Tensor,
+        gate_src: ttnn.Tensor,
+        bias_slots: list,
+    ) -> None:
+        """A prefill CSA overlap (fp32 ``[1, 1, 1, cr * dim]``, slot-major Ca, gate + bias) into decode's
+        ``[cr, 1, 1, 2 * dim]`` ``prev_*`` windows: Ca half from prefill (bias removed), Cb half neutral."""
+        rate = len(bias_slots)
+        dim = kv_src.shape[3] // rate
+        device = kv_dst.device()
+
+        def slots(src: ttnn.Tensor) -> ttnn.Tensor:  # [1, 1, 1, cr * dim] -> [cr, 1, 1, dim] fp32 TILE
+            return ttnn.to_layout(ttnn.reshape(src, [rate, 1, 1, dim]), ttnn.TILE_LAYOUT)
+
+        bias = ttnn.concat([ttnn.slice(b, [0, 0, 0, 0], [1, 1, 1, dim]) for b in bias_slots], dim=0)
+        raw_gate = slots(gate_src)
+        gate = ttnn.subtract(raw_gate, bias)
+        ttnn.deallocate(raw_gate)
+        ttnn.deallocate(bias)
+        for ca, dst, cb_fill in ((slots(kv_src), kv_dst, 0.0), (gate, gate_dst, _MASK_NEG)):
+            cb = ttnn.full([rate, 1, 1, dim], cb_fill, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            pair = ttnn.concat([ca, cb], dim=-1)
+            window = ttnn.to_layout(ttnn.typecast(pair, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+            self._overwrite(dst, window)
+            for t in (ca, cb, pair, window):
+                ttnn.deallocate(t)
+
+    def _commit_index_keys(self, scache, state: PrefillAttentionState) -> None:
+        """Index keys into ``idx_key_cache`` and the entries into ``comp_kv`` (identity paging: entry ``w`` at
+        block ``w // block``, row ``w % block``)."""
+        n_blocks, _, block, _ = scache.idx_key_cache.shape
+        keys, entries = state.idx_keys, state.compressed_kv
+        if keys.shape[2] != entries.shape[2]:
+            raise ValueError(f"{keys.shape[2]} index keys for {entries.shape[2]} compressed entries")
+        if keys.shape[2] > n_blocks * block:
+            raise ValueError(f"{keys.shape[2]} index keys do not fit the decode cache's {n_blocks * block} rows")
+        device = scache.idx_key_cache.device()
+
+        def paged(rows: ttnn.Tensor) -> ttnn.Tensor:  # ROW_MAJOR [n_blocks, 1, block, width]
+            width = rows.shape[3]
+            flat = self._stack_rows([rows], n_blocks * block, width, device)
+            return ttnn.reshape(flat, [n_blocks, 1, block, width])
+
+        keys_rm = paged(keys)
+        keys_tiled = ttnn.to_layout(keys_rm, ttnn.TILE_LAYOUT)
+        self._overwrite(scache.idx_key_cache, keys_tiled)
+        ttnn.deallocate(keys_rm)
+        ttnn.deallocate(keys_tiled)
+        if scache.comp_kv is not None:
+            kv_rm = paged(entries)
+            self._overwrite(scache.comp_kv, kv_rm)
+            ttnn.deallocate(kv_rm)
+
+
+# ================================================================================================= #
+# Prefill: the whole network over a prompt, many tokens per call.
+#
+# :class:`DeepSeekV4PrefillModel` is the prefill counterpart of :class:`DeepSeekV4Model`, following the
+# reference ``DeepseekV4ForCausalLM``::
+#
+#     streams = embed_tokens(ids) expanded to hc parallel streams        # [1, T, hc, D]
+#     for layer in layers: streams = layer(streams)                      # PrefillDecoderLayer
+#     hidden  = norm(hc_head(streams))                                   # collapse the streams, RMSNorm
+#     logits  = lm_head(hidden)
+#
+# It composes :class:`~.prefill.decoder_layer.DeepSeekV4PrefillDecoderLayer` with the embedding, a prefill
+# :class:`DeepSeekV4PrefillHyperHead`, the final RMSNorm and ``lm_head``. Prompts are multiples of
+# ``ALIGNMENT`` (128) tokens; a ragged tail is left to decode.
+#
+# Devices. ``layer_devices`` places each layer on a ``1 x tp_size`` mesh (attention heads and the MoE
+# intermediate width sharded over its ranks, everything else replicated); the embedding sits on the first
+# stage and the head on the last. :meth:`DeepSeekV4Model.build_prefill` puts every layer on its decode
+# submesh and hands in decode's routed experts, embedding table and ``lm_head``, so the two models share the
+# chips and the big weights, and :meth:`DeepSeekV4Model.commit_prefill_state` moves the finished state into
+# decode's buffers without leaving the device. The residual streams cross a stage boundary through the host
+# (one ``[1, T, hc, D]`` tensor per chunk per boundary).
+#
+# Weights use the checkpoint's names (no ``model.`` prefix): ``embed_tokens.weight``,
+# ``layers.{i}.<decoder-layer keys>``, ``hc_head.{hc_fn,hc_base,hc_scale}``, ``norm.weight`` and
+# ``lm_head.weight``, each a torch tensor or a zero-arg thunk. The routed experts come either from
+# ``expert_provider(layer_idx)`` (uploaded here) or as ready-made ``experts``.
+# ================================================================================================= #
+
+
+class DeepSeekV4PrefillHyperHead(DeepSeekV4Module):
+    """ttnn prefill port of ``DeepseekV4HyperHead`` (the final stream collapse).
+
+    The multi-token counterpart of the decode :class:`~.decode.hyperconnection.DeepSeekV4HyperHead`::
+
+        flat = unweighted_rmsnorm(streams.flatten(2))
+        pre  = sigmoid(hc_fn @ flat * hc_scale + hc_base) + eps
+        out  = (pre[..., None] * streams).sum(dim=2)
+
+    Unlike the layers' hyper-connections there is no ``post`` / ``comb``: the head only produces the
+    collapsed sequence. ``weights`` keys: ``hc_fn`` ``[hc, hc*D]``, ``hc_base`` ``[hc]``, ``hc_scale``
+    (a single scalar). The decode head keeps its operands in width-sharded L1, which is sized for a few
+    token rows; this one runs on DRAM-interleaved tensors.
+    """
+
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    ):
+        self.device = device
+        self.hc = config.hc_mult
+        self.hidden = config.hidden_size
+        self.eps = config.hc_eps
+        self.norm_eps = config.rms_norm_eps
+        cache = _as_cache(cache)
+
+        self.fn = Linear(weights["hc_fn"], device, cache.file("hc_fn.prefill"), dtype=weight_dtype)  # [hc, hc*D]
+        base_src = weights["hc_base"]
+        base_file = cache.file("hc_base.prefill")
+        base = _materialize(
+            lambda: (base_src() if callable(base_src) else base_src).detach().reshape(1, 1, 1, self.hc),
+            base_file,
+            ttnn.bfloat16,
+        )
+        self.base = _load_weight(base, device, cache_file_name=base_file)
+        scale_src = weights["hc_scale"]
+        self.scale = float((scale_src() if callable(scale_src) else scale_src).flatten().tolist()[0])
+
+    def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
+        """``streams`` ``[1, T, hc, D]`` TILE -> ``[1, 1, T, D]`` TILE, the collapsed sequence."""
+        _, t, hc, d = streams.shape
+        if hc != self.hc or d != self.hidden or streams.shape[0] != 1:
+            raise ValueError(f"expected streams [1, T, {self.hc}, {self.hidden}], got {tuple(streams.shape)}")
+
+        flat = flatten_streams(streams)
+        normed = wide_rms_norm(flat, self.norm_eps)
+        ttnn.deallocate(flat)
+        mixes = self.fn(normed)  # [1, 1, T, hc]
+        ttnn.deallocate(normed)
+        pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mixes, self.scale), self.base)), self.eps)
+        ttnn.deallocate(mixes)
+
+        # Weight each stream by its own per-token scalar and sum the streams. Streams go stream-major
+        # ([1, hc, T, D]) so the sum runs over a plain outer axis, and ``pre`` to [1, hc, T, 1] so it
+        # broadcasts across D: in ``[1, T, hc, D]`` the ``hc`` rows of a token share one tile.
+        rows = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+        stream_major = ttnn.to_layout(ttnn.permute(rows, (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(rows)
+        weights = ttnn.permute(pre, (0, 3, 2, 1))
+        ttnn.deallocate(pre)
+        weighted = ttnn.multiply(stream_major, weights)
+        ttnn.deallocate(stream_major)
+        ttnn.deallocate(weights)
+        out = ttnn.sum(weighted, dim=1, keepdim=True)  # [1, 1, T, D]
+        ttnn.deallocate(weighted)
+        return out
+
+
+class DeepSeekV4PrefillModel(DeepSeekV4Module):
+    """ttnn prefill port of ``DeepseekV4ForCausalLM`` (see the prefill section comment above).
+
+    ``num_layers`` builds only the first layers of the stack (bring-up, or a reduced test model). Weight
+    dtypes: ``weight_dtype`` for the attention projections, ``moe_weight_dtype`` for the routers and the
+    shared experts, ``expert_dtype`` for the routed experts this class uploads (``None`` takes the system
+    profile's default) and ``head_dtype`` for ``lm_head``.
+
+    ``device`` holds the embedding. ``layer_devices`` (one entry per layer, default ``device`` for all)
+    places each layer; the head lives with the last layer. ``tp_size`` is the width of the ``1 x tp_size``
+    meshes the layers run on (1 for a single device), and ``dense_csa`` lifts the CSA length limit without
+    the lightning indexer (see :class:`~.prefill.attention.DeepSeekV4PrefillAttention`); ``lightning_indexer``
+    runs the real indexer on CSA layers instead (the model's exact attention at any length, eager and traced).
+
+    ``embedding_weight`` (a ROW_MAJOR ``[V, D]`` table on ``device``) and ``lm_head`` (a :class:`~.layers.Linear`
+    on the last layer's device) reuse tensors another model already holds instead of uploading copies.
+    """
+
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        rope: dict,
+        expert_provider: Optional[Callable[[int], Callable[[int], tuple]]] = None,
+        experts: Optional[Sequence[DeepSeekV4PreloadedExperts]] = None,
+        num_layers: Optional[int] = None,
+        cache: Optional[WeightCache] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        moe_weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        expert_dtype: Optional[ttnn.DataType] = None,
+        head_dtype: ttnn.DataType = ttnn.bfloat16,
+        tp_size: int = 1,
+        layer_devices: Optional[Sequence[ttnn.MeshDevice]] = None,
+        dense_csa: bool = False,
+        lightning_indexer: bool = False,
+        progress: Optional[Callable[..., None]] = None,
+        embedding_weight: Optional[ttnn.Tensor] = None,
+        lm_head: Optional[Linear] = None,
+    ):
+        """Upload the embedding, the layers, the head and ``lm_head`` to their devices.
+
+        ``progress(message, important=False)`` is told what the model is about to do, at a fine grain
+        (each build step, each layer of each chunk, each stage hand-off, each wait on the device). A caller
+        keeps the last message to tell a slow step from a hung one, and logs the ``important`` ones (chunk
+        boundaries) always and the rest as it sees fit.
+        """
+        self._progress = progress or (lambda message, important=False: None)
+        self._tag = "build"
+        note = self._note
+        num_layers = config.num_hidden_layers if num_layers is None else num_layers
+        if not 0 < num_layers <= config.num_hidden_layers:
+            raise ValueError(f"num_layers {num_layers} is not in [1, {config.num_hidden_layers}]")
+        if experts is None and expert_provider is None:
+            raise ValueError("pass either expert_provider (to upload the routed experts) or ready-made experts")
+        if experts is not None and len(experts) < num_layers:
+            raise ValueError(f"got {len(experts)} experts objects for {num_layers} layers")
+        if layer_devices is None:
+            layer_devices = [device] * num_layers
+        if len(layer_devices) != num_layers:
+            raise ValueError(f"got {len(layer_devices)} layer devices for {num_layers} layers")
+        self.config = config
+        self.device = device
+        self.layer_devices = list(layer_devices)
+        self.head_device = self.layer_devices[-1]
+        self.tp_size = tp_size
+        self.hidden = config.hidden_size
+        self.vocab_size = config.vocab_size
+        self.hc = config.hc_mult
+        self._traced: Optional[TracedPrefill] = None
+        cache = _as_cache(cache)
+
+        if embedding_weight is not None:
+            self.embedding_weight = embedding_weight
+        else:
+            note(f"embedding table [{config.vocab_size} x {config.hidden_size}] -> device", important=True)
+            embed_file = cache.file("embed_tokens.prefill")
+            embed = _materialize(weights["embed_tokens.weight"], embed_file, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            # ``ttnn.embedding`` wants a ROW_MAJOR table.
+            self.embedding_weight = _load_weight(
+                embed.detach() if embed is not None else None,
+                device,
+                cache_file_name=embed_file,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        self.layers: list[DeepSeekV4PrefillDecoderLayer] = []
+        for i in range(num_layers):
+            layer_device = self.layer_devices[i]
+            layer_cache = cache.sub(f"layers.{i}")
+            layer_experts = experts[i] if experts is not None else None
+            if layer_experts is None:
+                note(f"layer {i + 1}/{num_layers} ({config.layer_types[i]}): routed experts", important=True)
+                layer_experts = DeepSeekV4PreloadedExperts(
+                    config,
+                    self._noting_provider(expert_provider(i), i, num_layers, config.num_local_experts),
+                    layer_device,
+                    dtype=expert_dtype,
+                    cache=layer_cache.sub("mlp"),
+                    tp_size=tp_size,
+                )
+            self.layers.append(
+                DeepSeekV4PrefillDecoderLayer(
+                    config,
+                    i,
+                    _strip_prefix(weights, f"layers.{i}"),
+                    layer_device,
+                    rope,
+                    experts=layer_experts,
+                    cache=layer_cache,
+                    weight_dtype=weight_dtype,
+                    moe_weight_dtype=moe_weight_dtype,
+                    tp_size=tp_size,
+                    dense_csa=dense_csa,
+                    lightning_indexer=lightning_indexer,
+                )
+            )
+            note(f"layer {i + 1}/{num_layers}: built (attention, router, shared expert, hyper-connections)")
+
+        note("final hyper head, norm and lm_head -> device", important=True)
+        self.hc_head = DeepSeekV4PrefillHyperHead(
+            config, _strip_prefix(weights, "hc_head"), self.head_device, cache=cache.sub("hc_head")
+        )
+        self.norm_weight = load_norm_gamma(weights["norm.weight"], self.head_device, cache.file("norm.prefill"))
+        self.eps = config.rms_norm_eps
+        self.lm_head = (
+            lm_head
+            if lm_head is not None
+            else Linear(weights["lm_head.weight"], self.head_device, cache.file("lm_head.prefill"), dtype=head_dtype)
+        )
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.layers)
+
+    @property
+    def devices(self) -> list[ttnn.MeshDevice]:
+        """The distinct devices the model uses, in pipeline order."""
+        seen: dict[int, ttnn.MeshDevice] = {}
+        for dev in [self.device, *self.layer_devices, self.head_device]:
+            seen.setdefault(id(dev), dev)
+        return list(seen.values())
+
+    def new_state(self) -> list[PrefillAttentionState]:
+        """One empty attention state per layer: the start of a prompt."""
+        return [layer.new_state() for layer in self.layers]
+
+    def synchronize(self, why: str = "") -> None:
+        """Block until every device the model uses has finished its queued work."""
+        devices = self.devices
+        for i, dev in enumerate(devices):
+            self._note(f"{self._tag}: {why or 'synchronize'} - waiting for device {i + 1}/{len(devices)}")
+            ttnn.synchronize_device(dev)
+
+    # ------------------------------------------------------------------ progress
+    def _note(self, message: str, important: bool = False) -> None:
+        """Report what the model is doing (see the constructor's ``progress``)."""
+        self._progress(message, important)
+
+    def _noting_provider(self, provider: Callable[[int], tuple], layer: int, num_layers: int, num_experts: int):
+        """``provider`` that reports every 32nd expert it is asked for (only a cache miss calls it at all)."""
+
+        def noting(e: int):
+            if e % 32 == 0:
+                self._note(
+                    f"layer {layer + 1}/{num_layers}: reading + quantizing routed expert {e}/{num_experts} "
+                    "from the checkpoint (weight-cache miss)"
+                )
+            return provider(e)
+
+        return noting
+
+    # ------------------------------------------------------------------ pieces
+    def _host_ids(self, input_ids) -> torch.Tensor:
+        """``input_ids`` (``[T]`` / ``[1, T]`` ints) as a validated ``[1, T]`` int64 torch tensor."""
+        ids = torch.as_tensor(input_ids)
+        if ids.dim() == 1:
+            ids = ids.unsqueeze(0)
+        if ids.dim() != 2 or ids.shape[0] != 1:
+            raise ValueError(f"expected token ids [T] or [1, T], got {tuple(ids.shape)}")
+        if ids.numel() == 0 or ids.shape[1] % ALIGNMENT:
+            raise ValueError(f"prompt length {ids.shape[1]} must be a positive multiple of {ALIGNMENT}")
+        if int(ids.min()) < 0 or int(ids.max()) >= self.vocab_size:
+            raise ValueError(f"token ids must lie in [0, {self.vocab_size})")
+        return ids.long()
+
+    def _upload_ids(self, ids: torch.Tensor, device: Optional[ttnn.MeshDevice] = None) -> ttnn.Tensor:
+        """``[1, T]`` ids as the uint32 ROW_MAJOR tensor the embedding and hash routers read (on every rank)."""
+        device = self.device if device is None else device
+        return ttnn.from_torch(
+            ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+        )
+
+    @staticmethod
+    def to_host(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> torch.Tensor:
+        """One rank's copy of a replicated device tensor, as fp32 torch (the tensors here are replicated)."""
+        if device.get_num_devices() > 1:
+            tensor = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            return tensor[: tensor.shape[0] // device.get_num_devices()].to(torch.float32)
+        return ttnn.to_torch(tensor).to(torch.float32)
+
+    def _handoff(self, streams: ttnn.Tensor, src: ttnn.MeshDevice, dst: ttnn.MeshDevice) -> ttnn.Tensor:
+        """Move the residual streams ``[1, T, hc, D]`` to the next pipeline stage, through the host."""
+        host = self.to_host(streams, src).to(torch.bfloat16)
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dst,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dst) if dst.get_num_devices() > 1 else None,
+        )
+
+    def embed(self, ids_dev: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1, T]`` uint32 ids -> the initial streams ``[1, T, hc, D]`` TILE: the embedding, once per stream."""
+        t = ids_dev.shape[1]
+        emb = ttnn.embedding(ids_dev, self.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T, D]
+        # ROW_MAJOR, where adding the stream axis is a view and repeating along it a page copy.
+        emb = ttnn.reshape(emb, [1, t, 1, self.hidden])
+        streams = ttnn.repeat(emb, ttnn.Shape([1, 1, self.hc, 1]))
+        return ttnn.to_layout(streams, ttnn.TILE_LAYOUT)
+
+    def head(self, streams: ttnn.Tensor, last_only: bool = True, select: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        """``streams`` ``[1, T, hc, D]`` -> logits ``[1, 1, 1, V]`` (the last token) or ``[1, 1, T, V]``.
+
+        ``select`` (a one-hot bf16 TILE row ``[1, 1, 1, T]``) picks the token instead of the last one.
+        """
+        self._note(f"{self._tag}: head (hyper head, final norm, lm_head)")
+        hidden = ttnn.rms_norm(self.hc_head(streams), weight=self.norm_weight, epsilon=self.eps)  # [1, 1, T, D]
+        if select is not None:
+            hidden = ttnn.matmul(select, hidden)
+        elif last_only:
+            t = hidden.shape[2]
+            hidden = ttnn.slice(hidden, [0, 0, t - 1, 0], [1, 1, t, self.hidden])
+        return self.lm_head(hidden)
+
+    def _stack(
+        self,
+        ids: torch.Tensor,
+        states: list[PrefillAttentionState],
+        on_layer: Optional[Callable[[int, ttnn.Tensor, ttnn.MeshDevice], None]] = None,
+    ) -> ttnn.Tensor:
+        """The embedding and every layer over one chunk of ``ids`` ``[1, T]``; the final streams (on the head device).
+
+        ``on_layer(index, streams, device)`` (verification) is called with each layer's output streams
+        before they move on; it must not deallocate them.
+        """
+        if len(states) != len(self.layers):
+            raise ValueError(f"expected {len(self.layers)} layer states, got {len(states)}")
+        ids_on: dict[int, ttnn.Tensor] = {}
+
+        def ids_for(dev: ttnn.MeshDevice) -> ttnn.Tensor:
+            if id(dev) not in ids_on:
+                ids_on[id(dev)] = self._upload_ids(ids, dev)
+            return ids_on[id(dev)]
+
+        self._note(f"{self._tag}: embedding")
+        streams = self.embed(ids_for(self.device))
+        current = self.device
+        stage = 0
+        for i, (layer, dev, state) in enumerate(zip(self.layers, self.layer_devices, states)):
+            if dev is not current:
+                stage += 1
+                self._note(f"{self._tag}: stage hand-off to stage {stage} (streams -> host -> next submesh)")
+                moved = self._handoff(streams, current, dev)
+                ttnn.deallocate(streams)
+                streams, current = moved, dev
+                self._note(f"{self._tag}: stage hand-off done")
+            kind = self.config.layer_types[i].replace("_attention", "")
+            self._note(f"{self._tag}: layer {i + 1}/{len(self.layers)} ({kind}, stage {stage}) enqueue")
+            out = layer(streams, state, ids_for(dev))
+            if on_layer is not None:
+                on_layer(i, out, dev)
+            ttnn.deallocate(streams)
+            streams = out
+        for t in ids_on.values():
+            ttnn.deallocate(t)
+        return streams
+
+    # ------------------------------------------------------------------ public
+    def forward(
+        self, input_ids, states: Optional[list[PrefillAttentionState]] = None, last_only: bool = True
+    ) -> ttnn.Tensor:
+        """The network over one chunk of a prompt.
+
+        ``input_ids`` is ``[T]`` / ``[1, T]`` torch ints with ``T`` a multiple of ``ALIGNMENT``;
+        ``states`` is this model's per-layer state (:meth:`new_state`), advanced in place -- ``None`` runs a
+        whole prompt from scratch and discards it. Returns bf16 TILE logits ``[1, 1, 1, V]`` for the chunk's
+        last token, or ``[1, 1, T, V]`` for every token with ``last_only=False``, on the head device
+        (replicated across its ranks; read one with :meth:`to_host`).
+        """
+        ids = self._host_ids(input_ids)
+        self._tag = "forward"
+        streams = self._stack(ids, self.new_state() if states is None else states)
+        logits = self.head(streams, last_only)
+        ttnn.deallocate(streams)
+        return logits
+
+    def prefill(
+        self,
+        input_ids,
+        chunk_size: int = 1024,
+        on_chunk: Optional[Callable[[int, int, int, float], None]] = None,
+        states: Optional[list[PrefillAttentionState]] = None,
+    ) -> tuple[ttnn.Tensor, list[PrefillAttentionState]]:
+        """A whole prompt as consecutive ``chunk_size`` chunks; returns ``(last-token logits, states)``.
+
+        The logits are ``[1, 1, 1, V]`` for the prompt's last token, and ``states`` is what decode (or a
+        further chunk) continues from. Only the last chunk pays for the head.
+
+        ``on_chunk(index, start, end, seconds)`` is called after every chunk with its wall time. Giving it
+        makes the model synchronize every device before and after each chunk, so ``seconds`` covers all of
+        the chunk's device work (the last chunk includes the head); without it the chunks are enqueued back
+        to back. ``states`` continues an earlier prefill instead of starting a new one.
+        """
+        if chunk_size <= 0 or chunk_size % ALIGNMENT:
+            raise ValueError(f"chunk_size {chunk_size} must be a positive multiple of {ALIGNMENT}")
+        ids = self._host_ids(input_ids)
+        total = ids.shape[1]
+        states = self.new_state() if states is None else states
+        num_chunks = -(-total // chunk_size)
+        for index, start in enumerate(range(0, total, chunk_size)):
+            end = min(total, start + chunk_size)
+            self._tag = f"chunk {index + 1}/{num_chunks}"
+            if on_chunk is not None:
+                self.synchronize("before the chunk")
+            self._note(f"{self._tag} [{start}, {end}): start", important=True)
+            t0 = time.perf_counter()
+            streams = self._stack(ids[:, start:end], states)
+            last = end == total
+            logits = self.head(streams, last_only=True) if last else None
+            ttnn.deallocate(streams)
+            self._note(f"{self._tag}: all work enqueued in {time.perf_counter() - t0:.2f} s")
+            if on_chunk is not None:
+                self.synchronize("device compute")
+                on_chunk(index, start, end, time.perf_counter() - t0)
+        return logits, states
+
+    # ------------------------------------------------------------------ traced prefill
+    def prepare_traced_prefill(self, max_len: int, chunk_size: int = 1024) -> None:
+        """Capture the chunk trace for prompts of up to ``max_len`` tokens (see :class:`TracedPrefill`).
+
+        Allocates persistent state (its compressed-KV buffers sized for ``max_len``) and the H2D / D2D / D2H
+        sockets, compiles the ``chunk_size``-token chunk step, then captures it: one trace per stage. Do this right
+        after building the model and before any eager :meth:`prefill` / :meth:`forward` (allocating on a device
+        that holds a trace is unsafe); :meth:`prefill_traced` then serves any such prompt without compiling or
+        capturing again.
+
+        One plan at a time: for a longer ``max_len`` or another ``chunk_size``, :meth:`release_traced_prefill`
+        first, then prepare again. Preparing with the prepared ``chunk_size`` and a ``max_len`` it covers is a
+        no-op.
+        """
+        if self._traced is not None and self._traced.prepared:
+            if self._traced._chunk_size == chunk_size and max_len <= self._traced._max_len:
+                return
+            raise RuntimeError(
+                f"a traced prefill plan for up to {self._traced._max_len} tokens in chunks of "
+                f"{self._traced._chunk_size} is prepared; release_traced_prefill() before preparing another"
+            )
+        self._traced = TracedPrefill(self)
+        self._traced.prepare(max_len, chunk_size)
+
+    def prefill_traced(
+        self,
+        input_ids,
+        on_chunk: Optional[Callable[[int, int, int, float], None]] = None,
+    ) -> tuple[torch.Tensor, list[PrefillAttentionState]]:
+        """:meth:`prefill` by replaying the traces of :meth:`prepare_traced_prefill`, the stages pipelined.
+
+        ``input_ids`` is a multiple of ``ALIGNMENT`` tokens, at most the prepared ``max_len``. Returns
+        ``(logits, states)``: the last-token logits as a host fp32 ``[1, 1, 1, V]`` tensor (they arrive over the D2H
+        socket), and ``states`` read out of persistent buffers, so commit (or copy) them before calling again: the
+        next call overwrites them. ``on_chunk`` gets the time between consecutive chunks' logits (see
+        :meth:`TracedPrefill.run`).
+        """
+        if self._traced is None or not self._traced.prepared:
+            raise RuntimeError("call prepare_traced_prefill(max_len, chunk_size) first")
+        return self._traced.run(input_ids, on_chunk=on_chunk)
+
+    def free_traced_states(self, states: list[PrefillAttentionState]) -> None:
+        """Free what :meth:`prefill_traced` allocated for ``states`` (slices; the persistent buffers stay), once
+        they are consumed and before the next :meth:`prefill_traced`."""
+        self._traced.free_states(states)
+
+    def release_traced_prefill(self) -> None:
+        """Release every captured prefill trace and close its sockets, so the devices can allocate freely again
+        (e.g. a decode model).
+
+        The persistent buffers stay: the states :meth:`prefill_traced` returned remain valid.
+        """
+        if self._traced is not None:
+            self._traced.release()
+
+
+# --- Traced prefill ------------------------------------------------------------------------------ #
+# Capture the chunk step once per pipeline stage and replay it for every chunk, with the stages running as a
+# pipeline: with S stages, S chunks are in flight at once, one in each stage. This is the prefill twin of the
+# traced decode (:meth:`DeepSeekV4Model.decode_traced`), and it moves its data the same way:
+#
+# * H2D packet socket. A chunk's only host input is one INT32 packet -- its token ids and positions (see
+#   :meth:`TracedPrefill._layout_packet`) -- pushed into an H2D socket on stage 0 and received inside stage 0's
+#   trace (``recv_async_h2d``), then broadcast over the stage's TP ranks.
+# * D2D sockets. Every stage's trace ends by sending the residual streams (row-major, so no tile padding goes over
+#   the wire) and the packet to the next stage, whose trace starts by receiving them into persistent buffers.
+# * D2H output socket. The last stage's trace runs the head on the chunk's last token and streams those logits to
+#   the host (``send_async_d2h``), which reads them off the socket instead of issuing a readback.
+#
+# Nothing crosses the host between stages and no host write sits between two replays, so ``execute_trace`` is
+# posted ahead of time (from a replay thread, as decode does) while the host feeds packets and reads logits. A
+# stage starts chunk c + 1 as soon as it has handed chunk c on; the sockets are the only synchronization.
+#
+# A trace is a flat, fixed op sequence over fixed buffers, and the eager prefill is neither: every chunk uploads
+# its RoPE tables, mask and ids from the host, its compressed KV grows by a concat, and the SDPA key length grows
+# with it. So the traced path makes each of those static:
+#
+# * State in place. Each layer owns persistent :class:`~.prefill.attention.PrefillStaticBuffers`: the K=V
+#   ``tail``, the CSA overlap window and a *FIFO* of compressed entries anchored at its end (a chunk drops the
+#   oldest rows of the window it reads and appends its own; SDPA does not care about key order, the mask names
+#   the rows).
+# * Per-chunk inputs made in the trace from the packet. The RoPE rows are gathered (``ttnn.embedding``) from
+#   whole-prompt tables at the packet's positions, and a mask is a per-layer-type constant plus a column cut
+#   that depends only on the chunk's start
+#   (:meth:`~.prefill.attention.DeepSeekV4PrefillAttention.mask_tables_host`). Nothing is allocated between
+#   captures: allocating on a device that holds a trace is unsafe.
+# * One shape. Every chunk is ``C = chunk_size`` tokens, and every layer reads its *whole* FIFO: the SDPA key axis
+#   is ``sliding_window + C + capacity``, the rows not yet filled masked out. So one trace per stage serves every
+#   chunk of every prompt of up to ``max_len`` tokens, at the price of attending over the masked rows early on.
+# * Padding. A prompt's last chunk is padded at its end (with repeats of its own tokens). Attention is causal, so
+#   no real token sees the padding; what the padding does leave behind is the state after it, the head's last
+#   token and the FIFOs' last rows, so the packet names the chunk's last real token (the head picks it), the last
+#   chunk's ``[tail | chunk]`` window and Ca overlap rows are kept (``PrefillStaticBuffers``), and
+#   :meth:`TracedPrefill._export_states` slices the real state out of them and drops the padding's entries.
+#
+# One trace covers all the layers of one stage (the embedding on the first, the head on the last).
+# :meth:`TracedPrefill.prepare` compiles it eagerly, *then* captures it (a compile run allocates), once per
+# ``(max_len, chunk_size)``; :meth:`TracedPrefill.run` replays it for any prompt of up to ``max_len`` tokens (a
+# multiple of ``ALIGNMENT``). The result is interchangeable with :meth:`DeepSeekV4PrefillModel.prefill` (same chunk
+# boundaries), except that the logits arrive on the host; the states are read out of the persistent buffers, so
+# commit (or copy) them (:meth:`DeepSeekV4Model.commit_prefill_state`) before the next run.
+
+# Packets the prefill H2D FIFO holds. One, not several: the FIFO sits in L1 on a worker core, and
+# ``indexer_score_dsa``'s circular buffers already reach within ~30 KB of the top of that core's L1, so a
+# second packet (a 1024-token chunk's packet is ~9 KB) overlaps them. The host's write blocks until stage 0
+# has taken the packet, which the pipeline accounts for (see :meth:`TracedPrefill.run`).
+_PREFILL_PKT_FIFO_PACKETS = 1
+
+
+def _round_up(n: int, multiple: int) -> int:
+    return -(-n // multiple) * multiple
+
+
+@dataclass
+class _StageIO:
+    """Persistent per-stage device tensors: the D2D receive buffer, the mask constants and the head's row ramp."""
+
+    streams_in: Optional[ttnn.Tensor]  # [1, C, hc, D] bf16 ROW_MAJOR (stages after the first)
+    masks: dict  # layer_type -> (static [1, 1, C, K] bf16, threshold [1, 1, 1, K] fp32), K = sw + C + capacity
+    index_pads: dict = field(default_factory=dict)  # layer_type -> [1, 1, kv_len, index_head_dim] zero key pad
+    ramp: Optional[ttnn.Tensor] = None  # [1, 1, 1, C] fp32 TILE 0 .. C - 1 (last stage): the head's one-hot row
+
+
+@dataclass
+class _Stage:
+    """The contiguous run of layers that share one device (one pipeline stage), its buffers, sockets and traces."""
+
+    index: int
+    device: ttnn.MeshDevice
+    layers: list[int]
+    first: bool
+    last: bool = False
+    types: set = field(default_factory=set)
+    pkt: Optional[ttnn.Tensor] = None  # [1, 1, 1, W] INT32 ROW_MAJOR chunk packet (H2D on stage 0, D2D after)
+    rope: dict = field(default_factory=dict)  # kind -> (cos, sin) [max_len rounded up to C, rope_dim] bf16 ROW_MAJOR
+    io: Optional[_StageIO] = None
+    recv: object = None  # receiver socket from the previous stage
+    send: object = None  # sender socket to the next stage
+    trace: Optional[int] = None
+
+
+class TracedPrefill:
+    """Traced, pipelined execution of a :class:`DeepSeekV4PrefillModel` (see the section comment above)."""
+
+    def __init__(self, model: DeepSeekV4PrefillModel):
+        self.model = model
+        self.config = model.config
+        self.prepared = False
+        self.stages: list[_Stage] = []
+        self.buffers: dict = {}
+        self._entry_capacity: dict = {}  # layer type -> FIFO rows, every one of which each chunk reads
+        self._max_len = 0
+        self._prompt_len = 0  # the last run's prompt length
+        self._chunk_size = 0
+        self._pkt_socket = None
+        self._out_socket = None
+        self._pkt_entry: dict = {}  # compress rate -> packet offset of the chunk's entry positions
+        self._pkt_last = 0  # packet offset of the chunk's last real token (its index in the chunk)
+        self._pkt_w = 0
+        self._pkt_page_bytes = 0
+        self._out_plan: Optional[tuple[int, int]] = None  # (rows, cols) of one chunk's logits on the D2H socket
+
+    # ------------------------------------------------------------------ planning
+    @staticmethod
+    def _plan_chunks(prompt_len: int, chunk_size: int) -> list[tuple[int, int]]:
+        """``[(start, real tokens)]``: full chunks, then the remainder (padded to ``chunk_size`` when it runs)."""
+        return [(s, min(chunk_size, prompt_len - s)) for s in range(0, prompt_len, chunk_size)]
+
+    def _rates(self, stage: _Stage) -> list[int]:
+        """The compress rates of the stage's CSA / HCA layers."""
+        return sorted({self.config.compress_rates[lt] for lt in stage.types if lt != SLIDING_ATTENTION})
+
+    def _group_stages(self) -> list[_Stage]:
+        stages: list[_Stage] = []
+        for li, dev in enumerate(self.model.layer_devices):
+            if not stages or stages[-1].device is not dev:
+                stages.append(_Stage(index=len(stages), device=dev, layers=[], first=not stages))
+            stages[-1].layers.append(li)
+            stages[-1].types.add(self.config.layer_types[li])
+        stages[-1].last = True
+        return stages
+
+    def _layout_packet(self, chunk_size: int) -> None:
+        """Fix the INT32 slots of the chunk packet for chunks of ``C = chunk_size`` tokens.
+
+        ``[0, C)`` the token ids, ``[C, 2C)`` the token positions ``start + i`` (slot ``C`` doubles as the chunk's
+        start), then per compress rate ``r`` the ``C / r`` positions ``start + w * r`` of the chunk's compressed
+        entries, then one slot: the index in the chunk of its last real token (the head's token). The row is one
+        H2D socket page, so its width is rounded up to the PCIe alignment.
+        """
+        offset = 2 * chunk_size
+        self._pkt_entry = {}
+        for rate in sorted({self.config.compress_rates[lt] for lt in self._entry_capacity}):
+            self._pkt_entry[rate] = offset
+            offset += chunk_size // rate
+        self._pkt_last = offset
+        offset += 1
+        alignment = active_system_config().pipeline.pcie_alignment
+        self._pkt_page_bytes = math.ceil(offset * 4 / alignment) * alignment
+        self._pkt_w = self._pkt_page_bytes // 4
+
+    def _packet(self, chunk_ids: torch.Tensor, start: int) -> torch.Tensor:
+        """The host packet ``[1, 1, 1, W]`` INT32 of the chunk ``chunk_ids`` (``t <= C`` ints) starting at
+        ``start``, padded to ``C`` tokens with repeats of its own."""
+        t, c = chunk_ids.numel(), self._chunk_size
+        ids = chunk_ids.reshape(-1).to(torch.int32)
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        row = packet[0, 0, 0]
+        row[:c] = ids.repeat(-(-c // t))[:c]
+        row[c : 2 * c] = start + torch.arange(c, dtype=torch.int32)
+        for rate, offset in self._pkt_entry.items():
+            row[offset : offset + c // rate] = start + rate * torch.arange(c // rate, dtype=torch.int32)
+        row[self._pkt_last] = t - 1
+        return packet
+
+    # ------------------------------------------------------------------ allocation (before any trace)
+    def _representative(self, stage: _Stage, layer_type: str):
+        """One attention block of ``layer_type`` on ``stage`` (the source of its host / device helpers)."""
+        for li in stage.layers:
+            if self.config.layer_types[li] == layer_type:
+                return self.model.layers[li].self_attn
+        raise KeyError(layer_type)
+
+    def _allocate(self, max_len: int, chunk_size: int) -> None:
+        model, config = self.model, self.config
+        present = {config.layer_types[i] for i in range(model.num_layers)}
+        padded = _round_up(max_len, chunk_size)  # the last chunk's padding emits entries too
+        self._entry_capacity = {
+            lt: _round_up(max(padded // config.compress_rates[lt], 1), ALIGNMENT)
+            for lt in (COMPRESSED_SPARSE_ATTENTION, HEAVILY_COMPRESSED_ATTENTION)
+            if lt in present
+        }
+        self.stages = self._group_stages()
+        self._layout_packet(chunk_size)
+
+        for li, layer in enumerate(model.layers):
+            lt = config.layer_types[li]
+            self.buffers[li] = layer.self_attn.new_static_buffers(chunk_size, self._entry_capacity.get(lt, 0))
+
+        for stage in self.stages:
+            dev = stage.device
+            stage.pkt = ttnn.from_torch(
+                torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None,
+            )
+            for lt in stage.types:
+                attn = self._representative(stage, lt)
+                if attn.rope_kind not in stage.rope:
+                    stage.rope[attn.rope_kind] = self._rope_tables(attn, max_len, padded)
+            stage.io = self._allocate_io(stage, chunk_size)
+        self._open_sockets()
+
+    @staticmethod
+    def _rope_tables(attn, needed: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``(cos, sin)`` ``[length, rope_dim]`` bf16 ROW_MAJOR on ``attn``'s device, the rows every chunk gathers.
+
+        The same values as the eager path's per-chunk tables (:meth:`~.prefill.attention.DeepSeekV4PrefillAttention._rope_tables`)
+        for the ``needed`` positions a prompt can reach; rows past the model's table are zero (only padding reads them).
+        """
+        cos_half, sin_half = attn.rope[attn.rope_kind]
+        if cos_half.shape[0] < needed:
+            raise ValueError(f"rope table covers {cos_half.shape[0]} positions but the prompt needs {needed}")
+
+        def table(half: torch.Tensor) -> ttnn.Tensor:
+            half = half[:length].float()
+            half = torch.cat([half, half.new_zeros(length - half.shape[0], half.shape[1])])
+            return ttnn.from_torch(
+                half.repeat_interleave(2, dim=-1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=attn.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=attn._replicate,
+            )
+
+        return table(cos_half), table(sin_half)
+
+    def _allocate_io(self, stage: _Stage, t: int) -> _StageIO:
+        model = self.model
+        dev = stage.device
+        streams_in = None
+        if not stage.first:
+            streams_in = ttnn.from_torch(
+                torch.zeros(1, t, model.hc, model.hidden, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None,
+            )
+        masks, index_pads = {}, {}
+        for lt in stage.types:
+            attn = self._representative(stage, lt)
+            cap = self._entry_capacity.get(lt, 0)
+            static, threshold = attn.mask_tables_host(t, cap)
+            masks[lt] = (
+                attn._to_device(static.reshape(1, 1, t, -1)),
+                attn._to_device(threshold.reshape(1, 1, 1, -1), dtype=ttnn.float32),
+            )
+            if lt == COMPRESSED_SPARSE_ATTENTION and attn.use_indexer:
+                # chunk_start_idx (= cap) must sit strictly inside the key pad; pad past the chunk too.
+                index_pads[lt] = attn._zeros_rm(_round_up(cap + t, 64), attn.index_head_dim)
+        ramp = None
+        if stage.last:
+            ramp = ttnn.from_torch(
+                torch.arange(t, dtype=torch.float32).reshape(1, 1, 1, t),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None,
+            )
+        return _StageIO(streams_in, masks, index_pads, ramp)
+
+    def _open_sockets(self) -> None:
+        """The H2D packet socket on stage 0, the D2D pairs between consecutive stages and the D2H logits socket on
+        the last stage. Opened before any trace exists, because each allocates L1 on its cores."""
+        pipeline = active_system_config().pipeline
+        first, last = self.stages[0], self.stages[-1]
+        self._pkt_socket = ttnn.H2DSocket(
+            first.device,
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_PKT_SOCKET_CORE)),
+            ttnn.BufferType.L1,
+            _PREFILL_PKT_FIFO_PACKETS * self._pkt_page_bytes,
+            ttnn.H2DMode.HOST_PUSH,
+        )
+        # ``recv_async_h2d`` cross-checks this against the packet's aligned page size on every program-cache miss.
+        self._pkt_socket.set_page_size(self._pkt_page_bytes)
+        for upstream, downstream in zip(self.stages, self.stages[1:]):
+            upstream.send, downstream.recv = _create_socket_pair(
+                upstream.device, downstream.device, pipeline.socket_l1_bytes
+            )
+        self._out_socket = ttnn.D2HSocket(
+            last.device,
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_OUT_SOCKET_CORE)),
+            pipeline.d2h_fifo_bytes,
+        )
+        # bf16 logits (see _send_logits); one row is one socket page, which has to fit the FIFO.
+        self._out_plan = _d2h_page_plan(
+            self.model.vocab_size,
+            2,
+            page_cap_bytes=pipeline.d2h_fifo_bytes,
+            pcie_alignment=pipeline.pcie_alignment,
+        )
+        self._out_socket.set_page_size(self._out_plan[1] * 2)
+
+    # ------------------------------------------------------------------ the traced body
+    def _step_inputs(self, stage: _Stage, pkt: ttnn.Tensor) -> tuple:
+        """``(ids, step, made)``: the chunk's ``[1, C]`` uint32 ids and :class:`PrefillStaticStep`, built on device
+        from the packet ``pkt``, and every tensor made here (for the caller to free once the layers have run)."""
+        t = c = self._chunk_size
+        io = stage.io
+        caps = {lt: self._entry_capacity.get(lt, 0) for lt in stage.types}
+        sw = self.config.sliding_window
+        made: list = []
+
+        def keep(tensor: ttnn.Tensor) -> ttnn.Tensor:
+            made.append(tensor)
+            return tensor
+
+        def slots(offset: int, n: int) -> ttnn.Tensor:
+            """``n`` packet slots from ``offset``, as a ``[1, n]`` uint32 ROW_MAJOR tensor."""
+            row = ttnn.slice(pkt, [0, 0, 0, offset], [1, 1, 1, offset + n])
+            return keep(ttnn.typecast(ttnn.reshape(row, [1, n]), ttnn.uint32))
+
+        def gather(tables: tuple, positions: ttnn.Tensor, n: int) -> tuple:
+            """The RoPE rows at ``positions``: ``(cos, sin)`` ``[1, 1, n, rope_dim]`` bf16 TILE."""
+            out = []
+            for table in tables:
+                rows = ttnn.embedding(positions, table, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, n, rope_dim]
+                out.append(keep(ttnn.to_layout(ttnn.reshape(rows, [1, 1, n, rows.shape[-1]]), ttnn.TILE_LAYOUT)))
+                ttnn.deallocate(rows)
+            return tuple(out)
+
+        ids = slots(0, t)
+        positions = slots(c, t)
+        rope = {kind: gather(tables, positions, t) for kind, tables in stage.rope.items()}
+        entry_rope = {}
+        for rate in self._rates(stage):
+            n = t // rate
+            entry_rope[rate] = gather(stage.rope["compress"], slots(self._pkt_entry[rate], n), n)
+
+        start = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]), [1, 1, 1, 1])
+        start_f = keep(ttnn.typecast(ttnn.to_layout(start, ttnn.TILE_LAYOUT), ttnn.float32))
+        masks, index_cuts, index_pads = {}, {}, {}
+        for lt in stage.types:
+            cap = caps[lt]
+            static, threshold = io.masks[lt]
+            cut = ttnn.typecast(ttnn.multiply(ttnn.gt(threshold, start_f), _MASK_NEG), ttnn.bfloat16)
+            masks[lt] = keep(ttnn.add(static, cut))  # [1, 1, T, K] + the [1, 1, 1, K] start-dependent cut
+            ttnn.deallocate(cut)
+            if lt == COMPRESSED_SPARSE_ATTENTION and self._representative(stage, lt).use_indexer:
+                # The indexer's causal cut over the FIFO rows is the mask's entry columns.
+                index_cuts[lt] = keep(ttnn.slice(masks[lt], [0, 0, 0, sw + t], [1, 1, t, sw + t + cap]))
+                index_pads[lt] = io.index_pads[lt]
+        step = PrefillStaticStep(
+            rope=rope,
+            entry_rope=entry_rope,
+            masks=masks,
+            caps=caps,
+            index_cuts=index_cuts,
+            index_pads=index_pads,
+        )
+        return ids, step, made
+
+    def _head_select(self, stage: _Stage, pkt: ttnn.Tensor) -> ttnn.Tensor:
+        """The one-hot bf16 TILE row ``[1, 1, 1, C]`` of the chunk's last real token (its packet slot)."""
+        last = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, self._pkt_last], [1, 1, 1, self._pkt_last + 1]), [1, 1, 1, 1])
+        last_f = ttnn.typecast(ttnn.to_layout(last, ttnn.TILE_LAYOUT), ttnn.float32)
+        hit = ttnn.eq(stage.io.ramp, last_f)
+        ttnn.deallocate(last_f)
+        select = ttnn.typecast(hit, ttnn.bfloat16)
+        ttnn.deallocate(hit)
+        return select
+
+    def _stage_forward(self, stage: _Stage) -> None:
+        """One stage over one chunk: receive, embed (first stage), the stage's layers, send on.
+
+        Stage 0 receives the packet from the host (H2D) and broadcasts it over its TP ranks; a later stage receives
+        the streams and the packet from the stage before it (D2D, in the order they are sent). The last stage runs
+        the head on the chunk's last real token and sends the logits to the host (D2H); every other stage sends the
+        streams and the packet to the next one. Shared by the compile run and the trace capture.
+        """
+        model = self.model
+        io = stage.io
+        pkt = stage.pkt
+        if stage.first:
+            # Parks on the socket until the host pushes this chunk's packet (it may well have already).
+            ttnn.experimental.recv_async_h2d(stage.pkt, self._pkt_socket)
+            if stage.device.get_num_devices() > 1:
+                pkt = ttnn.broadcast(stage.pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+        else:
+            ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)
+            ttnn.experimental.recv_direct_async(stage.pkt, stage.recv)
+        ids, step, made = self._step_inputs(stage, pkt)
+        streams = model.embed(ids) if stage.first else ttnn.to_layout(io.streams_in, ttnn.TILE_LAYOUT)
+        for li in stage.layers:
+            out = model.layers[li].forward_static(streams, self.buffers[li], step, ids)
+            ttnn.deallocate(streams)
+            streams = out
+        if stage.last:
+            select = self._head_select(stage, pkt)
+            self._send_logits(model.head(streams, select=select))
+            ttnn.deallocate(select)
+        else:
+            rows = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.experimental.send_direct_async(rows, stage.send)
+            ttnn.experimental.send_direct_async(pkt, stage.send)
+            ttnn.deallocate(rows)
+        ttnn.deallocate(streams)
+        for tensor in made:
+            ttnn.deallocate(tensor)
+        if pkt is not stage.pkt:
+            ttnn.deallocate(pkt)
+
+    def _send_logits(self, logits: ttnn.Tensor) -> None:
+        """Stream a chunk's last-token logits ``[1, 1, 1, V]`` to the host over the D2H socket (inside the trace).
+
+        ``send_async_d2h`` sends whole row-major pages and a row is one page, which has to fit the socket FIFO, so
+        the logits go as ``(rows, cols)`` (:func:`_d2h_page_plan`) rather than as one vocab-wide row.
+        """
+        rows, cols = self._out_plan
+        if logits.dtype != ttnn.bfloat16:
+            logits = ttnn.typecast(logits, ttnn.bfloat16)
+        paged = ttnn.to_layout(ttnn.reshape(logits, [1, 1, rows, cols]), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.experimental.send_async_d2h(ttnn.reshape(paged, [rows, cols]), self._out_socket)
+        ttnn.deallocate(paged)
+        ttnn.deallocate(logits)
+
+    def _read_logits(self) -> torch.Tensor:
+        """The oldest unread chunk's logits off the D2H socket, fp32 ``[1, 1, 1, V]`` (blocks until they arrive)."""
+        rows, cols = self._out_plan
+        out = torch.empty(rows, cols, dtype=torch.bfloat16)
+        self._out_socket.read_tensor(out)
+        return out.reshape(1, 1, 1, -1).float()
+
+    # ------------------------------------------------------------------ prepare: compile, then capture
+    def prepare(self, max_len: int, chunk_size: int = 1024) -> None:
+        """Allocate the persistent buffers and sockets, compile the chunk step eagerly, then capture it: one trace
+        per stage.
+
+        The traces then serve every prompt of up to ``max_len`` tokens (see the section comment). Must run before
+        the model does anything else that allocates on its devices per prompt (eager prefills included).
+        ``max_len`` and ``chunk_size`` are multiples of ``ALIGNMENT``; ``max_len`` sizes the FIFOs every chunk reads.
+        """
+        model = self.model
+        for name, value in (("max_len", max_len), ("chunk_size", chunk_size)):
+            if value <= 0 or value % ALIGNMENT:
+                raise ValueError(f"{name}={value} must be a positive multiple of {ALIGNMENT}")
+        if self.prepared:
+            raise RuntimeError("traced prefill is already prepared; another plan needs another TracedPrefill")
+        self._max_len, self._chunk_size = max_len, chunk_size
+        model._tag = "traced prepare"
+        model._note("traced prefill: allocating persistent buffers and sockets", important=True)
+        self._allocate(max_len, chunk_size)
+        self._stop_prefetcher()
+        logger.info(
+            f"[traced-prefill] prompts of up to {max_len} tokens in chunks of {chunk_size}: one trace x "
+            f"{len(self.stages)} stage(s); entry buffers {self._entry_capacity}; packet {self._pkt_page_bytes} B"
+        )
+
+        # Pass 1: the compile run, while no trace exists (a compile run allocates freely). It executes, so it takes
+        # a packet and sends logits, drained here. Every stage is issued before the read, since a stage's send parks
+        # until the next stage posts its receive.
+        self._pkt_socket.write_tensor(self._packet(torch.zeros(chunk_size, dtype=torch.long), 0))
+        for stage in self.stages:
+            model._note(f"traced prefill: compiling stage {stage.index}", important=True)
+            self._stage_forward(stage)
+        self._read_logits()
+        for stage in self.stages:
+            ttnn.synchronize_device(stage.device)
+
+        # Pass 2: capture.
+        for stage in self.stages:
+            model._note(f"traced prefill: capturing stage {stage.index}", important=True)
+            tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
+            with _trace_capture_guard():
+                self._stage_forward(stage)
+            ttnn.end_trace_capture(stage.device, tid, cq_id=0)
+            stage.trace = tid
+        self.prepared = True
+        model._note("traced prefill: ready", important=True)
+
+    # ------------------------------------------------------------------ run
+    def _reset(self) -> None:
+        for li, layer in enumerate(self.model.layers):
+            layer.self_attn.reset_static(self.buffers[li])
+
+    def _stop_prefetcher(self) -> None:
+        """Retire any DRISC tensor prefetcher on the prefill devices before a prefill trace is captured or replayed.
+
+        The device is synchronized first, so every queued ``matmul_decode`` has consumed its prefetch request and the
+        clean stop's sentinel is the only thing left in the senders' FIFO (a no-op if no prefetcher runs there).
+        A decode model must not leave a request queued for a matmul it never ran (``LinearDecode.prefetch_queued``):
+        the sentinel would queue behind it and the stop would never return.
+        """
+        for device in {id(d): d for d in [*(s.device for s in self.stages), self.model.head_device]}.values():
+            ttnn.synchronize_device(device)
+            ttnn.experimental.stop_tensor_prefetcher(device)
+            ttnn.synchronize_device(device)
+
+    def release(self) -> None:
+        """Release the stage traces and close the sockets; the model cannot replay until :meth:`prepare` runs again."""
+        for stage in self.stages:
+            ttnn.synchronize_device(stage.device)
+            if stage.trace is not None:
+                ttnn.release_trace(stage.device, stage.trace)
+            stage.trace = None
+            stage.send = stage.recv = None
+        self._pkt_socket = self._out_socket = None
+        self.prepared = False
+
+    def _replay(self, chunks: queue.Queue) -> None:
+        """Replay-thread body: post every stage's trace for each queued chunk index, until ``None`` arrives."""
+        try:
+            for _ in iter(chunks.get, None):
+                for stage in self.stages:
+                    ttnn.execute_trace(stage.device, stage.trace, cq_id=0, blocking=False)
+        except Exception:
+            logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
+            raise
+
+    def run(
+        self,
+        input_ids,
+        on_chunk: Optional[Callable[[int, int, int, float], None]] = None,
+    ) -> tuple[torch.Tensor, list[PrefillAttentionState]]:
+        """Replay the captured traces over ``input_ids`` (up to the prepared ``max_len``); returns ``(logits, states)``.
+
+        The stages run as a pipeline, one chunk in each: a replay thread posts every chunk's ``execute_trace`` on
+        every stage ahead of time, while this thread pushes each chunk's packet into the H2D socket and reads each
+        chunk's logits off the D2H socket, with at most one chunk per stage fed but not yet read (the H2D FIFO holds a
+        single packet, so the host's next write waits until stage 0 has taken the previous one). ``logits`` is the
+        prompt's last-token logits, fp32 ``[1, 1, 1, V]`` on the host;
+        ``states`` are read out of the persistent buffers.
+
+        ``on_chunk(index, start, end, seconds)`` is called as each chunk's logits arrive, in chunk order, with the time
+        since the previous chunk's arrived (the first chunk: since the run started, so it includes filling the
+        pipeline). With the pipeline full that is the time per chunk, and the ``seconds`` add up to the whole prefill.
+        """
+        if not self.prepared:
+            raise RuntimeError("call prepare(max_len, chunk_size) first")
+        model = self.model
+        ids = model._host_ids(input_ids)
+        n = ids.shape[1]
+        if n <= 0 or n % ALIGNMENT or n > self._max_len:
+            raise ValueError(
+                f"traces were captured for prompts of up to {self._max_len} tokens in multiples of {ALIGNMENT}, got {n}"
+            )
+        self._stop_prefetcher()
+        self._reset()
+        self._prompt_len = n
+        plan = self._plan_chunks(n, self._chunk_size)
+        num_chunks = len(plan)
+        # One chunk per stage, plus as many as the H2D FIFO can hold. One more and the host's next write blocks
+        # on stage 0 while the last stage blocks on the host reading its logits.
+        in_flight = len(self.stages) + _PREFILL_PKT_FIFO_PACKETS - 1
+        ahead = in_flight + len(self.stages)  # posted replays run ahead of the packets by this many chunks
+        model._tag = "traced prefill"
+        model._note(
+            f"traced prefill: {num_chunks} chunk(s) through {len(self.stages)} stage(s), up to {in_flight} in flight",
+            important=True,
+        )
+
+        replay: queue.Queue = queue.Queue()
+        thread = threading.Thread(target=self._replay, args=(replay,), name="prefill-replay", daemon=True)
+        thread.start()
+        posted = fed = read = 0  # chunks whose traces are posted / whose packet is written / whose logits are read
+        logits = None
+        last_arrival = time.perf_counter()
+
+        def feed(index: int, chunk_ids: torch.Tensor) -> None:
+            nonlocal fed
+            self._pkt_socket.write_tensor(self._packet(chunk_ids, plan[index][0]))
+            fed += 1
+
+        def take() -> None:
+            nonlocal read, logits, last_arrival
+            logits = self._read_logits()
+            # Counted before the callback: the unwind below must never ask the socket for logits already read.
+            read += 1
+            now = time.perf_counter()
+            start, t = plan[read - 1]
+            model._note(f"traced chunk {read}/{num_chunks} [{start}, {start + t}): logits received")
+            if on_chunk is not None:
+                on_chunk(read - 1, start, start + t, now - last_arrival)
+            last_arrival = now
+
+        try:
+            for index, (start, t) in enumerate(plan):
+                while posted < min(num_chunks, index + ahead):
+                    replay.put(posted)
+                    posted += 1
+                feed(index, ids[0, start : start + t])
+                while fed - read > in_flight:
+                    take()
+            while read < fed:
+                take()
+        finally:
+            try:
+                # An error part-way leaves posted replays parked on their in-trace receives: feed each a dummy packet
+                # and drain its logits, so the sockets and the replay thread can unwind.
+                while read < posted:
+                    if read >= fed:
+                        feed(read, torch.zeros(plan[read][1], dtype=torch.long))
+                    self._read_logits()
+                    read += 1
+            finally:
+                replay.put(None)
+                thread.join()
+        model.synchronize("traced prefill done")
+        return logits, self._export_states()
+
+    # ------------------------------------------------------------------ hand-off to decode
+    def _export_states(self) -> list[PrefillAttentionState]:
+        """Per-layer :class:`PrefillAttentionState` of the prompt just run (for the decode commit).
+
+        ``compressed_kv`` / ``idx_keys`` are slices of the FIFOs' rows holding the prompt's ``prompt_len // rate``
+        entries (the padding's entries come after them). When the last chunk was padded, ``kv_tail`` and the CSA
+        overlaps are sliced out of that chunk's kept window and Ca rows at its last real token; otherwise they are the
+        persistent tensors themselves. Consume the states before the next run, then :meth:`free_states`.
+        """
+        n, c = self._prompt_len, self._chunk_size
+        pad = _round_up(n, c) - n
+        real = c - pad  # the last chunk's real tokens
+
+        def rows(t: ttnn.Tensor, lo: int, hi: int) -> ttnn.Tensor:
+            return ttnn.slice(t, [0, 0, lo, 0], [1, 1, hi, t.shape[3]])
+
+        def overlap(persistent: ttnn.Tensor, kept: ttnn.Tensor, rate: int) -> ttnn.Tensor:
+            return rows(kept, real // rate - 1, real // rate) if pad else persistent
+
+        states = []
+        for li, layer in enumerate(self.model.layers):
+            attn = layer.self_attn
+            bufs = self.buffers[li]
+            tail = rows(bufs.window, real, real + attn.sliding_window) if pad else bufs.tail
+            state = PrefillAttentionState(seq_len=n, kv_tail=tail)
+            if not attn.is_sliding:
+                rate = attn.rate
+                emitted, padding = (n + pad) // rate, pad // rate
+                total = bufs.entries.shape[2]
+                state.compressed_kv = rows(bufs.entries, total - emitted, total - padding)
+                if attn.is_csa:
+                    state.csa_prev_kv = overlap(bufs.prev_kv, bufs.ca_kv, rate)
+                    state.csa_prev_gate = overlap(bufs.prev_gate, bufs.ca_gate, rate)
+                if bufs.idx_keys is not None:
+                    total = bufs.idx_keys.shape[2]
+                    state.idx_keys = rows(bufs.idx_keys, total - emitted, total - padding)
+                    state.idx_prev_kv = overlap(bufs.idx_prev_kv, bufs.idx_ca_kv, rate)
+                    state.idx_prev_gate = overlap(bufs.idx_prev_gate, bufs.idx_ca_gate, rate)
+            states.append(state)
+        return states
+
+    def free_states(self, states: list[PrefillAttentionState]) -> None:
+        """Deallocate the tensors :meth:`_export_states` sliced out for ``states`` (not the persistent buffers).
+
+        They were allocated while the traces exist, so they must be gone before the next replay.
+        """
+        for li, state in enumerate(states):
+            persistent = {id(t) for t in vars(self.buffers[li]).values() if t is not None}
+            for name, tensor in vars(state).items():
+                if isinstance(tensor, ttnn.Tensor) and id(tensor) not in persistent:
+                    ttnn.deallocate(tensor)
+                    setattr(state, name, None)
