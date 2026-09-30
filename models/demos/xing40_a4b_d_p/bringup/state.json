@@ -1,4 +1,27 @@
 {
+ "G.s16384": {
+  "attempts": 0,
+  "duration_s": 623.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:43:49"
+   }
+  ],
+  "last_run": "2026-09-30T03:43:49",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/G.s16384.log",
+  "metrics": {
+   "cpu_seconds": 610.3,
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 40,
+   "text_top5_acc_last_chunk": 0.7276278734207153
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:33:25",
+  "status": "PASS"
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 118.0,
