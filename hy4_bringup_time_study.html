@@ -145,10 +145,10 @@ a{color:var(--accent)}
   <h2>The numbers</h2>
   <div class="tbl">
     <table>
-      <thead><tr><th>Kind of agent run</th><th class="n">Runs</th><th class="n">Hours</th><th class="n">Avg min</th><th class="n">Device test runs</th><th class="n">Changed the test</th><th class="n">Cost</th></tr></thead>
+      <thead><tr><th>Kind of agent run</th><th class="n">Runs</th><th class="n">Hours</th><th class="n">Avg min</th><th class="n">Device test runs</th><th class="n">Extended the test</th><th class="n">Cost</th></tr></thead>
       <tbody>
-        <tr><td>Swap-test review (test agent, S.*)</td><td class="n">41</td><td class="n">7.8</td><td class="n">11.4</td><td class="n">186</td><td class="n">4 of 41</td><td class="n">$55</td></tr>
-        <tr><td>Component-test review (test agent, C.*)</td><td class="n">41</td><td class="n">4.0</td><td class="n">5.9</td><td class="n">149</td><td class="n">14 of 41</td><td class="n">$41</td></tr>
+        <tr><td>Swap-test review (test agent, S.*)</td><td class="n">41</td><td class="n">7.8</td><td class="n">11.4</td><td class="n">186</td><td class="n">all 42</td><td class="n">$55</td></tr>
+        <tr><td>Component-test review (test agent, C.*)</td><td class="n">41</td><td class="n">4.0</td><td class="n">5.9</td><td class="n">149</td><td class="n">all 42</td><td class="n">$41</td></tr>
         <tr><td>CPU reference (R.2)</td><td class="n">1</td><td class="n">1.9</td><td class="n">114</td><td class="n">0</td><td class="n">n/a</td><td class="n">$9</td></tr>
         <tr><td>Implement (device code, C.*)</td><td class="n">17</td><td class="n">1.5</td><td class="n">5.1</td><td class="n">45 (+21 probes)</td><td class="n">n/a</td><td class="n">$29</td></tr>
         <tr><td>Plan (PL.1)</td><td class="n">1</td><td class="n">0.2</td><td class="n">12.8</td><td class="n">0</td><td class="n">n/a</td><td class="n">$4</td></tr>
@@ -163,8 +163,8 @@ a{color:var(--accent)}
   <h2>What the numbers say</h2>
   <ol class="findings">
     <li><b>Reviewing tests costs about 8× more than writing the code.</b> The test agents took 11.8 h and the implement agents 1.5 h. The code was quick because layers 1-4 mostly reuse layer 0's modules, but every test is still reviewed from scratch.</li>
-    <li><b>Swap-test review is half of all agent time and rarely changes anything.</b> Its 41 runs took 7.8 h (51%) and changed the test only 4 times, each time to add extra checks. All swap tests come from one template, and every freeze already requires a pass with the reference and a fail with the zero stub.</li>
-    <li><b>Component-test review earns its time.</b> It changed 14 of 41 tests. Some changes were important, such as the set-overlap metric for the indexer and the checks that catch a wrong norm epsilon. It is still repeated for layers whose component is identical to one already reviewed (layers 2-4 against layer 1).</li>
+    <li><b>Swap-test review is half of all agent time, and most of what it adds is repetitive.</b> Its runs took 7.8 h (about 50%). Every swap test was extended: from the 28-line template to 165-1658 lines, each one copying the previous swap test and adding checks for the newly swapped step (each step's output against the golden and against the CPU step on the same inputs, error and row-size limits, finiteness, no CPU bridge). That pattern is mechanical, so it can be built into the framework (F49, below).</li>
+    <li><b>Component-test review earns more of its time.</b> It extended every component test, and some additions were step-specific and important, such as the set-overlap metric for the indexer and the checks that catch a wrong norm epsilon. It is still repeated for layers whose component is identical to one already reviewed (layers 2-4 against layer 1).</li>
     <li><b>Most agent time is device runs, not thinking</b>: 9.8 h running tools against 5.5 h thinking. Each test run opens the 2x2 mesh and loads the weights again, so a test agent spends several minutes per run waiting on the setup.</li>
     <li><b>The one long agent run was a one-off.</b> The reference run (1.9 h) was mostly two full 78-layer CPU sanity passes, reading 1.5 TB of weights from disk. The second pass was needed after the agent found the RoPE bug in the HF code.</li>
   </ol>
@@ -198,12 +198,13 @@ a{color:var(--accent)}
       <p>The 78-layer HF sanity check reads 1.5 TB from disk each time. A cached result per HF-code version, and a quick first check on 256 tokens before the 2048-token one, would make a rerun much cheaper.</p>
     </div>
   </div>
-  <p class="note col">Recommendations 1 and 2 together would have cut this run's agent time from about 15 h to about 7 h. They are framework changes and would go through the framework's own selftests. Run1 continues on the current rules.</p>
+  <p class="note col">Recommendations 1 and 2 together would have cut this run's agent time from about 15 h to about 7 h. They are framework changes and go through the framework's own selftests. Run1 continues on the current rules.</p>
+  <p class="note col"><b>Recommendation 1 is built and partly proven (F49, branch dnijemcevic/f49-swap-checks, not merged).</b> Mistakes were injected into the last swapped step of three reviewed Hy4 swap tests (7 kinds each: scale ±2%, swapped halves, shifted rows, one chip's share zeroed, 1% noise, flipped signs). The old generic test caught 11 of 21, the reviewed tests 21 of 21, the new automated test 21 of 21. The fourth reviewed test and a device run are still to do.</p>
 </section>
 
 <section class="col">
   <h2>How these numbers were made</h2>
-  <p class="note">Agent times come from each agent's own transcript: wall time, model time, cost, and the commands it ran. Device test runs count <code>run_safe_pytest.sh</code> calls. "Changed the test" counts runs that edited a file in <code>tests/bringup/</code>. Gate times come from the run's ledger (<code>state.json</code>). Files: <code>/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/*.jsonl</code> and <code>models/demos/hy4_preview_d_p/bringup/state.json</code>. The run is still going, so the totals will grow; the proportions should hold.</p>
+  <p class="note">Agent times come from each agent's own transcript: wall time, model time, cost, and the commands it ran. Device test runs count <code>run_safe_pytest.sh</code> calls. "Extended the test" compares each frozen test file with the generated template (a first version of this page counted only one kind of file edit and wrongly reported 4 of 41 and 14 of 41). Gate times come from the run's ledger (<code>state.json</code>). Files: <code>/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/*.jsonl</code> and <code>models/demos/hy4_preview_d_p/bringup/state.json</code>. The run is still going, so the totals will grow; the proportions should hold.</p>
 </section>
 
 </div>
