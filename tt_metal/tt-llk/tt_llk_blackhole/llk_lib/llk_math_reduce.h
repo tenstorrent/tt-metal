@@ -141,10 +141,21 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
 // SFPU uses the entries below math::replay_buf_offset): the pools and the transpose of one face row (10 or 11
 // instructions), then the DEST advance to the next face row (2 or 4 SETRWCs). Recorded by
 // reduce_row_max_record_replay at init and replayed per face row by _llk_math_reduce_, so that the RISC issues
-// three REPLAYs per tile where it issued 22 to 24 instructions.
+// three REPLAYs per tile where it issued 22 to 24 instructions. The recorded lengths and the face row count are
+// kept in reduce_row_max_replay_state and the execute path replays with them, so the replayed stream follows the
+// shape the init recorded (the same shape programs the unpack MOP), whatever shape the execute call receives.
 constexpr std::uint32_t reduce_row_max_transpose_len        = 9;
 constexpr std::uint32_t reduce_row_max_pool_replay_start    = ckernel::math::replay_buf_offset;
 constexpr std::uint32_t reduce_row_max_advance_replay_start = reduce_row_max_pool_replay_start + 2 + reduce_row_max_transpose_len;
+
+struct reduce_row_max_replay_state_t
+{
+    std::uint32_t pool_len      = 0; // GMPOOLs of one face row plus the transpose
+    std::uint32_t advance_len   = 0; // SETRWCs of the DEST advance (2 for a narrow tile, 4 otherwise)
+    bool two_face_rows          = false;
+};
+
+static reduce_row_max_replay_state_t reduce_row_max_replay_state;
 
 inline std::uint32_t reduce_row_max_pool_replay_len(const ckernel::TensorShape& tensor_shape)
 {
@@ -169,9 +180,13 @@ inline void reduce_row_max_record_replay(const ckernel::TensorShape& tensor_shap
 {
     const bool is_narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
 
+    reduce_row_max_replay_state.pool_len      = reduce_row_max_pool_replay_len(tensor_shape);
+    reduce_row_max_replay_state.advance_len   = reduce_row_max_advance_replay_len(is_narrow_tile);
+    reduce_row_max_replay_state.two_face_rows = tensor_shape.num_faces_r_dim > 1;
+
     load_replay_buf(
         reduce_row_max_pool_replay_start,
-        reduce_row_max_pool_replay_len(tensor_shape),
+        reduce_row_max_replay_state.pool_len,
         [&tensor_shape]
         {
             reduce_row_pool_all_faces<PoolType::MAX, false>(tensor_shape.num_faces_c_dim);
@@ -180,7 +195,7 @@ inline void reduce_row_max_record_replay(const ckernel::TensorShape& tensor_shap
 
     load_replay_buf(
         reduce_row_max_advance_replay_start,
-        reduce_row_max_advance_replay_len(is_narrow_tile),
+        reduce_row_max_replay_state.advance_len,
         [is_narrow_tile]
         {
             reduce_row_advance_dest(is_narrow_tile);
@@ -301,6 +316,10 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @param tensor_shape: Tensor shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
+ * @note MAX ROW replays the sequences the init recorded into replay buffer entries 16 to 30 with the init's
+ *       tensor shape; an op that records into that range between the init and this call (the SUM and AVG
+ *       reduce MOP, matmul, transpose_dest, the SFPU TopK and Welford kernels) needs the init to be run again,
+ *       as it already does for the address modifiers and the MOP configuration.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
@@ -345,14 +364,19 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             {
                 // The same instructions, replayed from the buffer _llk_math_reduce_init_ recorded
                 // (reduce_row_max_record_replay): the pools and the transpose of face row 0, the DEST advance,
-                // the pools and the transpose of face row 1.
-                const std::uint32_t pool_len = reduce_row_max_pool_replay_len(tensor_shape);
-                lltt::replay(reduce_row_max_pool_replay_start, pool_len);
+                // the pools and the transpose of face row 1. The lengths are the recorded ones: the replayed
+                // stream and the unpack MOP both follow the init's shape.
+                LLK_ASSERT(
+                    reduce_row_max_replay_state.pool_len == reduce_row_max_pool_replay_len(tensor_shape) &&
+                        reduce_row_max_replay_state.two_face_rows == (tensor_shape.num_faces_r_dim > 1),
+                    "reduce MAX ROW: the tensor shape differs from the one _llk_math_reduce_init_ recorded");
+                const reduce_row_max_replay_state_t& replay_state = reduce_row_max_replay_state;
+                lltt::replay(reduce_row_max_pool_replay_start, replay_state.pool_len);
 
-                if (tensor_shape.num_faces_r_dim > 1)
+                if (replay_state.two_face_rows)
                 {
-                    lltt::replay(reduce_row_max_advance_replay_start, reduce_row_max_advance_replay_len(is_narrow_tile));
-                    lltt::replay(reduce_row_max_pool_replay_start, pool_len);
+                    lltt::replay(reduce_row_max_advance_replay_start, replay_state.advance_len);
+                    lltt::replay(reduce_row_max_pool_replay_start, replay_state.pool_len);
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
