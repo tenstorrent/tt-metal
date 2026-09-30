@@ -315,6 +315,7 @@ def sliding_ring_prefill_attention(
     max_seq_len,
     logical_n,
     kv_actual_global,
+    gather_buffer_key,
     sliding_window_size=None,
     scale=1.0,
     compute_kernel_config=None,
@@ -343,6 +344,7 @@ def sliding_ring_prefill_attention(
         layer_idx=layer_idx,
         num_layers=num_layers,
         slot_idx=slot_idx,
+        gather_buffer_key=gather_buffer_key,
     )
 
 
@@ -365,6 +367,7 @@ def _ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
+    gather_buffer_key=None,
 ):
     """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
 
@@ -405,10 +408,10 @@ def _ring_prefill_attention(
     else:
         gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer(
-        "ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
     buffer_v = ccl_manager.get_ring_gather_buffer(
-        "ring_v", num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
     )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
