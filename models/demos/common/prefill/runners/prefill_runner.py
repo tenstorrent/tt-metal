@@ -55,6 +55,21 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
+# Worker grid for the socket copies on both ends of a stage boundary (activation <-> backing tensor).
+# Each worker copies its page slice with one NoC round trip per page, so the copy time divides by the
+# core count; 64 cores leave a fraction of a millisecond per copy and more would only chase that
+# remainder. The H2D token stream and the D2H acks stay on SYNC_WORKER_CORES: they move a page or less
+# per transfer, so extra workers would have nothing to do.
+D2D_WORKER_GRID_MAX = 8
+
+
+def d2d_worker_cores(mesh_device) -> ttnn.CoreRange:
+    grid = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(min(D2D_WORKER_GRID_MAX, grid.x) - 1, min(D2D_WORKER_GRID_MAX, grid.y) - 1),
+    )
+
 
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
@@ -235,13 +250,15 @@ def build_d2d_pipeline_endpoints(
     # Separate specs per direction: a model whose boundary payload grows with depth (Kimi-K3 carries
     # one AttnRes snapshot per completed block) sends more planes than it received. This rank's
     # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
+    workers = d2d_worker_cores(mesh_device)
+
     def _common(planes):
         return dict(
             global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
-            sender_worker_cores=SYNC_WORKER_CORES,
-            receiver_worker_cores=SYNC_WORKER_CORES,
+            sender_worker_cores=workers,
+            receiver_worker_cores=workers,
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
@@ -261,7 +278,7 @@ def build_d2d_pipeline_endpoints(
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
-        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={SYNC_WORKER_CORES}, "
+        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={workers}, "
         f"fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
