@@ -30,7 +30,10 @@ _DTYPE = {"BFLOAT16": (ttnn.bfloat16, torch.bfloat16), "FLOAT32": (ttnn.float32,
 
 @pytest.fixture(scope="module")
 def mesh():
-    c = CASES[0]
+    # Open the mesh of a case captured on a box of this size (a 2x2 submesh of a 4x2 box fails the 2D fabric
+    # handshake); the per-chip math does not depend on the mesh shape.
+    n_sys = ttnn.get_num_devices()
+    c = next((c for c in CASES if c["mesh"][0] * c["mesh"][1] == n_sys), CASES[0])
     p = c["device_params"]
     ttnn.set_fabric_config(getattr(ttnn.FabricConfig, p["fabric_config"]))
     m = ttnn.open_mesh_device(ttnn.MeshShape(*c["mesh"]), l1_small_size=p["l1_small_size"])
@@ -83,11 +86,18 @@ def test_mhc_post(mesh, case):
     x = _host(case["residual"], g, True, n_dev)
     post = (_host(case["post"], g, True, n_dev).float().sigmoid() * 2).to(torch.float32)  # post = 2 sigmoid(.)
     comb = _host(case["comb"], g, True, n_dev).float().abs().to(torch.float32) / 4  # a comb-like positive mix
+    kw = {"comb_transposed": case["comb_transposed"]} if "comb_transposed" in case else {}
     out = ttnn.bringup.mhc_post(
         *(
             _to_device(t, case[k], mesh, True)
             for t, k in ((f, "input"), (x, "residual"), (post, "post"), (comb, "comb"))
-        )
+        ),
+        **kw,
     )
-    p, r = _check("out", _from_device(out, mesh), ref.mhc_post(f, x, post, comb), case["pcc"], case["max_rel"])
+    want = ref.mhc_post(f, x, post, comb, **kw)
+    p, r = _check("out", _from_device(out, mesh), want, case["pcc"], case["max_rel"])
+    if kw.get("comb_transposed") is False:
+        # the option must change the math: the default (comb^T) result is far from the comb-as-stored one
+        _, r_t = _check("out_t", want, ref.mhc_post(f, x, post, comb), -1.0, float("inf"))
+        assert r_t > 50 * max(r, 1e-6), f"comb vs comb^T references too close (rel {r_t})"
     print(f"{case['id']}: pcc {p:.7f} rel {r:.6f}")
