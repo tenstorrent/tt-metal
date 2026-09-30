@@ -465,3 +465,14 @@ def test_the_metric_current_follows_the_ledger_when_it_is_the_same_reading():
     other = {"name": "m", "baseline": 42.0, "current": 40.0}
     assert _metric_now(other, {"eager_per_op": rows}) == other, "a different reading is not borrowed"
     assert _metric_now(None, {"eager_per_op": rows}) is None
+
+
+def test_a_stage_history_line_moves_only_on_kept_attempts():
+    """A discarded candidate is plotted but never becomes the stage's "best": counting it drew
+    Qwen-Image-Edit's vision_encode line to a PCC-failed rewrite's 16344 ms, ~6 s below every kept win."""
+    from scripts.tt_hw_planner._optimize_dashboard_page import PAGE_HTML
+
+    i = PAGE_HTML.index("function historyChart(")
+    body = PAGE_HTML[i : PAGE_HTML.index("\nfunction ", i + 1)]
+    assert 'a.status === "kept" && (runMin == null || v < runMin)' in body
+    assert "v < runMin)) runMin = v" in body and 'bestLabel: "best kept"' in PAGE_HTML

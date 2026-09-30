@@ -378,8 +378,11 @@ function historyStages(S) {
    that converts to a rate (ms per token -> tokens per second), so it is the only one that reads upward.
 
    Every other stack is a one-shot latency with no gate behind it, so there is no banked best to show:
-   its best line is the running minimum of what was actually measured, called "best recorded" to keep
-   the two apart, and its axis stays in ms where lower is better. */
+   its best line is the running minimum of the readings of KEPT attempts -- the state the model actually
+   has -- called "best kept", and its axis stays in ms where lower is better. A discarded candidate
+   is still plotted but never moves the line: counting it drew Qwen-Image-Edit's vision_encode line down
+   to 16344 ms from a PCC-failed rewrite, and every later kept win floated ~6 s above a "best" the
+   model never had. */
 function historySeries(S, stage) {
   const tok = ((S.serving || {}).per_token || {}).stage;
   if (!stage || stage === tok) {
@@ -398,7 +401,7 @@ function historySeries(S, stage) {
       return st && st.ms != null ? st.ms : null;
     },
     best: null,
-    bestLabel: "best recorded",
+    bestLabel: "best kept",
     rate: null,
   };
 }
@@ -430,12 +433,12 @@ function historyChart(S, stage) {
 
   const goal = (sameQuantity && m.target != null) ? yOf(m.target) : null;
   // The best line: the engine's banked best where one exists, otherwise the running minimum of the
-  // readings themselves (a plain description of the data, not a second opinion on what counts as best).
+  // KEPT readings -- only a kept attempt changes what the model is, so only it may move the line.
   let runMin = null;
   const bestAt = at.map(a => {
     if (ser.best) return yOf(ser.best(a));
     const v = ser.value(a);
-    if (v != null && (runMin == null || v < runMin)) runMin = v;
+    if (v != null && a.status === "kept" && (runMin == null || v < runMin)) runMin = v;
     return yOf(runMin);
   });
   const bests = bestAt.filter(v => v != null);
