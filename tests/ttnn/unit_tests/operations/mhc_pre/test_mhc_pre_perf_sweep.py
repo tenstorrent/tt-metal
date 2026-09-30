@@ -72,8 +72,11 @@ ALL_KNOBS = {
     "chunks6_if3": dict(X_STREAM_CHUNKS=6, X_STREAM_INFLIGHT=3),
     "ych16_yd3": dict(Y_CHUNK_TILES_CAP=16, Y_DEPTH=3),
 }
+# Unselected (e.g. the plain unit-test run): a small smoke set covering each non-default placement branch.
+DEFAULT_KNOBS = ("default", "noflip", "wwriter", "fullrow", "nostream")
 _sel = os.environ.get("MHC_PRE_PERF_KNOBS")
-KNOBS = {k: ALL_KNOBS[k] for k in _sel.split(",")} if _sel else ALL_KNOBS
+_sel = list(ALL_KNOBS) if _sel == "all" else (_sel.split(",") if _sel else DEFAULT_KNOBS)
+KNOBS = {k: ALL_KNOBS[k] for k in _sel}
 
 
 @pytest.mark.parametrize("knobs", list(KNOBS), ids=list(KNOBS))

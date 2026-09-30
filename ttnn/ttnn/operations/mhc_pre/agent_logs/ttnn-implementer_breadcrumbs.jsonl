@@ -10,3 +10,5 @@
 {"event":"test_run","status":"pass","detail":"R3 W bcast: unit 27/27; perf bf16 640x7168 193.5us (was 272.0)","ts":"2026-09-30T04:31:52+00:00"}
 {"event":"fix_applied","detail":"W sender: cb_push_back after sender.send (in-place fp32 W split raced the mcast source read)","stress_before":"1/40 bad","stress_after":"0/40","golden":"206/206","unit":"35/35","ts":"2026-09-30T04:50:31+00:00"}
 {"event":"test_run","refinement":4,"status":"pass","detail":"640x1792 bf16 86.5->44.3-45.6us; guard set all faster than R3; unit 27/27; golden slices cover 206/206 after L1 margin 64->96KB fix","ts":"2026-09-30T06:48:22+00:00"}
+{"event":"test_run","status":"pass","tests":"golden 206/206, unit dir 30/30 (incl new noc_placement knobs)","perf":"1280x4096 bf16 174.3->148.5us median","ts":"2026-09-30T07:26:15+00:00"}
+{"event":"test_run","status":"pass","tests":"golden 206/206, unit 91 passed 1 skipped","perf":"1280x4096 bf16 175.8->148.2us; placement levers path-gated","ts":"2026-09-30T07:50:18+00:00"}

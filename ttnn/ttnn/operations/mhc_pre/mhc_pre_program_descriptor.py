@@ -169,20 +169,39 @@ W_SHARE_ON_READER = True
 # ... and land it (barrier) before the first X read is issued: all rows' shares then cross the NoCs / banks with no
 # X traffic (the all-gather waits for the slowest row), at the cost of starting X a few us later.
 W_SHARE_BEFORE_X = False
+# Path gate of the two placement levers above (derived flip rows, W share on the reader). Measured wins (flip 0 +
+# writer W -> defaults, device us): bf16 X / fp32 W 1280x4096 176.6 -> 148.4, 2048x5120 345.5 -> 315.4, 1x7168
+# 58.0 -> 46.5; fp32 X / fp32 W 640x1792 128.4 -> 121.2; fp32 X / bf16 W 640x7168 392.7 -> 351.6, 1280x4096
+# 387.0 -> 371.3. bf16 X / bf16 W (unstreamed matmul_block projection) loses: 1280x4096 183.2 -> 188.3, 2048x5120
+# 354.3 -> 377.9 -- that path keeps the Refinement 4 placement (no flip, W share on the writer).
+PLACEMENT_LEVERS_BF16_X_BF16_W = False
+# Without the W column broadcast (R1: every core reads its whole W slice on the writer -- decode, group_h > 1) only
+# the flip applies. 1x7168: fp32 W wins (bf16 X 58.7 -> 46.1, fp32 X 130.7 -> 119.8 us), bf16 W loses (fp32 X 80.1
+# -> 93.2, bf16 X 40.8 -> 40.3) -- a bf16 W there keeps the Refinement 4 placement.
+PLACEMENT_LEVERS_BF16_W_R1 = False
 
 
 def _other_noc(noc):
     return ttnn.NOC.NOC_1 if noc == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
 
 
-def _flip_rows(grid_y):
+def _placement_levers(x_dtype, w_dtype, w_bcast):
+    """Whether the derived flip rows + the reader-side W share apply (measured path gate, see above)."""
+    if w_dtype != ttnn.bfloat16:
+        return True
+    if not w_bcast:  # per-core DRAM W (R1: decode / group_h > 1): the flip only wins with an fp32 W
+        return PLACEMENT_LEVERS_BF16_W_R1
+    return PLACEMENT_LEVERS_BF16_X_BF16_W or x_dtype != ttnn.bfloat16
+
+
+def _flip_rows(grid_y, levers):
     if READER_NOC_FLIP_ROWS is not None:
         return READER_NOC_FLIP_ROWS
-    return int(round(READER_NOC_FLIP_FRACTION * grid_y))
+    return int(round(READER_NOC_FLIP_FRACTION * grid_y)) if levers else 0
 
 
-def _reader_noc_of(group_y0, grid_y):
-    return _other_noc(READER_NOC) if group_y0 < _flip_rows(grid_y) else READER_NOC
+def _reader_noc_of(group_y0, flip_rows):
+    return _other_noc(READER_NOC) if group_y0 < flip_rows else READER_NOC
 
 
 # Stream-column tiles moved off rank 0 when rank 0 owns every Sinkhorn row (one token tile-row per group): the
@@ -507,11 +526,14 @@ def create_program_descriptor(
     # ---- W column broadcast (R2): one Mcast1D(PerColumn) over the active rectangle, sender = row 0 ----
     # Kernel sets: the groups sharing one (reader NoC, writer NoC) placement get their own reader / writer
     # descriptors (the NoC is a kernel-config property; the multicast wires depend on it too).
-    reader_nocs = sorted({_reader_noc_of(gy0, plan.grid_y) for _, _, gy0 in groups}, key=lambda c: c.value)
+    active_rows = len(groups) // plan.groups_x
+    w_bcast = W_BCAST and plan.group_h == 1 and len(groups) % plan.groups_x == 0 and active_rows >= 2
+    levers = _placement_levers(x_tensor.dtype, w_tensor.dtype, w_bcast)
+    flip_rows = _flip_rows(plan.grid_y, levers)
+    reader_nocs = sorted({_reader_noc_of(gy0, flip_rows) for _, _, gy0 in groups}, key=lambda c: c.value)
 
     w_mcast = {}  # reader NoC of the kernel set -> Mcast1D (same rectangle and semaphore; senders may ride either NoC)
-    active_rows = len(groups) // plan.groups_x
-    if W_BCAST and plan.group_h == 1 and len(groups) % plan.groups_x == 0 and active_rows >= 2:
+    if w_bcast:
         w_rect = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
         )
@@ -533,7 +555,7 @@ def create_program_descriptor(
     mcast_ct = {}  # reader NoC of the kernel set -> the group-mcast CT wire (identical within a set)
     if G > 1:
         for g, gx0, gy0 in groups:
-            rnoc = _reader_noc_of(gy0, plan.grid_y)
+            rnoc = _reader_noc_of(gy0, flip_rows)
             mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
             rect = ttnn.CoreRangeSet(
                 [
@@ -668,7 +690,7 @@ def create_program_descriptor(
     writer_rt = {rnoc: ttnn.RuntimeArgs() for rnoc in reader_nocs}
     compute_rt = ttnn.RuntimeArgs()
     for g, gx0, gy0 in groups:
-        rnoc = _reader_noc_of(gy0, plan.grid_y)
+        rnoc = _reader_noc_of(gy0, flip_rows)
         ctt = plan.core_token_tiles[g]
         ts = plan.t_start[g]
         num_blocks = math.ceil(ctt / bt)
@@ -688,7 +710,7 @@ def create_program_descriptor(
                     sizes, starts = _split(n * cc, active_rows)
                     own = [starts[y], starts[y] + sizes[y]]
                     events = sum(1 for sz in sizes if sz > 0) - (1 if sizes[y] > 0 else 0)
-                    share_on_reader = int(W_SHARE_ON_READER)
+                    share_on_reader = int(W_SHARE_ON_READER and levers)
                     w_rt = [W_ROLE_SPREAD] + own + [events, share_on_reader]
                     w_mc_rt = list(w_mcast[rnoc].runtime_args(ttnn.CoreCoord(x, y)))
                 reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks] + (
@@ -720,7 +742,7 @@ def create_program_descriptor(
     dm_kernels = []
     for rnoc in reader_nocs:
         set_cores = ttnn.CoreRangeSet(
-            [r for (_, _, gy0), r in zip(groups, ranges) if _reader_noc_of(gy0, plan.grid_y) == rnoc]
+            [r for (_, _, gy0), r in zip(groups, ranges) if _reader_noc_of(gy0, flip_rows) == rnoc]
         )
         dm_kernels.append(
             ttnn.KernelDescriptor(

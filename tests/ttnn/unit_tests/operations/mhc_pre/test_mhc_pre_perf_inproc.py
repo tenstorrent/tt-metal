@@ -21,8 +21,14 @@ _KEY = "DEVICE KERNEL DURATION [ns]"
 _DTYPES = {"xbf16": ttnn.bfloat16, "xf32": ttnn.float32}
 _SEL_DT = os.environ.get("MHC_PRE_PERF_DTYPES", "xbf16,xf32").split(",")
 _SEL_SH = os.environ.get("MHC_PRE_PERF_SHAPES")
+_W_DT = getattr(ttnn, os.environ.get("MHC_PRE_PERF_WDTYPE", "float32"))
 _REPEAT = int(os.environ.get("MHC_PRE_PERF_REPEAT", 1))  # calls per setting (the median is printed too)
 _SHAPES = [s for s in SHAPES if _SEL_SH is None or f"{s[-2]}x{s[-1] // 4}" in _SEL_SH.split(",")]
+# extra "TxC" shapes (1, 1, T, 4*C), e.g. MHC_PRE_PERF_XSHAPES=1x7168,32x128
+_SHAPES += [
+    (1, 1, int(t), 4 * int(c))
+    for t, c in (e.split("x") for e in os.environ.get("MHC_PRE_PERF_XSHAPES", "").split(",") if e)
+]
 
 
 def _read_ns(device):
@@ -51,7 +57,7 @@ def test_mhc_pre_perf_inproc(device, monkeypatch):
                     w = torch.randn((nc, 24), dtype=torch.float32) / nc**0.5
                     b = torch.randn((1, 24), dtype=torch.float32)
                     tx = ttnn.from_torch(x, dtype=_DTYPES[dt_name], layout=ttnn.TILE_LAYOUT, device=device)
-                    tw = ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+                    tw = ttnn.from_torch(w, dtype=_W_DT, layout=ttnn.TILE_LAYOUT, device=device)
                     tb = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
                     _read_ns(device)  # drain anything earlier
                     ns = []

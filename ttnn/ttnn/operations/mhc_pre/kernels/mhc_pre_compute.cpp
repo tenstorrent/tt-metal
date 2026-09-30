@@ -1088,6 +1088,11 @@ void kernel_main() {
             }
         }
         if constexpr (x_grid_split) {
+            if constexpr (w_pieces == 1) {
+                // bf16 W feeds the split projection's matmul unsplit: nothing else waits for it (the fp32-W grid
+                // split does, before block 0). Cumulative wait, never popped (resident); a no-op after block 0.
+                cb_wait_front(cb_weight, core_k_tiles);
+            }
             // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
             // reader's data is guaranteed by the cb_x_resident wait).
             cb_reserve_back(cb_x_fp32, x_block_pages);
@@ -1101,11 +1106,6 @@ void kernel_main() {
             // per-block compute phase must not start only after the last X tile): mix partial = X_blk @ W_slice
             // -> cb_partial [mix rows] ----
             if constexpr (x_grid_split) {
-                if constexpr (w_pieces == 1) {
-                    // bf16 W feeds the matmul unsplit: nothing else waited for it (the fp32-W grid split does).
-                    // Cumulative wait, never popped (resident); a no-op after block 0.
-                    cb_wait_front(cb_weight, core_k_tiles);
-                }
                 project_block_split(extent, core_k_tiles, sb_h);
             } else if constexpr (w_pieces > 1) {
                 if constexpr (w_presplit) {

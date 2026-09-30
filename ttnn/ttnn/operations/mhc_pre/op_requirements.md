@@ -294,7 +294,7 @@ a 4-way SFPU fold or a split combine (~1 µs), a register-fused Sinkhorn row/col
 X·Xᵀ diagonal (~1.5 µs). I did not do them because each is ~1 µs, inside the ±1 µs run-to-run noise at this size, and
 the lower-fidelity Σx² variant spends precision budget. The ~30 µs target would need the X read itself to get faster.
 
-### [ ] Refinement 5 — Speed up the perf-focus profile T=1280, C=4096, bf16 streams (block × depth co-tune)
+### [x] Refinement 5 — Speed up the perf-focus profile T=1280, C=4096, bf16 streams (block × depth co-tune)
 
 **Type**: perf
 
@@ -328,3 +328,19 @@ the prompt MUST rule: no per-shape constants. A dtype-dependent cap derived from
 - The golden suite is green.
 - There is no regression across the config-spanning guard set, including the other two focus shapes and the
   fp32 640×7168 case.
+
+**Outcome**: 1280×4096 bf16 X / fp32 W went 175.8 µs (R4 build; 264.1 µs at verifier time) → **148.2 µs**, 1.11× the
+133 µs target. BH device-ns, medians. The block × depth knobs measured null or negative and stay at their
+defaults: bt 2 → 163.8, bt 4 → 186.7, depth 3 → 148.8, depth 1 → 174.3, and y chunk / y depth / stream chunks /
+in-flight all within ±2 µs. A coarser block at C=4096 forces fewer groups or depth 1 and loses the overlap, so
+the bf16 L1 headroom stays unspent. The win came from NoC placement: the reader NoC flip is derived for the top
+round(0.4·grid_y) rows, and the W column share is read by the reader on its own NoC ahead of X. It is path-gated
+off for bf16 X / bf16 W and for bf16 W without the column broadcast, where it lost. Other shapes: 2048×5120 bf16
+344 → 315, decode 1×7168 59 → 46, 640×7168 bf16 153 → 146, fp32 X / bf16 W −3…−11 %. 640×7168 fp32 is +0.7 %
+(inside the noise band). A latent missing W wait on the fp32-X / bf16-W path was fixed (golden 206/206). What
+binds now: the W all-gather ends at ~50–58 µs, bound by its slowest (NoC0-starved) row, and ~70–85 µs of per-core
+compute follows (2 × [projection + Σx² 15.5, coefficients 5–17, y-mix 7 µs]). Landing W first only moves the wall
+onto the middle rows' late X plus their tail. What I would try next: a row-weighted W share split (fewer tiles on
+the NoC-starved rows) or an all-gather that does not wait on the slowest row, then a cheaper projection + Σx² per
+K tile. I did not do them because they are a new share topology and a compute rewrite, beyond this knob-turn
+heading.

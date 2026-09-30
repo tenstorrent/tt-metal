@@ -29,6 +29,7 @@ Page sizes: `xT` = X tile bytes (fp32 4096, bf16 2048); `wT` = W tile bytes; `yT
 | `cb_grid` (fp32 X only) | `bt` | the block's per-row-tile grid-constant tiles (and the W one, once, before block 0) | {token: spans → bt, rest 0} | Float32, UnpackToDestFp32 | compute | compute (splits) | per block | W's grid tile reuses it before block 0 (disjoint lifetime). |
 | `cb_max_scaler` (fp32 X only) | 1 | constant | 1 tile | Float16_b | reader | compute | whole kernel | Separate from `cb_reduce_scaler` (pool-type-aware fill: <MAX, REDUCE_SCALAR> vs <SUM, REDUCE_ROW>). |
 | `cb_w_own_ready` / `cb_w_own_split` | 1 each (32 B token pages) | 1 token | no payload | Float16_b | writer / compute | compute / writer | once, before block 0 (W column all-gather) | none (tokens: 64 B). |
+| `cb_w_share_landed` | 1 (32 B token page) | 1 token | no payload | Float16_b | reader | writer | once, before block 0 (W column all-gather, `W_SHARE_ON_READER`) | Refinement 5. Not `cb_w_own_ready`: that one is writer → compute (single producer / consumer each). The share bytes themselves land in the writer-owned `cb_weight` region (no new buffer). 32 B. |
 
 ## Symbol table
 
@@ -140,3 +141,15 @@ Totals: DRAM ≈ 73.4 + 36.7 + 0.4 + 18.4 + 0.16 ≈ **129 MB** (fp32). The DRAM
   The fit reads the same split (`_c_split`), so the CB sizes stay single-source.
 - Data-movement budget unchanged: X once, W once per physical column (column all-gather), outputs once. The
   NoC-flip knob (`READER_NOC_FLIP_ROWS`, default 0) changes only the NoC, not the bytes.
+
+## Refinement 5 (T=1280, C=4096 bf16 perf focus: block × depth co-tune + NoC placement)
+
+- Added `cb_w_share_landed` (one 32 B token, reader → writer). Nothing else changed in the inventory:
+  `block_token_tiles` stays 1 and `x_block_depth` stays 2 (co-tune measured below), so the bf16-X L1 headroom that
+  bf16 frees (≈ 200–350 KB at C = 4096–7168) is left unspent — a coarser block or a deeper prefetch did not pay.
+- With the W column all-gather, the reader (not the writer) DRAM-reads this core's W share into `cb_weight` at the
+  writer's slots (transaction id 15, issued before the X burst) and hands it over by token. The writer still owns
+  the CB (it reserves / publishes it; the split, multicast and bias are unchanged).
+- Data-movement budget unchanged: X once, W once per physical column (column all-gather), outputs once. Only the NoC
+  that carries each byte moved (reader NoC flip for the top `round(0.4 · grid_y)` rows; the W share now rides the
+  reader's NoC).

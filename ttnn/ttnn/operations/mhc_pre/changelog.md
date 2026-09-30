@@ -265,3 +265,78 @@
 - Tests added: `tests/ttnn/unit_tests/operations/mhc_pre/test_mhc_pre_perf_inproc.py`, an in-process device-ns
   probe over `SHAPES` × dtypes × the knob sets in `test_mhc_pre_perf_sweep.py`. It is skipped unless
   `TT_METAL_DEVICE_PROFILER=1`.
+
+## Refinement 5 — Speed up the perf-focus profile T=1280, C=4096, bf16 streams (block × depth co-tune)
+- Date: 2026-09-30
+- What was done (perf; nothing added to SUPPORTED). All device-ns below are BH p150 in-process
+  `ttnn.ReadDeviceProfiler` medians of 3–5 calls (`test_mhc_pre_perf_inproc.py`, new `MHC_PRE_PERF_REPEAT` /
+  `_XSHAPES` / `_WDTYPE`). Temporary `DeviceZoneScopedN` zones were used for the analysis, then removed.
+  - **Diagnosis (1280×4096 bf16 X / fp32 W, 175.8 µs).** 20 groups of 5 cores, 2 token blocks per core. Per-row
+    zones: with every reader on NoC0, the top core rows are starved. Row y=3's block-0 X read takes 116 µs, while
+    the bottom rows finish everything by ~100 µs. The starved cores then run their whole compute after the data
+    lands, a ~52 µs tail (projection + Σx² alone is 15 µs per block with the data present).
+  - **Block × depth co-tune (the heading's knobs): measured null or negative, defaults kept.**
+    - `BLOCK_TOKEN_TILES_CAP` 2 → 163.8 µs; 2 with depth 1 → 163.9; 4 → 186.7. A bt > 1 block at C=4096 only fits
+      with fewer or wider groups, or with depth 1, so it loses the block-to-block overlap (lamp L1).
+    - `X_BLOCK_DEPTH_DEFAULT` 3 → 148.8 (vs 148.1); 1 → 174.3.
+    - `Y_CHUNK_TILES_CAP` 4 / 16 → 150.1 / 147.8; `Y_DEPTH` 1 / 3 → 151.4 / 148.4; 16 × 3 → 146.4.
+    - X stream chunks 2 / 6 / 8 → 151.4 / 146.9 / 148.0; in-flight 1 / 3 / all → 147.7 / 150.4 / 153.6;
+      `OWNER_C_DISCOUNT` 0 / 4 → 149.6 / 148.9.
+    - All of these are within the ±2 µs noise band or worse, so the bf16 L1 headroom stays unspent. The
+      Σx² `cb_sq_acc` handshake question from the verifier notes does not arise (bt stays 1).
+  - **NoC placement (`noc_placement`, the lever that won).** Two coupled changes:
+    1. `READER_NOC_FLIP_ROWS` is now derived: `round(READER_NOC_FLIP_FRACTION = 0.4 × grid_y)` top rows swap
+       reader and writer NoCs. The explicit int override is kept, and 0 = the Refinement 4 placement.
+    2. **The W column share moved to the reader** (`W_SHARE_ON_READER`). The reader DRAM-reads it into the
+       writer-owned `cb_weight` at the writer's slots, issued ahead of the X burst on its own NoC with transaction
+       id 15 (`X_STREAM_CHUNKS` is now capped at 14). It hands the share to the writer through the new token CB
+       `cb_w_share_landed` before the first X chunk is waited for. The writer still splits, multicasts and publishes.
+    - Why both: flipping alone put the flipped rows' writer W-share reads on the congested NoC. They took
+      56–60 µs, and every projection waits for the column all-gather, which ends at its slowest row (flip4 alone
+      with the writer W: 157 µs). The share on the reader alone (no flip) starves NoC0's top rows' shares instead
+      (640×7168 153 → 174 µs).
+    - Ordering the share before X on the writer's NoC (a reader wait on a "W issued" token) measured flat.
+      Landing it before any X read (`W_SHARE_BEFORE_X`, parked False) was 159.7 vs 148.
+  - **Path gate** (`_placement_levers`). Both levers are off for the pairs where they lose, which keep the
+    Refinement 4 placement:
+    - bf16 X / bf16 W (unstreamed `matmul_block` projection): 1280×4096 183.2 → 188.3, 2048×5120 354.3 → 377.9 µs.
+    - bf16 W without the column broadcast (decode / `group_h > 1`, per-core DRAM W): 1×7168 fp32 X 80.1 → 93.2 µs.
+    - Knobs: `PLACEMENT_LEVERS_BF16_X_BF16_W`, `PLACEMENT_LEVERS_BF16_W_R1`, both False.
+  - **Latent bug fixed.** On the fp32-X / bf16-W path, nothing waited for the resident `cb_weight` before the split
+    projection's matmul read it. The fp32-W paths wait inside their W split, and the bf16-X path waits inside
+    `matmul_block`. It worked only because W happened to land before the first X block. Both placement levers
+    shift W timing, so the race showed up: golden 202/206, with 4 fp32-X/bf16-W precision failures. Fix: wait for
+    `cb_weight` at block start on that path, before the X stats pass, which is where the fp32-W path waits. A wait
+    placed later, right before the projection, still failed deterministically at 640×1792 with no flip: whole
+    block-0 token rows of the bottom groups came out wrong. I did not pin down the thread-level mechanism for that.
+  - Reused: the X stream / transaction-id machinery, the W all-gather (split, multicast, publish unchanged), and the
+    per-NoC kernel sets. Added: one token CB, reader W-share issue/landing, derived flip rows, the path gate, and one
+    compute wait.
+- Perf (device µs, R4 placement → Refinement 5 defaults, same build):
+
+  | Shape | bf16 X / fp32 W | fp32 X / fp32 W | fp32 X / bf16 W | bf16 X / bf16 W |
+  |---|---|---|---|---|
+  | 1280×4096 (focus) | **175.8 → 148.2** | 387.8 → 378.9 | 393.4 → 349.0 | 183.7 → 182.9 (gated) |
+  | 640×1792 | 45.0 → 43.4 | 128.4 → 121.9 | 123.4 → 115.5 | 44.0 → 43.8 (gated) |
+  | 640×7168 | 152.6 → 146.4 | 408.3 → 411.2 (+0.7 %, 10 samples, noise band) | 395.4 → 353.1 | 148.5 → 148.2 (gated) |
+  | 4096×1792 | 244.9 → 239.2 | 559.6 → 552.5 | 529.5 → 521.9 | 261.0 → 261.9 (gated) |
+  | 2048×5120 | 344.2 → 314.7 | 719.2 → 714.7 | 713.7 → 672.1 | 353.2 → 352.8 (gated) |
+  | 1×7168 decode | 58.7 → 46.1 | 130.7 → 119.8 | 80.1 → 80.1 (gated) | 40.5 → 40.8 (gated) |
+  | 64×4096 | 49.7 → 42.7 | 96.2 → 92.1 | 64.5 → 63.4 | 37.9 → 37.8 (gated) |
+  | 32×128 | 19.4 → 18.9 | 24.5 → 24.0 | 20.0 → 19.9 | 19.2 → 19.0 (gated) |
+
+- Bottleneck now (1280×4096 bf16, flip4 zones): the W column all-gather ends at ~50–58 µs. It waits for its slowest
+  row's share, which is logical row 4, the top NoC0 row, and is still starved. About 70–85 µs of per-core compute
+  follows it: 2 × (projection + Σx² 15.5 µs, coefficients 5–17 µs including the group wait and the owner's
+  Sinkhorn, y-mix 7 µs). The middle rows' X lands last, at ~100–105 µs. Landing W first (~26 µs) instead leaves
+  those rows X-bound with a ~45 µs tail. That is the same wall.
+- Accuracy achieved: gates unchanged. Golden 206/206. Unit directory 91 passed / 1 skipped (includes the new cases).
+  Alternating-seed stress (stale L1 cannot mask a race): 0 bad on 1280×16384, 640×7168, 2048×20480,
+  256×24576, 64×16384 and 640×28672 across all four dtype pairs × {default, noflip, W on the writer}.
+- Golden test progress: 206/206.
+- Issues encountered: the latent fp32-X/bf16-W W wait (above). Run-to-run noise at 1280×4096 is ±2–4 µs across
+  processes, so every A/B used 3–5 call medians.
+- Tests added: `test_mhc_pre_blocking.py::test_mhc_pre_noc_placement_knobs` covers the non-default placement
+  branches (noflip, W share on the writer, both) × {fp32 X / bf16 W, bf16 X / fp32 W}, with two alternating
+  seeds. Without the fix it fails. `test_mhc_pre_perf_sweep.py`: new knob sets (bt / depth / y window / placement).
+  Its unselected default is now a 5-setting smoke set; `MHC_PRE_PERF_KNOBS=all` runs every setting.
