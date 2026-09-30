@@ -90,3 +90,21 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   mark O.1 passed. Killed the orchestrator and the attempt-2 agent between device runs (no files changed by it),
   restored state.json from the O.1 gate commit (O.1 PASS), removed the PAUSE file, reset the board on the owner's word
   (tt-smi -r; 4 p150b back). Run1 COMPLETE: 105/105 PASS, 0 deferred.
+
+## Hand-off (2026-09-30 02:25, overseer context 85%)
+State: Hy4 run1 COMPLETE (105/105). glm53 merge LANDED on dnijemcevic/ernie45_prefill at 3c18aed7576 (includes F49
+auto-checked swap tests, F55 gate_outputs fix, glm53 F48-F52 renumbered F50-F54), built OK. Nothing pushed.
+Running: /localdev/dnijemcevic/post_merge_checks.sh (background, one device job at a time). Summary lines in
+/localdev/dnijemcevic/post_merge_checks.log, per-check logs in /localdev/dnijemcevic/post_merge_logs/. Done so far:
+7 fork suites PASS except rms_norm (1 pre-existing C++ gap test, now skipped in 12dd81a17d6), Hy4 C.dense_full.indexer,
+S.moe_full.15, K.1 PASS. Remaining: hy4 X.1, glm B.1 / M.1 / L.s4096 / X.3 (GLM ran on p300c; this box p150b; GLM
+artifacts copied to /localdev/dnijemcevic/bringup/glm53_flash_d_p + generated/glm53_flash_d_p/tt_cache), f49_device
+(generated/f49_device/test_f49_device.py: checks="steps" on Hy4 dense_full / moe_full full-block swaps).
+After the script: the gates were run without --commit but record into state.json/results of hy4 and glm53: restore
+them with `git checkout -- models/demos/hy4_preview_d_p/bringup/state.json models/demos/hy4_preview_d_p/bringup/results
+models/demos/glm53_flash_d_p/bringup/state.json models/demos/glm53_flash_d_p/bringup/results` (check git status first).
+Open for the owner: (1) F49 device proof result, then OK to make "no swap review" the default (agents.swap_review);
+(2) optional rms_norm C++ fix (validate() inplace + memory_config refusal); (3) push when asked; (4) next framework
+step: automated component-test checks (output-kind checks, mistake tests at freeze, "can the test see it") = F56.
+Notes: final dashboards (index 563 KB, teletext 553 KB) exceed the 500 KB large-file hook, published not committed;
+worktrees tt-metal2-f49 and tt-metal2-merge can be removed; owner wants short plain answers.
