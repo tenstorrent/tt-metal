@@ -157,6 +157,14 @@ Tensor UpdateKVCacheOperation::create_output_tensors(
     return tensor_args.cache;
 }
 
+UpdateKVCacheOperation::topology_return_value_t UpdateKVCacheOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: the cache keeps its own distribution. The framework's default otherwise unions the cache's
+    // label with the update tensor's, so a replicated cache written from a mesh-sharded update came back
+    // labelled as sharded (same contract as update_padded_kv_cache / indexed_fused_update_cache).
+    return {tensor_args.cache.tensor_topology()};
+}
+
 tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(

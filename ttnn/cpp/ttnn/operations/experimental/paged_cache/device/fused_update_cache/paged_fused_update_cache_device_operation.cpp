@@ -247,6 +247,16 @@ PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCach
     return std::make_tuple(tensor_args.cache_tensor1, tensor_args.cache_tensor2);
 }
 
+PagedFusedUpdateCacheDeviceOperation::topology_return_value_t
+PagedFusedUpdateCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: each cache keeps its own distribution, in the same order as the returned tuple. The
+    // framework's default otherwise unions the cache labels with the update/index/page_table labels, so
+    // replicated caches written from mesh-sharded updates came back labelled as sharded (same contract as
+    // update_padded_kv_cache / indexed_fused_update_cache).
+    return {tensor_args.cache_tensor1.tensor_topology(), tensor_args.cache_tensor2.tensor_topology()};
+}
+
 ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
