@@ -18,18 +18,19 @@ namespace ckernel {
 namespace sfpu {
 
 // Computes the reciprocal of a floating point value x.
-template <int max_iter = 2>
+// sfpi::approx_recip(x) returns ±0 for x = ±inf or |x| >= 2**126, and ±inf for x = ±0. The first case also
+// flushes the representable reciprocal of ±2**126. With fold_exponent_126, exponent-126 inputs are scaled
+// into approx_recip's range by an exact 2**-2 and the result is scaled back, so ±2**126 gives ±2**-126 when
+// max_iter = 2 (with fewer iterations the result stays just below 2**-126 and still flushes); every other
+// input is unchanged.
+// It costs about 11 SFPU instructions per call, so only callers that need ±2**-126 (softsign) enable it.
+template <int max_iter = 2, bool fold_exponent_126 = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x_in) {
-    // sfpi::approx_recip(x) will return ±0 for x = ±inf or x ≥ ±2**126 — which
-    // wrongly flushes the exactly-representable reciprocal of ±2**126 (and,
-    // through this helper, breaks softsign at |x| = 2**126). Fold exponent-126
-    // inputs back into approx_recip's range with an exact power-of-two scale
-    // and undo it afterwards; both multiplies are exact, so accuracy elsewhere
-    // is untouched. Inputs at exponent 127 keep returning 0 (their reciprocal
-    // is subnormal and flushes anyway), as do ±inf and NaN (exponent 128).
     sfpi::vFloat x = x_in;
-    v_if (exexp(x_in) == 126) { x = x_in * 0.25F; }
-    v_endif;
+    if constexpr (fold_exponent_126) {
+        v_if(exexp(x_in) == 126) { x = x_in * 0.25F; }
+        v_endif;
+    }
     sfpi::vFloat y = sfpi::approx_recip(x);
 
     // Optionally improve the approximation using Newton-Raphson.
@@ -56,8 +57,10 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x_in) {
         }
     }
 
-    v_if (exexp(x_in) == 126) { y = y * 0.25F; }
-    v_endif;
+    if constexpr (fold_exponent_126) {
+        v_if(exexp(x_in) == 126) { y = y * 0.25F; }
+        v_endif;
+    }
     return y;
 }
 
