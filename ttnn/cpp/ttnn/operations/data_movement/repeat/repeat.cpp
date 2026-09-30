@@ -370,16 +370,18 @@ ttnn::Tensor repeat_via_codegen(
             is_final ? final_out : std::nullopt);
     }
 
-    if (plan.round_trip) {
-        working = ttnn::to_layout(working, ttnn::TILE_LAYOUT, tensor.dtype());
-    }
-    // A folded leg leaves its size-1 axis unexpanded; the pages are already in output order.
+    // A folded leg leaves its size-1 axis unexpanded; the pages are already in output order. A
+    // row-major fold can land on H, and a TILE view cannot move rows across tile padding, so the
+    // round trip restores the shape before it retilizes.
     auto out_shape = tensor.logical_shape();
     for (size_t d = 0; d < repetition_vector.size(); ++d) {
         out_shape[d] *= repetition_vector[d];
     }
     if (working.logical_shape() != out_shape) {
         working = ttnn::view(working, out_shape);
+    }
+    if (plan.round_trip) {
+        working = ttnn::to_layout(working, ttnn::TILE_LAYOUT, tensor.dtype());
     }
     if (!same_placement(working.memory_config(), output_mem_config)) {
         working = ttnn::to_memory_config(working, output_mem_config, std::nullopt);
