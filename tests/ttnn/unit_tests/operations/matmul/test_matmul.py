@@ -4041,8 +4041,18 @@ def test_matmul_activation_with_sharded_input(device):
     # 1. matmul gets called with activation="silu" and partial memory config
     # 2. matmul internally calls unary (silu) with the output tensor's memory config
     # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
+    # Accumulate in fp32 for the 0.9999 PCC below: with bf16 accumulation the result depends on how K is blocked
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
     try:
-        output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
+        output_tensor = ttnn.matmul(
+            input_a,
+            input_b,
+            memory_config=output_mem_config,
+            activation=activation,
+            compute_kernel_config=compute_kernel_config,
+        )
         output_tensor = ttnn.to_torch(output_tensor)
         assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
