@@ -50,6 +50,23 @@ def test_sdpa_pin_long_ctx(mesh_device, reset_seeds, ensure_gc):
     model.sync_gdn_decode_state()
     tokens = torch.full((w, 1), 1000, dtype=torch.int32)
     pins = {"on": "16", "off": "0"}
+    if os.environ.get("PIN_SINGLE"):  # one config per process (PIN_SINGLE=on|off)
+        pins = {os.environ["PIN_SINGLE"]: pins[os.environ["PIN_SINGLE"]]}
+    if os.environ.get("PIN_DEBUG"):  # log every SDPA-decode program config built (width / max_cores check)
+        _orig_cfg = ttnn.SDPAProgramConfig
+
+        def _cfg(*a, **kw):
+            logger.info(f"[sdpa_pin] SDPAProgramConfig {kw.get('max_cores_per_head_batch', 'default')}")
+            return _orig_cfg(*a, **kw)
+
+        ttnn.SDPAProgramConfig = _cfg
+        _orig_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode
+
+        def _sdpa(q, *a, **kw):
+            logger.info(f"[sdpa_pin] paged sdpa decode q shape {tuple(q.shape)}")
+            return _orig_sdpa(q, *a, **kw)
+
+        ttnn.transformer.paged_scaled_dot_product_attention_decode = _sdpa
     for name, v in pins.items():  # compile both program sets before any trace is parked
         os.environ["QWEN36_DECODE_SDPA_PIN_MIN_WIDTH"] = v
         dev0 = model.prepare_inputs_decode(tokens, torch.full((w,), ctxs[0], dtype=torch.int32), page_table=pt)

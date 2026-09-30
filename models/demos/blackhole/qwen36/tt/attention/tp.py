@@ -1023,9 +1023,13 @@ class TPAttention:
         # number of active requests (and a slot remap forces Bmax), so without the pin a row's attention reduction
         # order, hence its bits, depended on how many requests shared that step: the TP=2 run-to-run drift of
         # concurrent decoders (profiles/opt_round5/FASTSLOT.md). Widths below W keep their wider split (it matters
-        # for 1..8-user long-context TPOT); at W=16 the pin is free (2k/8k x 16 users ITL p50 unchanged within
-        # 0.5 ms). Base-model decode calls outside spec verify only (a spec seed step at B >= W would be pinned too;
-        # no shipped spec profile runs B >= 16).
+        # for 1..8-user long-context TPOT). Cost at W=16 (steps at width 9..16 only): none at 2k/8k x 16 users (ITL
+        # p50 within 0.5 ms), +2..8 ms per step (+2-9%) at 32k x 16 users and +2.9 ms (+3%) at 64k x 9 users
+        # (served, fresh-server pairs, profiles/opt_round5/REMAP.md); a long-context throughput profile may set 0
+        # and give up run-to-run identity of its long decoders. No narrower W keeps the invariance: width 32 has
+        # 1 core per head on 110 cores, and the rows the pin slows (KV > one chunk) are the rows whose bits depend
+        # on the split. Base-model decode calls outside spec verify only (a spec seed step at B >= W would be pinned
+        # too; no shipped spec profile runs B >= 16).
         _pin_w = _sdpa_pin_min_width(self.mesh.get_num_devices())
         if _pin_w and _sdpa_max_cores is None and not spec_verify_mode and B >= _pin_w and self.B >= _pin_w:
             _grid_n, _bmax = _sdpa_grid.x * _sdpa_grid.y, self.B
