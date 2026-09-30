@@ -1024,6 +1024,13 @@ tasks:
     - attn_norm
     - q_a
     layer: 2
+  frozen:
+    at: '2026-09-30T14:47:26'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_04_q_a.py: c53a58351beecf3a3203753a7cd3901ca0ecde2dd13c6bad7f748a39a40e714b
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.moe.attention
   title: moe attention (attention) on device, layer 2
   step: implement
