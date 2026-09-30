@@ -84,14 +84,12 @@ struct CoefExpander {
         cb_reserve_back(cb_coef_bcast, num_coef_tiles);
         const uint32_t bcast_base = get_write_ptr(cb_coef_bcast);
         for (uint32_t j = 0; j < n; ++j) {
-#ifndef ABL_NO_EXPAND
             for (uint32_t t = 0; t <= n; ++t) {
                 const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
                 const uint32_t raw_col = t == 0 ? j : (t - 1) * n + j;
                 const uint32_t tile = j * coef_tiles_per_stream + coef_tile_in_stream(t);
                 expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, coef_half(t));
             }
-#endif
             cb_push_back(cb_coef_bcast, coef_tiles_per_stream);
         }
         cb_pop_front(cb_coef_raw, num_raw_tiles);

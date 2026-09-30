@@ -73,9 +73,6 @@ void kernel_main() {
         const uint32_t f_base = get_write_ptr(cb_sublayer_tiles);
         const uint32_t x_base = get_write_ptr(cb_residual_tiles);
         const uint32_t f_page0 = row * col_tiles_per_row + col_start;
-#ifdef ABL_NO_DM
-        return;
-#endif
         for (uint32_t c = 0; c < valid_cols; ++c) {
             noc_async_read(
                 sublayer_acc.get_noc_addr(f_page0 + c), f_base + c * sublayer_page_bytes, sublayer_page_bytes);

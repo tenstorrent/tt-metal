@@ -71,3 +71,42 @@
   - reusing data tiles across output streams, which needs n·P + n + 1 slots.
   The DM floor itself (224 vs 202 µs target) is Refinement 3.
 - Tests added: `test_mhc_post_streams.py` (n ∈ {1,2,3,5} × aligned / non-aligned × fp32 / bf16 — the n-dependent window regimes); `test_mhc_post_perf.py::test_mhc_post_perf_guard` (the no-regression guard set).
+
+## Refinement 3 — Reader / writer overlap and coefficient-expansion cost on the perf-flagged bf16 profiles
+- Date: 2026-09-30
+- What was done: data-movement levers. No SUPPORTED change.
+  - **Diagnosis** (ablation on the R2 kernel; T640 C7168 / T640 C1792 / T1280 C4096 bf16):
+    - Full: 306.6 / 131.5 / 370.0 µs.
+    - Expansion stubbed: 278 / 78 / 321 µs.
+    - Compute + expansion stubbed (DM floor): 182 / 48.5 / 209.5 µs.
+    - The coefficient expansion was the largest single DM cost: 54 µs of 131 at C1792. It ran at ~3.5 cycles per store.
+    - Per-core maps showed a physical-row gradient: grid row 2 is slowest, row 11 fastest, independent of unit order (`row_wise` False measured the same).
+  - **Tight expansion loop** (`mhc_post_coef_expand.hpp`): one raw load per row feeds 16 unrolled word stores, over the two contiguous faces of a half-tile. It replaces per-element face-offset math plus a `fill_l1_range` call per row. Bit-exact fp32 word copies. This alone took C1792 from 131.5 to 86 µs.
+  - **`COEF_EXPANDER` knob** (default `"writer"`, `"reader"` kept live):
+    - load_coefficients is a shared `CoefExpander` that exactly one DM kernel runs, so `cb_coef_raw` and `cb_coef_bcast` keep a single producer.
+    - The writer (BRISC) is idle until the first output block. It loads segment 0's set up front and segment s+1's right after writing segment s's first block, using a look-ahead `SegmentWalker` (same derivation). This needs `COEF_DEPTH ≥ 2`, which the host asserts.
+    - On the reader path, the raw read rides block 0's barrier and the expansion runs in block 1's read shadow.
+    - Writer vs reader, measured back to back: 66 vs 76 µs (C1792), 238 vs 246 µs (C7168), 267 vs 273 µs (T1280).
+  - **Per-stream coefficient pushes:** the expander pushes P tiles per output stream. Compute waits cumulatively for `(j+1)·P` before stream j, so it starts mixing stream 0 while later streams are still being expanded.
+  - **Block-size policy:** `B = min(B_fit, longest segment, MAX_BLOCK_COL_TILES = 8, ceil(max units per core / MIN_BLOCKS_PER_CORE = 3))`. The coarsest fit left 1–2 blocks per core, so there was no read / mix / write overlap and every core burst its full prefetch at DRAM at once.
+    - Swept B ∈ {1, 2, 3, 4, 6, 8, 10, 12, 16}: B = 8 was best at C7168 (≈ 221 µs vs 263–320 µs), B = 4 at C1792, and B = 8–12 at T1280.
+    - `DEPTH_IN` = 3 measured slower (B = 11: 252 → 293 µs) and was not adopted.
+  - Reused: SegmentWalker, all CB lifecycles, the compute mix, the reader's block reads. Added: `mhc_post_coef_expand.hpp`, the reader/writer CT flag `expand_here`, the writer's post / comb accessors and RT args, and the knobs `COEF_EXPANDER` and `MIN_BLOCKS_PER_CORE` (`MAX_BLOCK_COL_TILES` changed from None to 8).
+- Perf (device kernel ns, 110 cores, Blackhole; R2 → R3):
+  - bf16 flagged: T640 C1792 131.5 → 66–69 µs (target ≈ 50); T640 C7168 306.6 → 238 µs (target ≈ 202); T1280 C4096 370.0 → 267 µs (target ≈ 231).
+  - fp32/fp32: T640 C7168 478 → 450 µs; T640 C1792 154 → 134 µs; T1280 C4096 547 → 531 µs.
+  - Guard set, fp32 / bf16 / mixed. Every cell is faster; no regression:
+    - C1792 T640: 171 / 133 / 153 → 138 / 67 / 128 µs.
+    - C1792 T1000: 224 / 167 / 216 → 197 / 113 / 192 µs.
+    - C7168 T640: 469 / 304 / 482 → 434 / 220 / 425 µs.
+    - C7168 T1000: 788 / 460 / 760 → 706 / 398 / 677 µs.
+- Accuracy achieved: the arithmetic is unchanged (the coefficients are the same fp32 words). The precision baseline passes unchanged: bf16 PCC ≈ 0.999998 and rel-RMS ≈ 1.65e-3; fp32 rtol = atol = 1e-5 (streams tests). Determinism tests pass.
+- Golden test progress: `test_regression.py` 12/12 (incl. the 122-wrap depth chain) and `test_golden.py -k loose` 96/96 (108 passed). The unit dir passes 116/116. The full `test_op` set was not re-run; it goes through the same kernels and is covered by the acceptance and knob tests.
+- Issues encountered: none. Ablation hooks were temporary and have been removed.
+- Remaining headroom (finding, not a follow-up):
+  - The DM floor (compute stubbed) is now 187 / 50 / 209 µs, at or below target, and compute alone (DM stubbed) is 184 / 62 / 207 µs. The stages are balanced.
+  - The wall exceeds both because per-core DRAM service is uneven by core position: about 170–215 µs per core at C7168. The slowest core sets the kernel time.
+  - Next levers: a position-weighted work split; a compute cut (R2's serialized DEST window); splitting the expansion across both DM RISCs by segment parity (two coefficient CBs and a second compute instantiation — TRISC code-size risk, not attempted).
+- Tests added:
+  - `test_mhc_post_dataflow_knobs.py`: 24 cases covering `COEF_EXPANDER` writer / reader × {default policy, coarsest fit, B = 1, B = 3} × {T640 C1792 bf16 (row-straddling cores), T100 C224 fp32 non-aligned, n = 5}.
+  - `test_mhc_post_perf.py`: `MHC_POST_SWEEP_MAX_BLOCK` env sweep; `max_block = None` now keeps the descriptor's policy.

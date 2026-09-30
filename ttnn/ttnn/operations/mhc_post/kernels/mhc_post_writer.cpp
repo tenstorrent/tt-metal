@@ -79,11 +79,6 @@ void kernel_main() {
             for (uint32_t j = 0; j < n; ++j) {
                 const uint32_t page0 = seg.row * output_row_tiles + j * col_tiles_per_row + col_start;
                 const uint32_t slot0 = out_base + j * block_col_tiles * output_page_bytes;
-#ifdef ABL_NO_DM
-                if (true) {
-                    continue;
-                }
-#endif
                 for (uint32_t c = 0; c < valid; ++c) {
                     noc_async_write(
                         slot0 + c * output_page_bytes, output_acc.get_noc_addr(page0 + c), output_page_bytes);

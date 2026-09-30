@@ -3,6 +3,8 @@
 
 """Perf-measurement shapes for mhc_post (run under scripts/run_safe_pytest.sh --profile)."""
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -13,11 +15,18 @@ from ttnn.operations.mhc_post import mhc_post
 N = 4
 
 
-@pytest.mark.parametrize("max_block", [None])
+# MHC_POST_SWEEP_MAX_BLOCK="2,4,8" sweeps the block-size cap in one process (perf exploration); default: the
+# descriptor's own policy.
+_SWEEP = os.environ.get("MHC_POST_SWEEP_MAX_BLOCK")
+MAX_BLOCKS = [int(b) for b in _SWEEP.split(",")] if _SWEEP else [None]
+
+
+@pytest.mark.parametrize("max_block", MAX_BLOCKS)
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 @pytest.mark.parametrize("T, C", [(640, 7168), (640, 1792), (1280, 4096)])
 def test_mhc_post_perf(device, T, C, dtype, max_block, monkeypatch):
-    monkeypatch.setattr(pd, "MAX_BLOCK_COL_TILES", max_block)
+    if max_block is not None:
+        monkeypatch.setattr(pd, "MAX_BLOCK_COL_TILES", max_block)
     torch.manual_seed(0)
     f = torch.randn(1, 1, T, C)
     x = torch.randn(1, 1, T, N * C)

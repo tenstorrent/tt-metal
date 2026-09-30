@@ -84,7 +84,7 @@
 - **Next:** find a coefficient form that survives DEST release, or a denser coefficient layout that allows K > 1 columns per window. Not attempted: every pack release ZEROACCs all of DEST, and at n=4 the SFPU lane geometry needs half a tile per coefficient.
 - **DM floor vs target** (224 vs 202 µs) is Refinement 3's scope.
 
-### [ ] Refinement 3 — Reader / writer overlap and coefficient-expansion cost on the perf-flagged bf16 profiles
+### [x] Refinement 3 — Reader / writer overlap and coefficient-expansion cost on the perf-flagged bf16 profiles
 
 **Type**: perf
 
@@ -105,3 +105,24 @@
 - Moving the expansion to BRISC makes the writer the producer of `cb_coef_bcast`. Keep a single producer per CB, and keep the shared `SegmentWalker` derivation as the one source of segment and block boundaries.
 
 **Done when**: measured device-ns improves on T640 C1792 bf16 toward its `target_ns`, and on T640 C7168 / T1280 C4096 bf16 beyond the Refinement 2 result. The golden suite and regression tests must stay green, with no device-ns regression across the same config-spanning guard set as Refinement 2.
+
+**Outcome**:
+- **Measured** (device kernel ns, 110 cores, Blackhole, bf16/bf16):
+  - T640 C1792: 131.5 → 66–69 µs (target ≈ 50).
+  - T640 C7168: 306.6 → 238 µs.
+  - T1280 C4096: 370.0 → 267 µs.
+  - Guard set: every cell is faster than after Refinement 2 (C1792 T640 fp32/bf16/mixed: 171/133/153 → 138/67/128 µs; C7168 T1000: 788/460/760 → 706/398/677 µs).
+- **Levers:**
+  - A tight, unrolled expansion store loop. This was the dominant cost: 54 of 131 µs at C1792, at ~3.5 cycles per store before and ~1.1 after.
+  - The expansion moved to the writer (`COEF_EXPANDER` knob, default `"writer"`), with look-ahead for the next segment.
+  - Per-stream coefficient pushes, so compute starts on stream 0 while the later streams are still being expanded.
+  - The raw coefficient read folded into block 0's barrier.
+  - A block-size policy: `MAX_BLOCK_COL_TILES = 8`, `MIN_BLOCKS_PER_CORE = 3`.
+  - Deeper `DEPTH_IN` (3) was measured slower and was not adopted. `row_wise` = False measured the same.
+- **Bottleneck now:**
+  - The ablations put the DM floor with compute stubbed at 187 / 50 / 209 µs, which is at or below target_ns, and compute with DM stubbed at 184 / 62 / 207 µs. The stages are balanced.
+  - The wall exceeds both because per-core DRAM service is uneven. At C7168 there is a physical-row gradient of about 170 µs (grid row 11) to 215 µs (grid row 2) that follows core position, not unit order. The kernel time is the slowest core.
+  - At C1792, the expansion on the writer is still on the DM path of cores that straddle a row boundary (two expansions each).
+- **Next (not attempted):**
+  - A position-weighted work split, or a compute-side cut (R2's remaining DEST-window cost), to take the balanced stages below the imbalance.
+  - Splitting the expansion across both DM RISCs by segment parity. This needs two coefficient CBs and a duplicated compute instantiation, a TRISC code-size risk.

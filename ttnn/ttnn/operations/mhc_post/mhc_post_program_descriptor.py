@@ -28,13 +28,17 @@ CB_OUTPUT_TILES = 16  # X' block tiles (n streams) compute -> writer
 
 # ---- Block-model knobs (single source of truth) ----
 BLOCK_TOKEN_TILES = 1  # a block never spans two token rows (realized by segments)
-DEPTH_IN = int(
-    __import__("os").environ.get("MHC_DIN", 2)
-)  # TEMP blocks in flight on cb_sublayer_tiles / cb_residual_tiles
-DEPTH_OUT = int(__import__("os").environ.get("MHC_DOUT", 2))  # TEMP blocks in flight on cb_output_tiles
+DEPTH_IN = 2  # blocks in flight on cb_sublayer_tiles / cb_residual_tiles
+DEPTH_OUT = 2  # blocks in flight on cb_output_tiles
 COEF_DEPTH = 2  # token-row coefficient sets in flight on cb_coef_bcast
 L1_BUDGET_BYTES = 1 << 20  # CB budget per core
-MAX_BLOCK_COL_TILES = None  # optional cap on block_col_tiles (None = coarsest L1 fit); overlap perf lamp
+# Block-size policy: block_col_tiles = min(L1 fit, longest segment, MAX_BLOCK_COL_TILES,
+# ceil(max units per core / MIN_BLOCKS_PER_CORE)). The coarsest L1 fit leaves a core with 1-2 blocks, so read,
+# mix and write barely overlap and every core bursts its whole prefetch at DRAM at once. Measured (Blackhole,
+# 110 cores, bf16): cap 8 is the best cap at T640 C7168 / T1280 C4096, and >= 3 blocks per core is best at
+# T640 C1792 (10-11 units per core -> B = 4). Deeper DEPTH_IN (3) measured slower.
+MAX_BLOCK_COL_TILES = 8  # cap on block_col_tiles (None = no cap)
+MIN_BLOCKS_PER_CORE = 3  # blocks the busiest core's range is cut into, at least (1 = no constraint)
 # DEST sync mode of the compute kernel (overrides the caller's dst_full_sync_en; an internal schedule
 # choice). SyncFull gives 8 fp32 DEST slots, enough for one output column's P coefficient tiles + n+1
 # data tiles at n = 4; the kernel derives its window layout from DEST_AUTO_LIMIT. False (SyncHalf, 4
@@ -68,9 +72,7 @@ def _work_assignment(grid_size, total_units):
         core_group_2,
         units_per_core_g1,
         units_per_core_g2,
-    ) = ttnn.split_work_to_cores(
-        grid_size, total_units, row_wise=__import__("os").environ.get("MHC_POST_COLWISE") is None
-    )
+    ) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
     assignment = []
     start = 0
     for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
@@ -147,11 +149,11 @@ def create_program_descriptor(
     )
     assert block_col_tiles_fit >= 1, "mhc_post: coefficient set + one column block does not fit L1_BUDGET_BYTES"
     block_col_tiles = min(block_col_tiles_fit, _max_segment_col_tiles(assignment, col_tiles_per_row))
-    import os
-
-    _mb = int(os.environ["MHC_POST_MAXB"]) if os.environ.get("MHC_POST_MAXB") else MAX_BLOCK_COL_TILES  # TEMP
-    if _mb is not None:
-        block_col_tiles = max(1, min(block_col_tiles, _mb))
+    max_units_per_core = max(count for _, _, count in assignment)
+    block_col_tiles = min(block_col_tiles, math.ceil(max_units_per_core / MIN_BLOCKS_PER_CORE))
+    if MAX_BLOCK_COL_TILES is not None:
+        block_col_tiles = min(block_col_tiles, MAX_BLOCK_COL_TILES)
+    block_col_tiles = max(1, block_col_tiles)
 
     # ---- circular buffers ----
     cbs = [
@@ -242,11 +244,7 @@ def create_program_descriptor(
     compute_cfg.dst_full_sync_en = DST_FULL_SYNC
     compute_cfg.unpack_to_dest_mode = unpack_modes
 
-    import os
-
-    _abl = [(d, "1") for d in os.environ.get("MHC_POST_ABLATE", "").split(",") if d]  # TEMP ablation
     reader = ttnn.KernelDescriptor(
-        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct,
@@ -254,7 +252,6 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
-        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,
@@ -262,7 +259,6 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
-        defines=_abl,
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct,

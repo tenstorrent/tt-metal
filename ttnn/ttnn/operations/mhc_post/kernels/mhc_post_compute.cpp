@@ -293,7 +293,7 @@ ALWI void mix_tail_window(uint32_t j, uint32_t col0, uint32_t rem, bool& data_fi
 // mix_block: all n output streams of one block.
 ALWI void mix_block(uint32_t valid_col_tiles, bool& data_first) {
     for (uint32_t j = 0; j < n; ++j) {
-        // The reader pushes the coefficient set one stream at a time (P tiles each); stream j needs streams
+        // load_coefficients pushes the set one stream at a time (P tiles each); stream j needs streams
         // 0..j. Cumulative, so a no-op after the segment's first block.
         cb_wait_front(cb_coef_bcast, (j + 1) * coef_tiles_per_stream);
         uint32_t col0 = 0;
@@ -328,9 +328,7 @@ void kernel_main() {
             cb_wait_front(cb_residual_tiles, residual_block_tiles);
             cb_reserve_back(cb_output_tiles, output_block_tiles);
 
-#ifndef ABL_NO_COMPUTE
             mix_block(valid, data_first);
-#endif
 
             cb_push_back(cb_output_tiles, output_block_tiles);
             cb_pop_front(cb_residual_tiles, residual_block_tiles);
