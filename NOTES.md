@@ -14,6 +14,12 @@ Branch reset onto the t36 line (16ba9a383dc, what blx03 runs). Commit 9a02249fdf
   older 145f entries (which were 4x8/8x4). C_in/C_out/T blocks identical -> expect bit-identical output.
 
 ## Device A/B (single config)
+Job 884 FAILED (pytest timeout 480s): run25.sh exports TT_METAL_HOME=$W, overriding env.yaml -> t17 kernel
+paths -> cold JIT. Log kept as conv145_t17/run_884_cold.log. Rerun via detached blx03:~/fasth3/drive17.sh
+(tmp/t17/drive17.sh): waits for the one project slot, then submits with trailing TT_METAL_HOME=main tree,
+PYTHONPATH=t17:main/ttnn:main/tools (verified: ttnn from main, conv3d.py from t17). Job id in blx03:~/fasth3/drive17.log.
+Done check: tmp/t17/done17.sh. Then run compare.sh as below.
+
 blx03 job 884 (882 was killed: new TT_METAL_HOME made the JIT cache cold; 884 runs t17 python with TT_METAL_HOME=main tree):
 baseline job 879 (conv145_t20, 16ba9a383dc): gen#1 VAE decode (conv) 0.72s, E2E 8.761s.
 Output: blx03:~/fasth3/out/ltx25_1080p_6s/conv145_t17/{run.log,ltx_av_fast_*.mp4}
