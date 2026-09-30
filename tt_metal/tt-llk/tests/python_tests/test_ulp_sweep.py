@@ -10,21 +10,26 @@ regeneration that quietly drops one weakens a gate with nothing to notice.
 
 import math
 import os
+import re
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import MathOperation
+from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.ulp import has_ulp_gate
 from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
+    _known_lanes,
     export_measured,
     finish_emit,
+    flushed_inputs,
     measurable_mask,
     merge_measured,
     nonfinite_failures,
     record,
+    stale_excuses,
     write_table,
 )
 
@@ -328,6 +333,10 @@ def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
     assert not nonfinite_failures(
         MathOperation.Sin, far, golden, result, fmt, fmt
     ).any()
+    # Bfp8_b rides on the bfloat16 value set, so it carries bfloat16's limit.
+    assert not nonfinite_failures(
+        MathOperation.Sin, far, golden, result, DataFormat.Bfp8_b, fmt
+    ).any()
     # Inside [-pi, pi] the same disagreement is a failure.
     assert nonfinite_failures(
         MathOperation.Sin,
@@ -337,6 +346,136 @@ def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
         fmt,
         fmt,
     ).any()
+
+
+@pytest.mark.parametrize(
+    "op", [MathOperation.Sin, MathOperation.Cos], ids=lambda o: o.name
+)
+def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
+    """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
+    kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
+    fp16 input carries no limit, and a non-finite answer at its very top is a failure.
+    Keyed on the op alone, the pi claim covered the fp16 cells too, which are the only
+    Sin/Cos cells the table step-gates."""
+    fmt = DataFormat.Float16
+    top = torch.tensor([65504.0, 4.0], dtype=torch.float16)
+    golden = torch.tensor([-1.0, -1.0], dtype=torch.float16)
+    result = torch.tensor([float("inf"), float("inf")], dtype=torch.float16)
+    assert nonfinite_failures(op, top, golden, result, fmt, fmt).tolist() == [
+        True,
+        True,
+    ]
+    # The same two magnitudes from a bfloat16 input: 4.0 is past pi and excused.
+    assert nonfinite_failures(
+        op,
+        top.to(torch.bfloat16),
+        golden.to(torch.bfloat16),
+        result.to(torch.bfloat16),
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+    ).tolist() == [False, False]
+
+
+def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
+    """The sweep's one ``-0.0`` shares a Bfp8_b block with the bf16 subnormals beside
+    it; the shared exponent is 0 and the quantizer's forced hidden bit hands the golden
+    ``-2**-127``, so ``floor`` reads -1 against the 0 silicon sees: 16,129 steps, the
+    whole of Floor's apparent error on every Bfp8_b-input cell. The input as generated
+    is a zero, so only the quantized value shows it -- and only on a block format."""
+    tiny = 2.0**-133
+    below = [-(k * tiny) for k in range(8, 0, -1)]
+    above = [k * tiny for k in range(1, 8)]
+    src = torch.tensor(below + [-0.0] + above, dtype=torch.bfloat16)
+    zero = len(below)
+    assert float(src[zero]) == 0.0
+
+    as_bf16 = flushed_inputs(src, DataFormat.Float16_b)
+    as_block = flushed_inputs(src, DataFormat.Bfp8_b)
+    assert as_bf16.tolist() == [True] * zero + [False] + [True] * len(above)
+    assert as_block.all()
+
+    golden = torch.full_like(src, -1.0)
+    result = torch.zeros_like(src)
+    assert not measurable_mask(src, golden, result, DataFormat.Bfp8_b)[zero]
+    assert measurable_mask(src, golden, result, DataFormat.Float16_b)[zero]
+    inf = torch.full_like(src, float("inf"))
+    assert not nonfinite_failures(
+        MathOperation.Floor, src, golden, inf, DataFormat.Bfp8_b, DataFormat.Float16_b
+    )[zero]
+    assert nonfinite_failures(
+        MathOperation.Floor,
+        src,
+        golden,
+        inf,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+    )[zero]
+
+
+def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
+    """Celu returns inf for x in 65408..65504 on a 16-bit Float16 Dest (#58607). The
+    entry names those inputs on that cell. The lane below the interval is still a
+    failure, so is the same lane on a 32-bit Dest, and a named lane that agrees is
+    ranked like any other: it is the disagreement that is excused, not the lane."""
+    fmt = DataFormat.Float16
+    src = torch.tensor([65376.0, 65408.0, 65504.0], dtype=torch.float16)
+    golden = src.clone()
+    result = torch.full_like(src, float("inf"))
+    cell = dict(approx_mode=ApproximationMode.Yes, dest_acc=DestAccumulation.No)
+    assert nonfinite_failures(
+        MathOperation.Celu, src, golden, result, fmt, fmt, **cell
+    ).tolist() == [True, False, False]
+    assert nonfinite_failures(
+        MathOperation.Celu,
+        src,
+        golden,
+        result,
+        fmt,
+        fmt,
+        approx_mode=ApproximationMode.Yes,
+        dest_acc=DestAccumulation.Yes,
+    ).all()
+    # An op with no entry, and a caller that does not name the cell, get no excuse.
+    assert nonfinite_failures(_OP, src, golden, result, fmt, fmt, **cell).all()
+    assert nonfinite_failures(MathOperation.Celu, src, golden, result, fmt, fmt).all()
+    assert measurable_mask(src, golden, golden.clone(), fmt).all()
+
+    (entry,) = _known_lanes()[MathOperation.Celu]
+    assert entry.applies_to(fmt, fmt, ApproximationMode.No, DestAccumulation.No)
+    assert not entry.applies_to(
+        DataFormat.Float16_b, fmt, ApproximationMode.No, DestAccumulation.No
+    )
+    assert not entry.applies_to(
+        fmt, DataFormat.Float16_b, ApproximationMode.No, DestAccumulation.No
+    )
+
+
+def test_an_entry_no_lane_of_which_disagrees_is_stale():
+    """The day the defect is fixed its lanes agree, and the gate has to say so rather
+    than keep excusing them."""
+    fmt = DataFormat.Float16
+    src = torch.tensor([65408.0, 65504.0], dtype=torch.float16)
+    golden = src.clone()
+    cell = (fmt, fmt, ApproximationMode.No, DestAccumulation.No)
+    still_broken = torch.tensor([float("inf"), 65504.0], dtype=torch.float16)
+    assert stale_excuses(MathOperation.Celu, src, golden, still_broken, *cell) == []
+    fixed = golden.clone()
+    assert [
+        e.issue for e in stale_excuses(MathOperation.Celu, src, golden, fixed, *cell)
+    ] == ["#58607"]
+    # On a cell the entry does not name there is nothing to go stale.
+    other = (fmt, fmt, ApproximationMode.No, DestAccumulation.Yes)
+    assert stale_excuses(MathOperation.Celu, src, golden, fixed, *other) == []
+
+
+def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
+    for op, entries in _known_lanes().items():
+        for entry in entries:
+            where = f"{op.name}: {entry}"
+            assert re.fullmatch(r"#\d+", entry.issue), where
+            assert entry.inputs and entry.low <= entry.high and entry.why, where
+            # A block output is never step-gated, so there would be nothing to keep gated.
+            assert has_ulp_gate(entry.output), where
 
 
 def test_xdist_workers_measurements_merge_worst_lane_first(table):

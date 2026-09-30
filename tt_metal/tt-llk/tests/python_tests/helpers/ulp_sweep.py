@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, List, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
@@ -125,6 +126,47 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
+def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """Lanes whose input the unpack path flushes to zero and the golden does not.
+
+    Two values are tested against the *stimuli* format's smallest normal: the input as
+    generated, and the input as ``quantize_input_to_unpack_format`` hands it to the
+    golden. They differ on a block float. The sweep's one ``-0.0`` shares a Bfp8_b block
+    with the bf16 subnormals ``0x8001..0x800F``, the shared exponent is 0, and the
+    quantizer's forced hidden bit gives the golden ``-2**-127``; ``floor`` of that is -1
+    against the 0 silicon sees. That one lane was 16,129 steps on every Bfp8_b-input
+    cell of Floor, and the reason Ceil and Trunc read 0 on the same cells.
+
+    The threshold is the stimuli format's, not the golden's: taking it from the golden
+    dtype silently passed every fp16 subnormal through on a Float16->Float16_b variant --
+    bf16's smallest normal is 1.18e-38 and fp16's is 6.1e-05, so 2,046 flushed lanes
+    read as a 14,337-step error on ``Abs``, an op that cannot be wrong.
+    """
+    from helpers.golden_generators import quantize_input_to_unpack_format
+    from helpers.llk_params import format_dict
+
+    stimuli_dtype = format_dict[stimuli_format_for(input_format)]
+    smallest_normal = torch.finfo(stimuli_dtype).smallest_normal
+
+    def subnormal(values: torch.Tensor) -> torch.Tensor:
+        # In float32, from the values as they are. Casting to the golden's dtype first
+        # rounds an fp16 subnormal *up* -- bf16 keeps 8 mantissa bits, so 6.09e-05
+        # becomes 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band
+        # then passed this filter while looking, in any printout, like the smallest
+        # normal.
+        magnitude = values.detach().to(torch.float32).abs()
+        return (magnitude < smallest_normal) & (magnitude != 0)
+
+    # The block quantizer works on whole 16-lane blocks. A device sweep is 65,536 lanes;
+    # a host test may hand in a fragment, so pad it with zeros, which never raise a
+    # block's exponent, and drop the padding again.
+    flat = src.detach().flatten()
+    short = (-flat.numel()) % 16
+    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
+    quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    return (subnormal(flat) | subnormal(quantized)).reshape(src.shape)
+
+
 def measurable_mask(
     src: torch.Tensor,
     golden: torch.Tensor,
@@ -142,58 +184,56 @@ def measurable_mask(
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
       undefined at an input (``log`` of a negative) lands here on its own.
-    * the two sides disagreeing about being non-finite -- ``sin(2.6e28)`` returning
-      ``inf`` against a golden of ``-1``, or a reciprocal overflowing where the golden
-      is still finite. ``passed_test`` rejects those positionally whatever the budget
-      says, so ranking them would inflate the number without tightening the gate. One
-      such lane is worth ~48,000 steps.
+    * the two sides disagreeing about being non-finite -- a reciprocal overflowing where
+      the golden is still finite. ``passed_test`` rejects those positionally whatever the
+      budget says, so ranking them would inflate the number without tightening the gate.
+      One such lane is worth ~48,000 steps.
     * the sweep's own zero padding -- see :func:`padding_lanes`.
-    * subnormal inputs. The hardware flushes them on the way in and the golden does not,
-      so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon -- 16,129 bf16 steps for
-      a difference that is the unpack path's flush, not the op's accuracy. Measured, it
-      is the whole of Ceil's, Floor's and Sqrt's apparent error: excluding it returns
-      all three to the 0 their exactness claims, and moves nothing else. The flush is
-      covered on its own terms elsewhere; a step count is the wrong instrument for it.
+    * subnormal inputs, as generated or as the block-float quantizer hands them to the
+      golden (:func:`flushed_inputs`). The hardware flushes them on the way in and the
+      golden does not, so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon --
+      16,129 bf16 steps for a difference that is the unpack path's flush, not the op's
+      accuracy. Measured, it is the whole of Ceil's, Floor's and Sqrt's apparent error:
+      excluding it returns all three to the 0 their exactness claims, and moves nothing
+      else. The flush is covered on its own terms elsewhere; a step count is the wrong
+      instrument for it.
 
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
     ``x=-87.5`` is that case, and it is the op's own tail, not the unpack path.
 
     The second kind is a *failure*, not a non-question, and dropping it here is only
-    sound because :func:`nonfinite_failures` reports it separately: a caller that ranks
-    this mask and nothing else would let a hardware overflow produce a clean budget.
+    sound because :func:`nonfinite_failures` reports it separately -- less the lanes it
+    excuses: an input the op makes no claim on (``sin(2.6e28)``, past Sin's
+    argument-reduction limit on a bfloat16 input) and a lane a tracked issue names
+    (:data:`_KNOWN_NONFINITE_LANES`). A caller that ranks this mask and nothing else
+    would let a hardware overflow produce a clean budget.
     """
-    # The threshold is the *stimuli* format's, not the golden's. Taking it from the
-    # golden dtype silently passed every fp16 subnormal through on a Float16->Float16_b
-    # variant -- bf16's smallest normal is 1.18e-38 and fp16's is 6.1e-05, so 2,046
-    # flushed lanes read as a 14,337-step error on `Abs`, an op that cannot be wrong.
-    from helpers.llk_params import format_dict
-
     from .ulp import nonfinite_mismatches
-
-    stimuli_dtype = format_dict[stimuli_format_for(input_format)]
-    smallest_normal = torch.finfo(stimuli_dtype).smallest_normal
-    # In float32, and from `src` as generated. Casting to the golden's dtype first
-    # rounds an fp16 subnormal *up* -- bf16 keeps 8 mantissa bits, so 6.09e-05 becomes
-    # 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band then passed
-    # this filter while looking, in any printout, like the smallest normal.
-    magnitude = src.detach().to(torch.float32).abs()
-    normal_input = (magnitude >= smallest_normal) | (magnitude == 0)
 
     both_measurable = ~(torch.isnan(golden) | torch.isnan(result))
     return (
         both_measurable
         & ~nonfinite_mismatches(golden, result)
-        & normal_input
+        & ~flushed_inputs(src, input_format)
         & ~padding_lanes(src, input_format)
     )
 
 
-#: The magnitude past which an op's argument reduction stops claiming a finite answer.
-#: Only ops whose kernel reduces its argument belong here; anywhere else a non-finite
-#: answer against a finite golden is a failure over the whole format. Sin and Cos give
-#: up far outside [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1 -- and
-#: pi is the widest bound measured so far, so it is the claim until one is wider.
+#: The magnitude past which an op's argument reduction stops claiming a finite answer,
+#: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
+#: kernel reduces its argument belong here; anywhere else a non-finite answer against a
+#: finite golden is a failure over the whole format. Sin and Cos give up far outside
+#: [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1 -- and pi is the widest
+#: bound measured so far, so it is the claim until one is wider.
+#:
+#: Keyed on the stimuli format because the claim is about what the format can reach.
+#: 2.6e28 is a bfloat16 value (and a Float32 one); float16 ends at 65504, and Sin and
+#: Cos measure 1-4 steps over the whole float16 format, so an fp16 input carries no
+#: limit and a non-finite answer anywhere in it is a failure. Keyed on the op alone, the
+#: pi claim silently covered the fp16 cells too -- the only Sin/Cos cells the table
+#: step-gates -- and a range-reduction regression on the ~46% of fp16 lanes past pi
+#: would have passed the gate and been emitted as a clean budget.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -201,14 +241,17 @@ def _claim_limits() -> Dict:
     from helpers.llk_params import MathOperation
 
     if not _CLAIM_LIMIT:
-        _CLAIM_LIMIT.update({MathOperation.Sin: math.pi, MathOperation.Cos: math.pi})
+        wide_formats = {DataFormat.Float16_b: math.pi, DataFormat.Float32: math.pi}
+        _CLAIM_LIMIT.update(
+            {MathOperation.Sin: wide_formats, MathOperation.Cos: wide_formats}
+        )
     return _CLAIM_LIMIT
 
 
-def _claimed(op, src: torch.Tensor) -> torch.Tensor:
+def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """Lanes where *op* claims a finite, accurate answer: the whole format, less the
     side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
-    for a pole, and any ``_CLAIM_LIMIT``.
+    for a pole, and any ``_CLAIM_LIMIT`` for the format *input_format* is swept in.
 
     Deliberately not the functional driver's sampling window, which is where a few
     thousand points are drawn, not where the op stops being defined: Abs is sampled on
@@ -229,7 +272,7 @@ def _claimed(op, src: torch.Tensor) -> torch.Tensor:
             claimed &= value <= point
         else:
             claimed &= value != point
-    limit = _claim_limits().get(op)
+    limit = _claim_limits().get(op, {}).get(stimuli_format_for(input_format))
     if limit is not None:
         claimed &= value.abs() <= limit
     return claimed
@@ -246,6 +289,153 @@ def _at_a_singularity(op, src: torch.Tensor) -> torch.Tensor:
     return on_point
 
 
+@dataclass(frozen=True)
+class KnownNonfiniteLanes:
+    """Inputs on which an op is known to answer on the wrong side of infinity on one
+    cell, tracked by an issue.
+
+    One such lane used to park the whole cell -- ~64,000 lanes -- as ``not measurable``
+    on the tolerance metric, which the gate then skips outright: Celu lost its
+    Float16->Float16 step gate over four inputs. Naming the inputs instead keeps the rest
+    of the cell on its budget. Only the *non-finite disagreement* is excused: a named
+    lane that agrees is ranked like any other, the entry applies to no cell but the ones
+    it pins, and a gate run fails once no named lane of a cell disagrees any more
+    (:func:`stale_excuses`), so an entry cannot outlive the defect it tracks.
+    """
+
+    #: The tracking issue, ``#NNNNN``.
+    issue: str
+    #: The input formats the entry holds on.
+    inputs: Tuple[DataFormat, ...]
+    output: DataFormat
+    #: Inclusive bounds on the input -- on ``|x|`` when *magnitude* is set.
+    low: float
+    high: float
+    #: ``ApproximationMode`` / ``DestAccumulation``, or ``None`` for either value.
+    approx: Optional[object] = None
+    dest: Optional[object] = None
+    magnitude: bool = False
+    why: str = ""
+
+    def applies_to(self, input_format, output_format, approx_mode, dest_acc) -> bool:
+        return (
+            input_format in self.inputs
+            and output_format == self.output
+            and (self.approx is None or approx_mode == self.approx)
+            and (self.dest is None or dest_acc == self.dest)
+        )
+
+    def lanes(self, src: torch.Tensor) -> torch.Tensor:
+        value = src.detach().to(torch.float32)
+        if self.magnitude:
+            value = value.abs()
+        return (value >= self.low) & (value <= self.high)
+
+
+#: ``{op: (KnownNonfiniteLanes, ...)}``. Read through :func:`_known_lanes`; the enum
+#: imports are deferred like ``_CLAIM_LIMIT``'s.
+_KNOWN_NONFINITE_LANES: Dict = {}
+
+
+def _known_lanes() -> Dict:
+    from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+
+    if _KNOWN_NONFINITE_LANES:
+        return _KNOWN_NONFINITE_LANES
+    # #58607: on a 16-bit Float16 Dest these ops answer inf where the answer is one of
+    # the four largest fp16 values, 65408..65504. The same inputs on a 32-bit Dest read
+    # 1-2 steps, and Abs/Identity read 0 on the same cell, so it is neither the input
+    # nor the store alone.
+    top_of_fp16 = dict(
+        issue="#58607",
+        inputs=(DataFormat.Float16,),
+        output=DataFormat.Float16,
+        dest=DestAccumulation.No,
+        low=65408.0,
+        high=65504.0,
+        why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
+    )
+    _KNOWN_NONFINITE_LANES.update(
+        {
+            MathOperation.Celu: (KnownNonfiniteLanes(**top_of_fp16),),
+            MathOperation.Elu: (KnownNonfiniteLanes(**top_of_fp16),),
+            MathOperation.Gelu: (
+                KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
+            ),
+            MathOperation.Silu: (KnownNonfiniteLanes(**top_of_fp16),),
+            MathOperation.Square: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 255.75,
+                        "high": 255.875,
+                        "magnitude": True,
+                        "why": "inf where x*x is 65408 or 65472, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            # #57215: the Float16 store saturates a value just past 65504 to 65504 rather
+            # than to an infinity. 1/x for |x| a step or two under 2**-16 is such a
+            # value, and the approximate reciprocal's few-percent shortfall keeps it
+            # under 2**16, the one value the store does carry to inf.
+            MathOperation.Reciprocal: (
+                KnownNonfiniteLanes(
+                    issue="#57215",
+                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
+                    output=DataFormat.Float16,
+                    approx=ApproximationMode.Yes,
+                    dest=DestAccumulation.Yes,
+                    low=1.51e-5,
+                    high=1.54e-5,
+                    magnitude=True,
+                    why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
+                ),
+            ),
+        }
+    )
+    return _KNOWN_NONFINITE_LANES
+
+
+def known_nonfinite_lanes(
+    op,
+    src: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+    approx_mode,
+    dest_acc,
+) -> torch.Tensor:
+    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell."""
+    excused = torch.zeros(src.shape, dtype=torch.bool, device=src.device)
+    for entry in _known_lanes().get(op, ()):
+        if entry.applies_to(input_format, output_format, approx_mode, dest_acc):
+            excused |= entry.lanes(src)
+    return excused
+
+
+def stale_excuses(
+    op,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+    approx_mode,
+    dest_acc,
+) -> List[KnownNonfiniteLanes]:
+    """The entries that apply to this cell but excuse nothing: no lane they name
+    disagrees with the golden about being finite any more. The gate fails on one, so
+    the defect being fixed retires the entry rather than leaving its lanes excused."""
+    from .ulp import nonfinite_mismatches
+
+    disagreeing = nonfinite_mismatches(golden, result)
+    return [
+        entry
+        for entry in _known_lanes().get(op, ())
+        if entry.applies_to(input_format, output_format, approx_mode, dest_acc)
+        and not bool((entry.lanes(src) & disagreeing).any())
+    ]
+
+
 def nonfinite_failures(
     op,
     src: torch.Tensor,
@@ -253,20 +443,27 @@ def nonfinite_failures(
     result: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    approx_mode=None,
+    dest_acc=None,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
     non-question: the two sides disagreeing about being non-finite where the output
     format could have held the answer.
+
+    *approx_mode* and *dest_acc* name the cell for :data:`_KNOWN_NONFINITE_LANES`; left
+    unset, only an entry that pins neither can apply.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
     hardware overflow or an unexpected NaN would otherwise leave the statistics clean
     and both emit and gate would pass.
 
-    Four exclusions, all of them the sweep's own doing rather than the op's:
+    The exclusions, and whose doing each one is:
 
-    * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
-      flushes them and the golden does not, so a disagreement there is the flush.
+    * **flushed inputs** (:func:`flushed_inputs`), on the same grounds as in the mask --
+      the unpack path flushes a subnormal and the golden does not, so a disagreement
+      there is the flush. As generated or as the block-float quantizer hands it to the
+      golden: the sweep's ``-0.0`` becomes ``-2**-127`` in a Bfp8_b block of subnormals.
     * **a NaN golden**, and **a golden past the output format's range answered by a
       saturated store** -- ``NaN`` or an infinity of the golden's sign. A full-range
       sweep feeds every value of a 16-bit input, and ``relu_min`` passes most of them
@@ -284,12 +481,16 @@ def nonfinite_failures(
       Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step off
       it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
-    * **an input the op makes no claim on** (:func:`_claimed`): the undefined side of
-      a registered singularity, or past an argument-reduction limit. ``Sin`` and
-      ``Cos`` disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``, which is the
-      case ``measurable_mask``'s own docstring cites. The budget is still measured over
-      the whole format; it is only the *non-finite* answer that needs the op to have
-      been claiming something.
+    * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
+      rather than the sweep's -- the undefined side of a registered singularity, or
+      past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
+      disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``. The budget is still
+      measured over the whole format; it is only the *non-finite* answer that needs the
+      op to have been claiming something.
+    * **a lane a tracked issue names** (:data:`_KNOWN_NONFINITE_LANES`): a defect
+      already on the books, excused on its own cell and inputs so the rest of the cell
+      keeps its step gate. The gate fails once the lanes stop disagreeing
+      (:func:`stale_excuses`).
 
     What is left is the case the mask would otherwise hide: an op returning ``inf`` or
     ``NaN`` where it is defined, the input is normal, and the output could have held
@@ -299,11 +500,6 @@ def nonfinite_failures(
 
     from .ulp import nonfinite_mismatches
 
-    stimuli_dtype = format_dict[stimuli_format_for(input_format)]
-    magnitude = src.detach().to(torch.float32).abs()
-    normal_input = (magnitude >= torch.finfo(stimuli_dtype).smallest_normal) | (
-        magnitude == 0
-    )
     output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
     # `golden` is usually already in the output dtype, so "past the range" is mostly an
     # infinity; a wider golden can also be finite and past it. NaN compares false here.
@@ -316,9 +512,12 @@ def nonfinite_failures(
     )
     return (
         nonfinite_mismatches(golden, result)
-        & normal_input
+        & ~flushed_inputs(src, input_format)
         & ~excused
-        & _claimed(op, src)
+        & _claimed(op, src, input_format)
+        & ~known_nonfinite_lanes(
+            op, src, input_format, output_format, approx_mode, dest_acc
+        )
         & ~padding_lanes(src, input_format)
     )
 
@@ -686,8 +885,9 @@ def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     rows coexist, so regenerating one arch must not erase the other's contract.
 
     Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
-    floor, an ``atol``/``rtol`` pair. Those are refused at :func:`write_table` rather
-    than quietly replaced or quietly duplicated.
+    floor, an ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
+    verbatim and names it in its return, rather than quietly replacing or quietly
+    duplicating the row.
     """
     fields = _row_fields(line)
     if "arch" in fields or set(fields) - _RENDERABLE_FIELDS:

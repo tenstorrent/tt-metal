@@ -5,7 +5,6 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -19,7 +18,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -39,7 +38,6 @@ from helpers.test_variant_parameters import (
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
 
@@ -162,24 +160,12 @@ def _run_sfpu_ternary(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     # The op's declared accuracy contract for this exact variant, the same lookup the
-    # unary and binary drivers make. No ternary op is enrolled yet, so every one of them
-    # resolves to today's per-format tolerance -- enrolling one is then a table edit.
-    contract = accuracy_contract(
-        mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        # The mode the kernel compiled. Left unset, a row keyed `approx: "No"` would not
-        # match and would silently fall back to the default tolerance.
-        approx_mode=_APPROX_MODE,
-        dest_acc=dest_acc,
-        arch=get_chip_architecture(),
+    # binary driver makes. No ternary op is enrolled yet, so every one of them resolves
+    # to today's per-format tolerance -- enrolling one is then a table edit. The mode the
+    # kernel compiled is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_against_contract(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
     )
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        **contract.tolerance_kwargs(),
-    ), "Assert against golden failed"
 
 
 @parametrize(

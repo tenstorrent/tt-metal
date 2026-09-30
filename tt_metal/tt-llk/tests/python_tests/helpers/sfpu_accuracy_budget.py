@@ -39,7 +39,7 @@ from typing import Any, Dict, Optional, Tuple, Type, TypeVar
 import yaml
 
 from .chip_architecture import ChipArchitecture
-from .format_config import DataFormat
+from .format_config import DataFormat, InputOutputFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
 
@@ -436,6 +436,50 @@ def accuracy_contract(
         if contract.metric is not Metric.ULP
     }
     return resolve_contract(tolerance_rows, query, label=op.name)
+
+
+def assert_against_contract(
+    op: MathOperation,
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    golden_tensor,
+    res_tensor,
+    *,
+    approx_mode: Optional[ApproximationMode] = None,
+) -> None:
+    """Resolve *op*'s declared contract for the variant that ran, and gate on it.
+
+    The binary and ternary drivers' shared last line, so that the resolution and the
+    caveat below are written once. The numbers live beside the op in the registry, and
+    an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
+    table edit rather than a driver edit.
+
+    Tolerance arm only (``tolerance_kwargs``): a step budget is measured by the
+    exhaustive unary sweep, which is the one caller that gates on ``max_ulp``.
+
+    *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
+    one would claim a measurement taken for a mode that path does not select. Where the
+    kernel does compile it, passing it is required: a row keyed ``approx: "No"`` would
+    not match an unset query and would silently fall back to the default tolerance.
+    """
+    from .chip_architecture import get_chip_architecture
+    from .utils import passed_test
+
+    contract = accuracy_contract(
+        op,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
+    if not passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.tolerance_kwargs(),
+    ):
+        raise AssertionError("Assert against golden failed")
 
 
 def enrolled_ops() -> Tuple[MathOperation, ...]:

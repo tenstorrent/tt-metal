@@ -10,7 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from conftest import skip_for_quasar
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -36,7 +36,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -65,7 +65,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
-from helpers.utils import passed_test
 
 # =============================================================================
 # Shared skip helpers
@@ -415,37 +414,6 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 
 
-def _assert_against_contract(
-    mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=None
-):
-    """Resolve the op's declared contract for this variant and gate on it.
-
-    Shared by all three drivers in this file. ``BINARY_CUSTOM_TOLERANCES`` used to sit
-    at the top of the file; the numbers now live beside the op in the registry, and an
-    unenrolled op resolves to today's per-format tolerance unchanged. Enrolment is then
-    a table edit rather than a driver edit.
-
-    *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
-    one would claim a measurement taken for a mode that path does not select. Where the
-    kernel does compile it, passing it is required: a row keyed ``approx: "No"`` would
-    not match an unset query and would silently fall back to the default tolerance.
-    """
-    contract = accuracy_contract(
-        mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        approx_mode=approx_mode,
-        dest_acc=dest_acc,
-        arch=get_chip_architecture(),
-    )
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        **contract.tolerance_kwargs(),
-    ), "Assert against golden failed"
-
-
 def sfpu_binary(
     formats,
     dest_acc,
@@ -632,7 +600,7 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    _assert_against_contract(
+    assert_against_contract(
         mathop,
         formats,
         dest_acc,
@@ -1635,7 +1603,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
     ), "Result tensor and golden tensor are not of the same length"
 
     # Without this a row for SfpuAddTopRow would be inert.
-    _assert_against_contract(
+    assert_against_contract(
         mathop,
         formats,
         dest_acc,
@@ -1814,4 +1782,4 @@ def test_eltwise_binary_sfpu_bcast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     # approx_mode unset: this kernel compiles no APPROX_MODE.
-    _assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
+    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)

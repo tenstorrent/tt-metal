@@ -113,6 +113,8 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         templates=[
             generate_input_dim(SWEEP_DIMENSIONS, SWEEP_DIMENSIONS),
             APPROX_MODE(approx_mode),
+            # The table has no axis for either: every budget is measured with these two
+            # compiled in and holds for a kernel built that way (see the YAML header).
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
@@ -220,7 +222,27 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         pytest.skip(f"golden cannot be computed over the full range: {exc}")
 
     mask = measurable_mask(src, golden, result, in_fmt)
-    overflowed = nonfinite_failures(mathop, src, golden, result, in_fmt, out_fmt)
+    overflowed = nonfinite_failures(
+        mathop,
+        src,
+        golden,
+        result,
+        in_fmt,
+        out_fmt,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+    )
+    if not ulp_sweep.EMIT:
+        # An excused lane that agrees again means the defect its issue tracks is gone
+        # from this cell; the entry has to go with it, or its lanes stay ungated.
+        stale = ulp_sweep.stale_excuses(
+            mathop, src, golden, result, in_fmt, out_fmt, approx_mode, dest_acc
+        )
+        assert not stale, (
+            f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
+            f"{', '.join(entry.issue for entry in stale)} names disagrees with the "
+            "golden any more; drop the entry so those lanes are gated again"
+        )
     # Subnormal outputs flushed on every format, fp16 included. The metric keeps fp16's
     # subnormal band by default, but the golden keeps IEEE subnormals the pack path
     # does not reproduce: an exact op read 512 steps on Float16_b->Float16 from that

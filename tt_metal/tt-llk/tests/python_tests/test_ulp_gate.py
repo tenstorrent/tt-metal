@@ -781,3 +781,16 @@ def test_the_report_stays_off_a_format_with_no_per_element_ulp():
             _logs_for(lambda: passed_test(golden, golden.clone(), DataFormat.Bfp4_b))
         )
     assert "ULP report" not in logged
+
+
+def test_the_report_skips_a_shape_the_verdict_broadcast_rather_than_raising():
+    """The tolerance arm accepts broadcast-compatible shapes and `ulp_distance` refuses
+    them, so a report that measured here would turn a pass into an error under a flag
+    that must not be able to change a verdict. It says so and steps aside."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = golden.clone().unsqueeze(0)  # (1, N) against (N,)
+    assert bool(passed_test(golden, result, fmt))
+    with _ulp_report_enabled():
+        logged = "\n".join(_logs_for(lambda: passed_test(golden, result, fmt), "INFO"))
+    assert "ULP report skipped" in logged and "ULP report —" not in logged

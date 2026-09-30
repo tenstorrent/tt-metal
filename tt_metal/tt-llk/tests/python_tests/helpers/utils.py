@@ -518,7 +518,9 @@ _RECORD_TEST_ORDER: bool = False
 #: ULP-capable format, including the ops with no budget yet -- which is where the signal
 #: is most useful, since a drift shows up in the report long before anyone picks a number
 #: to gate it with. Never a verdict: it is computed after the verdict and never read back
-#: into one, so the flag cannot change whether a test passes.
+#: into one, so the flag cannot change whether a test passes -- which is also why it
+#: skips, with a warning, the shapes the tolerance arm broadcasts and ``ulp_distance``
+#: refuses, rather than raising after a verdict was reached.
 #:
 #: Trend p99, not max. An op with no declared ``near_zero_atol`` has no floor to excuse
 #: its near-zero lanes, and one lane whose golden is zero or subnormal carries a step
@@ -928,15 +930,26 @@ def passed_test(
         # where the report earns its keep: it is the ops still on the tolerance metric
         # whose drift no number is watching. Measured after the verdict and never read
         # back into it.
-        logger.info(
-            "ULP report — {}",
-            ulp_verdict_message(
-                golden_tensor,
-                res_tensor,
-                ulp_distance(golden_tensor, res_tensor),
-                output_data_format,
-            ),
-        )
+        if golden_tensor.shape != res_tensor.shape:
+            # `torch.isclose` broadcast these; `ulp_distance` refuses a shape mismatch.
+            # Raising here would turn a pass into an error under a flag that must not
+            # be able to change a verdict.
+            logger.warning(
+                "ULP report skipped — golden {} and result {} differ in shape; the "
+                "verdict above compared them broadcast",
+                tuple(golden_tensor.shape),
+                tuple(res_tensor.shape),
+            )
+        else:
+            logger.info(
+                "ULP report — {}",
+                ulp_verdict_message(
+                    golden_tensor,
+                    res_tensor,
+                    ulp_distance(golden_tensor, res_tensor),
+                    output_data_format,
+                ),
+            )
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare

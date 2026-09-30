@@ -125,7 +125,8 @@ def _every_variant(op):
 @functools.lru_cache(maxsize=None)
 def _live_step_budgets():
     """``(op, input_format, output_format, contract)`` for every ULP contract the live
-    table resolves to. Computed once: four tests read it and the sweep is the slow part.
+    table resolves to. Computed once: more than one test reads it, and the sweep is the
+    slow part.
     """
     return tuple(
         (op, in_fmt, fmt, contract)
@@ -709,25 +710,15 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
-#: metric, with what was measured there. Each is a real deviation on an op that should
-#: be exact, and none has a cause established yet; the test below keeps the list from
-#: growing unnoticed, and fails when an entry is no longer needed. (Abs/Neg/Identity's
+#: metric, with what was measured there. Each would be a real deviation on an op that
+#: should be exact, with no cause established yet; the test below keeps the list from
+#: growing unnoticed, and fails when an entry is no longer needed. Empty today. The
+#: two classes it used to hold were the sweep's, not the ops': Abs/Neg/Identity's
 #: 512-step Float16 cells were the metric keeping fp16 subnormals the pack does not
-#: reproduce; the sweep flushes them now, and those cells measure 0.)
-_EXACT_OP_DEMOTIONS = {
-    (
-        MathOperation.Floor,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
-        DestAccumulation.Yes,
-    ): "15360 ULP measured",
-    **{
-        (MathOperation.Floor, DataFormat.Bfp8_b, DataFormat.Float16_b, dest): (
-            "16129 ULP measured"
-        )
-        for dest in DestAccumulation
-    },
-}
+#: reproduce, and Floor's 16,129-step Bfp8_b cells were the one -0.0 lane the block
+#: quantizer turns into -2**-127 for the golden (``ulp_sweep.flushed_inputs``). Both
+#: cells measure 0 now.
+_EXACT_OP_DEMOTIONS: dict = {}
 
 
 @pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
@@ -883,16 +874,23 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
 # so it is read from the text: YAML discards comments. Widening a budget without
 # re-measuring then has to falsify that comment.
 
-#: How far a budget may sit above its measurement: the emitter's widest headroom.
+#: How far a *sampled* row's budget may sit above its measurement. Its comment records
+#: a sample, and the hand-set headroom over the tail the sample did not see varies; an
+#: exhaustive row saw every value and carries exactly the emitter's budget instead.
 MEASUREMENT_HEADROOM = 2
 
 #: ``max 65536 ULP`` in the emitted rows, ``0 ULP`` in the hand-measured ones.
 _MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
 
+#: What marks a row's comment as the exhaustive sweep's: ``write_table``'s suffix.
+_EXHAUSTIVE = "exhaustive"
+
 
 def _measured_budget_rows(path=_TABLE_PATH):
-    """``(op_name, row_text, max_ulp, measured_or_None)`` for every ``max_ulp`` row."""
-    rows, op, op_measured = [], None, None
+    """``(op_name, row_text, max_ulp, measured_or_None, exhaustive)`` for every
+    ``max_ulp`` row. *exhaustive* is whether the comment the measurement was read from
+    is the sweep's."""
+    rows, op, op_measured, op_exhaustive = [], None, None, False
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -901,6 +899,7 @@ def _measured_budget_rows(path=_TABLE_PATH):
             op = head.split(":")[0].strip()
             found = _MEASUREMENT.search(comment)
             op_measured = int(found.group(1)) if found else None
+            op_exhaustive = _EXHAUSTIVE in comment
             continue
         body, _, comment = line.strip().partition("#")
         declared = re.search(r"max_ulp:\s*(\d+)", body)
@@ -908,14 +907,15 @@ def _measured_budget_rows(path=_TABLE_PATH):
             continue  # a tolerance row has no step budget to back
         found = _MEASUREMENT.search(comment)
         measured = int(found.group(1)) if found else op_measured
-        rows.append((op, body.strip(), int(declared.group(1)), measured))
+        exhaustive = _EXHAUSTIVE in comment if found else op_exhaustive
+        rows.append((op, body.strip(), int(declared.group(1)), measured, exhaustive))
     return rows
 
 
 def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
     """A row the regex misses (``max_ulp : 5``, ``+5``, ``0x10``) would silently escape
     the two audits below, so tie the parse back to the loaded table."""
-    parsed = sorted((op, budget) for op, _, budget, _ in _measured_budget_rows())
+    parsed = sorted((op, budget) for op, _, budget, _, _ in _measured_budget_rows())
     loaded = sorted(
         (op.name, contract.max_ulp)
         for op, table in _SFPU_ACCURACY_BUDGET.items()
@@ -928,21 +928,34 @@ def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
 def test_every_step_budget_names_the_measurement_it_came_from():
     rows = _measured_budget_rows()
     assert rows, "no max_ulp rows found -- the parser has drifted from the table"
-    unbacked = [(op, body) for op, body, _, measured in rows if measured is None]
+    unbacked = [(op, body) for op, body, _, measured, _ in rows if measured is None]
     assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
         f"  {op}: {body}" for op, body in unbacked
     )
 
 
 def test_no_step_budget_exceeds_the_measurement_it_records():
-    """At or above the measurement, and within ``MEASUREMENT_HEADROOM`` of it."""
-    for op, body, budget, measured in _measured_budget_rows():
+    """An exhaustive row carries exactly the budget the emitter derives from its
+    measurement -- ``_verdict``'s rule, 0 for 0 and otherwise ``EMIT_HEADROOM`` rounded
+    up -- so a budget widened by hand has to falsify the comment beside it, which is
+    the table header's rule for raising one. A 2x envelope would have admitted Acosh's
+    ``max_ulp: 7  # max 6 ULP`` raised to 12 with its comment untouched.
+
+    A sampled row may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``,
+    and at 1 over a measured 0: a finite sample cannot assert exactness."""
+    from helpers.ulp_sweep import _row_fields, _verdict
+
+    for op, body, budget, measured, exhaustive in _measured_budget_rows():
         if measured is None:
             continue  # owned by test_every_step_budget_names_the_measurement_it_came_from
         where = f"{op}: {body} (records {measured} ULP)"
-        if measured == 0:
-            # 1 where a finite sample cannot assert exactness; 0 only for an exhaustive
-            # sweep of an op exact by construction.
+        if exhaustive:
+            out_fmt = _row_fields(body)["out"]
+            assert ("ulp", budget) == _verdict(measured, out_fmt), (
+                f"{where}: the emitter writes {_verdict(measured, out_fmt)[1]} for that "
+                f"measurement, not {budget}. Re-measure rather than edit the number."
+            )
+        elif measured == 0:
             assert budget <= 1, f"{where}: a 0-ULP measurement cannot justify {budget}"
         else:
             assert budget >= measured, f"{where}: budget {budget} is below it"
@@ -950,3 +963,94 @@ def test_no_step_budget_exceeds_the_measurement_it_records():
                 f"{where}: budget {budget} is more than "
                 f"{MEASUREMENT_HEADROOM}x the measurement"
             )
+
+
+# ── A gated cell is not quietly parked ────────────────────────────────────────
+#
+# The emitter writes `not measurable` for a cell in which one lane disagrees with the
+# golden about being finite, and the sweep gates no tolerance row -- so an overflow a
+# later emit introduces into a gated cell would take the whole cell off the gate with
+# nothing to notice. Exact ops are held by _EXACT_OP_DEMOTIONS; this holds the rest.
+
+#: Swept cells on a gateable output that the table holds as ``not measurable``, keyed
+#: ``(op, in, out, approx, dest)`` with ``None`` for an axis the cause does not depend
+#: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
+#: handful of inputs does not belong here: name the inputs in
+#: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
+_UNMEASURABLE_CELLS_ACKNOWLEDGED = {
+    **{
+        (op, DataFormat.Float16, DataFormat.Float16_b, None, DestAccumulation.Yes): (
+            "the golden is tilized and untilized in the input format, so an fp16 input's "
+            "reference overflows at 65504 where the kernel's 32-bit Dest holds the "
+            "answer (exp2(16) reads inf against an exact 65536); #58590 fixes the golden"
+        )
+        for op in (MathOperation.Exp, MathOperation.Exp2, MathOperation.Square)
+    },
+    (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): (
+        "approximate exp answers 64256..65408 for x in 11.09..11.12, where exp(x) is "
+        "past 65504: the approximation's own shortfall at the overflow edge, which no "
+        "store or golden fix removes"
+    ),
+}
+
+
+def _not_measurable_cells(path=_TABLE_PATH):
+    """``(op, in, out, approx_or_None, dest_or_None)`` for every ``not measurable`` row
+    on an output a step budget could gate."""
+    from helpers.ulp_sweep import _row_fields
+
+    cells, op = [], None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            op = line.split(":")[0].strip()
+        if "not measurable" not in line or not line.lstrip().startswith("- "):
+            continue
+        fields = _row_fields(line)
+        out_fmt = DataFormat[fields["out"]]
+        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
+            continue  # a block output is never gated from this sweep
+        cells.append(
+            (
+                MathOperation[op],
+                DataFormat[fields["in"]],
+                out_fmt,
+                ApproximationMode[fields["approx"]] if "approx" in fields else None,
+                DestAccumulation[fields["dest"]] if "dest" in fields else None,
+            )
+        )
+    return cells
+
+
+def _acknowledges(key, cell) -> bool:
+    return all(k is None or k == c for k, c in zip(key, cell))
+
+
+def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
+    cells = _not_measurable_cells()
+    unacknowledged = [
+        cell
+        for cell in cells
+        if not any(_acknowledges(key, cell) for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED)
+    ]
+    assert not unacknowledged, (
+        "not-measurable cells with no acknowledged cause (a tracked defect on a few "
+        "inputs belongs in ulp_sweep._KNOWN_NONFINITE_LANES; anything else, here):\n"
+        + "\n".join(
+            f"  {op.name} {i.name}->{o.name} approx={a and a.name} dest={d and d.name}"
+            for op, i, o, a, d in unacknowledged
+        )
+    )
+    stale = [
+        key
+        for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED
+        if not any(_acknowledges(key, cell) for cell in cells)
+    ]
+    assert not stale, "acknowledgements no row needs any more: " + ", ".join(
+        f"{op.name} {i.name}->{o.name}" for op, i, o, _, _ in stale
+    )

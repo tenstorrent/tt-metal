@@ -77,11 +77,14 @@ swept and then masked out of the statistics, so they still reach hardware.
 `measurable_mask` drops four kinds, none of them a budget question:
 
 - **either side NaN** — an op undefined at an input lands here on its own;
-- **the two sides disagreeing about being non-finite** — `sin(2.6e28)` returning `inf`
-  against a golden of `-1`; one such lane ranks at ~48,000 steps;
+- **the two sides disagreeing about being non-finite** — a reciprocal overflowing where
+  the golden is still finite; one such lane ranks at ~48,000 steps;
 - **subnormal inputs** — the hardware flushes them and the golden does not, so
   `ceil(5.69e-39)` is 1 in the model and 0 on silicon: 16,129 bfloat16 steps. Measured,
-  that class alone was the whole of `Ceil`'s, `Floor`'s and `Sqrt`'s apparent error;
+  that class alone was the whole of `Ceil`'s, `Floor`'s and `Sqrt`'s apparent error.
+  Judged on the input as generated *and* as the block-float quantizer hands it to the
+  golden: the sweep's one `-0.0` shares a `Bfp8_b` block with the bfloat16 subnormals
+  beside it and quantizes to `-2**-127`, so `floor` read -1 there against silicon's 0;
 - **the sweep's own zero padding** — the tensor is 65,536 lanes and bfloat16 has 65,279
   finite values, so the last 257 are padding rather than data.
 
@@ -89,11 +92,22 @@ The second kind is a *failure*, not a non-question, so `nonfinite_failures` repo
 separately — over everywhere the op claims an answer: the whole format, less the
 undefined side of each singularity `sfpu_domains._OP_SINGULARITIES` registers (`Log`
 below zero, `Reciprocal` at zero) and a per-op argument-reduction limit (`Sin` and `Cos`
-past pi). Not the functional driver's sampling window, which is where points are drawn
-rather than where an op stops being defined, and not `_SFPU_UNDEFINED_RANGES`, whose
-holes are guard bands around those points rather than the points themselves. A golden
-past the output format's range is excused only where the store saturated -- NaN, or an
-infinity of the golden's sign; a finite answer to an infinite golden is a failure.
+past pi, on the formats that reach `sin(2.6e28)`: bfloat16 and Float32, not float16,
+which ends at 65504 and is reduced correctly throughout). Not the functional driver's
+sampling window, which is where points are drawn rather than where an op stops being
+defined, and not `_SFPU_UNDEFINED_RANGES`, whose holes are guard bands around those
+points rather than the points themselves. A golden past the output format's range is
+excused only where the store saturated -- NaN, or an infinity of the golden's sign; a
+finite answer to an infinite golden is a failure.
+
+One more exclusion is a defect already on the books rather than the sweep's doing.
+`ulp_sweep._KNOWN_NONFINITE_LANES` names, per op and per cell, the inputs on which the
+hardware is known to answer on the wrong side of infinity, each entry pointing at its
+issue (`Celu` returns `inf` for `x` in 65408..65504 on a 16-bit `Float16` Dest, #58607).
+Without it one such lane parked the whole ~64,000-lane cell as `not measurable`, which
+the gate skips outright. Only the non-finite disagreement is excused: a named lane that
+agrees is ranked like any other, and the gate fails the day no named lane of a cell
+disagrees any more, so an entry cannot outlive its fix.
 
 Subnormal *outputs* are ranked with the band flushed, on `Float16` as well: the golden
 keeps IEEE fp16 subnormals that the pack path does not reproduce, and an exact op read
@@ -157,7 +171,11 @@ Four verdicts:
   input, so neither number is enrollable.
 - **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
   describe, or answered inf/NaN where the op claims a finite result. No budget buys that;
-  the row says why instead of leaving a hole the next emit would paper over.
+  the row says why instead of leaving a hole the next emit would paper over. On a
+  gateable output such a row must also be acknowledged, with its cause, in
+  `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` — and if the cause is a
+  tracked defect on a handful of inputs, it belongs in `_KNOWN_NONFINITE_LANES` instead,
+  so the rest of the cell keeps its gate.
 
 ### 5. Gate on it
 
@@ -178,6 +196,17 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
+- **A row holds for the configuration it was measured in.** Every exhaustive row was
+  measured with `FAST_MODE(No)` and `CLAMP_NEGATIVE(True)` compiled in, and the key has
+  no axis for either. The functional drivers build `Sqrt`/`Rsqrt` at `FastMode.Yes` and
+  take only a row's tolerance arm, which those flags do not move.
+- **An exhaustive budget is the emitter's number.** `test_no_step_budget_exceeds_the_measurement_it_records`
+  holds every row the sweep wrote to exactly `_verdict`'s budget for the measurement
+  beside it, so widening one by hand has to falsify its comment. A sampled row may sit up
+  to 2x its measurement.
+- **A gated cell is not parked quietly.** A `not measurable` verdict on a gateable output
+  has to be acknowledged in `_UNMEASURABLE_CELLS_ACKNOWLEDGED` with its cause, or the
+  lanes behind it named in `_KNOWN_NONFINITE_LANES` with their issue.
 - **Budgets do not transfer between architectures.** Every unkeyed number was measured
   on Wormhole. Off it, an op falls back to tolerance unless a row names that `arch`
   itself. Re-measure before trusting any of it on Blackhole.
