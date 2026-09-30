@@ -11,6 +11,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 #include <cstdint>
+#include <vector>
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
@@ -83,6 +84,13 @@ struct SoftmaxDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Output distribution labels. The in-place variants hand the caller's own tensor back, so it keeps the
+    // caller's topology; out-of-place outputs are fresh and take the framework's union of the inputs.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
+
+    // True when the op writes its result back into tensor_args.input_tensor instead of allocating an output.
+    static bool is_inplace(const operation_attributes_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);

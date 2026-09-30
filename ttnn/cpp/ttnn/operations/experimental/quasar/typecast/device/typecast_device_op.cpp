@@ -131,6 +131,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires the preallocated output to be on the same device as the input.");
     }
 }
 
@@ -152,6 +155,21 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    // Same rule as the non-quasar typecast / copy device operations: the output holds a per-device copy of
+    // the input's shards, so the input's topology is the data-correct label. A caller-owned preallocated
+    // output that spans different mesh coordinates keeps its own label (launch() then only writes the
+    // input's coordinates and the relabel never reaches the caller's handle).
+    const auto& src = tensor_args.input;
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& dst = *tensor_args.preallocated_output;
+        const bool same_coords = src.tensor_topology().mesh_coords() == dst.tensor_topology().mesh_coords();
+        return {same_coords ? src.tensor_topology() : dst.tensor_topology()};
+    }
+    return {src.tensor_topology()};
 }
 
 bool TypecastDeviceOperation::skip_launch(

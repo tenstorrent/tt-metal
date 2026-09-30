@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -88,6 +89,14 @@ struct LayerNormDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // Output distribution labels. The in-place sharded path hands the caller's own tensor back, so it keeps
+    // the caller's topology; out-of-place outputs are fresh and take the framework's union of the inputs.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // True when the op writes its result back into tensor_args.input instead of allocating an output.
+    static bool is_inplace(const operation_attributes_t& operation_attributes);
 };
 
 Tensor layer_norm(
