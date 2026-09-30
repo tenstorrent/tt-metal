@@ -26,6 +26,12 @@ Branch ttp/t41-... = t20 tip (1eadde3ce6c) + 63c8860f08e. Pushed.
   check ~/fasth3/t41 and /var/tmp/fasth3 survived, then relaunch:
   `setsid nohup tmp/t41/drive.sh 2 > tmp/t41/drive.log 2>&1 &` and wait on `grep -q T41_DRIVE_DONE tmp/t41/drive.log`.
 
+## Status 2026-09-30 20:33
+- blx03 back (rebooted ~20:26, broker power-cycled after a chip left PCIe, then recovered). ~/fasth3/t41 and
+  /var/tmp/fasth3 intact; blx03 job.sh identical to branch. Project job 889 (other task) running.
+- Driver relaunched: `tmp/t41/drive.sh 2` (setsid), log tmp/t41/drive.log; it retries every 2 min while 889
+  (or any project job) is active, then submits. Old log: tmp/t41/drive.log.2024.
+
 ## Next
 1. `ssh g14blx03 "cd ~/fasth3/t41 && ~/fasth3/tt-metal/python_env/bin/python tmp/t41/analyze.py /var/tmp/fasth3/t41/qkv"`
    -> attention mass by frame distance + per-W rel_l2 vs dense.
