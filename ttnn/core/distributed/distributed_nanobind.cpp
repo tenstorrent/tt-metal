@@ -280,7 +280,6 @@ void py_module(nb::module_& mod) {
                 str << mcrs;
                 return str.str();
             })
-        .def("__hash__", [](const MeshCoordinateRangeSet& s) { return std::hash<MeshCoordinateRangeSet>{}(s); })
         .def(
             "__eq__",
             [](const MeshCoordinateRangeSet& a, const MeshCoordinateRangeSet& b) { return a == b; },
