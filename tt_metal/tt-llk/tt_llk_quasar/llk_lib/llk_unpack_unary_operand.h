@@ -100,7 +100,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @note For UNP_DEST no dvalid is set (no math is involved): the caller's DEST handshake takes its place, either the dest-dvalid
  *       @ref _llk_unpack_dest_dvalid_section_done_ for a bare UNP_DEST unpack, or the UNPACK_MATH / MATH_PACK semaphore protocol of
- *       @ref _llk_unpack_unary_operand_to_dest_ (llk_unpack_unary_operand_to_dest.h), whose init builds on this MOP.
+ *       llk_unpack_unary_operand_to_dest.h (@ref _llk_unpack_unary_operand_to_dest_tile_, @ref _llk_unpack_unary_operand_to_dest_block_).
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
