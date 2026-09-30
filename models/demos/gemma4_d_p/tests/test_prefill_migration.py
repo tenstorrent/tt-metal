@@ -24,6 +24,10 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     read_cache_tensor,
 )
 
+# Temporarily overriding PCC values, original:
+# MIN_PER_HEAD_PCC = 0.91
+# MIN_OVERALL_PCC = 0.97
+# MAX_OVERALL_RRMSE = 0.232
 MIN_PER_HEAD_PCC = 0.87
 MIN_OVERALL_PCC = 0.96
 MAX_OVERALL_RRMSE = 0.275
