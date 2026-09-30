@@ -52,10 +52,13 @@ def _prepare(mesh, test: str, params: list[str]) -> str:
         model, spec, tokens, reference, _ = T.setup_small(mesh, case, schedule)
     elif test == "test_v41_transformer_production":
         weights, chunks = params
-        setup = T.setup_production(mesh, weights, _CHUNKS[chunks])
+        setup = T.setup_production(mesh, weights, chunks)
         if setup is None:
             return "skipped: checkpoint not downloaded"
         model, spec, tokens, reference = setup
+        _, chunk, _ = T.PRODUCTION_CASES[chunks]
+        T.reference_data(spec, tokens, reference, chunk if chunk == T.LONG_CHUNK else None)
+        return f"reference built: {reference.built}"
     else:
         raise ValueError(f"no prepare step for {test}")
     T.reference_data(spec, tokens, reference)

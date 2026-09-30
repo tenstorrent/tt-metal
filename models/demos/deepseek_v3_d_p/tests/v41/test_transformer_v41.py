@@ -16,7 +16,13 @@ allows and every attention and MoE input the error that flips selection and rout
 no worse than the components predict (a state or composition bug fails it). Top-1 agreement, top-5 recall and
 logits PCC over the scored positions are reported against the same floor; repeats are bit-identical.
 Cases: small dims (one chunk, two chunks, a padded last chunk), then production shape (S=2048) with synthetic
-and real weights.
+and real weights, then long context on real weights (bead 8y7.19.1): N real-text chunks of 5120 tokens, the last
+one (e.g. at start 51200 for 11 chunks) attending over the caches the preceding chunks filled on device, with the
+released candidate count (2048 blocks). There the gate also covers the last chunk's rows (``chunk``), and the
+block acceptance of test_block_v41 runs at the last chunk: every chunk teacher-forced through every block on a
+fresh state (oracle inputs), the last chunk's block outputs >= the real block bar, the KV sources' compressed-KV and
+index-K rows and every window carry >= the cache bar. The single-shot oracle scores the indexer in query blocks
+(``oracle.INDEXER_QUERY_BLOCK``, bit-identical) so that it fits in host memory at S=56320.
 """
 
 import time
@@ -33,12 +39,13 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
-from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _unpack
+from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import BLOCK_PCC, CACHE_PCC, _pack, _pcc, _unpack
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import (  # noqa: F401 (WEIGHT_CACHE re-export)
     WEIGHT_CACHE,
     host_weights,
     weight_cache_dir,
 )
+from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -67,6 +74,13 @@ MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}  # token metrics: reported a
 DRIFT_MARGIN = 0.003
 PRODUCTION_SEQ = 2048
 PRODUCTION_CANDIDATE_BLOCKS = 96  # of 128 visible blocks at S=2048 (2048 would make every block a candidate)
+LONG_CHUNK = 5120
+# case -> (prompt tokens, chunk, candidate blocks; None = released 2048). Long cases: real weights only.
+PRODUCTION_CASES = {
+    "one_chunk": (PRODUCTION_SEQ, PRODUCTION_SEQ, PRODUCTION_CANDIDATE_BLOCKS),
+    "two_chunks": (PRODUCTION_SEQ, PRODUCTION_SEQ // 2, PRODUCTION_CANDIDATE_BLOCKS),
+    **{f"{n}x{LONG_CHUNK}": (n * LONG_CHUNK, LONG_CHUNK, None) for n in (2, 4, 11)},
+}
 MESH = [
     pytest.param(
         (2, 4),
@@ -134,7 +148,7 @@ def setup_small(mesh_device, case, schedule):
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
 def test_v41_transformer_small(mesh_device, device_params, case, schedule):
     model, spec, tokens, reference, dspark = setup_small(mesh_device, case, schedule)
-    state = _check(model, spec, tokens, reference, f"{schedule} {case}")
+    state, _ = _check(model, spec, tokens, reference, f"{schedule} {case}")
     if dspark is not None:
         result = orc.oracle(spec, tokens, model=reference)
         # rings seeded from free-running device streams inherit their drift; reported only. The G1 ring bar
@@ -167,13 +181,16 @@ def _agreement(expected: torch.Tensor, actual: torch.Tensor) -> dict:
     }
 
 
-def reference_data(spec, tokens, reference):
-    """What the gate compares against: the clean oracle, the scored tail logits, the per-layer noisy drifts and the
-    token-agreement floor (all disk-cached; the prepare step fills them outside the device lock)."""
+def reference_data(spec, tokens, reference, last_chunk=None):
+    """What the gate compares against: the clean oracle, the scored tail logits, the per-layer noisy drifts (with
+    ``last_chunk``, also over the last chunk's rows) and the token-agreement floor (all disk-cached; the prepare step
+    fills them outside the device lock)."""
     scored = min(SCORED, tokens.shape[1])
     clean = orc.oracle(spec, tokens, reference)
     expected = orc.tail_logits(spec, tokens, scored, reference)
-    drifts = [orc.noise_drift(spec, tokens, scored, (*NOISE, s), reference) for s in range(NOISE_SEEDS)]
+    drifts = [
+        orc.noise_drift(spec, tokens, scored, (*NOISE, s), reference, chunk=last_chunk) for s in range(NOISE_SEEDS)
+    ]
     token_floor = {k: 1.0 for k in MARGIN}
     for seed in range(NOISE_SEEDS):
         noisy = _agreement(expected, orc.tail_logits(spec, tokens, scored, reference, noise=(*NOISE, seed)))
@@ -181,10 +198,11 @@ def reference_data(spec, tokens, reference):
     return clean, expected, drifts, token_floor
 
 
-def _check(model, spec, tokens, reference, name):
-    """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows and the last
-    SCORED rows) no further from the reference than its drift under the floor noise (worst seed) minus
-    DRIFT_MARGIN. Token agreement vs the same floor is reported. Returns the first prefill's state."""
+def _check(model, spec, tokens, reference, name, last_chunk=None):
+    """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows, the last
+    SCORED rows and, with ``last_chunk``, the last chunk's rows) no further from the reference than its drift under
+    the floor noise (worst seed) minus DRIFT_MARGIN. Token agreement vs the same floor is reported. Returns the
+    first prefill's state and the clean oracle result."""
     scored = min(SCORED, tokens.shape[1])
     mesh, tp = model.mesh_device, model.mesh_device.shape[1]
     concat = ttnn.ConcatMesh2dToTensor(mesh, tuple(mesh.shape), dims=(2, 3))
@@ -199,7 +217,7 @@ def _check(model, spec, tokens, reference, name):
     with _stage(f"{name} prefill (repeat)", "compute"):
         logits2, _ = model.prefill(tokens[0], scored)
     with _stage(f"{name} reference (cached unless precomputed)", "oracle"):
-        clean, expected, drifts, token_floor = reference_data(spec, tokens, reference)
+        clean, expected, drifts, token_floor = reference_data(spec, tokens, reference, last_chunk)
     assert torch.equal(logits, logits2), "prefill is not bit-identical across repeats"
     tokens_device = _agreement(expected, logits)
     logger.info(
@@ -207,32 +225,102 @@ def _check(model, spec, tokens, reference, name):
         + ", ".join(f"{k} {tokens_device[k]:.4f} (reference self {token_floor[k]:.4f})" for k in MARGIN)
     )
     failures = []
+    windows = [("all", slice(None)), ("tail", slice(-scored, None))]
+    if last_chunk:
+        windows.append(("chunk", slice(-last_chunk, None)))
     for layer, parts in streams.items():
         device, ref = torch.cat(parts), clean["blocks"][layer]["x_out"]
-        for key, rows in (("all", slice(None)), ("tail", slice(-scored, None))):
+        for key, rows in windows:
             value = comp_pcc(ref[rows].float(), device[rows].float(), 0.0)[1]
             floor = min(d[layer][key] for d in drifts)
             logger.info(f"transformer {name} layer {layer} {key}: device {value:.5f} (bar {floor - DRIFT_MARGIN:.5f})")
             if value < floor - DRIFT_MARGIN:
                 failures.append((layer, key, value, floor))
     assert not failures, failures
-    return state
+    return state, clean
 
 
-def setup_production(mesh_device, weights, chunks):
-    """Everything before the production prefill (see setup_small); None when the checkpoint is not downloaded."""
+def _teacher_forced_last_chunk(model, clean, total, name):
+    """The block acceptance of test_block_v41 at the last chunk of a chunked prefill of ``total`` tokens: every chunk
+    through every block on the oracle's inputs (streams and pre-mix) over a fresh state, so each block reads caches
+    it wrote itself from teacher-forced inputs. Gates the last chunk's block outputs (>= BLOCK_PCC real), the KV
+    sources' compressed-KV and index-K rows (all rows) and every window carry (>= CACHE_PCC)."""
+    mesh, cfg, chunk = model.mesh_device, model.config, model.chunk
+    shape, tp, n = tuple(mesh.shape), mesh.shape[1], cfg.HC_MULT
+    down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, shape, dims=(2, 3)))
+    state = model._new_state()
+    last = {}
+    for start in range(0, total, chunk):
+        length = min(chunk, total - start)
+        for layer, block in zip(model.layers, model.blocks):
+            rec = clean["blocks"][layer]
+            x_rows = torch.zeros(chunk, *rec["x_in"].shape[1:])
+            x_rows[:length] = rec["x_in"][start : start + length].float()
+            pre_rows = torch.zeros(chunk, rec["pre_in"].shape[-1])
+            pre_rows[:length] = rec["pre_in"][start : start + length].float()
+            x = ttnn.from_torch(
+                _pack(x_rows, tp),
+                device=mesh,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, shape, dims=(2, 3)),
+            )
+            pre = ttnn.from_torch(
+                pre_rows[None, None],
+                device=mesh,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, shape, dims=(2, None)),
+            )
+            x_out, pre_out = block(x, pre, state, length)
+            if start + length == total:
+                last[layer] = (_unpack(down(x_out)[0, 0], n, tp)[:length], down(pre_out)[0, 0, :length, :n])
+            for t in (x, pre, x_out, pre_out):
+                ttnn.deallocate(t)
+        state.advance(length)
+    first, failures = total - length, []
+    for layer, (x_out, pre_out) in last.items():
+        rec = clean["blocks"][layer]
+        entry = {
+            "block_out": (_pcc(rec["x_out"][first:total], x_out), BLOCK_PCC["real"]),
+            "pre_mix": (_pcc(rec["pre_out"][first:total], pre_out), None),
+        }
+        tail = rec["window_kv"][max(0, total - WINDOW_SLOT) : total].float()
+        carry = torch.zeros(WINDOW_SLOT, tail.shape[-1])
+        carry[WINDOW_SLOT - tail.shape[0] :] = tail
+        entry["window_kv"] = (_pcc(carry, state.to_host(state.window_carry[layer])), CACHE_PCC)
+        if layer in C.KV_SOURCE_LAYERS:
+            pub = clean["shared"][layer]
+            rows, w0 = pub["compress_kv"].shape[0], state.geometry.window_rows
+            entry["compressed_kv"] = (
+                _pcc(pub["compress_kv"], state.to_host(state.kv[layer])[w0 : w0 + rows]),
+                CACHE_PCC,
+            )
+            entry["index_k"] = (_pcc(pub["index_k"], state.to_host(state.index_k[layer])[:rows]), CACHE_PCC)
+        logger.info(
+            f"transformer {name} teacher-forced last chunk [{first}, {total}) layer {layer}: "
+            + ", ".join(f"{k} {v:.5f}" + (f" (bar {bar})" if bar else "") for k, (v, bar) in entry.items())
+        )
+        failures += [(layer, k, v, bar) for k, (v, bar) in entry.items() if bar is not None and v < bar]
+    assert not failures, failures
+
+
+def setup_production(mesh_device, weights, case):
+    """Everything before the production prefill of ``case`` (PRODUCTION_CASES; see setup_small); None when the
+    checkpoint is not downloaded."""
     layers = SCHEDULES["sharing"]
+    seq, chunk, candidate_blocks = PRODUCTION_CASES[case]
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
         return None
     spec = orc.real_spec(
         layers,
-        PRODUCTION_SEQ,
-        candidate_topk_blocks=PRODUCTION_CANDIDATE_BLOCKS,
+        seq,
+        candidate_topk_blocks=candidate_blocks,
         checkpoint=ckpt.root if ckpt else None,
     )
-    cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": PRODUCTION_CANDIDATE_BLOCKS})
-    tokens = orc.text_tokens(PRODUCTION_SEQ)
+    cfg = C if candidate_blocks is None else type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": candidate_blocks})
+    tokens = orc.text_tokens(seq)
     # built only on an oracle or weight-cache miss (warm runs construct no reference model)
     reference = orc.LazyReference(spec)
     root = weight_cache_dir(spec, mesh_device.shape)
@@ -265,24 +353,35 @@ def setup_production(mesh_device, weights, chunks):
             embed,
             norm,
             head,
-            max_seq_len=PRODUCTION_SEQ,
-            chunk=PRODUCTION_SEQ // chunks,
+            max_seq_len=seq,
+            chunk=chunk,
             weight_cache_path=root,
         )
     return model, spec, tokens, reference
 
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("chunks", [1, 2], ids=["one_chunk", "two_chunks"])
-@pytest.mark.parametrize("weights", ["synthetic", "real"])
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(
+    "weights, chunks",
+    [(w, c) for c in ("one_chunk", "two_chunks") for w in ("synthetic", "real")]
+    + [("real", c) for c in PRODUCTION_CASES if c not in ("one_chunk", "two_chunks")],
+    ids=lambda v: v,
+)
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
 def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
     """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
-    tables, not downloaded). Precompute the reference logits outside the device lock first (``tail_logits``, clean
-    and per noise seed; disk-cached)."""
+    tables, not downloaded). Precompute the reference outside the device lock first (tests/v41/prepare_caches.py:
+    oracle, ``tail_logits`` clean and per noise seed; disk-cached). Long cases (``<n>x5120``) also gate the last
+    chunk's rows and run the block acceptance at the last chunk (module docstring)."""
     setup = setup_production(mesh_device, weights, chunks)
     if setup is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     model, spec, tokens, reference = setup
-    _check(model, spec, tokens, reference, f"production {weights} chunks={chunks}")
-    logger.info(f"production {weights} chunks={chunks}: reference model built: {reference.built}")
+    seq, chunk, _ = PRODUCTION_CASES[chunks]
+    long = chunk == LONG_CHUNK
+    name = f"production {weights} chunks={chunks}"
+    _, clean = _check(model, spec, tokens, reference, name, last_chunk=chunk if long else None)
+    if long:
+        with _stage(f"{name} teacher-forced blocks", "compute"):
+            _teacher_forced_last_chunk(model, clean, seq, name)
+    logger.info(f"{name}: reference model built: {reference.built}")
