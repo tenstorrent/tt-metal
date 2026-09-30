@@ -157,7 +157,9 @@ class CCLManager:
             # Reduce-scatter entries hold [intermediate, output-or-None] pairs; the rest hold tensors.
             tensors = [t for b in buffers for t in (b if isinstance(b, (list, tuple)) else [b]) if t is not None]
             nbytes = sum(t.volume() * t.element_size() for t in tensors)
-            rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
+            # Reduce-scatter keys start with the shape; the others start with a kind label.
+            kind, shape = (key[0], key[1]) if isinstance(key[0], str) else ("rs", key[0])
+            rows.append((nbytes, f"{kind} x{len(buffers)} {tuple(shape)}"))
         return sorted(rows, reverse=True)
 
     def get_rs_ping_pong_buffer(
