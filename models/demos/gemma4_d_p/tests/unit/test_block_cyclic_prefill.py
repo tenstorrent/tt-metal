@@ -301,6 +301,7 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
                 cache_k,
                 cache_v,
                 head_dim=width,
+                gather_buffer_key=0,
                 sliding_window_size=1024,
                 **args,
             )
