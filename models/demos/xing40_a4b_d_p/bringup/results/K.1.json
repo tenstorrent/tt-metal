@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "ack_blocks_checked": {
+   "t": "2026-09-30T17:36:00",
+   "value": 160
+  },
+  "acks_early": {
+   "t": "2026-09-30T17:36:00",
+   "value": 0
+  },
+  "contract_checks_failed": {
+   "t": "2026-09-30T17:36:06",
+   "value": 0
+  },
+  "pcc_producer_kv_kv_latent": {
+   "t": "2026-09-30T17:36:06",
+   "value": 0.9976123383880163
+  }
+ },
+ "task": "K.1"
+}
