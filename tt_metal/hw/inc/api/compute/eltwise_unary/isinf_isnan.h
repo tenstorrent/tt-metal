@@ -6,12 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-// The Blackhole/Wormhole kernel lives in tt-llk (sfpu/); the Quasar port lives in hw/ckernels/quasar.
-#ifdef ARCH_QUASAR
 #include "ckernel_sfpu_isinf_isnan.h"
-#else
-#include "sfpu/ckernel_sfpu_isinf_isnan.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 

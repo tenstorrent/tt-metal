@@ -39,7 +39,6 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
-#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -49,16 +48,13 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
-#endif
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
-#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
-#endif
 
 // clang-format off
 /**

@@ -17,8 +17,8 @@ namespace sfpu {
 /**
  * @brief Add top row operation for a 32x32 tile.
  *        Automatically chooses between integer and floating-point implementations based on the data format.
- *        Takes the top row of tile 0 (first 16 datums of face 0 and first 16 of face 1) and adds them
- *        with the top row of tile 1 (first 16 datums of face 2 and first 16 of face 3).
+ *        Adds the top four rows of tile 0 (rows 0-3 of faces 0 and 1) to the top four rows of tile 1
+ *        and stores the sums in the top four rows of the result tile; its other rows are left unchanged.
  * @tparam format The data format that determines which implementation to use.
  *                Supported formats:
  *                - DataFormat::Int32: Use integer implementation with INT32 instruction mode
@@ -68,7 +68,8 @@ inline void calculate_add_top_row(
 /**
  * @brief Init for the add-top-row kernel. The kernel is pure sfpi and addresses Dest from the
  *        tile indices, so only the Dest counters need resetting. Run it as one call per tile
- *        (VectorMode::None): it reaches all four rows itself and must not be walked per face.
+ *        (VectorMode::RC_custom, which Quasar's SFPU dispatch runs once, like None): it reaches all
+ *        four rows itself and must not be walked per face.
  */
 inline void init_add_top_row() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 

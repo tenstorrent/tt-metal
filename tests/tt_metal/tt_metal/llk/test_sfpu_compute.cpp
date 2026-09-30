@@ -207,7 +207,10 @@ std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
         return x > 0.0f ? x : static_cast<float>(std::expm1(d));
     }
     if (op_name == "softshrink") {
-        return x > 0.5f ? x - 0.5f : (x < -0.5f ? x + 0.5f : 0.0f);
+        if (x > 0.5f) {
+            return x - 0.5f;
+        }
+        return x < -0.5f ? x + 0.5f : 0.0f;
     }
     if (op_name == "hardshrink") {
         return std::fabs(x) > 0.5f ? x : 0.0f;
@@ -338,7 +341,10 @@ std::optional<float> ported_sfpu_function(const std::string& op_name, float x) {
         return static_cast<float>(std::exp2(d));
     }
     if (op_name == "heaviside") {
-        return x < 0.0f ? 0.0f : (x == 0.0f ? 0.5f : 1.0f);
+        if (x < 0.0f) {
+            return 0.0f;
+        }
+        return x == 0.0f ? 0.5f : 1.0f;
     }
     if (op_name == "expm1") {
         return static_cast<float>(std::expm1(d));
@@ -777,8 +783,13 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_ported_int8_binary_inputs
     std::mt19937 rng(seed);
     const bool divides = op_name.starts_with("div_int32") || op_name == "fmod_int32" || op_name == "remainder_int32";
     const bool masks = op_name == "int_mask";
-    std::uniform_int_distribution<int> lhs_dist(0, op_name == "rsub_int" ? 63 : 127);
-    std::uniform_int_distribution<int> rhs_dist(divides ? 1 : (op_name == "rsub_int" ? 64 : 0), masks ? 1 : 127);
+    const bool is_rsub = op_name == "rsub_int";
+    int rhs_min = is_rsub ? 64 : 0;
+    if (divides) {
+        rhs_min = 1;
+    }
+    std::uniform_int_distribution<int> lhs_dist(0, is_rsub ? 63 : 127);
+    std::uniform_int_distribution<int> rhs_dist(rhs_min, masks ? 1 : 127);
     const size_t words = (numel + 3) / 4;
     vector<uint32_t> lhs(words, 0), rhs(words, 0);
     for (size_t i = 0; i < numel; ++i) {
@@ -1776,7 +1787,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     if (sfpu_util::is_quasar_ported_unary_test_op(test_config.sfpu_op)) {
         sfpu_defines["SFPU_OP_PORTED_INCLUDES"] = "1";
         // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
-        // declared only on the math TRISC, so name the fixture's mode as a literal, as ttnn does.
+        // declared only on the math TRISC, so name the fixture's mode as a literal instead.
         sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
     }
     sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
@@ -2854,9 +2865,10 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
     // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
     const bool is_int8_op = unit_tests::sfpu_util::is_int8_binary_sfpu_op(sfpu_op);
     const tt::DataFormat data_format_input = is_int8_op ? tt::DataFormat::Int8 : tt::DataFormat::Float16_b;
-    const tt::DataFormat data_format_output = sfpu_op == "div_int32" ? tt::DataFormat::Float32
-                                              : is_int8_op           ? tt::DataFormat::Int32
-                                                                     : tt::DataFormat::Float16_b;
+    tt::DataFormat data_format_output = is_int8_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+    if (sfpu_op == "div_int32") {
+        data_format_output = tt::DataFormat::Float32;
+    }
     const size_t tile_byte_size = is_int8_op ? tt::tile_size(tt::DataFormat::Int8) : 2 * 32 * 32;
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -2898,6 +2910,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 std::vector<std::tuple<size_t, std::string>> ported_binary_sfpu_params() {
     std::vector<std::tuple<size_t, std::string>> params;
+    params.reserve(unit_tests::sfpu_util::sfpu_ported_binary_op_to_op_name.size());
     for (const auto& [op_name, defines] : unit_tests::sfpu_util::sfpu_ported_binary_op_to_op_name) {
         params.emplace_back(1, op_name);
     }
@@ -2987,6 +3000,7 @@ TEST_P(QuasarPortedSfpuInt32UnaryFixture, TensixSfpuCompute) {
 
 std::vector<std::tuple<size_t, std::string>> ported_int_unary_sfpu_params() {
     std::vector<std::tuple<size_t, std::string>> params;
+    params.reserve(unit_tests::sfpu_util::sfpu_ported_int_unary_op_to_op_name.size());
     for (const auto& [op_name, defines] : unit_tests::sfpu_util::sfpu_ported_int_unary_op_to_op_name) {
         params.emplace_back(1, op_name);
     }

@@ -869,8 +869,9 @@ ALWI void max_reduce_with_indices_init() {
 // clang-format off
 /**
  * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
- * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
- * storing the result in the top row of tile at dst_tile_out.
+ * Adds the top four rows of the tile at dst_tile_0 (rows 0-3 of faces 0 and 1) to the top four rows
+ * of the tile at dst_tile_1, storing the result in the top four rows of the tile at dst_tile_out.
+ * The remaining rows of dst_tile_out are left unchanged.
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
@@ -882,24 +883,14 @@ ALWI void max_reduce_with_indices_init() {
  * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
- * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32 (no UInt32 on Quasar)          | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32 (where the arch has UInt32)    | True     |
  */
 // clang-format on
 template <DataFormat format>
 ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
-#ifdef ARCH_QUASAR
-    // Quasar's DataFormat has no UInt32, and its binary SFPU runs a whole-tile kernel as one call
-    // (VectorMode::None) rather than through RC_custom.
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32,
-        "Unsupported data format. Supported formats: Float32, Int32");
-    constexpr VectorMode add_top_row_vector_mode = VectorMode::None;
-#else
-    static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        format == DataFormat::Float32 || format == DataFormat::Int32 || is_uint32_format(format),
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
-    constexpr VectorMode add_top_row_vector_mode = VectorMode::RC_custom;
-#endif
 
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -909,7 +900,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
         dst_tile_0,
         dst_tile_1,
         dst_tile_out,
-        add_top_row_vector_mode)));
+        VectorMode::RC_custom)));
 }
 
 /**

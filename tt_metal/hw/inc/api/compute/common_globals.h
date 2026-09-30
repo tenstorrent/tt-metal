@@ -33,33 +33,3 @@
 #else
 #define UNPACK(...)
 #endif
-
-namespace ckernel {
-
-// Quasar's DataFormat has no UInt32, Bfp8_b or Bfp4_b. API format checks name those formats through
-// these predicates so one check compiles on every arch; each is false where the format does not exist.
-constexpr bool is_uint32_format([[maybe_unused]] DataFormat format) {
-#ifdef ARCH_QUASAR
-    return false;
-#else
-    return format == DataFormat::UInt32;
-#endif
-}
-
-constexpr bool is_bfp8_b_format([[maybe_unused]] DataFormat format) {
-#ifdef ARCH_QUASAR
-    return false;
-#else
-    return format == DataFormat::Bfp8_b;
-#endif
-}
-
-constexpr bool is_bfp4_b_format([[maybe_unused]] DataFormat format) {
-#ifdef ARCH_QUASAR
-    return false;
-#else
-    return format == DataFormat::Bfp4_b;
-#endif
-}
-
-}  // namespace ckernel

@@ -6,9 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifndef ARCH_QUASAR  // _sub_int_ is not ported to Quasar
-#include "sfpu/ckernel_sfpu_sub_int.h"
-#endif
+#include "ckernel_sfpu_sub_int.h"
 #include "ckernel_sfpu_rsub_int32.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
@@ -37,11 +35,10 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-#ifndef ARCH_QUASAR  // _sub_int_ is not ported to Quasar
 template <DataFormat data_format>
 ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
@@ -55,7 +52,6 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
-#endif
 
 // clang-format off
 /**
@@ -99,9 +95,7 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-#ifndef ARCH_QUASAR  // _sub_int_ is not ported to Quasar
 ALWI void sub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
-#endif
 
 ALWI void rsub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
 
