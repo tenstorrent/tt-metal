@@ -85,16 +85,12 @@ def test_traced_verify_throughput(mesh_device, device_params, reset_seeds, ensur
 
     tokenizer = AutoTokenizer.from_pretrained(resolve_target_path())
     prompt = tokenizer(PROMPT, return_tensors="pt").input_ids
-    # Same configuration as the demo:
-    #   * anchor_for() sizes the bucket to the request.
-    #   * ctx_capacity makes the drafter's KV history a fixed buffer at stable addresses.
-    #   * narrow_head=True runs the verify's LM head over a 32/64-row window instead of all 128
-    #     rows, and is the precondition for the device-side argmax (Qwen36Model._posterior_device).
+    # Same configuration as the demo: ctx_capacity makes the drafter's KV history a fixed buffer at
+    # stable addresses, which a parked trace requires.
     total_tokens = prompt.shape[1] + MAX_NEW_TOKENS
-    anchor = TtTarget.anchor_for(total_tokens, new_tokens=MAX_NEW_TOKENS)
     ctx_capacity = -(-(total_tokens + 32) // 32) * 32
-    logger.info(f"anchor {anchor} for {prompt.shape[1]} + {MAX_NEW_TOKENS} tokens, drafter ctx {ctx_capacity}")
-    target = TtTarget(model, cfg.target_layer_ids, page_table, device_taps=True, anchor=anchor)
+    logger.info(f"{prompt.shape[1]} + {MAX_NEW_TOKENS} tokens, drafter ctx {ctx_capacity}")
+    target = TtTarget(model, cfg.target_layer_ids, page_table)
     drafter = TtDrafter(
         TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(drafter_path), ctx_capacity=ctx_capacity),
         target,
@@ -128,9 +124,9 @@ def test_traced_verify_throughput(mesh_device, device_params, reset_seeds, ensur
 
     eager_stats, eager_dt, eager_n, eager_text = run("eager verify")
 
-    # The eager arm above doubles as the warm-up this requires: capture_verify_trace only warms its
-    # own forward, and compiling the rest under a parked trace hangs.
-    target.enable_traced_verify(narrow_head=True)
+    # The eager arm above doubles as the warm-up this requires: the capture only warms the verify
+    # body, and compiling the rest under a parked trace hangs.
+    target.enable_traced_verify()
     traced_stats, traced_dt, traced_n, traced_text = run("TRACED verify")
 
     speedup = (eager_dt / eager_n) / (traced_dt / traced_n)

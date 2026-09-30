@@ -9,8 +9,8 @@ slot only when it matches the target's own argmax, so the emitted tokens are exa
 27B would produce on its own; the drafter changes only how fast they arrive. The demo reports
 acceptance length alongside tok/s and compares against production traced decode (text_demo.py).
 
-The verify forward runs as a captured trace (Qwen36Model.capture_verify_trace); the drafter runs
-eagerly.
+The 16-row verify (with its residual taps and on-device argmax) and the GDN commit run as captured
+traces (Qwen36Model.capture_verify_trace / capture_commit_traces); the drafter runs eagerly.
 
 Run::
 
@@ -24,9 +24,8 @@ Run::
     # one case
     ... pytest models/demos/blackhole/qwen36/demo/dflash_demo.py -v -s -k "spec_128"
 
-Optional env vars: DFLASH_PROMPT overrides the prompt with a literal string. The anchor bucket is
-sized to the request by TtTarget.anchor_for; DFLASH_ANCHOR=<rows> or DFLASH_AUTO_ANCHOR=0 (fixed 128)
-override it, e.g. to exercise the anchor-crossing path.
+Optional env vars: DFLASH_PROMPT overrides the prompt with a literal string; DFLASH_NUM_SPEC=<n> drafts
+n tokens per step instead of the checkpoint's own count.
 """
 
 import json
@@ -75,7 +74,7 @@ DEVICE_PARAMS = [
 ]
 
 
-def _build(mesh_device, num_blocks, ctx_capacity=None, anchor=None):
+def _build(mesh_device, num_blocks, ctx_capacity=None):
     """The 27B target, the DFlash drafter, and the speculative loop's view of both."""
     drafter_path = resolve_drafter_path()
     cfg = DFlashDrafterConfig.from_pretrained(drafter_path)
@@ -85,9 +84,7 @@ def _build(mesh_device, num_blocks, ctx_capacity=None, anchor=None):
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    # device_taps=True keeps the target's residual taps on the mesh for the ttnn drafter instead of
-    # reading them back to host every step.
-    target = TtTarget(model, cfg.target_layer_ids, page_table, device_taps=True, anchor=anchor)
+    target = TtTarget(model, cfg.target_layer_ids, page_table)
     # ctx_capacity makes the drafter's KV history a persistent fixed-capacity buffer, which limits its
     # per-step shape space to the block width alone -- the precondition for warm_block_widths.
     # The drafter shares the model's TT_CCL for its tap all-gather.
@@ -177,6 +174,7 @@ def _log_results(perf, prompt_len, stats, text):
         pytest.param(16384, 100, id="isl_16k"),
         pytest.param(24576, 100, id="isl_24k"),
         pytest.param(32768, 100, id="isl_32k"),
+        pytest.param(65536, 100, id="isl_64k"),
     ],
 )
 def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, reset_seeds, ensure_gc):
@@ -187,7 +185,7 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
 
     from transformers import AutoTokenizer
 
-    # Tokenize before building: the drafter's capacity and the anchor are sized from the actual
+    # Tokenize before building: the drafter's capacity and the KV page count are sized from the actual
     # prompt length, which with DFLASH_PROMPT is not `seqlen`.
     tokenizer = AutoTokenizer.from_pretrained(resolve_target_path())
     # DFLASH_PROMPT overrides the shared prompt file with a literal, un-padded string.
@@ -210,20 +208,8 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
         cap = None
         if os.environ.get("DFLASH_CTX_CAPACITY", "1") != "0":
             cap = -(-(prompt_len + max_generated_tokens + 32) // 32) * 32
-        # The anchor is sized to this request: a crossing costs an eager whole-bucket forward and a
-        # trace re-capture, while a wider bucket costs padded rows on every step. TtTarget.anchor_for
-        # weighs both, with the per-step term paid over the generation budget. DFLASH_ANCHOR
-        # overrides it, and DFLASH_AUTO_ANCHOR=0 restores the fixed 128.
-        anchor = None
-        if os.environ.get("DFLASH_AUTO_ANCHOR", "1") != "0" and not os.environ.get("DFLASH_ANCHOR"):
-            total = prompt_len + max_generated_tokens
-            anchor = TtTarget.anchor_for(total, new_tokens=max_generated_tokens)
-            logger.info(
-                f"auto anchor {anchor} for {prompt_len} + {max_generated_tokens} tokens "
-                f"({TtTarget.crossings_for(total, anchor)} crossings)"
-            )
         num_blocks = paged_blocks_for(prompt_len + max_generated_tokens)
-        model, target, drafter, cfg = _build(mesh_device, num_blocks, ctx_capacity=cap, anchor=anchor)
+        model, target, drafter, cfg = _build(mesh_device, num_blocks, ctx_capacity=cap)
     except Exception as e:  # noqa: BLE001 -- a missing drafter checkpoint is a skip, not a failure
         if "drafter" in str(e).lower() or "DFLASH_HF_MODEL" in str(e):
             pytest.skip(f"drafter checkpoint unavailable ({type(e).__name__}: {e})")
@@ -241,38 +227,30 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
         f"prompt {prompt_len} tokens, generating {max_generated_tokens}, block_size {block_size} ({num_spec} drafted)"
     )
 
-    # Run an eager generation first, then capture. capture_verify_trace warms only its own forward;
-    # the loop also needs the drafter projections, tap gather, LM head at the drafted width and the
-    # whole-bucket eager fallback. Any program first compiled while a trace is parked hangs the
-    # process and wedges the device (TtTarget.enable_traced_verify asserts against it).
+    # Run an eager generation first, then capture. The eager verify compiles the programs the trace
+    # replays, and the loop also needs the drafter projections, the tap gather and the LM head at the
+    # drafted width. Any program first compiled while a trace is parked hangs the process and wedges
+    # the device.
     #
     # The eager warm-up must cover every shape the measured run will use, so it runs at the real
-    # token budget: each step takes `verify_size = min(block_size, max_length - start,
-    # target.max_block(start))`, so a long generation produces narrow tail blocks (and, past the
-    # anchor, `max_block`-capped ones) that a short warm-up never reaches. This is why `compile_s`
-    # is large and reported separately.
+    # token budget: the last steps take a shorter block (`verify_size = min(block_size, max_length -
+    # start)`) that a short warm-up never reaches. This is why `compile_s` is large and reported
+    # separately.
     t0 = time.perf_counter()
     if cap is not None:
         logger.info(f"fixed-capacity drafter ({cap} rows); warming every block width before capture")
         drafter.drafter.warm_block_widths()
-        # Traced verify past the anchor is on by default (DFLASH_TRACE_PAST_ANCHOR=0 opts out): after
-        # a crossing the verify trace is re-captured (TtTarget._recapture_after_anchor) instead of
-        # falling back to eager verifies for the rest of the generation. It changes step time only;
-        # greedy verification accepts exact argmax matches, so the tokens are the same either way.
-        target.allow_trace_past_anchor = os.environ.get("DFLASH_TRACE_PAST_ANCHOR", "1") != "0"
     gen_kwargs = {"max_new_tokens": max_generated_tokens, "block_size": block_size}
 
     eager_ids = dflash_generate(drafter, target, token_ids, **gen_kwargs)
-    # Narrow head on by default (DFLASH_NARROW_HEAD=0 opts out): the verify LM head runs over a
-    # 32/64-row tile-aligned window instead of the whole 128-row bucket. It cannot change the tokens.
-    target.enable_traced_verify(narrow_head=os.environ.get("DFLASH_NARROW_HEAD", "1") != "0")
+    target.enable_traced_verify()
+    if os.environ.get("DFLASH_TRACE_DRAFTER", "1") != "0":
+        drafter.enable_trace()
     # One traced generation before the measured one.
     dflash_generate(drafter, target, token_ids, **gen_kwargs)
     compile_s = time.perf_counter() - t0
 
-    # TTFT comes from dflash_generate itself (DFlashStats.ttft_s); a separate prefill probe after
-    # the capture would call target.reset(), which reallocates the anchor's GDN snapshot while the
-    # trace is active and corrupts the traced run.
+    # TTFT comes from dflash_generate itself (DFlashStats.ttft_s).
     t0 = time.perf_counter()
     stats = dflash_generate(drafter, target, token_ids, return_stats=True, **gen_kwargs)
     total_s = time.perf_counter() - t0
@@ -288,13 +266,14 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     }
     _log_results(perf, prompt_len, stats, text)
 
-    target.model.release_verify_trace()
+    drafter.release_trace()
+    target.release_verify_trace()
 
     # Acceptance >= 1 holds trivially (the target's bonus token is committed even when every draft is
     # rejected), so require more than one committed token per target forward on average.
     assert n >= 1, "generated nothing"
     # Greedy verification accepts only the target's own argmax, so the traced run must emit exactly
-    # the tokens of the eager warm-up -- across every anchor crossing and trace re-capture.
+    # the tokens of the eager warm-up.
     assert torch.equal(stats.output_ids, eager_ids), "traced generation diverged from the eager warm-up"
     assert stats.mean_acceptance_length > 1.0, (
         f"acceptance {stats.mean_acceptance_length:.3f} tok/step means every draft is being rejected "

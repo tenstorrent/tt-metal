@@ -22,9 +22,8 @@ dispatch, not arithmetic; see :mod:`.weights`.
 
 Two further departures from the target:
 
-* KV history is a contiguous per-layer tensor, not a paged cache. The target's paged path can only
-  write a multi-token run at a bucket-aligned offset (see
-  :class:`~.target.TtTarget`) and speculation advances 1-16 tokens a step. By
+* KV history is a contiguous per-layer tensor, not a paged cache, since speculation advances 1-16
+  tokens a step and the drafter attends over its own context. By
   default the history grows by concatenation each step; with ``ctx_capacity`` it is a persistent
   fixed-size buffer written in place, so every step has a constant shape that can be compiled before
   the verify trace is captured, and nothing is reallocated under it. 8 KV heads x 128 dim is
@@ -107,12 +106,23 @@ class TtDFlashDrafter:
         self.compute_cfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        self._exact_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
         self._cos, self._sin = self._build_rope_tables()
         # Contiguous per-layer K/V history for the committed context; see the module docstring.
         self._ctx_k: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_v: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_len = 0
         if self._cap is not None:
+            # A sliding layer only ever attends to the last `sliding_window` positions, so its history
+            # is a ring of that size (plus slack) instead of the full capacity; position p lives in
+            # row p % L. The full-attention layer keeps every position (L == capacity, so p % L == p).
+            ring = -(-(cfg.sliding_window + 32) // 32) * 32
+            self._ring = min(self._cap, ring)
+            self._lcap = [
+                min(self._cap, ring) if cfg.is_sliding(i) else self._cap for i in range(cfg.num_hidden_layers)
+            ]
             self._alloc_ctx_buffers()
         # Projection matmul program configs, keyed (m_tiles, K, N); see _proj_pc.
         self._mm_pc = {}
@@ -233,18 +243,31 @@ class TtDFlashDrafter:
         Rows past ``_ctx_len`` are masked out rather than trusted (see :meth:`_fixed_mask_tensors`):
         a zero K row is not a no-op under softmax, it is a key that scores 0 against every query.
         """
-        zeros = torch.zeros(1, self.nkv, self._cap, self.hd, dtype=torch.bfloat16)
         for i in range(self.cfg.num_hidden_layers):
+            zeros = torch.zeros(1, self.nkv, self._lcap[i], self.hd, dtype=torch.bfloat16)
             self._ctx_k[i] = self._replicate(zeros)
             self._ctx_v[i] = self._replicate(zeros)
 
+    def _hist_columns(self, L: int, prev: int):
+        """Absolute position stored in each of a layer's ``L`` history rows, and which are live.
+
+        Position ``p`` lives in row ``p % L``; the last ``L`` positions before ``prev`` are live.
+        """
+        pos = torch.arange(max(0, prev - L), prev)
+        k_pos = torch.zeros(L, dtype=torch.long)
+        k_real = torch.zeros(L, dtype=torch.bool)
+        k_pos[pos % L] = pos
+        k_real[pos % L] = True
+        return k_pos, k_real
+
     def _fixed_mask_tensors(self, q_len: int, new_ctx: int, ctx_pad: int):
-        """The two additive masks the fixed-capacity path needs, at a constant ``[1, 1, q_len, C+32]``.
+        """The two additive masks the fixed-capacity path needs: ``[1, 1, q_len, L + ctx_pad + q_len]``
+        for the sliding layers (``L`` = ring size) and for the full-attention layer (``L`` = capacity).
 
-        Key columns are laid out ``[ history(C) | padded context(16) | block(q_len) ]``:
+        Key columns are laid out ``[ history(L) | padded context(16) | block(q_len) ]``:
 
-        * ``history`` is the persistent buffer; column ``j`` is absolute position ``j`` and is real
-          only while ``j < _ctx_len``.
+        * ``history`` is the persistent buffer; a column is real only while it holds a position
+          before this step's context (:meth:`_hist_columns`).
         * ``padded context`` is this step's newly accepted rows, left-padded to a constant 16 so the
           fused kv_proj's M is constant. Left-padding makes the position map uniform: row ``i`` of
           the 32-row kv_src is absolute position ``start - 16 + i``, contiguous across both regions.
@@ -256,25 +279,25 @@ class TtDFlashDrafter:
         window, while the bidirectional layer needs validity only, which matches the unmasked
         growing-history path because every row it sees there is real.
         """
-        C, start = self._cap, self._ctx_len + new_ctx
-        kv_len = C + ctx_pad + q_len
-        k_pos = torch.empty(kv_len, dtype=torch.long)
-        k_real = torch.zeros(kv_len, dtype=torch.bool)
-        k_pos[:C] = torch.arange(C)
-        k_real[:C] = torch.arange(C) < self._ctx_len
-        k_pos[C : C + ctx_pad] = torch.arange(start - ctx_pad, start)
-        k_real[C : C + ctx_pad] = torch.arange(ctx_pad) >= (ctx_pad - new_ctx)
-        k_pos[C + ctx_pad :] = torch.arange(start, start + q_len)
-        k_real[C + ctx_pad :] = True
-
+        prev, start = self._ctx_len, self._ctx_len + new_ctx
         q_pos = torch.arange(start, start + q_len).unsqueeze(1)
-        k_pos, k_real = k_pos.unsqueeze(0), k_real.unsqueeze(0)
-        causal = (k_pos <= q_pos) & ((q_pos - k_pos) < self.cfg.sliding_window)
 
-        def _host(visible):
+        def _build(L: int, sliding: bool):
+            kv_len = L + ctx_pad + q_len
+            k_pos = torch.empty(kv_len, dtype=torch.long)
+            k_real = torch.zeros(kv_len, dtype=torch.bool)
+            k_pos[:L], k_real[:L] = self._hist_columns(L, prev)
+            k_pos[L : L + ctx_pad] = torch.arange(start - ctx_pad, start)
+            k_real[L : L + ctx_pad] = torch.arange(ctx_pad) >= (ctx_pad - new_ctx)
+            k_pos[L + ctx_pad :] = torch.arange(start, start + q_len)
+            k_real[L + ctx_pad :] = True
+            k_pos, k_real = k_pos.unsqueeze(0), k_real.unsqueeze(0)
+            visible = k_real.expand(q_len, kv_len)
+            if sliding:
+                visible = visible & (k_pos <= q_pos) & ((q_pos - k_pos) < self.cfg.sliding_window)
             return torch.where(visible, 0.0, _MASK_NEG).reshape(1, 1, q_len, kv_len).to(torch.bfloat16)
 
-        return _host(k_real & causal), _host(k_real.expand(q_len, kv_len))
+        return _build(self._ring, True), _build(self._cap, False)
 
     # ---- setup -----------------------------------------------------------------------------
 
@@ -472,6 +495,7 @@ class TtDFlashDrafter:
         mask_full=None,
         real_ctx=None,
         ctx_pad=16,
+        select=None,
     ):
         """One layer's attention. Q from ``hidden`` (the block); K/V from ``[ctx_rm, hidden]``.
 
@@ -545,21 +569,24 @@ class TtDFlashDrafter:
         if self._cap is not None:
             # Fixed-capacity: the buffer is persistent, so commit by writing through it rather than
             # by rebinding to a fresh concat. The real rows are the last `real_ctx` of the 16-row
-            # padded context region (left-padded; see _fixed_mask_tensors), and they land at `hist_len` --
-            # the length BEFORE this step, which is also why the mask still marks them invalid in
-            # the history region and valid in the context region. Written once, counted once.
-            if real_ctx:
-                end = hist_len + real_ctx
+            # padded context region (left-padded; see _fixed_mask_tensors), and they land at
+            # positions `hist_len...` -- the length BEFORE this step. The commit happens after the
+            # concat below, so attention reads the pre-commit history (which is what the mask
+            # describes) and the rows are counted once, via the context region.
+            # With `select` (the traced step) the destination rows are tensor contents, not Python
+            # ints: a one-hot matrix applied in place.
+            full_k = ttnn.concat([hist_k, k], dim=-2, memory_config=_DRAM)
+            full_v = ttnn.concat([hist_v, v], dim=-2, memory_config=_DRAM)
+            if select is not None:
+                self._select_commit(k, hist_k, *select)
+                self._select_commit(v, hist_v, *select)
+            elif real_ctx:
                 for src, dst in ((k, hist_k), (v, hist_v)):
                     rows = ttnn.slice(
                         src, (0, 0, ctx_pad - real_ctx, 0), (1, self.nkv, ctx_pad, self.hd), memory_config=_DRAM
                     )
-                    ttnn.experimental.slice_write(
-                        rows, dst, (0, 0, hist_len, 0), (1, self.nkv, end, self.hd), (1, 1, 1, 1)
-                    )
+                    self._ring_write(dst, rows, hist_len)
                     ttnn.deallocate(rows)
-            full_k = ttnn.concat([hist_k, k], dim=-2, memory_config=_DRAM)
-            full_v = ttnn.concat([hist_v, v], dim=-2, memory_config=_DRAM)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         else:
@@ -624,6 +651,212 @@ class TtDFlashDrafter:
         # Replicated, so down_proj is a plain local matmul — no all-reduce.
         out = ttnn.linear(hidden, lw.down_proj, compute_kernel_config=self.compute_cfg, memory_config=_DRAM)
         ttnn.deallocate(hidden)
+        return out
+
+    def ingest_context(self, taps: list[ttnn.Tensor]) -> None:
+        """Commit context rows straight into every layer's K/V history, without running a block.
+
+        ``taps`` are the target's tap tensors for the next ``n`` positions, ``[1, 1, n, hidden/tp]``
+        each. The rows go through the same ``project_taps`` -> ``kv_proj`` -> ``k_norm`` -> RoPE path
+        a block step uses, so the history is the same either way; this only lets a long prompt be fed
+        in bounded pieces instead of as one prompt-sized tensor. Fixed-capacity history only.
+        """
+        assert self._cap is not None, "ingest_context needs the fixed-capacity history"
+        n = taps[0].shape[-2]
+        pos0 = self._ctx_len
+        assert pos0 + n <= self._cap, f"context would reach {pos0 + n} rows, past the {self._cap}-row capacity"
+        src = ttnn.to_layout(self.project_taps(taps), ttnn.TILE_LAYOUT)
+        cos, sin = self._rope_slice(pos0, n)
+        for i, lw in enumerate(self.weights.layers):
+            kv = ttnn.linear(src, lw.kv_proj, compute_kernel_config=self.compute_cfg, memory_config=_DRAM)
+            k, v = self._kv_heads(kv)
+            ttnn.deallocate(kv)
+            k = self._rms(k, lw.k_norm)
+            k = apply_partial_rope_prefill(k, cos, sin, self.nkv, self.hd, memory_config=_DRAM)
+            for rows, dst in ((k, self._ctx_k[i]), (v, self._ctx_v[i])):
+                self._ring_write(dst, rows, pos0)
+                ttnn.deallocate(rows)
+        for t in (src, cos, sin):
+            ttnn.deallocate(t)
+        self._ctx_len = pos0 + n
+
+    def _ring_write(self, dst, rows, first_pos: int) -> None:
+        """Write ``rows`` (``[1, nkv, n, hd]``, positions ``first_pos...``) into a history buffer whose
+        row for position ``p`` is ``p % L``. Only the last ``L`` positions survive, and a write that
+        crosses the end of the buffer wraps into two."""
+        L = dst.shape[-2]
+        n = rows.shape[-2]
+        owned = []
+        if n > L:
+            rows = ttnn.slice(rows, (0, 0, n - L, 0), (1, self.nkv, n, self.hd), memory_config=_DRAM)
+            owned.append(rows)
+            first_pos, n = first_pos + n - L, L
+        r0 = first_pos % L
+        n1 = min(n, L - r0)
+        for a, b, row in [(0, n1, r0)] + ([(n1, n, 0)] if n1 < n else []):
+            part = rows
+            if (a, b) != (0, n):
+                part = ttnn.slice(rows, (0, 0, a, 0), (1, self.nkv, b, self.hd), memory_config=_DRAM)
+                owned.append(part)
+            ttnn.experimental.slice_write(
+                part, dst, (0, 0, row, 0), (1, self.nkv, row + (b - a), self.hd), (1, 1, 1, 1)
+            )
+        for t in owned:
+            ttnn.deallocate(t)
+
+    def _select_commit(self, src, dst, sel, keep):
+        """``dst[pos] = src[i]`` for the one-hot ``sel[pos, i]``; every other row of ``dst`` is kept.
+
+        ``dst`` is written in place, so its address is unchanged. The select is exact (one 1.0 per
+        selected row, HiFi4 with fp32 accumulation), so this commits the same bits a ``slice_write``
+        would, with the destination rows carried in tensor contents instead of Python ints.
+        """
+        contrib = ttnn.matmul(sel, src, compute_kernel_config=self._exact_cfg, memory_config=_DRAM)
+        kept = ttnn.multiply(dst, keep, memory_config=_DRAM)
+        new = ttnn.add(kept, contrib, memory_config=_DRAM)
+        ttnn.copy(new, dst)
+        for t in (contrib, kept, new):
+            ttnn.deallocate(t)
+
+    # ---- traced steady-state step ----------------------------------------------------------
+    #
+    # In the loop's steady state the drafter's inputs are the verify trace's own tap buffers (16
+    # rows, the first `produced` of them accepted) and a 16-slot block, so every shape is constant
+    # and a step can be captured. What varies per step -- positions, masks, which rows are committed
+    # -- lives in persistent tensors refreshed by a host copy before each replay.
+
+    def alloc_trace_io(self) -> None:
+        """Persistent per-step inputs of the traced step (RoPE, masks, commit selectors)."""
+        assert self._cap is not None, "the traced step needs the fixed-capacity history"
+        Q, C, R, hd = self.block_size, self._cap, self._ring, self.hd
+
+        def _t(shape, fill=0.0):
+            return self._replicate(torch.full(shape, fill, dtype=torch.bfloat16))
+
+        self._tio = {
+            "cos": _t((1, 1, 16 + Q, hd)),
+            "sin": _t((1, 1, 16 + Q, hd)),
+            "q_cos": _t((1, 1, Q, hd)),
+            "q_sin": _t((1, 1, Q, hd)),
+            "mask": _t((1, 1, Q, R + 16 + Q)),
+            "mask_full": _t((1, 1, Q, C + 16 + Q)),
+            "sel_ring": _t((1, 1, R, 16 + Q)),
+            "keep_ring": _t((1, 1, R, 1), 1.0),
+            "sel": _t((1, 1, C, 16 + Q)),
+            "keep": _t((1, 1, C, 1), 1.0),
+        }
+
+    def stage_trace_inputs(self, start: int, produced: int) -> None:
+        """Refresh the traced step's inputs for a block at ``start`` whose context is the last
+        verify's first ``produced`` rows (positions ``[start - produced, start)``).
+
+        The 16 context rows are the verify's rows in order, so row ``i`` sits at position
+        ``start - produced + i``; only the first ``produced`` are real. Advances the history length.
+        """
+        Q, C, R = self.block_size, self._cap, self._ring
+        prev = start - produced
+        assert prev == self._ctx_len, f"drafter context is {self._ctx_len} rows, expected {prev}"
+        assert start + Q <= self.max_seq_len, f"positions up to {start + Q} exceed the {self.max_seq_len}-row RoPE"
+        q_pos = torch.arange(start, start + Q).unsqueeze(1)
+
+        def _mask(L, sliding):
+            kv_len = L + 16 + Q
+            k_pos = torch.empty(kv_len, dtype=torch.long)
+            k_real = torch.zeros(kv_len, dtype=torch.bool)
+            k_pos[:L], k_real[:L] = self._hist_columns(L, prev)
+            k_pos[L : L + 16] = torch.arange(prev, prev + 16)
+            k_real[L : L + 16] = torch.arange(16) < produced
+            k_pos[L + 16 :] = torch.arange(start, start + Q)
+            k_real[L + 16 :] = True
+            k_pos, k_real = k_pos.unsqueeze(0), k_real.unsqueeze(0)
+            visible = k_real.expand(Q, kv_len)
+            if sliding:
+                visible = visible & (k_pos <= q_pos) & ((q_pos - k_pos) < self.cfg.sliding_window)
+            return torch.where(visible, 0.0, _MASK_NEG).reshape(1, 1, Q, kv_len).to(torch.bfloat16)
+
+        def _select(L):
+            sel = torch.zeros(1, 1, L, 16 + Q, dtype=torch.bfloat16)
+            keep = torch.ones(1, 1, L, 1, dtype=torch.bfloat16)
+            rows = torch.arange(produced)
+            sel[0, 0, (prev + rows) % L, rows] = 1.0
+            keep[0, 0, (prev + rows) % L, 0] = 0.0
+            return sel, keep
+
+        span = torch.cat([torch.arange(prev, prev + 16), torch.arange(start, start + Q)])
+        blk = torch.arange(start, start + Q)
+        sel_r, keep_r = _select(R)
+        sel_f, keep_f = _select(C)
+        host = {
+            "cos": self._cos_host[:, :, span, :],
+            "sin": self._sin_host[:, :, span, :],
+            "q_cos": self._cos_host[:, :, blk, :],
+            "q_sin": self._sin_host[:, :, blk, :],
+            "mask": _mask(R, True),
+            "mask_full": _mask(C, False),
+            "sel_ring": sel_r,
+            "keep_ring": keep_r,
+            "sel": sel_f,
+            "keep": keep_f,
+        }
+        for name, t in host.items():
+            h = ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+            )
+            ttnn.copy_host_to_device_tensor(h, self._tio[name])
+        self._ctx_len = start
+
+    def forward_traced_body(self, noise: ttnn.Tensor, taps: list) -> ttnn.Tensor:
+        """The steady-state step over persistent inputs: ``taps`` are 16-row tap buffers, ``noise`` the
+        ``[1, 1, block_size, hidden]`` block embedding. Returns the final-normed block hidden."""
+        io = self._tio
+        kv_source = self.project_taps(taps)
+        ctx_rm = ttnn.to_layout(kv_source, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(kv_source)
+        # One copy of the one-hot per KV head: a batch-broadcast matmul is not available to every
+        # program config, and the select is per head anyway.
+        sel_ring = ttnn.repeat(io["sel_ring"], ttnn.Shape([1, self.nkv, 1, 1]))
+        sel_full = ttnn.repeat(io["sel"], ttnn.Shape([1, self.nkv, 1, 1]))
+        x = noise
+        for i, lw in enumerate(self.weights.layers):
+            residual = x
+            normed = self._rms(x, lw.input_layernorm, memory_config=_DRAM)
+            attn = self._layer_attention(
+                i,
+                lw,
+                normed,
+                ctx_rm,
+                io["cos"],
+                io["sin"],
+                io["q_cos"],
+                io["q_sin"],
+                io["mask"],
+                hist_len=0,
+                mask_full=io["mask_full"],
+                real_ctx=16,
+                ctx_pad=16,
+                select=(sel_ring, io["keep_ring"]) if self.cfg.is_sliding(i) else (sel_full, io["keep"]),
+            )
+            ttnn.deallocate(normed)
+            x = ttnn.add(residual, attn, memory_config=_DRAM)
+            ttnn.deallocate(attn)
+            if residual is not noise:
+                ttnn.deallocate(residual)
+
+            residual = x
+            normed = self._rms(x, lw.post_attention_layernorm, memory_config=_DRAM)
+            mlp = self._layer_mlp(lw, normed)
+            ttnn.deallocate(normed)
+            x = ttnn.add(residual, mlp, memory_config=_DRAM)
+            ttnn.deallocate(mlp)
+            ttnn.deallocate(residual)
+        ttnn.deallocate(ctx_rm)
+        ttnn.deallocate(sel_ring)
+        ttnn.deallocate(sel_full)
+        out = self._rms(x, self.weights.norm, memory_config=_DRAM)
+        ttnn.deallocate(x)
         return out
 
     # ---- forward ---------------------------------------------------------------------------

@@ -34,30 +34,28 @@ NUM_BLOCKS = 64
 #: Default sequence capacity (prompt + generation), and the default depth of the drafter's resident
 #: RoPE tables. A longer request needs both raised, which the demo does per request.
 MAX_SEQ_LEN = PAGED_BLOCK_SIZE * NUM_BLOCKS
-#: Widest anchor bucket ``TtTarget.anchor_for`` considers; the trace region is sized for it.
-MAX_ANCHOR = 512
 
 
 def paged_blocks_for(total_tokens: int) -> int:
     """Paged-KV blocks for a request of ``total_tokens`` (prompt + generation).
 
-    Beyond the tokens themselves: the anchored verify writes a whole bucket starting at the anchor, so
-    it can run up to one bucket past the last token, and ``TtTarget.capture_page_table`` keeps one
-    bucket of spare pages beyond that with one more of headroom. Rounded up to a multiple of 8 for the
-    SDPA page-table alignment, and never below the 4096-token default.
+    A verify block writes its full width of KV rows from the last committed position, so the cache
+    needs one block of slack past the last token. Rounded up to a multiple of 8 for the SDPA
+    page-table alignment, and never below the 4096-token default.
     """
-    need = int(total_tokens) + 3 * MAX_ANCHOR
+    need = int(total_tokens) + PAGED_BLOCK_SIZE
     blocks = max(NUM_BLOCKS, -(-need // PAGED_BLOCK_SIZE))
     return -(-blocks // 8) * 8
 
 
-#: Trace region for the verify capture: one masked forward over 64 layers plus the LM head. Too
-#: small and the capture fails with "Cannot load new binaries".
+#: Trace region for the verify and commit captures: one 16-row forward over 64 layers plus the LM head,
+#: and one commit trace per accepted-prefix length. Too small and the capture fails with "Cannot load
+#: new binaries".
 TRACE_REGION_SIZE = 250_000_000
 #: Production traced decode on T3K (``demo/text_demo.py -k "traced_128 and not 128k"``: ISL 128,
 #: batch 1), measured on the same build as the README's DFlash numbers. The demo and the
 #: throughput test report the speculative rate relative to it.
-PRODUCTION_DECODE_TOK_S_T3K = 16.52
+PRODUCTION_DECODE_TOK_S_T3K = 17.03
 
 
 @dataclass(frozen=True)

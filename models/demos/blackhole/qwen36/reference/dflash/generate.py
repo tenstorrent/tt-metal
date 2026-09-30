@@ -35,12 +35,11 @@ Neither works against Qwen3.6-27B on transformers 5.12.1:
 So a naive port silently leaves 48 recurrent states advanced past the accepted prefix while
 ``get_seq_length()`` reports the cropped length: no error, just wrong tokens.
 
-The loop therefore rolls back explicitly, through the target's ``snapshot`` / ``restore``. A target
-with ``replays_after_rollback`` (:class:`~.targets.HFTarget`) restores the pre-block state and
-replays the accepted tokens, which re-advances the recurrent state and also produces the taps the
-next draft needs, at the cost of a second target forward on any step that is not fully accepted.
-:class:`~...tt.dflash.target.TtTarget` recomputes every forward from a bucket-aligned anchor, so a rejected
-tail is simply overwritten and no replay is needed.
+The loop therefore rolls back explicitly. :class:`~.targets.HFTarget` snapshots before the block,
+restores it and replays the accepted tokens, which re-advances the recurrent state and also produces
+the taps the next draft needs, at the cost of a second target forward on any step that is not fully
+accepted. :class:`~...tt.dflash.target.TtTarget` stashes the recurrent state after every slot of the
+verify, so ``commit(accepted)`` just keeps the right one: no snapshot, no replay.
 """
 
 from __future__ import annotations
@@ -300,7 +299,7 @@ def dflash_generate(
 
     # ---- speculative decode ----
     while start + 1 < max_length and not stopped:
-        # A target may cap the block: TtTarget's device bucket must not be crossed mid-block.
+        # A target may cap the block.
         verify_size = min(block_size, max_length - start, getattr(target, "max_block", lambda _: block_size)(start))
         block_ids = output_ids[:, start : start + verify_size].clone()
         draft_probs = None
@@ -357,7 +356,12 @@ def dflash_generate(
                 stopped = True
 
         # ---- roll back the rejected tail ----
-        if produced < verify_size:
+        if getattr(target, "commits_slot", False):
+            # The verify stashed the state after every slot: keep the one after the last accepted token.
+            target.commit(produced)
+            num_rollbacks += produced < verify_size
+            pending_taps.append(_taps_head(target, taps, produced))
+        elif produced < verify_size:
             num_rollbacks += 1
             target.restore(snap, start)
             if getattr(target, "replays_after_rollback", True):
@@ -365,10 +369,6 @@ def dflash_generate(
                 # It also yields the next draft's taps, so the second forward is not pure overhead.
                 _, taps = target.forward(output_ids[:, start : start + produced], start)
                 pending_taps.append(taps)
-            else:
-                # The target recomputes from its own anchor, so the rejected tail never happened
-                # and the taps already in hand are correct. No replay.
-                pending_taps.append(_taps_head(target, taps, produced))
         else:
             pending_taps.append(_taps_head(target, taps, produced))
 

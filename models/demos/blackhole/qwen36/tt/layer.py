@@ -181,7 +181,6 @@ class Qwen36DecoderLayer:
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
         valid_len=None,
-        valid_mask=None,  # (m, mq) pre-staged device masks for valid_len; see gdn/fused_chunk.py
         gdn_collect=False,
         gdn_recurrent=False,
         decode_cfg=False,
@@ -281,11 +280,7 @@ class Qwen36DecoderLayer:
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input,
-                            chunk_size=chunk_size,
-                            valid_len=valid_len,
-                            valid_mask=valid_mask,
-                            capture_state=True,
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
