@@ -572,16 +572,19 @@ class XingDeviceModel:
         ttnn.synchronize_device(self.mesh)
 
     def perf_settings(self):
-        """Recorded in the profile: the mHC residual mix (XING_RESIDUAL_MIX), the ring_mla implementation
+        """Recorded in the profile: the mHC coefficient / collapse path (XING_HC_IMPL), the mHC residual mix
+        (XING_RESIDUAL_MIX), the ring_mla implementation
         (XING_MLA_SDPA), its fidelity / chunks (XING_MLA_SDPA_FIDELITY, XING_MLA_Q_CHUNK) and the routed-experts
         path (XING_EXPERTS_MODE)."""
         import os
 
         from models.demos.xing40_a4b_d_p.tt.attention import K_CHUNK, sdpa_fidelity, sdpa_impl, sdpa_q_chunk
+        from models.demos.xing40_a4b_d_p.tt.mhc import hc_impl
         from models.demos.xing40_a4b_d_p.tt.residual import residual_mix_mode
 
         return {
             "residual_mix": residual_mix_mode(),
+            "hc_impl": hc_impl(),
             "mla_sdpa": sdpa_impl(),
             "mla_sdpa_fidelity": sdpa_fidelity(),
             "mla_sdpa_chunks": f"q{sdpa_q_chunk()}/k{K_CHUNK}",

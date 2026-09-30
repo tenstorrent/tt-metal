@@ -343,3 +343,34 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   ~120 ms per chunk (hc 78 + collapse 44).
 - Re-run: `PYTHONPATH=$PWD TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`
   (add `XING_RESIDUAL_MIX=addcmul` for the baseline). Fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/test_mhc_post_ttnn.py`.
+
+## P.2b perf (run1, attempt 1): mHC coefficients + collapse on the mhc_pre fork (ttnn.bringup.mhc_pre_xing)
+- The previous "attempt" was only the orchestrator's baseline gate run (nothing implemented; numbers = P.2's).
+- Fork `mhc_pre_ttnn` got two new entries with their own program (CHANGELOG 4); `ttnn.bringup.mhc_pre` itself
+  (kernels, host code, hash) is unchanged, so every existing call keeps its program:
+  - `ttnn.bringup.mhc_pre_xing_pack(mix, streams)`: partial mix row [S/4, 32] (the matmul's) -> column 24 = sum x^2
+    of the chip's streams, one exact fp32 SFPU pass. Replaces multiply + sum + one-hot multiply + add.
+  - `ttnn.bringup.mhc_pre_xing(red, None, scale, base, norm_width=4H, ...)`: after the axis-1 all_reduce, RMS
+    scale, sigmoid pre (no eps), 2 sigmoid post, clamp [-30, 30], exp(L - rowmax), 20 x (rows, columns) with
+    /(sum + eps) -> hc [S/4, 24] (same boundary / layout as before; residual still slices post / comb).
+    `coefficients_given=True` with streams = the collapse (y = sum pre_i x_i). A one-call hc + y mode exists but the
+    model keeps two steps so each frozen test tests exactly what the model runs.
+  - Scalars (scale, base, eps, clamp, iters) are runtime args patched per call: one program for all 80 hc calls.
+- Model: `tt/mhc.py` and `tt/collapse.py` switch on `XING_HC_IMPL` = fused (default) | composed (the P.2 op chains).
+  Recorded in the profile as `settings.hc_impl`. hc step = matmul (HiFi4 fp32, unchanged) -> pack -> all_reduce ->
+  mhc_pre_xing: 5 programs per chip per call instead of 112.
+- Measured, device time per call (probe, 4x2, 1280 rows): hc 977 -> 353 us (matmul 211, pack 106, all_reduce 18,
+  mhc_pre_xing 21); collapse 548 -> 134 us. Profile warm chunk [51200, 56320): attn_hc 39.2 -> 14.3 ms, ffn_hc
+  39.2 -> 14.3 ms, attn_collapse 22.1 -> 5.3, ffn_collapse 22.1 -> 5.3; device 1255 -> 1172 ms, wall 1349 -> 1250.
+- Accuracy: mhc_pre_xing vs float64 reference rel ~1e-7. Frozen attn_hc L0: pre / post / comb rel vs cpu 0.00015 /
+  0.00065 / 0.00034 (composed: comb 0.00087); collapse rel 0 vs cpu. Ladder `last`: worst layer pcc 0.9928, final
+  hidden 0.9985, top1 0.977, host transfers 0.
+- Next perf on hc: the HiFi4 fp32 matmul [1280, 7168] x [7168, 32] is 211 us of the 353 (auto and 1D-mcast configs
+  both ~200 us; 40 output tiles -> 40 cores). A split-K projection inside the fork (as mhc_pre's group combine)
+  would be the next step.
+- Gotchas: tt-probe.sh writes probes into tests/ttnn/unit_tests/operations/<op>/ (deleted before finishing);
+  rms_norm_pre_all_gather overflows L1 on the 7168-wide fp32 row; new compute kernels need api/compute/common.h,
+  cb_api.h, reg_api.h + `using namespace ckernel` (known issues proposed). The fork's glm53 model-case fixture
+  now opens the whole box when its 2x2 case mesh does not match (2x2 on 4x2 fails the fabric handshake).
+- Re-run: gate command of the brief; fork: `scripts/run_safe_pytest.sh --run-all
+  ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py`; baseline: `XING_HC_IMPL=composed` with the profile.
