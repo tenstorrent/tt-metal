@@ -1,8 +1,8 @@
 # Invariant tests
 
 Each test builds a ProgramSpec, calls `MakeProgramFromSpec` on a mock device, and checks that the spec is rejected
-with a specific error message or accepted. Together they pin the invariants written as comments in the public
-headers under `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
+with a specific error message or accepted. Together they pin the invariants listed in each directory's README (see
+"Listed invariants" below).
 
 ## Where an invariant is tested
 
@@ -19,7 +19,7 @@ exception and do not follow names.
 A rule that no struct below `ProgramSpec` can state is **structural**. It either checks that a name resolves, for
 example "every `DFBBinding::dfb_spec_name` names a declared DataflowBufferSpec", or needs every struct that names an
 object, for example "every DataflowBufferSpec is bound by some kernel". Structural invariants are listed at the top of
-`ProgramSpec` in `program_spec.hpp` and tested in `program_spec/`.
+`ProgramSpec` in `program_spec/README.md` and tested in `program_spec/`.
 
 | Directory | Header | Covers |
 |---|---|---|
@@ -33,12 +33,37 @@ object, for example "every DataflowBufferSpec is bound by some kernel". Structur
 
 Headers without a directory:
 
-- `semaphore_spec.hpp`: its one local invariant (non-empty `target_nodes`) is untested. Semaphore binding and option
-  rules are in `kernel_spec/`, `advanced_options/` and `program_spec/`.
+- `semaphore_spec.hpp`: its one local invariant (non-empty `target_nodes`, listed below) is untested. Semaphore binding
+  and option rules are in `kernel_spec/`, `advanced_options/` and `program_spec/`.
 - `compute_hardware_config.hpp`: no invariant of its own. The `unpack_modes` rules need the kernel's DFB bindings, so
   they are in `kernel_spec/hardware_config.cpp`.
 - `tensor_parameter.hpp`: no invariant.
-- `program_run_args.hpp`: tested in `../program_run_args/`.
+- `program_run_args.hpp`: tested in `../program_run_args/`, whose README lists its invariant.
+
+## Listed invariants
+
+The public headers under `tt_metal/api/tt-metalium/experimental/metal2_host_api/` do not carry invariant comments.
+Instead, each directory README has a "Listed invariants" section: its header's structs as declared, with every field,
+and with the invariant comments in place of the header's documentation. A field with no comment has no listed
+invariant.
+
+Keep a listing in step with its header: when a struct gains, loses or renames a field, update the listing; when a new
+check is added to `tt_metal/impl/metal2_host_api/program_spec.cpp`, list the rule on the struct that owns it and add a
+test. The `*AdvancedOptions` structs have no listing yet.
+
+`SemaphoreSpec` (`semaphore_spec.hpp`), which has no directory:
+
+```cpp
+struct SemaphoreSpec {
+    SemaphoreSpecName unique_id;
+
+    // Invariant:
+    // - Must be non-empty
+    Nodes target_nodes;
+
+    SemaphoreAdvancedOptions advanced_options;
+};
+```
 
 ## Writing an invariant test
 
@@ -46,13 +71,7 @@ Headers without a directory:
   `::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(...))`.
 - When the boundary is not obvious, pair the rejection with an acceptance test at the boundary, as
   `MaxComputeThreadsSucceeds` does for `ComputeKernelExceedingMaxThreadsFails`.
-- Use the fixture for the architecture the rule depends on, and add the test to the directory's Files and coverage
-  tables. The tables prefix each test with its fixture:
-
-| Prefix | Fixture | Architecture |
-|---|---|---|
-| Q | `ProgramSpecTestQuasar` | Quasar (Gen2) |
-| WH | `ProgramSpecTestGen1` | Wormhole B0 (Gen1) |
-| BH | `ProgramSpecTestBlackhole` | Blackhole (Gen1) |
-| PQ | `PrefetcherPipeSpecTestQuasar` | Quasar, with PrefetcherPipe helpers |
-| PW | `PrefetcherPipeSpecTestGen1` | Wormhole B0, with PrefetcherPipe helpers |
+- Use the fixture for the architecture the rule depends on: `ProgramSpecTestQuasar` (Quasar, Gen2),
+  `ProgramSpecTestGen1` (Wormhole B0, Gen1), `ProgramSpecTestBlackhole` (Blackhole, Gen1), or
+  `PrefetcherPipeSpecTestQuasar` / `PrefetcherPipeSpecTestGen1` for PrefetcherPipe rules.
+- If the rule is new, add it to the directory's Listed invariants.

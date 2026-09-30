@@ -1,19 +1,35 @@
 # data_movement_hardware_config invariant tests
 
 Local invariants of `DataMovementHardwareConfig` (`data_movement_hardware_config.hpp`). Rules that compare DM kernels
-with each other are structural: `../program_spec/gen1_dm_placement.cpp` and
-`../program_spec/gen2_dm_core_assignment.cpp`.
+with each other live in `../program_spec/`: `gen1_dm_placement.cpp` (local to `WorkUnitSpec`) and
+`gen2_dm_core_assignment.cpp` (structural).
 
-## Files
+## Listed invariants
 
-| File | Tests | Covers |
-|---|---|---|
-| `config_1xx.cpp` | 3 | `config_1xx` (Wormhole, Blackhole) |
+`DataMovementHardwareConfig` as declared in `data_movement_hardware_config.hpp`, with every field and only its
+invariants.
 
-## Coverage
+```cpp
+struct DataMovementHardwareConfig {
+    struct DataMovement1XXConfig {
+        // Invariant:
+        // - Either RISCV_0 or RISCV_1.
+        tt::tt_metal::DataMovementProcessor processor;
 
-| Invariant | Tests |
-|---|---|
-| `DataMovement1XXConfig::processor` is RISCV_0 or RISCV_1 | WH `DMProcessorBeyondRiscv1Fails` |
-| `config_1xx` is set when the kernel is built for TT-1.x.x | WH `DMKernelWithoutGen1SpecificFails`. Accepted on Gen2 without it: Q `DMKernelWithDefaultConfigSucceeds` |
-| `DataMovement2XXConfig::disable_dfb_implicit_sync_for` has no repeated names | **Untested** |
+        tt::tt_metal::NOC noc;
+
+        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    };
+    // Invariant:
+    // - If this kernel is built for TT-1.x.x, config_1xx must not be empty (Processor and NOC have no default).
+    std::optional<DataMovement1XXConfig> config_1xx = std::nullopt;
+
+    struct DataMovement2XXConfig {
+        // Invariant: All DFBSpecNames must be unique.
+        Group<DFBSpecName> disable_dfb_implicit_sync_for;
+
+        bool disable_dfb_implicit_sync_for_all = false;
+    };
+    std::optional<DataMovement2XXConfig> config_2xx = std::nullopt;
+};
+```

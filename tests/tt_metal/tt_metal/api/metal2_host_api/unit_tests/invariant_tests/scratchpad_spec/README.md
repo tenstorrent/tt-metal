@@ -1,19 +1,26 @@
 # scratchpad_spec invariant tests
 
-Local invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`). Binding rules are in `../kernel_spec/`; the rules that
-every scratchpad is bound, names a declared spec, and has at most one binding kernel per node are structural and
-live in `../program_spec/`.
+Local invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`). Binding rules are in `../kernel_spec/`. The rules that
+every scratchpad is bound and every binding names a declared spec are structural, and the rule of at most one
+binding kernel per node is local to `WorkUnitSpec`; both live in `../program_spec/`.
 
-## Files
+## Listed invariants
 
-| File | Tests | Covers |
-|---|---|---|
-| `scratchpad_spec.cpp` | 4 | `size_per_node`, `data_format_metadata`, `tile_format_metadata` |
+`ScratchpadSpec` as declared in `scratchpad_spec.hpp`, with every field and only its invariants.
 
-## Coverage
+```cpp
+struct ScratchpadSpec {
+    ScratchpadSpecName unique_id;
 
-| Invariant | Tests |
-|---|---|
-| `size_per_node > 0` | Q `ZeroSizeScratchpadFails`. Accepted: Q `ValidScratchpadSucceeds` |
-| `data_format_metadata`, when set, is supported on the target architecture | Q `ScratchpadFormatUnsupportedOnArchFails` |
-| `tile_format_metadata` set requires `data_format_metadata` set | Q `ScratchpadTileWithoutFormatFails` |
+    // Invariant: Must be greater than 0.
+    uint32_t size_per_node = 0;
+
+    // Invariant:
+    // - When data_format_metadata is set, it must be supported on the target architecture.
+    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
+
+    // Invariant:
+    // - When tile_format_metadata is set, the data_format_metadata must also be set.
+    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+};
+```

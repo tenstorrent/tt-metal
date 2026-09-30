@@ -5,58 +5,140 @@ that read the object a binding names, such as the bound DFB's data format, are l
 That the name resolves ("the bound DFB is declared"), and rules that need every kernel binding an object, are
 structural and live in `../program_spec/`.
 
-## Files
+## Listed invariants
 
-| File | Tests | Covers |
-|---|---|---|
-| `basic_kernel_info.cpp` | 7 | `num_threads` per architecture and kernel kind, `source` |
-| `compiler_options.cpp` | 1 | `CompilerOptions` |
-| `dfb_binding.cpp` | 10 | `DFBBinding` and `dfb_bindings`, including the data format of the DFBs a compute kernel binds |
-| `semaphore_binding.cpp` | 6 | `SemaphoreBinding` and `semaphore_bindings` |
-| `scratchpad_binding.cpp` | 4 | `ScratchpadBinding` and `scratchpad_bindings` |
-| `tensor_binding.cpp` | 4 | `TensorBinding` and `tensor_bindings` |
-| `kernel_arguments.cpp` | 8 | `compile_time_args` and `RuntimeArgSchema` |
-| `hardware_config.cpp` | 14 | `hw_config` against the kernel's bindings and the DFBs they name, including unpack modes |
+`KernelSpec` as declared in `kernel_spec.hpp`, with every field and only its invariants.
 
-## Coverage
+```cpp
+struct KernelSpec {
+    KernelSpecName unique_id;
 
-"Accepted" lists tests that pin the legal side of a rule.
+    struct SourceCode {
+        // Invariant:
+        // - Must be non-empty.
+        std::string code;
+    };
+    // Invariant for the path:
+    // - Must be non-empty.
+    // - Must point to a file that exists.
+    // - The file must be readable.
+    std::variant<std::filesystem::path, SourceCode> source;
 
-| Invariant | Tests |
-|---|---|
-| `source` path is non-empty, exists and is readable; `SourceCode::code` is non-empty | **Untested.** Accepted: Q `SourceCodeKernelSucceeds` |
-| Gen1: `num_threads == 1` | WH `MultiThreadedDMKernelFails`, WH `MultiThreadedComputeKernelFails` |
-| Gen2 data-movement: `num_threads` in [1, 6] | Q `KernelWithZeroThreadsFails` (0), Q `DMKernelExceedingMaxThreadsFails` (9). The 6/7 boundary is untested |
-| Gen2 compute: `num_threads` in {1, 2, 4} | Q `ComputeKernelExceedingMaxThreadsFails` (5). Accepted: Q `MaxComputeThreadsSucceeds` (4). 3 is untested |
-| `DFBBinding::accessor_name` is a C++ identifier of at most `MAX_ACCESSOR_NAME_LENGTH` characters | Q `InvalidLocalAccessorNameFails` |
-| `DFBBinding::access_pattern` is not BLOCKED, and is STRIDED for a producer | **Untested** |
-| At most one PRODUCER and one CONSUMER binding per DFB | Q `DuplicateProducerBindingForSameLocalAccessorNameFails`, Q `DFBBoundTwiceInSameRoleUnderDifferentNamesFails` |
-| Two bindings share an `accessor_name` only as the PRODUCER and CONSUMER of one DFB | Q `SharedLocalAccessorNameForDifferentDFBsFails`. Accepted: Q `SelfLoopWithSharedLocalAccessorNameSucceeds` |
-| Gen2: a data-movement kernel does not self-loop a DFB | Q `DMKernelSelfLoopOnGen2Fails`. Accepted: WH `DMKernelSelfLoopOnGen1Succeeds`, Q `DFBSelfLoopOnComputeKernelSucceeds` |
-| A compute kernel that self-loops a DFB uses STRIDED on its CONSUMER binding | **Untested** |
-| A CONSUMER binding with access pattern ALL requires `num_threads <= 4` | **Untested** |
-| A compute kernel's bound DFBs set `data_format_metadata` | Q `DFBWithComputeEndpointRequiresDataFormat`. Accepted without a format when no compute kernel binds the DFB: Q `DMOnlyProgramSucceeds` |
-| `SemaphoreBinding::accessor_name` is a C++ identifier of at most `MAX_ACCESSOR_NAME_LENGTH` characters | Q `KernelSemaphoreBindingInvalidAccessorFails` (identifier only; the length limit is untested) |
-| `semaphore_spec_name` is unique across `semaphore_bindings` | **Untested** |
-| `accessor_name` is unique across `semaphore_bindings` | Q `KernelSemaphoreBindingDuplicateAccessorFails` |
-| Gen2 and Wormhole: a compute kernel has no `semaphore_bindings` | Q `SemaphoreBoundToComputeKernelFailsOnQuasar`, WH `SemaphoreBoundToComputeKernelFailsOnWormhole`. Accepted: WH `SemaphoreBoundToDMKernelSucceedsOnGen1`, Q `KernelSemaphoreBindingsSucceed` |
-| `ScratchpadBinding::accessor_name` is a C++ identifier of at most `MAX_ACCESSOR_NAME_LENGTH` characters | Q `InvalidScratchpadAccessorNameFails` |
-| `scratchpad_spec_name` is unique across `scratchpad_bindings` | Q `ScratchpadBoundTwiceInOneKernelFails` |
-| `accessor_name` is unique across `scratchpad_bindings` | Q `DuplicateScratchpadAccessorNameFails`. Accepted across kernels: Q `MultipleScratchpadsEachBoundToOwnKernelSucceeds` |
-| `TensorBinding::accessor_name` is a C++ identifier of at most `MAX_ACCESSOR_NAME_LENGTH` characters | WH `InvalidTensorAccessorNameFails` |
-| `accessor_name` is unique across `tensor_bindings` | WH `DuplicateTensorAccessorNameWithinKernelFails` |
-| `compile_time_args` keys are C++ identifiers | **Untested** |
-| No name is shared between `compile_time_args` and `runtime_arg_schema` | Q `NamedRtaCtaCollisionFails` (RTA against CTA; CRTA against CTA is untested) |
-| `runtime_arg_names` and `common_runtime_arg_names` are C++ identifiers | Q `InvalidNamedRtaIdentifierFails`, Q `InvalidNamedCrtaIdentifierFails` |
-| No name repeats within `runtime_arg_names` or within `common_runtime_arg_names` | **Untested** |
-| No name repeats across `runtime_arg_names` and `common_runtime_arg_names` | Q `NamedRtaCrtaCollisionFails` |
-| Every `unpack_modes` key names a DFB this kernel binds | Q `ComputeConfigUnpackToDestModeReferencesUnboundDFBFails` |
-| UnpackToDest on a consumed DFB with a 32-bit data format requires `enable_32_bit_dest` | Q `UnpackToDestFp32WithoutFp32DestAccEnFails`. Accepted: Q `ValidUnpackToDestModeSucceeds`, Q `NonFP32DFBWithUnpackToDestFp32ModeSucceeds`, Q `UnpackToDestFp32OnProducerBindingSucceeds` (producer bindings are exempt) |
-| Gen1: UnpackToDest on any consumed DFB requires `enable_32_bit_dest` | WH `ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf`. Accepted on Gen2: Q `ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds` |
-| A consumed Float32 DFB with `enable_32_bit_dest` set has an `unpack_modes` entry (Int32 and UInt32 are exempt, issue #49936) | Q `FP32ConsumerWithFp32DestAccEnAndNoEntryFails`. Accepted: Q `FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntry`, Q `FP32ProducerOnlyBindingDoesNotRequireEntry`, Q `FP32DFBWithDefaultUnpackToDestModeSucceeds`, Q `NonFP32DFBWithoutUnpackToDestModeEntrySucceeds`, Q `NonFP32DFBWithExplicitDefaultUnpackToDestModeSucceeds` |
-| Every `config_2xx->disable_dfb_implicit_sync_for` entry names a DFB this kernel binds | **Untested** |
+    // Invariant on Gen1 architectures (Wormhole, Blackhole): must be 1.
+    // Invariant on Gen2 architecture (Quasar):
+    //   - If is_data_movement_kernel(), the valid range is [1, 6]
+    //   - If is_compute_kernel(), the valid values are [1, 2, 4]
+    uint32_t num_threads = 1;
 
-Freedoms pinned by acceptance tests: one string may be a DFB, semaphore and tensor accessor name in the same kernel
-(WH `AccessorNamesAcrossCategoriesAreSeparateNamespaces`); compute kernels may bind tensors
-(Q `TensorBindingOnComputeKernelIsAccepted`); the argument-name rules apply per kernel
-(Q `DifferentKernelsMayReuseArgNames`).
+    bool is_data_movement_kernel() const;
+    bool is_compute_kernel() const;
+
+    struct CompilerOptions {
+        using IncludePaths = std::vector<std::filesystem::path>;
+        using Defines = Table<std::string, std::string>;
+        using OptLevel = tt::tt_metal::KernelBuildOptLevel;
+
+        IncludePaths include_paths;
+        Defines defines;
+        OptLevel opt_level = OptLevel::O2;
+    };
+    CompilerOptions compiler_options = {};
+
+    struct DFBBinding {
+        enum class EndpointType { PRODUCER, CONSUMER };
+        enum class AccessPattern { STRIDED, ALL, BLOCKED };
+
+        DFBSpecName dfb_spec_name;
+
+        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        std::string accessor_name;
+
+        EndpointType endpoint_type;
+
+        // Invariant:
+        // - Cannot be blocked (not yet supported).
+        // - For a producer binding, must be STRIDED.
+        AccessPattern access_pattern = AccessPattern::STRIDED;
+    };
+    // Local Invariant:
+    // - Each DFB has at most one PRODUCER binding and at most one CONSUMER binding.
+    //   (A kernel that binds a DFB in both roles "self-loops" it.)
+    // - Two bindings may share an accessor_name only if they are the PRODUCER and CONSUMER
+    //   bindings of the same DFB. (A self-loop may also use two different accessor_names.)
+    // - Gen2: a data-movement kernel must not self-loop a DFB.
+    // - A compute kernel that self-loops a DFB must use STRIDED on its CONSUMER binding.
+    // - A CONSUMER binding with access_pattern ALL requires num_threads <= 4.
+    // - If is_compute_kernel(), every DFB this kernel binds sets data_format_metadata.
+    Group<DFBBinding> dfb_bindings;
+
+    struct SemaphoreBinding {
+        SemaphoreSpecName semaphore_spec_name;
+
+        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        std::string accessor_name;
+    };
+    // Invariant:
+    // - semaphore_spec_name must be unique across all semaphore_bindings.
+    // - accessor_name must be unique across all semaphore_bindings.
+    // - Gen 2 & wormhole: Must be empty if is_compute_kernel().
+    Group<SemaphoreBinding> semaphore_bindings;
+
+    struct ScratchpadBinding {
+        ScratchpadSpecName scratchpad_spec_name;
+
+        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        std::string accessor_name;
+    };
+    // Invariant:
+    // - scratchpad_spec_name must be unique across all scratchpad_bindings.
+    // - accessor_name must be unique across all scratchpad_bindings.
+    Group<ScratchpadBinding> scratchpad_bindings;
+
+    struct TensorBinding {
+        TensorParamName tensor_parameter_name;
+
+        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        std::string accessor_name;
+    };
+    // Invariant:
+    // - accessor_name must be unique across all tensor_bindings.
+    Group<TensorBinding> tensor_bindings;
+
+    using CompileTimeArgs = Table<std::string, uint32_t>;
+    // Table key represents the accessor name of the CTA.
+    // Invariant:
+    // - The key must be a valid C++ identifier.
+    // - Must not have repeated name with runtime_arg_schema.
+    CompileTimeArgs compile_time_args;
+
+    struct RuntimeArgSchema {
+        // Invariant:
+        // - Must not have repeated names.
+        // - All argument names must be valid C++ identifiers.
+        Group<std::string> runtime_arg_names;
+
+        // Invariant:
+        // - Must not have repeated names.
+        // - All argument names must be valid C++ identifiers.
+        Group<std::string> common_runtime_arg_names;
+    };
+    // Invariant:
+    // - No repeated names across runtime_arg_names and common_runtime_arg_names.
+    // - Must not have repeated names with compile_time_args.
+    RuntimeArgSchema runtime_arg_schema{};
+
+    // Invariant for ComputeHardwareConfig:
+    // - Every unpack_modes key names a DFB in this kernel's dfb_bindings (either role).
+    // - For each DFB this kernel binds as CONSUMER:
+    //   - An UnpackToDest entry requires enable_32_bit_dest when the DFB's data_format_metadata is 32-bit
+    //     (Float32, Int32, UInt32 or RawUInt32). On Gen1 it requires enable_32_bit_dest for every format.
+    //   - If the DFB's data_format_metadata is Float32 and enable_32_bit_dest is set, unpack_modes must
+    //     have an entry for it (either mode; no default is assumed).
+    //
+    // Invariant for DataMovementHardwareConfig:
+    // - Every config_2xx->disable_dfb_implicit_sync_for entry names a DFB in this kernel's dfb_bindings.
+    std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
+
+    KernelAdvancedOptions advanced_options;
+};
+```

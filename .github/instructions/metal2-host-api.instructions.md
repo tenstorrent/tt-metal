@@ -1,5 +1,5 @@
 ---
-description: 'Metal 2.0 Host API: test placement, and keeping header invariants, validation and tests in step'
+description: 'Metal 2.0 Host API: test placement, and keeping listed invariants, validation and tests in step'
 applyTo: 'tests/tt_metal/tt_metal/api/metal2_host_api/**,tt_metal/api/tt-metalium/experimental/metal2_host_api/**,tt_metal/impl/metal2_host_api/**'
 excludeAgent: "cloud-agent"
 ---
@@ -19,11 +19,13 @@ the rules below are what a review must enforce.
   `tests/tt_metal/tt_metal/api/metal2_host_api/` must be listed in
   `tests/tt_metal/tt_metal/api/metal2_host_api/sources.cmake`. A file that is not listed is
   never compiled into `unit_tests_api`.
-- **Invariant without a test**: a new or changed invariant comment in a public Metal 2.0 header,
-  or a new or changed validation check in `tt_metal/impl/metal2_host_api/program_spec.cpp`, must
-  have a matching test in `unit_tests/invariant_tests/<header>/` (local invariants, including rules
-  that follow a name field to the object it names) or `unit_tests/invariant_tests/program_spec/`
-  (structural invariants: a name resolves, or a rule needs every struct that names an object).
+- **Invariant without a test**: a new or changed validation check in
+  `tt_metal/impl/metal2_host_api/program_spec.cpp`, or a new or changed entry in a README's
+  "Listed invariants" section, must be listed there and have a matching test in
+  `unit_tests/invariant_tests/<header>/` (local invariants, including rules that follow a name
+  field to the object it names) or `unit_tests/invariant_tests/program_spec/` (structural
+  invariants: a name resolves, or a rule needs every struct that names an object). Invariants are
+  not written as comments in the public headers.
 
 ## 🟡 IMPORTANT
 
@@ -34,8 +36,10 @@ the rules below are what a review must enforce.
   `ProgramRunArgsTestGen1` for Wormhole Gen1, `ProgramSpecTestBlackhole` for Blackhole-only
   rules, `PrefetcherPipeSpecTest*` for PrefetcherPipe). Do not invent a one-off fixture when a
   shared one already covers the architecture.
-- **Directory README tables**: when adding or removing tests, update the directory README's
-  Files table and test counts, and for invariant tests the coverage table.
+- **Listed invariants in step with the header**: when a spec struct in
+  `tt_metal/api/tt-metalium/experimental/metal2_host_api/` gains, loses or renames a field, update
+  that struct in the matching README's "Listed invariants" section under
+  `unit_tests/invariant_tests/` (or `unit_tests/program_run_args/` for `ProgramRunArgs`).
 - **Kernel-compilation bindings**: tests in `kernel_compilation_tests/` check generated binding
   code with `static_assert`. They must not enqueue or otherwise run the compiled kernel; that
   belongs in `integration_tests/`.
@@ -49,9 +53,9 @@ the rules below are what a review must enforce.
 
 - [ ] Test is in the correct category (`unit_tests/` / `kernel_compilation_tests/` / `integration_tests/`)
 - [ ] New test `.cpp` is listed in `metal2_host_api/sources.cmake`
-- [ ] New or changed header invariants / `program_spec.cpp` validation have matching invariant tests
+- [ ] New or changed `program_spec.cpp` validation is in a README's Listed invariants and has a matching invariant test
+- [ ] Listed invariants match the fields of the header structs they mirror
 - [ ] Host-only tests use the `CPU_` prefix; integration tests do not
 - [ ] Tests use the shared fixture for the architecture the rule depends on
-- [ ] Directory README Files / coverage tables are updated
 - [ ] Kernel-compilation tests use `static_assert` and do not run kernels
 - [ ] Shared helper-header changes keep external includers compiling
