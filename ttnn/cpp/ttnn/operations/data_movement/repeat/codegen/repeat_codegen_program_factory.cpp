@@ -109,13 +109,6 @@ CoreSplit split_work(const Tensor& input, uint32_t total_work, std::optional<uin
 
 }  // namespace
 
-uint64_t static_l1_window(const Tensor& input) {
-    MeshDevice* device = input.device();
-    const uint64_t base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
-    return ceiling > base ? ceiling - base : 0;
-}
-
 uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const TensorSpec& spec) {
     const uint32_t alignment = device_tensor.device()->allocator()->get_alignment(spec.memory_config().buffer_type());
     return tt::round_up(static_cast<uint32_t>(spec.compute_page_size_bytes()), alignment);

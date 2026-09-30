@@ -51,11 +51,6 @@ inline bool rm_slot_routable(uint64_t slot_bytes, uint64_t l1_budget) {
     return slot_bytes != 0 && 2 * slot_bytes <= l1_budget;
 }
 
-// L1 per worker core that the allocator can ever hand to buffers and CBs, independent of what is
-// allocated right now. The routing gate budgets against this so its answer does not move with the
-// live allocator state between routing and a program-cache miss.
-uint64_t static_l1_window(const Tensor& input);
-
 // A ROW_MAJOR CB slot: one stick, holding whichever of the leg's input and output aligned pages is
 // larger, since DRAM and L1 align differently. The routing gate, the program-cache key and the
 // factory all size the slot here; only where the pages come from differs.

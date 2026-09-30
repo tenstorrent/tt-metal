@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
 
 #include <algorithm>
-#include <iterator>
 #include <optional>
 
 #include <tt-metalium/allocator.hpp>
@@ -16,6 +15,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 
@@ -33,18 +33,8 @@ bool is_sub_tile(const ttnn::Shape& shape) {
     return shape[-2] % tt::constants::TILE_HEIGHT != 0 || shape[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-MemoryConfig interleaved_in(BufferType buffer_type) {
-    return MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
-}
-
-// The spec of a buffer of `shape`/`layout` at `memory_config`, with `ref`'s dtype and tile.
-tt::tt_metal::TensorSpec spec_like(
-    const Tensor& ref, const ttnn::Shape& shape, Layout layout, const MemoryConfig& memory_config) {
-    const tt::tt_metal::PageConfig page_config = layout == Layout::TILE
-                                                     ? tt::tt_metal::PageConfig(layout, ref.tensor_spec().tile())
-                                                     : tt::tt_metal::PageConfig(layout);
-    return tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(ref.dtype(), page_config, memory_config));
-}
+using repeat::interleaved_in;
+using repeat::spec_like;
 
 // Per-bank bytes a buffer of `spec` takes out of L1 on `ref`'s device; zero when it lives in DRAM.
 uint64_t l1_bytes_per_bank(const Tensor& ref, const tt::tt_metal::TensorSpec& spec) {
@@ -73,7 +63,7 @@ bool rm_leg_fits_in_l1(
     uint64_t committed_l1) {
     const uint32_t slot = ttnn::prim::rm_slot_bytes(
         ttnn::prim::spec_aligned_page_bytes(input, leg_input), ttnn::prim::spec_aligned_page_bytes(input, leg_output));
-    const uint64_t window = ttnn::prim::static_l1_window(input);
+    const uint64_t window = ttnn::operations::data_movement::get_static_l1_space(input);
     return committed_l1 < window && ttnn::prim::rm_slot_routable(slot, window - committed_l1);
 }
 
@@ -411,7 +401,7 @@ bool supported_by_codegen(
         const uint64_t widest_stick = static_cast<uint64_t>(shape[-1]) * repeat_dims.back() * input.element_size();
         const uint64_t slot = tt::round_up(
             widest_stick, static_cast<uint64_t>(input.device()->allocator()->get_alignment(BufferType::DRAM)));
-        return ttnn::prim::rm_slot_routable(slot, ttnn::prim::static_l1_window(input));
+        return ttnn::prim::rm_slot_routable(slot, ttnn::operations::data_movement::get_static_l1_space(input));
     }
     // The row-major legs, in the order the router executes them. Each one's CB shares L1 with the
     // input, the round trip's untilized copy and every leg output so far; all of them are counted as
@@ -443,31 +433,34 @@ bool supported_by_codegen(
     return true;
 }
 
+namespace {
+
 // A ROW_MAJOR shard narrower than the row makes each page a partial stick, which the codegen page map
 // cannot address, so the codegen route unshards the whole input to DRAM before its legs and, for a
 // sharded output, reshards after them. When exactly one axis is repeated and native's sharded
 // predicate accepts the call, native instead repeats each shard where it lies in one program, so the
 // codegen route pays two or three extra full-tensor moves for the same work. With two or more
 // repeated axes native unshards up front too, and the two routes compete on equal terms.
-bool is_demoted(
+bool is_partial_stick_shard_native_in_place(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
-    if (is_row_hotspot_outer_leg(input, repeat_dims, output_mem_config) ||
-        is_few_core_row_last_dim(input, repeat_dims, output_mem_config)) {
-        return true;
-    }
     const auto& input_mc = input.memory_config();
     if (input.layout() != Layout::ROW_MAJOR || !input_mc.is_sharded() ||
         shard_spec_is_page_identical(input_mc, input.logical_shape(), Layout::ROW_MAJOR)) {
         return false;
     }
-    const auto repeated = std::count_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
-    if (repeated != 1) {
-        return false;
-    }
-    const auto* const it = std::find_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
-    const auto dim = static_cast<int32_t>(std::distance(repeat_dims.cbegin(), it));
-    return repeat::is_native_repeat_sharding(
-        input.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, dim, *it);
+    const auto single = repeat::single_repeated_dim(repeat_dims);
+    return single.has_value() &&
+           repeat::is_native_repeat_sharding(
+               input.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, single->first, single->second);
+}
+
+}  // namespace
+
+bool is_demoted(
+    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    return is_row_hotspot_outer_leg(input, repeat_dims, output_mem_config) ||
+           is_few_core_row_last_dim(input, repeat_dims, output_mem_config) ||
+           is_partial_stick_shard_native_in_place(input, repeat_dims, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement::repeat_codegen
