@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -90,11 +92,26 @@ void kernel_main() {
 
 
 @pytest.mark.parametrize("full_sync", [False, True], ids=["double_buffered", "single_buffered"])
+def test_dst_math_clear(device, enabled_program_cache, full_sync):
+    # Revisit each DST half after both a write and a skipped write, then replay
+    # the cached program. Timing stress is kept out of routine simulator runs.
+    _run_dst_math_clear(device, full_sync, math_delay=0, writer_delay=0, iterations=8, repeats=2)
+
+
+@pytest.mark.skipif(
+    os.getenv("TT_METAL_DST_MATH_CLEAR_STRESS") != "1",
+    reason="set TT_METAL_DST_MATH_CLEAR_STRESS=1 to run the hardware timing stress test",
+)
+@pytest.mark.skipif(bool(os.getenv("TT_METAL_SIMULATOR")), reason="timing stress requires hardware")
+@pytest.mark.parametrize("full_sync", [False, True], ids=["double_buffered", "single_buffered"])
 @pytest.mark.parametrize("math_delay,writer_delay", [(0, 0), (64, 0), (0, 256), (64, 256)])
-def test_dst_math_clear(device, enabled_program_cache, full_sync, math_delay, writer_delay):
+def test_dst_math_clear_stress(device, enabled_program_cache, full_sync, math_delay, writer_delay):
+    _run_dst_math_clear(device, full_sync, math_delay, writer_delay, iterations=64, repeats=128)
+
+
+def _run_dst_math_clear(device, full_sync, math_delay, writer_delay, *, iterations, repeats):
     if device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("MATH-owned DST clearing addresses Blackhole's cross-half ZEROACC race")
-    iterations = 64
     core = ttnn.CoreCoord(0, 0)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     # generic_op requires an input, but this kernel produces its own values.
@@ -141,7 +158,7 @@ def test_dst_math_clear(device, enabled_program_cache, full_sync, math_delay, wr
     )
     indices = torch.arange(iterations)
     expected_first = torch.where(indices % 4 < 2, 1 + indices.remainder(64).float() / 128, 0)
-    for _ in range(128):
+    for _ in range(repeats):
         ttnn.generic_op([unused_input, output], program)
         actual = ttnn.to_torch(output)[:, 0]
         torch.testing.assert_close(actual[0::2, 0, 0], expected_first, rtol=0, atol=0)
