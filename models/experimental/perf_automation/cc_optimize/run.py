@@ -4657,6 +4657,17 @@ def _next_target_summary(kernel_log: str) -> str:
     return _op_lever_label(op, rung)
 
 
+def _load_summary():
+    """summary.py, loaded fresh from disk by path -- the one loader, so the final report and the
+    heartbeat read the same rules. Raises when it cannot be loaded; callers decide the fallback."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _last_attempt_summary(kernel_log: str) -> str:
     """One line describing the most recent lever attempt on file: which op, which stack, which
     lever, and the outcome -- what the watchdog heartbeat should say instead of a bare timer nobody
@@ -4687,8 +4698,24 @@ def _last_attempt_summary(kernel_log: str) -> str:
     elif a.get("diverged"):
         status = "· diverged (uncounted)"
     else:
-        status = "· no gain"
+        status = _attempt_outcome(a, rows)
     return f"{_op_lever_label(op, rung)}: {status}"
+
+
+def _attempt_outcome(a: dict, rows: list) -> str:
+    """The outcome of attempt `a`, by the SAME rules the report's result column uses.
+
+    THE LAST ROW IS USUALLY THE ATTEMPT, NOT ITS COMMIT. The skill commits and then records, so a win
+    is followed by its own attempt row, and asking only "is the last row a commit" labelled every
+    banked win "no gain" -- the report's _banking_commit is what links the two. Its PCC failure
+    reads as one ("✗ PCC 0.932 < 0.95") rather than as a bare no-gain."""
+    try:
+        s = _load_summary()
+        if s._banking_commit(a, rows) is not None:
+            return "✓ win, saved"
+        return s._attempt_result(a, False, rows)
+    except Exception:  # noqa: BLE001 -- the heartbeat never fails for a report it cannot load
+        return "· no gain"
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -5046,8 +5073,6 @@ def _emit_summary(
     after_mode: str = "",
     stop_facts: dict | None = None,
 ) -> None:
-    import importlib.util
-
     # THE HARDWARE THIS RUN DETECTED, from its own manifest. This function has no `manifest` in scope
     # (it is a local of run_cc_optimize), and the residual line below read one anyway -- a NameError
     # its except swallowed, so the final summary never carried a residual.
@@ -5057,9 +5082,7 @@ def _emit_summary(
     except (OSError, ValueError, AttributeError):
         _run_env = {}
     try:
-        spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = _load_summary()
         mod.set_run_env(_run_env)  # the report prices the machine the run detected -- no default
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] summary unavailable: {exc}")

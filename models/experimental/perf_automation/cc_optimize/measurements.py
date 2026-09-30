@@ -35,6 +35,7 @@ already-optimized model still reports against the TRUE original. Without that, t
 measures the optimized model, calls that its baseline, and the 2464 -> 648 result becomes
 unreportable the moment you restart.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -178,6 +179,37 @@ def pcc_failed(attempt) -> bool:
     False when the attempt recorded no PCC reading (older rows): absence is not a failure."""
     st = str((attempt or {}).get("pcc_status") or "") if isinstance(attempt, dict) else ""
     return bool(st) and st != "ok"
+
+
+def banks_the_same_state(win, commit_row) -> bool:
+    """Whether a commit row banked the end-to-end state this winning attempt reached: both rows carry
+    the reading taken at that moment, and equality of that one number links them. The commit row
+    takes its rung from whatever target was current at git_commit, so the lever names routinely
+    disagree -- the measurement is what the two rows share."""
+    fp = (win or {}).get("fullpipe_ms") if isinstance(win, dict) else None
+    return isinstance(fp, (int, float)) and isinstance(commit_row, dict) and commit_row.get("fullpipe_ms") == fp
+
+
+def banking_commit(attempt, rows, op_match=None):
+    """The commit row that banked `attempt`, or None. THE ONE matching rule -- the report's ticks,
+    its commit column and the dashboard all ask it.
+
+    The same end-to-end reading first: two wins on one op and rung are banked by two commits, and op +
+    rung alone would hand both the first commit's sha. `op_match(op_signature, commit_row)` (perf_mcp's
+    _op_match) is the fallback for a commit that recorded no reading of its own; without one only the
+    reading links them."""
+    if not isinstance(attempt, dict) or attempt.get("commit_record"):
+        return None
+    commits = [b for b in rows or [] if isinstance(b, dict) and b.get("commit_record")]
+    for b in commits:
+        if banks_the_same_state(attempt, b):
+            return b
+    if callable(op_match):
+        rung = str(attempt.get("kernel_kind") or "").strip().lower()
+        for b in commits:
+            if str(b.get("kernel_kind") or "").strip().lower() == rung and op_match(attempt.get("op_signature"), b):
+                return b
+    return None
 
 
 def winning_indices(attempts, baseline_ms=None) -> set:

@@ -225,3 +225,20 @@ def test_the_stack_is_asked_for_and_never_typed(run_mod, tmp_path, monkeypatch):
     log = _target(tmp_path, op="SomeOp", rung="knob:grid")
     assert "[a_stage_nobody_typed]" in run_mod._next_target_summary(log)
     assert seen == ["SomeOp"]
+
+
+def test_a_banked_win_recorded_after_its_commit_is_still_a_win(run_mod, tmp_path, monkeypatch):
+    """The skill commits, THEN records: the attempt row is last and its commit row is before it."""
+    p = tmp_path / "kl.json"
+    win = _row(fullpipe_ms=56164.6, fullpipe_delta_ms=-11.1)
+    commit = _row(commit_record=True, commit="70601b1d387", fullpipe_ms=56164.6)
+    p.write_text(json.dumps([commit, win]))
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
+    assert "✓ win, saved" in run_mod._last_attempt_summary(str(p))
+
+
+def test_a_pcc_failure_says_so(run_mod, tmp_path, monkeypatch):
+    p = tmp_path / "kl.json"
+    p.write_text(json.dumps([_row(pcc_status="pcc_low", pcc=0.932, pcc_threshold=0.95, fullpipe_delta_ms=-6289.2)]))
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
+    assert "✗ PCC 0.932 < 0.95" in run_mod._last_attempt_summary(str(p))

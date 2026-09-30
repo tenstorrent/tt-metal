@@ -982,8 +982,7 @@ def _banks_the_same_state(win: dict, commit_row: dict) -> bool:
     of that one number is the evidence that this commit is the one that banked this win, and it
     needs no new field -- both rows already carry it.
     """
-    fp = win.get("fullpipe_ms")
-    return isinstance(fp, (int, float)) and commit_row.get("fullpipe_ms") == fp
+    return bool(_ledger().banks_the_same_state(win, commit_row))
 
 
 def _win_set(attempts, baseline_ms=None) -> set:
@@ -1021,26 +1020,10 @@ def _win_set(attempts, baseline_ms=None) -> set:
 
 
 def _banking_commit(a, rows):
-    """The commit row that banked attempt `a`, or None. ONE matching rule for "was it banked" and
-    "by which commit": the end-to-end reading both rows share (_banks_the_same_state), else op +
-    rung via perf_mcp's own _op_match."""
-    if not isinstance(a, dict) or a.get("commit_record"):
-        return None
+    """The commit row that banked attempt `a`, or None -- measurements.banking_commit, with perf_mcp's
+    own _op_match as the fallback matcher."""
     _m = _perf_mcp()
-    _match = getattr(_m, "_op_match", None) if _m else None
-    rung = str(a.get("kernel_kind") or "").strip().lower()
-    sig = a.get("op_signature")
-    commits = [b for b in rows or [] if isinstance(b, dict) and b.get("commit_record")]
-    # THE SAME READING FIRST. Two wins on one op and rung are banked by two commits; op + rung alone
-    # would hand both the first commit's sha, so it is only the fallback for a commit that recorded no
-    # end-to-end reading of its own.
-    for b in commits:
-        if _banks_the_same_state(a, b):
-            return b
-    for b in commits:
-        if callable(_match) and str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b):
-            return b
-    return None
+    return _ledger().banking_commit(a, rows, getattr(_m, "_op_match", None) if _m else None)
 
 
 def _attempt_result(a, won: bool, rows) -> str:

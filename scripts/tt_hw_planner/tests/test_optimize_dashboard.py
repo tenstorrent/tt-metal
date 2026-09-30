@@ -408,3 +408,43 @@ def test_hitl_decision_requires_a_pending_proposal(tmp_path):
     assert (run_dir / "hitl_proposal.json").is_file(), "answering must not consume the proposal"
     ok, _ = post_hitl_decision(run_dir, "bogus")
     assert not ok
+
+
+def test_a_banked_attempt_is_kept_and_its_commit_row_is_folded_into_it(tmp_path):
+    """The attempt row never carries beat_baseline -- its commit writes a separate row -- so every
+    banked win read "reverted" beside a second "kept" row (Qwen-Image-Edit: six wins, twelve rows)."""
+    from scripts.tt_hw_planner.optimize_dashboard import _load_attempts
+
+    win = {"op_signature": "OpA", "kernel_kind": "grid", "claimed_beat_baseline": True, "fullpipe_ms": 56164.6}
+    commit = {
+        "op_signature": "OpA",
+        "kernel_kind": "grid",
+        "commit_record": True,
+        "beat_baseline": True,
+        "commit": "70601b1d387aa",
+        "fullpipe_ms": 56164.6,
+        "note": "committed: lever",
+    }
+    pcc_fail = {
+        "op_signature": "OpB",
+        "kernel_kind": "fidelity",
+        "pcc_status": "pcc_low",
+        "pcc": 0.654,
+        "fullpipe_ms": 59310.4,
+        "note": "faster, reverted for PCC",
+    }
+    lone = {
+        "op_signature": "OpC",
+        "kernel_kind": "fold",
+        "commit_record": True,
+        "beat_baseline": True,
+        "commit": "e8696829b05aa",
+        "note": "committed: older lever",
+    }
+    (tmp_path / "cc_kernlog_m_main.json").write_text(json.dumps([win, pcc_fail, commit, lone]))
+    got = _load_attempts([tmp_path], "m")
+    by_op = {a["op"]: a for a in got}
+    assert len(got) == 3, "the banking commit row is folded into its attempt"
+    assert by_op["OpA"]["status"] == "kept" and by_op["OpA"]["commit"] == "70601b1d387aa"
+    assert by_op["OpB"]["status"] == "reverted" and by_op["OpB"]["pcc"] == 0.654
+    assert by_op["OpC"]["status"] == "kept", "a commit nothing links to still stands on its own"
