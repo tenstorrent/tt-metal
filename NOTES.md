@@ -22,3 +22,5 @@ Attempt 4 (20:10): job 886 passed (900s budget, exit 0). Post done:
 - Per seed (replay): S1 2.2-2.3s, S2 2.5s, DiffVAE 11.5s, compute 17.0-17.2s, E2E wall 18.05-18.44s.
 - blx03 cleanup done: worktree ~/fasth3/t16 removed, seeds5 outputs removed, driver logs in ~/fasth3/logs.
 - VBench: detached, log ref_dv145/eval.log (ends VBENCH16_DONE), results ref_dv145/eval/summary.json.
+
+Next on wake (VBench done): read ref_dv145/eval/summary.json + eval.log QUALITY lines, write ref_dv145/README.md (paths, per-seed timings, VBench means), prune eval/*.png down to one per seed if large, note + result.json done. Still for the user: ref_dv145/stills/seed0.jpg.
