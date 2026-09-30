@@ -1,38 +1,15 @@
-<!-- PROMPT FOR A NEW SESSION: paste everything between the two lines into a fresh Claude Code session -->
----
-Continue the bring-up test speed-up work: build F56, component tests without a review agent.
+<!-- STATUS FOR THE NEXT SESSION: F56 below is DONE and proven; do not rebuild or re-prove it. -->
+**F56 status (2026-09-30): built, proven, committed on branch `dnijemcevic/f56-component-checks`.** To bring it into
+another branch, cherry-pick the `[F56]` commits (`git log --oneline --grep "\[F56\]"`); they touch only
+`models/demos/common/bringup/` (testing/component_checks.py new; component.py, harness.py, templates.py, core/runs.py,
+core/metrics.py, orchestrator.py, README.md, selftest/test_component_checks.py, dev/f56_*, dev/BREADCRUMBS.md, this
+file). The proofs are recorded (dev/f56_mutation_proof.md, BREADCRUMBS F56 device table); there is no need to rerun
+them after a cherry-pick. Run the selftests after it (`scripts/run_safe_pytest.sh --no-precompile --run-all
+models/demos/common/bringup/selftest/`).
 
-Repo /localdev/dnijemcevic/tt-metal2. Start a NEW branch from origin/dnijemcevic/ernie45_prefill, named
-dnijemcevic/f56-component-checks (`git fetch origin && git checkout -b dnijemcevic/f56-component-checks
-origin/dnijemcevic/ernie45_prefill`). Do not commit to dnijemcevic/ernie45_prefill: another machine is using it for the
-Xing bring-up. That branch is forked from llk_helper_library: compare against origin/llk_helper_library, never main.
-
-Read first:
-- models/demos/common/bringup/docs/test_speedup_notes.md (this file): what was done (F49 swap tests, F55) and the
-  step-by-step recipe for F56 below. Follow the recipe.
-- hy4_bringup_time_study.html (repo root): where the time went and why.
-- The F49 work as the worked example: `git log --grep "\[F49\]"`, dev/BREADCRUMBS.md section F49,
-  testing/component.py (run_swap_test checks="steps"), testing/mutate.py, dev/f49_mutation_proof.py and its results
-  dev/f49_mutation_proof.md.
-
-Goal: component tests (C.*) check themselves well enough that the test-review agent is only needed for unusual steps,
-without letting any mistake slip through that a reviewed test would catch. Existing frozen tests must behave exactly
-as before (new checks are opt-in: checks=None keeps today's behaviour).
-
-How to test (in this order):
-1. CPU only first: selftests (`scripts/run_safe_pytest.sh --no-precompile --run-all
-   models/demos/common/bringup/selftest/`) and the mistake-injection proof on Hy4's reviewed component tests (CPU
-   reference with mesh=None, goldens in /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden). Requirement: the new
-   checks catch everything the reviewed test catches, and the unmutated reference passes.
-2. Then one short device check (one component per output kind), through scripts/run_safe_pytest.sh only.
-3. Write BREADCRUMBS F56 with the proof table. Make "no component review" the default only after I say OK.
-
-Rules: one device job at a time (check `ps -ef | grep -E "run_safe_pytest|tt-probe"` first); run run_safe_pytest.sh
-/ tt-probe.sh in the foreground; never run tt-smi -r unless I say so; commit each verified piece with explicit paths;
-never push unless I ask. Keep the scope to the recipe (don't over-engineer). Keep answers to me short and plain.
-Tell me up front how long you expect it to take, and report when done: what changed, the proof table, the
-device-check result, the commits.
----
+What is left: the owner's OK to switch the component review off by default (`orchestrator.py:
+COMPONENT_REVIEW_DEFAULT = "all"` -> `"none"`, or per model `agents.component_review: none` in the spec). Until then
+new component tests already carry the built-in checks and the review agent starts from them.
 
 # Faster bring-up testing: what was done, what remains
 
@@ -71,9 +48,20 @@ gate writes, deletes first and commits, and what the agent may change.
 **Also fixed today:** F48 (gate commits include new fork files and knowledge notes); X.3 gate gives the profiler room
 for 4000 programs (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`), since a 6-layer chunk runs more than 1000.
 
+**F56: component tests check themselves (built; review skip off until the owner says OK).**
+- Every new component test compares the device step with the CPU step on the same inputs and with the golden, with
+  checks chosen by the kind of output (float numbers, router weights, top-k positions). The error limit follows
+  the step's expected precision (the CPU step with bf16 intermediates), so it is tight for exact steps and loose
+  for bfp8 experts. Each test also runs a few second inputs (chunk 0, another layer, shuffled, tiny and x2 inputs)
+  for the bugs the golden cannot show: a wrong norm epsilon, iHC stream order at layer 0, a clamp.
+- At freeze a CPU sweep injects every standard mistake and requires the test to catch each; if one slips through,
+  the review agent starts with that log. Switch: `agents.component_review` (default `all`: review on).
+- Proof: `dev/f56_mutation_proof.md` (CPU, 11 reviewed Hy4 tests) and BREADCRUMBS F56 (device, 6 Hy4 components,
+  no false alarms).
+
 ## Remains (not started)
 
-1. **F56: component tests without a review agent** (about 4 h of review per bring-up; estimate 2-3 h to build and
+1. **Done as F56 (see above); was: component tests without a review agent** (about 4 h of review per bring-up; estimate 2-3 h to build and
    prove). Same idea as F49:
    - choose the built-in checks by output kind: float tensor (error, worst row, row size), top-k indices (set overlap,
      no future tokens), expert routing (expert overlap, weights sum to 1);
