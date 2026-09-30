@@ -130,3 +130,8 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   always the fast approx, investigation agent). Added XING_MLA_EXP_APPROX (default 0 = unchanged). End to end at HiFi2:
   rung last min layer 0.99236 (0.99242 without), s56320 min layer 0.99151 (0.99193), logits 0.99915 (0.99838), top1
   0.977 (0.963): within noise; default kept. Resumed (P.2).
+- 20:15 P.2 PASS 9f62db92023: mhc_post in both residuals (fork option comb_transposed, default True = unchanged; Xing
+  case in the fork tests; unit 164 / golden 208 with the option off): residuals 90 -> 10.9 ms each, device 1413 -> 1255
+  ms. The agent skipped part (2) (mhc_pre) on effort; the brief's "if (2) cannot pass, keep (1)" was too soft. Owner
+  wants both: added P.2b (mhc_pre Xing mode: reduced-row entry, no pre eps, clamp 30, Xing Sinkhorn order; only a
+  measured frozen-test failure may stop it; hc < 25 ms each). P.3 now depends on P.2b. Resumed.
