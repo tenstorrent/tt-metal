@@ -1,0 +1,177 @@
+{
+ "metrics": {
+  "auto_attention_L00_big_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": -0.0005379319190979004
+  },
+  "auto_attention_L00_big_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0039194822311401
+  },
+  "auto_attention_L00_big_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.9945507049560547
+  },
+  "auto_attention_L00_big_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.008130894973874092
+  },
+  "auto_attention_L00_big_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03
+  },
+  "auto_attention_L00_big_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03500433638691902
+  },
+  "auto_attention_L00_chunk0_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": -0.0002442598342895508
+  },
+  "auto_attention_L00_chunk0_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0026602745056152
+  },
+  "auto_attention_L00_chunk0_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.9970970749855042
+  },
+  "auto_attention_L00_chunk0_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0029526022262871265
+  },
+  "auto_attention_L00_chunk0_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03
+  },
+  "auto_attention_L00_chunk0_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.006725000217556953
+  },
+  "auto_attention_L00_layer39_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.00026404857635498047
+  },
+  "auto_attention_L00_layer39_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0031906366348267
+  },
+  "auto_attention_L00_layer39_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.997947633266449
+  },
+  "auto_attention_L00_layer39_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0027347966097295284
+  },
+  "auto_attention_L00_layer39_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03
+  },
+  "auto_attention_L00_layer39_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0060714371502399445
+  },
+  "auto_attention_L00_mixed_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": -6.890296936035156e-05
+  },
+  "auto_attention_L00_mixed_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0021023750305176
+  },
+  "auto_attention_L00_mixed_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.9976282119750977
+  },
+  "auto_attention_L00_mixed_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0017932647606357932
+  },
+  "auto_attention_L00_mixed_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03
+  },
+  "auto_attention_L00_mixed_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0031258573289960623
+  },
+  "auto_attention_L00_small_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": -0.0031702518463134766
+  },
+  "auto_attention_L00_small_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0027384757995605
+  },
+  "auto_attention_L00_small_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.9899768233299255
+  },
+  "auto_attention_L00_small_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.004575356375426054
+  },
+  "auto_attention_L00_small_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.03
+  },
+  "auto_attention_L00_small_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.01061398908495903
+  },
+  "auto_attention_L00_vs_cpu_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.00013053417205810547
+  },
+  "auto_attention_L00_vs_cpu_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0023475885391235
+  },
+  "auto_attention_L00_vs_cpu_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.998089611530304
+  },
+  "auto_attention_L00_vs_cpu_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0031441000755876303
+  },
+  "auto_attention_L00_vs_cpu_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.005550997331738472
+  },
+  "auto_attention_L00_vs_cpu_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.007655902300029993
+  },
+  "auto_attention_L00_vs_golden_bias": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.00017893314361572266
+  },
+  "auto_attention_L00_vs_golden_ratio_max": {
+   "t": "2026-09-30T07:08:55",
+   "value": 1.0023794174194336
+  },
+  "auto_attention_L00_vs_golden_ratio_min": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.9980234503746033
+  },
+  "auto_attention_L00_vs_golden_rel": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.0036257219035178423
+  },
+  "auto_attention_L00_vs_golden_rel_limit": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.007275078794918954
+  },
+  "auto_attention_L00_vs_golden_row": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.007838786579668522
+  },
+  "pcc_attention_L00": {
+   "t": "2026-09-30T07:08:55",
+   "value": 0.999993422237961
+  }
+ },
+ "task": "C.dense.attention"
+}
