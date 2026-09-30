@@ -7,24 +7,29 @@ Weight reorientation and expert packing run once at load and never touch the dev
 tables and the attention mask are built on the host and returned on device; the two reshapes
 take device tensors.
 
-Two layouts carry the activation between sub-blocks:
+Two layouts carry the activation, and only the first crosses a block boundary:
 
-    (B, 1, S, H)      attention and pooling, where the batch axis has to stay separate
-    (1, 1, B*S, H)    everything else, one flat token axis
+    (B, 1, S, H)      every block boundary, and inside attention and pooling
+    (1, 1, B*S, H)    inside the MoE layer, one flat token axis
 
 Neither is a preference. Attention mixes tokens along S, so flattening the batch away lets one
 text attend to another: PCC 0.71 against per-sequence attention, a wrong answer rather than a
 less precise one. Pooling also reduces along S, and has to produce one mean per text rather
 than one per batch.
 
-The MoE matmuls force the opposite. ttnn.matmul broadcasts a weight's batch dims only when
-every batch dim of the activation is 1, so (1, 1, T, H) x (1, E, H, F) gives (1, E, T, F) while
-(B, 1, S, H) raises outright. The spare dim at position 1 is what the expert axis expands into
-and what fast_reduce_nc collapses again.
+The MoE matmuls force the opposite. sparse_matmul takes the tokens as one (1, 1, T, H) operand
+against the (1, E, H, F) weights, and a transposed pass multiplies the stacked weight by one
+(1, 1, H, T) x^T. The spare dim at position 1 is what the expert axis expands into and what
+fast_reduce_nc collapses again.
 
-Those two are what crosses a sub-block boundary, not every shape in the model. Sub-blocks take
-others internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and (1, E, T, F) across
-the experts, each produced and consumed by the op that owns it.
+So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
+x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
+ttnn.gelu are token-wise and take the batch-separated form unchanged. That confines the round
+trip to the six MoE layers, 12 reshapes rather than the 24 a flat-everywhere contract would
+need around attention.
+
+Sub-blocks take other shapes internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and
+(1, E, T, F) across the experts, each produced and consumed by the op that owns it.
 
 The flat form keeps tokens batch-major, matching the reference's own x.view(-1, H), so the
 router's per-token weights stay aligned with the expert outputs.
@@ -91,7 +96,9 @@ def pack_expert_weights(
     In torch that mistake is silent: the wrong slab plus a .T has the right shape and returns
     noise, which test_w2_transposed_view_typechecks_but_is_garbage pins. The 4D operand is what
     makes it loud, since there is no .T to paper over it and the inner dimensions stop agreeing;
-    test_transposed_expert_weights_are_a_shape_error asserts it raises.
+    test_transposed_expert_weights_are_a_shape_error asserts it raises. TtNomicExperts transposes
+    w2 once more for its own programs, back to the (E, H, F) shape of the mistake, so there the
+    module PCC tests are the guard.
     """
     expert_shape = (config.num_experts, config.intermediate_size, config.hidden_size)
     return (
@@ -160,3 +167,23 @@ def flatten_tokens(x: ttnn.Tensor) -> ttnn.Tensor:
 def unflatten_tokens(x: ttnn.Tensor, batch: int, seqlen: int) -> ttnn.Tensor:
     """(1, 1, B*S, H) -> (B, 1, S, H). B and S are arguments because the flat form has lost them."""
     return ttnn.reshape(x, (batch, 1, seqlen, x.shape[-1]))
+
+
+def prepare_token_ids(input_ids: torch.Tensor, device) -> ttnn.Tensor:
+    """Move (B, S) token ids onto the device in the form ttnn.embedding indexes with.
+
+    ttnn.embedding requires a uint32 index tensor in ROW_MAJOR; a TILE index or an int32 one is
+    rejected. The ids are bounded by the tokenizer's 250002 entries, so uint32 is lossless.
+    """
+    return ttnn.from_torch(input_ids.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def pooling_mask(attention_mask: torch.Tensor, device, dtype: ttnn.DataType = ACTIVATION_DTYPE) -> ttnn.Tensor:
+    """Turn a (B, S) keep-mask into the (B, 1, S, 1) weight tensor mean_pool multiplies by.
+
+    The trailing singleton broadcasts over the hidden axis, so one multiply zeroes every feature
+    of a padded position. Float rather than integer because it is multiplied into activations and
+    then summed to form the divisor.
+    """
+    batch, seqlen = attention_mask.shape
+    return to_device(attention_mask.reshape(batch, 1, seqlen, 1).float(), device, dtype=dtype)

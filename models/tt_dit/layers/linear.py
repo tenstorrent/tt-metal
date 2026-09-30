@@ -604,11 +604,14 @@ class RowParallelLinear(Module):
         default_block_size: tuple = None,
         dtype=None,
         gather_output: bool = False,
+        reduce_scatter_dim: int = -1,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
+
+        `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -642,7 +645,7 @@ class RowParallelLinear(Module):
 
         if self._mesh_axis_size > 1:
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
-            dim = -2 if gather_output else -1
+            dim = -2 if gather_output else reduce_scatter_dim
             output = self.ccl_manager.reduce_scatter(
                 output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )

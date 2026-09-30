@@ -9,9 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
-#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -19,7 +17,6 @@
 #include <numeric>
 #include <optional>
 #include <ostream>
-#include <queue>
 #include <set>
 #include <string>
 #include <tuple>
@@ -33,8 +30,6 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
-#include "compressed_direction_table.hpp"
-#include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_host_utils.hpp"
@@ -43,7 +38,6 @@
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
-#include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -519,7 +513,8 @@ void ControlPlane::init_control_plane(
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
-        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(
+            *this->topology_mapper_, asic_mapping_file, rtoptions.get_mock_enabled());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }
@@ -639,7 +634,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
-        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(
+            *this->topology_mapper_, asic_mapping_file, rtoptions.get_mock_enabled());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }
@@ -873,8 +869,8 @@ void ControlPlane::initialize_fabric_context() {
         "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
         enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+        this->fabric_context_ =
+            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
     }
 }
 
@@ -1928,7 +1924,7 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routi
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
     intra_mesh_routing_path_t<1, false> routing_path_1d;
-    routing_path_1d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), num_chips);
+    routing_path_1d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, 0), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
@@ -1964,7 +1960,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[1]);
 
     intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+    routing_path_2d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, chip_id), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
 

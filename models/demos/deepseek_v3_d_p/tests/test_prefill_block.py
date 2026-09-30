@@ -26,18 +26,11 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_x_device_params,
-    torus_xy_device_params,
-    torus_y_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -49,7 +42,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -555,232 +547,6 @@ def run_model(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-    is_balanced = params["is_balanced"]
-    gate_fallback_mode = params["gate_fallback_mode"]
-    if not on_ci:
-        return False
-    if not is_balanced:
-        return True
-    if gate_fallback_mode is not None and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
-@pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
-    [
-        # pcc-prompt_5k runs ~3x longer than perf-prompt_5k (122s vs 41s warm on 8x4) because the CPU
-        # reference dominates, not the device. Rebalancing CI around that split is a separate PR.
-        ("prompt_5k", False, PREFILL_CHUNK_TOKENS, 8),
-        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
-    ],
-    ids=["perf-prompt_5k", "pcc-prompt_5k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [
-        ("dense", None),
-        ("moe", GateComputeMode.DEVICE_FP32),
-        ("moe", GateComputeMode.HOST_ALL),
-    ],
-    # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
-    # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
-    # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
-    ids=["dense", "moe-gate_device_fp32", "host_gate_all"],
-)
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-        pytest.param(
-            (4, 4),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-y-4x4",
-        ),
-        pytest.param(
-            (4, 4),
-            torus_x_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4",
-        ),
-        pytest.param(
-            (4, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-xy-4x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.timeout(750)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-def test_ds_prefill_block(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    is_balanced,
-    isl_total,
-    dispatch_buffer_capacity_factor,
-    layer_type,
-    gate_fallback_mode,
-    num_links,
-    pcc_validation,
-    input_source,
-    tokenizer,
-    is_ci_env,
-    is_ci_v2_env,
-    determinism_check,
-    num_iterations,
-    use_pretrained,
-    request,
-):
-    topology = per_axis_topology(device_params["fabric_config"])
-    # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
-    # xfail this exact combo (keeping the real threshold for every other config) until it is fixed;
-    # strict=True turns an XPASS into a failure so the marker is removed once the fix lands.
-    if (
-        pcc_validation
-        and not determinism_check
-        and layer_type == "moe"
-        and gate_fallback_mode == GateComputeMode.DEVICE_FP32
-        and is_balanced
-        and device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D
-        and tuple(mesh_device.shape) == (2, 4)
-    ):
-        request.node.add_marker(
-            pytest.mark.xfail(reason="FABRIC_2D 2x4 MoE/device-gate PCC regression (~0.96 < 0.992)", strict=True)
-        )
-
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        is_balanced,
-        isl_total,
-        dispatch_buffer_capacity_factor,
-        layer_type,
-        gate_fallback_mode,
-        num_links,
-        topology,
-        pcc_validation,
-        input_source,
-        tokenizer,
-        request,
-        is_ci_env,
-        is_ci_v2_env,
-        determinism_check=determinism_check,
-        num_iterations=num_iterations,
-        thresholds=DSV3_THRESHOLDS,
-        use_pretrained=use_pretrained,
-    )
-
-
-@pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
-    [
-        ("random", False, PREFILL_CHUNK_TOKENS, 8),
-        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
-    ],
-    ids=["perf-random-5k", "pcc-prompt_5k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
-    ids=["dense", "moe_gate_device_fp32"],
-)
-@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
-@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(900)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-def test_kimi_prefill_block(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    is_balanced,
-    isl_total,
-    dispatch_buffer_capacity_factor,
-    layer_type,
-    gate_fallback_mode,
-    num_links,
-    pcc_validation,
-    input_source,
-    tokenizer,
-    is_ci_env,
-    is_ci_v2_env,
-    determinism_check,
-    num_iterations,
-    use_pretrained,
-    request,
-):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        is_balanced,
-        isl_total,
-        dispatch_buffer_capacity_factor,
-        layer_type,
-        gate_fallback_mode,
-        num_links,
-        topology,
-        pcc_validation,
-        input_source,
-        tokenizer,
-        request,
-        is_ci_env,
-        is_ci_v2_env,
-        determinism_check=determinism_check,
-        num_iterations=num_iterations,
-        thresholds=KIMI_THRESHOLDS,
-        use_pretrained=use_pretrained,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Mistral Small 4 block test
 # ---------------------------------------------------------------------------
@@ -902,10 +668,10 @@ GLM_BLOCK_OUTPUT_PCC = 0.98
 
 
 def _first_full_moe_layer(config):
-    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.2 "shared" indexer
+    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.3 "shared" indexer
     # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
     # layer computes its own. glm_5_1 has no indexer_types -> every layer is full -> returns
-    # first_k_dense_replace (3). glm_5_2 layers 3-5 are shared -> returns 6.
+    # first_k_dense_replace (3). glm_5_3 layers 3-5 are shared -> returns 6.
     idx = config.first_k_dense_replace
     while indexer_layer_is_reused(config, idx):
         idx += 1
@@ -1006,7 +772,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block(
@@ -1025,9 +791,9 @@ def test_glm_prefill_block(
     is_moe = layer_type == "moe"
     config = config_only
     config.max_seq_len = seq_len
-    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.2 "shared"
+    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.3 "shared"
     # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
-    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_2 -> 6 (3-5 shared).
+    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_3 -> 6 (3-5 shared).
     layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
     sp_axis, tp_axis = 0, 1
@@ -1123,7 +889,7 @@ def test_glm_prefill_block(
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
     # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
-    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_3 cross-layer reuse — matching the
     # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len

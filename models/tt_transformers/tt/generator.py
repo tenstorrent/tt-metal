@@ -1041,6 +1041,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return tt_out_trace
 
+    def release_request(self, slot: int) -> None:
+        """Release finished-request seed state through the serving lifecycle hook.
+
+        'slot' is the request's current state slot, after any decode remap.
+        KV pages and traces remain reusable; surviving requests retain their
+        RNG streams. Hosts must notify completion before admitting replacements.
+        """
+        per_model_slots = self.model_args[0].max_batch_size
+        if not 0 <= slot < per_model_slots * self.data_parallel:
+            raise ValueError(f"Request slot {slot} is outside the configured batch")
+        model_id, local_slot = divmod(slot, per_model_slots)
+        sampling = getattr(self.model[model_id], "sampling", None)
+        if sampling is not None:
+            sampling.seed_manager.release_slot(local_slot)
+        getattr(self, "_slots_prefilled_since_decode", set()).discard(slot)
+
     # Note: This function is called by vLLM
     def prefill_forward_text(self, *args, **kwargs):
         """Flush deferred trace captures once the prefill that armed them ends successfully.
@@ -3887,11 +3903,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    def release_persistent_capture(self) -> None:
+        """Release model-lifetime traces once, while the mesh is still open.
 
-    def __del__(self):
-        # Release all captured traces to prevent nanobind memory leaks
-        # Traces must be released before closing the mesh device
+        The plugin calls this on the model before it closes the mesh. An
+        override must chain to ``super()``: the destructor below runs only this
+        base method, because a destructor may fire after the mesh closed.
+        """
+        if getattr(self, "_generator_capture_released", False):
+            return
+        self._generator_capture_released = True
         try:
             # Release prefill traces
             if hasattr(self, "trace_id_prefill"):
@@ -3959,6 +3980,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             pass  # Ignore errors during cleanup
         except Exception:
             pass  # Ignore any errors during trace cleanup
+
+    def __del__(self):
+        # Base traces only. Subclass releases need an open mesh and run through
+        # the plugin's release_persistent_capture call at shutdown.
+        Generator.release_persistent_capture(self)
 
         # Workaround for issue #19052
         if self.data_parallel > 1:
