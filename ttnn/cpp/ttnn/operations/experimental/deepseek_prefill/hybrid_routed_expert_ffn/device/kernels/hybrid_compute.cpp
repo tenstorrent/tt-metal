@@ -30,6 +30,10 @@
 // Declarations only -- the real CB API is not in scope until a half pulls it in.
 #include "hybrid_cb_shims.hpp"
 
+// Only when the pass exists. A threshold of zero leaves every expert to the unified half, and this
+// body is the largest single thing in the binary -- the kernel config ring is what this op is
+// short of, so an unreachable half is not worth the space it would take.
+#ifdef HYB_RUN_FUSED_PASS
 #define HYB_NS hyb_fused
 #define HYB_CT_BASE 0
 #define HYB_RT_BASE 0
@@ -37,6 +41,7 @@
 #undef HYB_NS
 #undef HYB_CT_BASE
 #undef HYB_RT_BASE
+#endif
 
 // The namespace wrapper isolates SYMBOLS, not the preprocessor: a macro either half defines at
 // file scope is still live when the other half is compiled. These are each half's PRIVATE macros
