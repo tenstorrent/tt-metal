@@ -565,6 +565,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T14:21:57'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py: 785be722061605930357e18f5a16318377e4e384a5d135a41f0c9288111b63f9
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.08
   title: 'dense block with steps 1-8 on device (last: ffn_collapse)'
   step: implement
