@@ -704,6 +704,15 @@ void sub_exp_block_bcast_cols(
                         dst_index,
                         vector_mode_exp)));
                     ++dst_index;
+#elif defined(SDPA_I6)
+                    // I6: exp tile t, then pack it; the next tile's SFPU exp overlaps this pack.
+                    if (i == 0 && j == 0) {
+                        configure_single_tile_pack(inout_cb);
+                    }
+                    exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index, vector_mode_exp);
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                    pack_tile<true>(dst_index, inout_cb, (max_row_base + i) * cols_in_row + global_col_base + j);
+                    ++dst_index;
 #else
                     exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
 #endif
@@ -720,7 +729,7 @@ void sub_exp_block_bcast_cols(
         // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
         // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
         // reconfigure here when the caller guarantees the state.
-#ifndef SDPA_KO_PPACK
+#if !defined(SDPA_KO_PPACK) && !(defined(SDPA_I6) && !defined(SDPA_RECIPE_FP32))
         if (skip_pack_configure) {
             pack_contiguous_rows_nocfg(
                 inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
