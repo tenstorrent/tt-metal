@@ -232,13 +232,13 @@ def _check_gathered_shape(
     shape: tuple,
     model_shapes: dict,
     expected_shapes: dict | None,
-    have_model: bool,
-) -> None:
+) -> bool:
     """Hold one gathered tensor to the shape it must have before it is written (see `CheckpointShapeError`).
 
     Model params are recorded in `model_shapes` and held to `expected_shapes` when given. Optimizer leaves are held
-    to their parameter's gathered shape when the parameter is in this checkpoint, else to `expected_shapes`; a leaf
-    whose name is no model param at all is skipped with a warning (an optimizer over a subset of the params)."""
+    to their parameter's gathered shape when the parameter is in this checkpoint, else to `expected_shapes`. Returns
+    False for a leaf with nothing to be held to (its name is no model param and not in `expected_shapes`: an
+    optimizer over a subset of the params); the caller reports those in one summary warning."""
     label = _leaf_label((group, *path), name)
     if group == "model":
         model_shapes[name] = shape
@@ -248,15 +248,9 @@ def _check_gathered_shape(
     elif expected_shapes is not None and name in expected_shapes:
         reference, source = expected_shapes[name], "expected_shapes"
     else:
-        if have_model:
-            warnings.warn(
-                f"checkpointing: {label} is not a parameter of the model being saved, so its gathered shape {shape} "
-                f"cannot be cross-checked; saving it as-is",
-                stacklevel=3,
-            )
-        return
+        return False
     if reference is None or tuple(reference) == shape:
-        return
+        return True
     raise CheckpointShapeError(
         f"checkpointing: {label} gathers to {shape} but {source} says {tuple(reference)}. The tensor is laid out as "
         f"{Sharding.from_tensor(tensor).describe()}; if that label does not describe its data (e.g. Replicate on a "
@@ -284,15 +278,16 @@ def save_checkpoint(
     Every optimizer state tensor keyed by a parameter in `model_params` must gather to that parameter's shape,
     else `CheckpointShapeError` is raised and no file is written (the `.tmp` is removed): a mismatch means one
     side's topology label does not describe its data and the file would hold truncated state. State keyed by a
-    name that is not in `model_params` is written with a warning; an optimizer saved without `model_params`
-    cannot be cross-checked (warned once).
+    name that is not in `model_params` is written as-is, and one summary warning after the save counts such leaves
+    and names up to three; an optimizer saved without `model_params` cannot be cross-checked (warned once).
 
     `expected_shapes` maps parameter name -> full (gathered) shape and is held against the matching model params
     and optimizer leaves. It is the only check that also catches a parameter whose own label is wrong (both the
     parameter and its moments gathering to the same wrong shape). TEST-FACING for now: trainers cannot populate it
     yet, because the global shape of a sharded parameter is not retained on the `Parameter` (only TP-aware
     modules know it, FSDP stores none, and lazy init discards it at materialize); a follow-up keeps it there.
-    Names in `expected_shapes` that no written tensor carries are an error, so a check cannot pass vacuously.
+    Names in `expected_shapes` that no tensor of this checkpoint carries raise `ValueError` before anything is
+    gathered or written, so a check cannot pass vacuously.
     """
     manifest = {}
     records = []  # (group, path, name, tensor) in stream order
@@ -308,9 +303,12 @@ def save_checkpoint(
                 "against their parameters' shapes (a mislabelled moment would be saved truncated)",
                 stacklevel=2,
             )
+    if expected_shapes is not None and (unknown := set(expected_shapes) - {name for _, _, name, _ in records}):
+        # Before any gather or file: a typo in expected_shapes must neither cost a full gather nor pass vacuously.
+        raise ValueError(f"checkpointing: expected_shapes names tensors not in this checkpoint: {sorted(unknown)}")
 
     model_shapes: dict = {}
-    seen = set()
+    unchecked = []  # optimizer leaves with no parameter (nor expected shape) to be held to
     tmp_path = path + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
@@ -319,25 +317,23 @@ def save_checkpoint(
                 records, total=len(records), desc="Saving checkpoint", enabled=display_progress
             ):
                 data = Sharding.from_tensor(tensor).gather(tensor)  # gather one at a time; freed after dump
-                _check_gathered_shape(
-                    group,
-                    sub_path,
-                    name,
-                    tensor,
-                    tuple(data.shape),
-                    model_shapes,
-                    expected_shapes,
-                    model_params is not None,
-                )
-                seen.add(name)
+                if not _check_gathered_shape(
+                    group, sub_path, name, tensor, tuple(data.shape), model_shapes, expected_shapes
+                ):
+                    unchecked.append(_leaf_label((group, *sub_path), name))
                 pickle.dump(data, f)
-        if expected_shapes is not None and (unknown := set(expected_shapes) - seen):
-            raise ValueError(f"checkpointing: expected_shapes names tensors not in this checkpoint: {sorted(unknown)}")
     except BaseException:
         with contextlib.suppress(OSError):
             os.remove(tmp_path)  # a rejected or interrupted save leaves no half-written file behind
         raise
     os.replace(tmp_path, path)
+    if unchecked and model_params is not None:
+        warnings.warn(
+            f"checkpointing: {len(unchecked)} optimizer state tensor(s) are keyed by names that are not parameters of "
+            f"the model being saved, so their gathered shapes could not be cross-checked; saved as-is: "
+            f"{', '.join(unchecked[:3])}{' ...' if len(unchecked) > 3 else ''}",
+            stacklevel=2,
+        )
 
 
 def _read_record0(f) -> dict:
