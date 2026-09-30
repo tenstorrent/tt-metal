@@ -92,3 +92,17 @@ def col_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
     [S, H]."""
     full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
     return full.reshape(-1, full.shape[-1])
+
+
+def col_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
+    """Host [S, H] -> device [1, 1, S/4, H/2] per chip, split by rows over axis 0 and by hidden columns over axis 1,
+    TILE, DRAM (the layout of TtHcCollapse's output)."""
+    s, w = x.shape
+    return ttnn.from_torch(
+        x.float().reshape(1, 1, s, w),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_mapper(mesh, (2, 3)),
+    )
