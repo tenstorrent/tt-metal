@@ -133,6 +133,7 @@ enum class SfpuType : std::uint32_t
     celu,
     elu,
     hardmish,
+    mish,
     hardshrink,
     hardtanh,
     heaviside,

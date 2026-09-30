@@ -303,6 +303,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Celu,
     MathOperation.Elu,
     MathOperation.Hardmish,
+    MathOperation.Mish,
     MathOperation.Hardshrink,
     MathOperation.Hardtanh,
     MathOperation.Heaviside,

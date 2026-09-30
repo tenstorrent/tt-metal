@@ -47,6 +47,7 @@
 #include "llk_sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
+#include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
@@ -241,6 +242,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
         hardmish_init();
+    }
+    else if constexpr (OPERATION == SfpuType::mish)
+    {
+        mish_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
@@ -721,6 +726,10 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, hardmish, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::mish)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_mish, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
