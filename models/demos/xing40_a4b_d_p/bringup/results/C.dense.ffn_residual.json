@@ -1,0 +1,153 @@
+{
+ "metrics": {
+  "auto_ffn_residual_L00_big_bias": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.0
+  },
+  "auto_ffn_residual_L00_big_ratio_max": {
+   "t": "2026-09-30T14:36:41",
+   "value": 1.0000001192092896
+  },
+  "auto_ffn_residual_L00_big_ratio_min": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.9999998807907104
+  },
+  "auto_ffn_residual_L00_big_rel": {
+   "t": "2026-09-30T14:36:41",
+   "value": 3.129952830249749e-08
+  },
+  "auto_ffn_residual_L00_big_rel_limit": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.03
+  },
+  "auto_ffn_residual_L00_big_row": {
+   "t": "2026-09-30T14:36:41",
+   "value": 5.934478508606844e-08
+  },
+  "auto_ffn_residual_L00_layer39_bias": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.0
+  },
+  "auto_ffn_residual_L00_layer39_ratio_max": {
+   "t": "2026-09-30T14:36:40",
+   "value": 1.0000001192092896
+  },
+  "auto_ffn_residual_L00_layer39_ratio_min": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.9999998807907104
+  },
+  "auto_ffn_residual_L00_layer39_rel": {
+   "t": "2026-09-30T14:36:40",
+   "value": 3.0584417221035665e-09
+  },
+  "auto_ffn_residual_L00_layer39_rel_limit": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.03
+  },
+  "auto_ffn_residual_L00_layer39_row": {
+   "t": "2026-09-30T14:36:40",
+   "value": 6.778700623044642e-08
+  },
+  "auto_ffn_residual_L00_mixed_bias": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.0
+  },
+  "auto_ffn_residual_L00_mixed_ratio_max": {
+   "t": "2026-09-30T14:36:40",
+   "value": 1.0000001192092896
+  },
+  "auto_ffn_residual_L00_mixed_ratio_min": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.9999998211860657
+  },
+  "auto_ffn_residual_L00_mixed_rel": {
+   "t": "2026-09-30T14:36:40",
+   "value": 5.5523482700436944e-08
+  },
+  "auto_ffn_residual_L00_mixed_rel_limit": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.03
+  },
+  "auto_ffn_residual_L00_mixed_row": {
+   "t": "2026-09-30T14:36:40",
+   "value": 6.093092963510571e-08
+  },
+  "auto_ffn_residual_L00_small_bias": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.0
+  },
+  "auto_ffn_residual_L00_small_ratio_max": {
+   "t": "2026-09-30T14:36:41",
+   "value": 1.0000001192092896
+  },
+  "auto_ffn_residual_L00_small_ratio_min": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.9999998211860657
+  },
+  "auto_ffn_residual_L00_small_rel": {
+   "t": "2026-09-30T14:36:41",
+   "value": 4.1581103005228215e-08
+  },
+  "auto_ffn_residual_L00_small_rel_limit": {
+   "t": "2026-09-30T14:36:41",
+   "value": 0.03
+  },
+  "auto_ffn_residual_L00_small_row": {
+   "t": "2026-09-30T14:36:41",
+   "value": 5.8434693528397474e-08
+  },
+  "auto_ffn_residual_L00_vs_cpu_bias": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.0
+  },
+  "auto_ffn_residual_L00_vs_cpu_ratio_max": {
+   "t": "2026-09-30T14:36:40",
+   "value": 1.0000001192092896
+  },
+  "auto_ffn_residual_L00_vs_cpu_ratio_min": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.9999998807907104
+  },
+  "auto_ffn_residual_L00_vs_cpu_rel": {
+   "t": "2026-09-30T14:36:40",
+   "value": 3.129952830249749e-08
+  },
+  "auto_ffn_residual_L00_vs_cpu_rel_limit": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.004441119730472565
+  },
+  "auto_ffn_residual_L00_vs_cpu_row": {
+   "t": "2026-09-30T14:36:40",
+   "value": 5.934478508606844e-08
+  },
+  "auto_ffn_residual_L00_vs_golden_bias": {
+   "t": "2026-09-30T14:36:40",
+   "value": 1.430511474609375e-06
+  },
+  "auto_ffn_residual_L00_vs_golden_ratio_max": {
+   "t": "2026-09-30T14:36:40",
+   "value": 1.0034431219100952
+  },
+  "auto_ffn_residual_L00_vs_golden_ratio_min": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.9967988729476929
+  },
+  "auto_ffn_residual_L00_vs_golden_rel": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.0026148692704737186
+  },
+  "auto_ffn_residual_L00_vs_golden_rel_limit": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.00705598876811564
+  },
+  "auto_ffn_residual_L00_vs_golden_row": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.004345205146819353
+  },
+  "pcc_ffn_residual_L00": {
+   "t": "2026-09-30T14:36:40",
+   "value": 0.9999965804073918
+  }
+ },
+ "task": "C.dense.ffn_residual"
+}

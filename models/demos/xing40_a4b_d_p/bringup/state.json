@@ -869,7 +869,58 @@
  },
  "C.dense.ffn_residual": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 24.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:36:43"
+   }
+  ],
+  "last_run": "2026-09-30T14:36:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.ffn_residual.log",
+  "metrics": {
+   "auto_ffn_residual_L00_big_bias": 0.0,
+   "auto_ffn_residual_L00_big_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_big_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_big_rel": 3.129952830249749e-08,
+   "auto_ffn_residual_L00_big_rel_limit": 0.03,
+   "auto_ffn_residual_L00_big_row": 5.934478508606844e-08,
+   "auto_ffn_residual_L00_layer39_bias": 0.0,
+   "auto_ffn_residual_L00_layer39_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_layer39_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_layer39_rel": 3.0584417221035665e-09,
+   "auto_ffn_residual_L00_layer39_rel_limit": 0.03,
+   "auto_ffn_residual_L00_layer39_row": 6.778700623044642e-08,
+   "auto_ffn_residual_L00_mixed_bias": 0.0,
+   "auto_ffn_residual_L00_mixed_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_mixed_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L00_mixed_rel": 5.5523482700436944e-08,
+   "auto_ffn_residual_L00_mixed_rel_limit": 0.03,
+   "auto_ffn_residual_L00_mixed_row": 6.093092963510571e-08,
+   "auto_ffn_residual_L00_small_bias": 0.0,
+   "auto_ffn_residual_L00_small_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_small_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L00_small_rel": 4.1581103005228215e-08,
+   "auto_ffn_residual_L00_small_rel_limit": 0.03,
+   "auto_ffn_residual_L00_small_row": 5.8434693528397474e-08,
+   "auto_ffn_residual_L00_vs_cpu_bias": 0.0,
+   "auto_ffn_residual_L00_vs_cpu_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_vs_cpu_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_vs_cpu_rel": 3.129952830249749e-08,
+   "auto_ffn_residual_L00_vs_cpu_rel_limit": 0.004441119730472565,
+   "auto_ffn_residual_L00_vs_cpu_row": 5.934478508606844e-08,
+   "auto_ffn_residual_L00_vs_golden_bias": 1.430511474609375e-06,
+   "auto_ffn_residual_L00_vs_golden_ratio_max": 1.0034431219100952,
+   "auto_ffn_residual_L00_vs_golden_ratio_min": 0.9967988729476929,
+   "auto_ffn_residual_L00_vs_golden_rel": 0.0026148692704737186,
+   "auto_ffn_residual_L00_vs_golden_rel_limit": 0.00705598876811564,
+   "auto_ffn_residual_L00_vs_golden_row": 0.004345205146819353,
+   "pcc_ffn_residual_L00": 0.9999965804073918
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:36:18",
+  "status": "PASS"
  },
  "C.dense.mlp": {
   "agent": {
