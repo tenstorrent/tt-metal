@@ -1066,7 +1066,12 @@ def test_rows_paths_never_upload_or_take_per_pass_host_ints() -> None:
         "g_rows",
         "beta_rows",
     ]
-    assert calls["_chunk_rows_composite"] == ["ttnn.transformer.chunk_gated_delta_rule"]
+    assert calls["_chunk_rows_composite"].count("ttnn.transformer.chunk_gated_delta_rule") == 1
+    assert calls["_chunk_rows_composite"].count("fused.gdn_source_chunk.chunk_token_major") == 1
+    source_call = next(node for node in ast.walk(methods["_chunk_rows_composite"])
+                       if isinstance(node, ast.Call) and ast.unparse(node.func) == "fused.gdn_source_chunk.chunk_token_major")
+    source_keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in source_call.keywords}
+    assert source_keywords == {"rows_total": "constants.tile_rows", "scale": "HEAD_DIM ** (-0.5)"}
     # The forward pass reads the committed state and writes only rows buffers; the commit is the only writer.
     assert "output_tensor=state.recurrent" not in ast.get_source_segment(
         GDN_SOURCE.read_text(), methods["forward_rows"]

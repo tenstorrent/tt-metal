@@ -4,8 +4,8 @@
 """GDN prefill slab with fused input preparation and gated output programs.
 
 Samuel Jett's producer preserves the source normalization, query scaling and
-chunk-major bytes. The public GDN adapter restores its documented token-major
-interface; the owned upstream operation selects its supported implementation.
+chunk-major bytes. The model-owned recurrence retains the source intermediate rounding sequence
+through the current public generic_op API.
 The existing projection, output projection, reduce-scatter and state ownership
 remain in Qwen38TTNNGDN. Source-era timing and program counts in docs/PREFILL.md
 are historical measurements, not measurements of this adapter.
@@ -23,7 +23,7 @@ import ttnn
 
 from . import gdn_post_rows, gdn_pre_rows
 from . import program as fp
-from .gdn_public_adapter import chunk_public
+from .gdn_source_chunk import chunk_source
 from .gdn_rows_reference import A_COLUMN, HEAD_DIM, HEADS, PROJECTION_WIDTH, QKV_WIDTH, TILE, VALUE_WIDTH
 from .registry import BITWISE, FusedKernel, register
 
@@ -111,14 +111,12 @@ def constants(gdn) -> RowsConstants:
 
 
 def chunk_prims(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, *, rows_total: int):
-    """Run the public recurrence from the fused producer's normalized, scaled chunk pages.
+    """Run the source numerical sequence on pre-normalized, twice-scaled pages.
 
-    The adapter restores token-major rank-four q/k and rank-three gates, preserving
-    chunk order and all producer bytes. The query already includes both source scale
-    folds, so the public operation receives scale=1. Persistent constants and state
-    remain caller-owned; outputs keep the head-major FP32 recurrence contract.
+    Persistent producers/constants/state stay caller-owned. Intermediate pack
+    boundaries retain Samuel Jett's frozen source words on the current runtime.
     """
-    return chunk_public(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, rows_total=rows_total)
+    return chunk_source(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, rows_total=rows_total)
 
 
 # -------------------------------------------------------------------------------------------- the slab body

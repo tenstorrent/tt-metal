@@ -79,7 +79,7 @@ def test_masked_commit_preserves_inputs_and_releases_only_temporaries(monkeypatc
             raise RuntimeError("injected recurrence failure")
         return result
 
-    monkeypatch.setattr(wrap, "chunk_public", public)
+    monkeypatch.setattr(wrap, "chunk_source", public)
     if fail:
         with expect_error(RuntimeError, match="injected recurrence failure"):
             wrap.chunk(None, rows_state, buffers, initial, mask)
