@@ -471,15 +471,15 @@ def test_combine_fabric2d_unaligned_emb_dim(mesh_device, device_params, num_link
     "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
 )
 @pytest.mark.timeout(900)
-# The reader zeroes fwd_arrived at end of stream, dropping a bump from an upstream chip already in the
-# next launch, which hangs the ring: https://github.com/tenstorrent/tt-metal/issues/57948
-@pytest.mark.skip(reason="overlapped launches can hang: https://github.com/tenstorrent/tt-metal/issues/57948")
 def test_combine_fabric2d_back_to_back(mesh_device, device_params, num_links, input_layout):
     """Four launches queued with no host sync between them, as in a traced replay.
 
-    A chip that finishes early can send into a neighbour still finishing the previous launch, racing the
-    counter reset that launch ends with: a lost increment hangs, a stale one reads early. Alternating two
-    draws makes stale slots visible.
+    A chip that finishes early starts bumping a neighbour's arrival counter while that neighbour is still
+    finishing the previous launch. The counter must keep those bumps: a lost one hangs, a stale one reads a
+    page early. Alternating two draws makes stale slots visible.
+
+    Only the counter is covered. An upstream chip far enough ahead can still overwrite forwarding pages its
+    neighbour has not read yet: https://github.com/tenstorrent/tt-metal/issues/57948
     """
     cfg = extract_mesh_config(mesh_device)
     a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31)
