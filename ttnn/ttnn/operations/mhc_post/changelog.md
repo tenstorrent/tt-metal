@@ -93,7 +93,7 @@
     - `DEPTH_IN` = 3 measured slower (B = 11: 252 → 293 µs) and was not adopted.
   - Reused: SegmentWalker, all CB lifecycles, the compute mix, the reader's block reads. Added: `mhc_post_coef_expand.hpp`, the reader/writer CT flag `expand_here`, the writer's post / comb accessors and RT args, and the knobs `COEF_EXPANDER` and `MIN_BLOCKS_PER_CORE` (`MAX_BLOCK_COL_TILES` changed from None to 8).
 - Perf (device kernel ns, 110 cores, Blackhole; R2 → R3):
-  - bf16 flagged: T640 C1792 131.5 → 66–69 µs (target ≈ 50); T640 C7168 306.6 → 238 µs (target ≈ 202); T1280 C4096 370.0 → 267 µs (target ≈ 231).
+  - bf16 flagged: T640 C1792 131.5 → 66–71 µs (target ≈ 50); T640 C7168 306.6 → 238 µs (target ≈ 202); T1280 C4096 370.0 → 267 µs (target ≈ 231).
   - fp32/fp32: T640 C7168 478 → 450 µs; T640 C1792 154 → 134 µs; T1280 C4096 547 → 531 µs.
   - Guard set, fp32 / bf16 / mixed. Every cell is faster; no regression:
     - C1792 T640: 171 / 133 / 153 → 138 / 67 / 128 µs.

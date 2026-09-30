@@ -108,7 +108,7 @@
 
 **Outcome**:
 - **Measured** (device kernel ns, 110 cores, Blackhole, bf16/bf16):
-  - T640 C1792: 131.5 → 66–69 µs (target ≈ 50).
+  - T640 C1792: 131.5 → 66–71 µs (target ≈ 50).
   - T640 C7168: 306.6 → 238 µs.
   - T1280 C4096: 370.0 → 267 µs.
   - Guard set: every cell is faster than after Refinement 2 (C1792 T640 fp32/bf16/mixed: 171/133/153 → 138/67/128 µs; C7168 T1000: 788/460/760 → 706/398/677 µs).
