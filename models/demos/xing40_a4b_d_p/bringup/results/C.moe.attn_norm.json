@@ -1,0 +1,153 @@
+{
+ "metrics": {
+  "auto_attn_norm_L02_big_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.0004850625991821289
+  },
+  "auto_attn_norm_L02_big_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.000545620918274
+  },
+  "auto_attn_norm_L02_big_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9984775185585022
+  },
+  "auto_attn_norm_L02_big_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0018096293788403273
+  },
+  "auto_attn_norm_L02_big_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.03
+  },
+  "auto_attn_norm_L02_big_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.002358758356422186
+  },
+  "auto_attn_norm_L02_layer39_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.000517427921295166
+  },
+  "auto_attn_norm_L02_layer39_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.0011274814605713
+  },
+  "auto_attn_norm_L02_layer39_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9977779388427734
+  },
+  "auto_attn_norm_L02_layer39_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0017866111593320966
+  },
+  "auto_attn_norm_L02_layer39_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.03
+  },
+  "auto_attn_norm_L02_layer39_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0031949607655406
+  },
+  "auto_attn_norm_L02_mixed_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.0005421638488769531
+  },
+  "auto_attn_norm_L02_mixed_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.0003658533096313
+  },
+  "auto_attn_norm_L02_mixed_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9985383749008179
+  },
+  "auto_attn_norm_L02_mixed_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0018306024139747024
+  },
+  "auto_attn_norm_L02_mixed_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.03
+  },
+  "auto_attn_norm_L02_mixed_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0022605855483561754
+  },
+  "auto_attn_norm_L02_small_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.0002808570861816406
+  },
+  "auto_attn_norm_L02_small_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.0006077289581299
+  },
+  "auto_attn_norm_L02_small_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9986173510551453
+  },
+  "auto_attn_norm_L02_small_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0017849497962743044
+  },
+  "auto_attn_norm_L02_small_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.03
+  },
+  "auto_attn_norm_L02_small_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.002121067838743329
+  },
+  "auto_attn_norm_L02_vs_cpu_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.000554502010345459
+  },
+  "auto_attn_norm_L02_vs_cpu_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.000333547592163
+  },
+  "auto_attn_norm_L02_vs_cpu_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9985106587409973
+  },
+  "auto_attn_norm_L02_vs_cpu_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.001831344678066671
+  },
+  "auto_attn_norm_L02_vs_cpu_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.006024225149303675
+  },
+  "auto_attn_norm_L02_vs_cpu_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0022429556120187044
+  },
+  "auto_attn_norm_L02_vs_golden_bias": {
+   "t": "2026-09-30T14:44:45",
+   "value": -0.0005546808242797852
+  },
+  "auto_attn_norm_L02_vs_golden_ratio_max": {
+   "t": "2026-09-30T14:44:45",
+   "value": 1.0002470016479492
+  },
+  "auto_attn_norm_L02_vs_golden_ratio_min": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9985360503196716
+  },
+  "auto_attn_norm_L02_vs_golden_rel": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0029293743427842855
+  },
+  "auto_attn_norm_L02_vs_golden_rel_limit": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.008366463473066688
+  },
+  "auto_attn_norm_L02_vs_golden_row": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.0033180699683725834
+  },
+  "pcc_attn_norm_L02": {
+   "t": "2026-09-30T14:44:45",
+   "value": 0.9999958648428795
+  }
+ },
+ "task": "C.moe.attn_norm"
+}
