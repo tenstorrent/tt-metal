@@ -213,10 +213,15 @@ def _golden_function_mesh_partition(
         for position, device_index in enumerate(group):
             per_device_outputs[device_index] = chunks[position]
 
-    # After partition the tensor is sharded along dim across the cluster axis.
+    # After partition the tensor is sharded along dim across the cluster axis. With no cluster axis device k holds
+    # chunk k in row-major device order, i.e. dim is sharded on every mesh axis (the op labels that output as the
+    # collapsed {N}, [Shard(dim)]), so the composition concatenates every device along dim.
+    normalized_dim = _normalize_dim(dim, input_tensor[0].ndim)
     output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
     if cluster_axis is not None:
-        output_shard_dims[cluster_axis] = _normalize_dim(dim, input_tensor[0].ndim)
+        output_shard_dims[cluster_axis] = normalized_dim
+    else:
+        output_shard_dims = [normalized_dim] * len(output_shard_dims)
     return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
