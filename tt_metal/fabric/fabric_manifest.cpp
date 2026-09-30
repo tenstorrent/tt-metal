@@ -32,6 +32,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 #include <unistd.h>
 
@@ -287,6 +288,119 @@ json credit_counters_json(const manifest::L1CreditCounters& counters) {
     return out;
 }
 
+// ============ Channels ============
+
+json stream_ref_json(const manifest::StreamRef& stream) {
+    json out;
+    out["stream_id"] = stream.stream_id;
+    out["register"] = lower_enum_name(stream.reg);
+    out["schema"] = stream.schema;
+    return out;
+}
+
+// An array reference is a path within the router, e.g. "credit_counters/to_sender_ack".
+json credit_ref_json(const manifest::CreditRef& credit) {
+    if (const auto* stream = std::get_if<manifest::StreamRef>(&credit)) {
+        return stream_ref_json(*stream);
+    }
+    const auto& array = std::get<manifest::ArrayRef>(credit);
+    json out;
+    out["array"] = array.array;
+    out["index"] = array.index;
+    return out;
+}
+
+// The NoC is written as its number: NOC's RISCV_*_default aliases share its values, so it has no unique name.
+json noc_write_config_json(const manifest::NocWriteConfig& config) {
+    json out;
+    out["noc"] = static_cast<uint32_t>(config.noc);
+    out["cmd_buf"] = lower_enum_name(config.cmd_buf);
+    return out;
+}
+
+// The path of the router facing `direction` on the same chip and routing plane as the router on `chan`.
+std::string sibling_router_path(
+    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, eth_chan_directions direction) {
+    const auto plane = control_plane.get_routing_plane_id(node, chan);
+    for (const auto& [sibling_chan, sibling_direction] : control_plane.get_active_fabric_eth_channels(node)) {
+        if (sibling_direction == direction && control_plane.get_routing_plane_id(node, sibling_chan) == plane) {
+            return router_path(node, router_key(direction, plane));
+        }
+    }
+    TT_THROW(
+        "Fabric manifest: {} channel {} has a producer facing {} on routing plane {}, but no router is there",
+        node,
+        chan,
+        direction_letter(direction),
+        plane);
+}
+
+// A worker producer is "worker" and a sibling router producer is that router's path.
+json sender_producer_json(
+    const std::optional<manifest::SenderChannelProducer>& producer,
+    const ControlPlane& control_plane,
+    FabricNodeId node,
+    chan_id_t chan) {
+    if (!producer.has_value()) {
+        return nullptr;
+    }
+    if (std::holds_alternative<manifest::LocalWorker>(*producer)) {
+        return "worker";
+    }
+    return sibling_router_path(
+        control_plane, node, chan, std::get<manifest::SiblingRouterRef>(*producer).direction);
+}
+
+json sender_channel_json(
+    const manifest::SenderChannel& sender, const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan) {
+    json serviced_by = json::array();
+    for (const auto risc_id : sender.serviced_by) {
+        serviced_by.push_back(fmt::format("erisc{}", risc_id));
+    }
+
+    json credits;
+    if (sender.credits.acked.has_value()) {
+        credits["acked"] = credit_ref_json(*sender.credits.acked);
+    }
+    credits["completed"] = credit_ref_json(sender.credits.completed);
+
+    json control_info;
+    control_info["connection"] = l1_region_json(sender.control_info.connection);
+    control_info["conn_info"] = l1_region_json(sender.control_info.conn_info);
+    if (sender.control_info.buffer_index_sem.has_value()) {
+        control_info["buffer_index_sem"] = l1_region_json(*sender.control_info.buffer_index_sem);
+    }
+
+    json out;
+    out["serviced_by"] = std::move(serviced_by);
+    out["producer"] = sender_producer_json(sender.producer, control_plane, node, chan);
+    out["is_injection_channel"] = sender.is_injection_channel;
+    out["producer_credit_return"] = noc_write_config_json(sender.producer_credit_return);
+    out["ring_buffer"] = l1_region_json(sender.ring_buffer);
+    out["free_slots"] = stream_ref_json(sender.free_slots);
+    out["credits"] = std::move(credits);
+    out["control_info"] = std::move(control_info);
+    return out;
+}
+
+// Keyed vc<N> then ch<M>. VCs this router has no senders on are left out.
+json senders_json(const manifest::Router& router, const ControlPlane& control_plane, FabricNodeId node) {
+    json out = json::object();
+    for (size_t vc = 0; vc < router.channels.senders.size(); ++vc) {
+        const auto& channels = router.channels.senders[vc];
+        if (channels.empty()) {
+            continue;
+        }
+        json vc_json;
+        for (size_t channel = 0; channel < channels.size(); ++channel) {
+            vc_json[fmt::format("ch{}", channel)] =
+                sender_channel_json(channels[channel], control_plane, node, router.identity.eth_chan);
+        }
+        out[fmt::format("vc{}", vc)] = std::move(vc_json);
+    }
+    return out;
+}
+
 // A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
 json make_router_json(
     const manifest::Router& router,
@@ -321,6 +435,7 @@ json make_router_json(
         is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));
     out["shape"] = router_shape_json(router.shape);
     out["credit_counters"] = credit_counters_json(router.credit_counters);
+    out["channels"]["senders"] = senders_json(router, control_plane, node);
     return out;
 }
 

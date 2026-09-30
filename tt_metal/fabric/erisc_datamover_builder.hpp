@@ -480,6 +480,10 @@ public:
     bool has_tensix_extension_enabled() const { return has_tensix_extension; }
     bool is_udm_mode() const { return udm_mode; }
     bool has_channel_trimming_overrides() const { return channel_trimming_overrides_.has_value(); }
+    // `channel` is the sender compact index (RouterVcShape::flat_sender_id).
+    bool is_sender_channel_serviced(uint32_t risc_id, uint32_t channel) const {
+        return is_sender_channel_serviced_.at(risc_id).at(channel);
+    }
 
     //    protected:
     tt::tt_metal::CoreCoord my_eth_core_logical;
