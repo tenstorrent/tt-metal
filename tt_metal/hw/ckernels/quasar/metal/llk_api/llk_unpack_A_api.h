@@ -74,10 +74,9 @@ inline void llk_unpack_A_init(
             // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
             // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
-                // One tile per DEST bank section (block_ct_dim = 1); llk_unpack_A / llk_unpack_A_block loop per
-                // tile. Transpose is not supported on UNP_DEST and is forced off inside the primitive.
+                // Transpose is not supported on UNP_DEST and is forced off inside the primitive.
                 _llk_unpack_unary_operand_to_dest_init_(
-                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), 1 /*block_ct_dim*/);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>());
             } else {
                 if (transpose_of_faces && within_face_16x16_transpose) {
                     _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(
@@ -112,8 +111,8 @@ inline void llk_unpack_A_init(
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
  * For the non-broadcast path the UNP_DEST routing decision is made solely from the `unpack_to_dest` template
- * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_`, which carries the
- * UNPACK_MATH / MATH_PACK semaphore handshake and the SyncHalf bank flip; otherwise `_llk_unpack_unary_operand_`
+ * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_tile_`, which carries
+ * the UNPACK_MATH / MATH_PACK semaphore handshake and the SyncHalf bank flip; otherwise `_llk_unpack_unary_operand_`
  * on UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
@@ -123,13 +122,16 @@ inline void llk_unpack_A_init(
  * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
+ * @param dst_tile_index: DEST tile index the tile lands at. Used on the unpack-to-dest path only: there the unpacker
+ * writes DEST directly, so math cannot place the tile. Ignored otherwise.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
     [[maybe_unused]] bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+inline void llk_unpack_A(
+    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -141,7 +143,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
             // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
             // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
             // DST_ACCUM_MODE.
-            _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx);
+            _llk_unpack_unary_operand_to_dest_tile_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx, dst_tile_index);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
@@ -155,6 +157,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
 /**
  * @brief Unpacks a contiguous block of tiles for unary and unary-broadcast paths.
+ *
+ * On the unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles [0, ntiles) under a
+ * single UNPACK_MATH / MATH_PACK handshake. The other paths unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -177,21 +182,24 @@ inline void llk_unpack_A_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
-    [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");
-        if constexpr (BType == BroadcastType::NONE) {
-            if constexpr (unpack_to_dest) {
-                // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
-                _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(rd_entry_idx + tile_index);
-            } else {
-                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index, tensor_shape);
-            }
-        } else {
-            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
-        }
+        // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
+        _llk_unpack_unary_operand_to_dest_block_<DST_SYNC_MODE, DST_ACCUM_MODE>(
+            rd_entry_idx + start_tile_index, ntiles);
         WAYPOINT("UPAD");
+    } else {
+        [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+        for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+            WAYPOINT("UPAW");
+            if constexpr (BType == BroadcastType::NONE) {
+                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index, tensor_shape);
+            } else {
+                constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
+                _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
+            }
+            WAYPOINT("UPAD");
+        }
     }
 }
 
