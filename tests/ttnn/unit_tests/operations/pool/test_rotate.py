@@ -547,10 +547,6 @@ def test_multichannel_consistency(device, input_shape, angle, interpolation_mode
         assert max_diff < 1e-5, f"Bilinear channels rotated differently: {max_diff}"
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
 @pytest.mark.parametrize("input_buffer, output_buffer", [("DRAM", "L1"), ("L1", "DRAM")])
 @pytest.mark.parametrize("input_shape", [(1, 64, 64, 24), (2, 32, 32, 40)])
 def test_nearest_rotate_across_buffer_types(device, input_shape, input_buffer, output_buffer):
@@ -566,3 +562,7 @@ def test_nearest_rotate_across_buffer_types(device, input_shape, input_buffer, o
     )
 
     assert torch.equal(ttnn.to_torch(ttnn_output), torch_input)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
