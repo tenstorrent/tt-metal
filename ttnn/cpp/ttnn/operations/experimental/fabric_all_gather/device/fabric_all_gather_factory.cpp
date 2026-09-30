@@ -413,6 +413,20 @@ Plan build_plan(
                     TT_FATAL(best.has_value(), "fabric_all_gather: the core grid {} has too few cores", grid);
                     take(*best);
                     workers[worker_slot(j, dir, l, L)] = LinkWorker{*best, true, links[l]};
+                    log_debug(
+                        tt::LogOp,
+                        "fabric_all_gather placement: chip {} ring {} dir {} link {} peer {} eth {} (virtual {}) "
+                        "worker {} (virtual {}) hops {}",
+                        c,
+                        j,
+                        dir,
+                        links[l],
+                        *peer,
+                        eth,
+                        device->ethernet_core_from_logical_core(eth),
+                        *best,
+                        device->worker_core_from_logical_core(*best),
+                        best_hops);
                 }
             }
         }
@@ -434,6 +448,13 @@ Plan build_plan(
             TT_FATAL(it != order.end(), "fabric_all_gather: the core grid {} has too few cores", grid);
             take(*it);
             plan.copy_cores[li].push_back(*it);
+            log_debug(
+                tt::LogOp,
+                "fabric_all_gather placement: chip {} copy {} worker {} (virtual {})",
+                c,
+                l,
+                *it,
+                device->worker_core_from_logical_core(*it));
         }
     }
     return plan;
