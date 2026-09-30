@@ -12,7 +12,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.bringup.mhc_post import mhc_post
+from ttnn.bringup.mhc_post_ttnn import mhc_post
 
 from .test_mhc_post import reference_mhc_post, to_device
 

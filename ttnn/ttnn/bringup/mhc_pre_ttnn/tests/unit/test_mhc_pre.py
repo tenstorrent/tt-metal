@@ -20,7 +20,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.bringup.mhc_pre import mhc_pre, default_compute_kernel_config
+from ttnn.bringup.mhc_pre_ttnn import mhc_pre, default_compute_kernel_config
 from ttnn.operations._op_contract import UnsupportedAxisValue
 
 N_HC = 4
