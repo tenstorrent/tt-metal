@@ -576,14 +576,21 @@ void sub_exp_block_bcast_cols(
 #ifdef SDPA_RECIPE_FP32
 #ifdef SDPA_RECIPE_ACCURATE
     // One batch per QK subblock column group (the subblock width divides the K chunk).
+#ifdef SDPA_I4
+    // I4 (perf research): s - m on the SFPU in FP32. Two score tiles per batch leave a dest slot for m.
+    constexpr uint32_t score_batch = SDPA_RECIPE_QK_W > 2 ? 2 : SDPA_RECIPE_QK_W;
+#else
     constexpr uint32_t score_batch = SDPA_RECIPE_QK_W;
+#endif
     static_assert(score_batch == 1 || score_batch == 2 || score_batch == 4);
     CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
+#ifndef SDPA_I4
     if (global_col_base == 0) {
 #ifndef SDPA_KO_SUBL1
         sdpa_subtract_max_l1(inout_cb, max_cb, max_row_base, cols_in_row);
 #endif
     }
+#endif
     cb_alias_read_ptr(7, inout_cb);
     configure_pack_width(inout_cb, score_batch);
     PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -604,8 +611,19 @@ void sub_exp_block_bcast_cols(
             })
             sdpa_score_unpack_mop(4);
             unary_bcast_uninit<BroadcastType::NONE>(7);
+#ifdef SDPA_I4
+            // The row maximum (BF16, exact in FP32) broadcast along columns into the slot after the scores.
+            sdpa_stream_reconfig(max_cb, max_cb);
+            unary_bcast_init<BroadcastType::COL>(max_cb);
+            unary_bcast<BroadcastType::COL>(max_cb, max_row_base + i, score_batch);
+            unary_bcast_uninit<BroadcastType::COL>(max_cb);
+#endif
             tile_regs_commit();
             tile_regs_wait();
+#ifdef SDPA_I4
+            PACK((SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_sub_bcast_max, (score_batch), 0, VectorMode::None)));
+#endif
             PACK((ckernel::sfpu::restore_sdpa_grid_macro_instructions()));
             PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
             PACK((SFPU_UNARY_CALL(
