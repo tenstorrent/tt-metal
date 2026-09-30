@@ -5,9 +5,7 @@ compile-time arguments must change the hash, or a stale binary runs; a change su
 Each test builds Programs from specs that differ in one field and compares the kernels' hashes, with one file per
 struct whose field is varied.
 
-Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH).
-
-| File | Struct | Tests | What is pinned |
+| File | Struct | Tests | What is tested |
 |---|---|---|---|
 | `kernel_spec.cpp` | `KernelSpec` | 1 | Binding a scratchpad changes the hash |
 | `dataflow_buffer_spec.cpp` | `DataflowBufferSpec` | 1 | `tile_format_metadata` changes the bound compute kernel's hash |

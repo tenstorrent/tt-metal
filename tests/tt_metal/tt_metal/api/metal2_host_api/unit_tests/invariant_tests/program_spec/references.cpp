@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramSpec structural invariant (program_spec.hpp): every binding and WorkUnitSpec names a declared spec.
+// ProgramSpec structural invariant (program_spec.hpp): every name resolves. Each binding, WorkUnitSpec::kernels
+// entry and DataflowBufferSpec::borrowed_from names a declared spec.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -19,6 +20,7 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::BindTensorParameterToKernel;
+using test_helpers::MakeBorrowedDFBProgramSpec;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
@@ -100,6 +102,17 @@ TEST_F(ProgramSpecTestQuasar, CPU_WorkUnitSpecReferencesUnknownKernelFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("WorkUnitSpec 'work_unit' references unknown kernel 'nonexistent_kernel'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBUnknownTensorParameterFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor");
+    // Re-target the DFB at a TensorParameter that wasn't declared.
+    spec.dataflow_buffers[0].borrowed_from = TensorParamName{"nonexistent_tensor"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("borrows memory from TensorParameter 'nonexistent_tensor'")));
 }
 
 }  // namespace

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of KernelSpec::DFBBinding and KernelSpec::dfb_bindings (kernel_spec.hpp): accessor
-// names, at most one PRODUCER and one CONSUMER binding per DFB, and self-loop rules.
+// names, at most one PRODUCER and one CONSUMER binding per DFB, self-loop rules, and every DFB a compute
+// kernel binds sets a data format.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -263,6 +264,52 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelSelfLoopOnGen1Succeeds) {
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBWithComputeEndpointRequiresDataFormat) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");  // Compute!
+    auto dfb = MakeMinimalDFB("dfb");
+    // dfb.data_format_metadata is NOT set (nullopt)
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' is used by a compute kernel, but no data_format_metadata is specified")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DMOnlyProgramSucceeds) {
+    // A program with only DM kernels (no compute)
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "dm_only_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    // No data_format_metadata needed for DM-only DFBs
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }

@@ -10,26 +10,33 @@ An invariant is **local** to the smallest struct that holds every field it reads
 input), and is tested in the directory named after that struct's header. For example, "a DFB accessor name is a
 valid C++ identifier" reads only a `DFBBinding`, so it is tested in `kernel_spec/`.
 
-A rule that reads more than one field of `ProgramSpec` is **structural**, for example "every
-`DFBBinding::dfb_spec_name` names a declared DataflowBufferSpec", which reads `kernels` and `dataflow_buffers`.
-Structural invariants are listed at the top of `ProgramSpec` in `program_spec.hpp` and tested in `program_spec/`.
+A name field is a pointer: a binding's `*_spec_name` or `tensor_parameter_name`, `WorkUnitSpec::kernels`, and
+`DataflowBufferSpec::borrowed_from`. A struct may follow the names it holds, so a rule that reads the object a name
+points to is still local. For example, "every DFB a compute kernel binds sets `data_format_metadata`" follows
+`dfb_spec_name`, so it is local to `KernelSpec` and tested in `kernel_spec/`. Rules on `*AdvancedOptions` fields are an
+exception and do not follow names.
+
+A rule that no struct below `ProgramSpec` can state is **structural**. It either checks that a name resolves, for
+example "every `DFBBinding::dfb_spec_name` names a declared DataflowBufferSpec", or needs every struct that names an
+object, for example "every DataflowBufferSpec is bound by some kernel". Structural invariants are listed at the top of
+`ProgramSpec` in `program_spec.hpp` and tested in `program_spec/`.
 
 | Directory | Header | Covers |
 |---|---|---|
-| `kernel_spec/` | `kernel_spec.hpp` | KernelSpec: threads, bindings, argument schema, hw_config against its bindings |
+| `kernel_spec/` | `kernel_spec.hpp` | KernelSpec: threads, bindings and the DFBs they name, argument schema, hw_config |
 | `data_movement_hardware_config/` | `data_movement_hardware_config.hpp` | DataMovementHardwareConfig |
-| `dataflow_buffer_spec/` | `dataflow_buffer_spec.hpp` | DataflowBufferSpec |
+| `dataflow_buffer_spec/` | `dataflow_buffer_spec.hpp` | DataflowBufferSpec, including the TensorParameter `borrowed_from` names |
 | `scratchpad_spec/` | `scratchpad_spec.hpp` | ScratchpadSpec |
 | `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` | PrefetcherPipeParameter geometry |
 | `advanced_options/` | `advanced_options.hpp` | KernelAdvancedOptions, DFBAdvancedOptions, SemaphoreAdvancedOptions |
-| `program_spec/` | `program_spec.hpp` | WorkUnitSpec, per-field ProgramSpec rules, all structural invariants |
+| `program_spec/` | `program_spec.hpp` | WorkUnitSpec and the kernels it names, per-field ProgramSpec rules, all structural invariants |
 
 Headers without a directory:
 
 - `semaphore_spec.hpp`: its one local invariant (non-empty `target_nodes`) is untested. Semaphore binding and option
   rules are in `kernel_spec/`, `advanced_options/` and `program_spec/`.
 - `compute_hardware_config.hpp`: no invariant of its own. The `unpack_modes` rules need the kernel's DFB bindings, so
-  they are in `kernel_spec/hardware_config.cpp` and `program_spec/unpack_modes.cpp`.
+  they are in `kernel_spec/hardware_config.cpp`.
 - `tensor_parameter.hpp`: no invariant.
 - `program_run_args.hpp`: tested in `../program_run_args/`.
 

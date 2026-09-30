@@ -19,6 +19,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/kernel_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/semaphore_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/data_movement_hardware_config/config_1xx.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/dataflow_buffer_spec/borrowed_memory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/dataflow_buffer_spec/dataflow_buffer_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/basic_kernel_info.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/compiler_options.cpp
@@ -29,7 +30,6 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/semaphore_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/tensor_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/prefetcher_pipe_parameter/prefetcher_pipe_parameter.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/borrowed_memory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/declarations_used.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfb_aliasing.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfb_endpoints.cpp
@@ -42,7 +42,6 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/program_spec_fields.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/semaphores.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/unpack_modes.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/valid_program_specs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_capacity.cpp

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramSpec structural invariants on placement per WorkUnitSpec (program_spec.hpp): each node hosting
-// a DFB has exactly one producer and one consumer instance, and at most one kernel per node binds a
-// given scratchpad.
+// Local invariants of WorkUnitSpec::kernels (program_spec.hpp): for each DFB its kernels bind, exactly one
+// producer and one consumer instance, and at most one of its kernels binds a given scratchpad.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -32,48 +31,6 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBWithOnlyProducerFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto kernel = MakeMinimalGen2DMKernel("kernel");
-    auto dfb = MakeMinimalDFB("dfb");
-
-    // Only bind as producer, no consumer
-    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "accessor"));
-
-    spec.kernels = {kernel};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no consumer")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBWithOnlyConsumerFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto kernel = MakeMinimalGen2DMKernel("kernel");
-    auto dfb = MakeMinimalDFB("dfb");
-
-    // Only bind as consumer, no producer
-    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "accessor"));
-
-    spec.kernels = {kernel};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has no producer")));
-}
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInSameWorkUnitFails) {
     NodeCoord node{0, 0};

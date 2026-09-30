@@ -326,4 +326,43 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     return spec;
 }
 
+// Helper to create a Gen2 ProgramSpec with a single borrowed-memory DFB backed by a TensorParameter.
+//   - DFB default size: 32 bytes (entry_size 16 * num_entries 2). Fits inside
+//     MakeMinimalTensorParameter's 1x32 BFLOAT16 default (64 bytes); oversized cases
+//     pass larger dfb_entry_size / dfb_num_entries via the parameters.
+//   - tensor_buffer_type defaults to L1 (the only legal choice for borrowing).
+inline ProgramSpec MakeBorrowedDFBProgramSpec(
+    const std::string& tensor_param_name = "borrowed_tensor",
+    tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
+    uint32_t dfb_entry_size = 16,
+    uint32_t dfb_num_entries = 2,
+    bool bind_backing_to_kernel = true) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
+    dfb.borrowed_from = TensorParamName{tensor_param_name};
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
+    // The borrowed_from reference is itself counted as a use of the TensorParameter, so binding it
+    // to a kernel is not required for referential integrity. Callers exercising the borrowed-only
+    // path pass bind_backing_to_kernel=false.
+    if (bind_backing_to_kernel) {
+        BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    }
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    return spec;
+}
+
 }  // namespace tt::tt_metal::experimental::test_helpers

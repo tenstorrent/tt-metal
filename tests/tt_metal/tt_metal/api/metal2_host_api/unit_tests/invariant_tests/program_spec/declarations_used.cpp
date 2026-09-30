@@ -18,6 +18,7 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeBorrowedDFBProgramSpec;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
@@ -90,6 +91,21 @@ TEST_F(ProgramSpecTestGen1, CPU_UnboundTensorParameterFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("TensorParameter 'orphan_tensor' is defined but not bound by any kernel")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
+    // Regression: a TensorParameter used ONLY as a borrowed-memory DFB's backing (referenced via
+    // borrowed_from, never bound by a kernel) is a legitimate use. The validator must count
+    // borrowed_from toward referential integrity rather than rejecting the parameter as "defined
+    // but not bound by any kernel". This is the common borrowed-memory-DFB case (e.g. a borrowed
+    // LUT / scratch tensor consumed only through the DFB).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor",
+        tt::tt_metal::BufferType::L1,
+        /*dfb_entry_size=*/16,
+        /*dfb_num_entries=*/2,
+        /*bind_backing_to_kernel=*/false);
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {

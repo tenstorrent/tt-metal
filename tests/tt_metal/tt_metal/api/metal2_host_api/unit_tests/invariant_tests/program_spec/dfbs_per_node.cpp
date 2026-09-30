@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramSpec structural invariant (program_spec.hpp): the number of DFBs occupying one node is bounded.
+// Local invariant of WorkUnitSpec::kernels (program_spec.hpp): its kernels bind a bounded number of distinct
+// DFBs, which bounds the DFBs occupying each of its nodes.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

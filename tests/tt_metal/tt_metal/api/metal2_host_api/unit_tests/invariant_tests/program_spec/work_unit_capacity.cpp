@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramSpec structural invariants on WorkUnitSpec capacity (program_spec.hpp): at most one compute
-// kernel, and summed num_threads within the per-architecture budgets.
+// Local invariants of WorkUnitSpec::kernels (program_spec.hpp): at most one compute kernel, and summed
+// num_threads within the per-architecture budgets.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

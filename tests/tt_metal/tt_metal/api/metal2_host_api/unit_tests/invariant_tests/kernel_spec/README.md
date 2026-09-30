@@ -1,7 +1,9 @@
 # kernel_spec invariant tests
 
-Local invariants of `KernelSpec` and its nested structs (`kernel_spec.hpp`). Rules that relate a kernel's bindings to
-the rest of the ProgramSpec, such as "the bound DFB is declared", are structural and live in `../program_spec/`.
+Local invariants of `KernelSpec` and its nested structs (`kernel_spec.hpp`). A binding's name is a pointer, so rules
+that read the object a binding names, such as the bound DFB's data format, are local to `KernelSpec` and tested here.
+That the name resolves ("the bound DFB is declared"), and rules that need every kernel binding an object, are
+structural and live in `../program_spec/`.
 
 ## Files
 
@@ -9,12 +11,12 @@ the rest of the ProgramSpec, such as "the bound DFB is declared", are structural
 |---|---|---|
 | `basic_kernel_info.cpp` | 7 | `num_threads` per architecture and kernel kind, `source` |
 | `compiler_options.cpp` | 1 | `CompilerOptions` |
-| `dfb_binding.cpp` | 8 | `DFBBinding` and `dfb_bindings` |
+| `dfb_binding.cpp` | 10 | `DFBBinding` and `dfb_bindings`, including the data format of the DFBs a compute kernel binds |
 | `semaphore_binding.cpp` | 6 | `SemaphoreBinding` and `semaphore_bindings` |
 | `scratchpad_binding.cpp` | 4 | `ScratchpadBinding` and `scratchpad_bindings` |
 | `tensor_binding.cpp` | 4 | `TensorBinding` and `tensor_bindings` |
 | `kernel_arguments.cpp` | 8 | `compile_time_args` and `RuntimeArgSchema` |
-| `hardware_config.cpp` | 4 | `hw_config` against the kernel's own bindings |
+| `hardware_config.cpp` | 14 | `hw_config` against the kernel's bindings and the DFBs they name, including unpack modes |
 
 ## Coverage
 
@@ -33,6 +35,7 @@ the rest of the ProgramSpec, such as "the bound DFB is declared", are structural
 | Gen2: a data-movement kernel does not self-loop a DFB | Q `DMKernelSelfLoopOnGen2Fails`. Accepted: WH `DMKernelSelfLoopOnGen1Succeeds`, Q `DFBSelfLoopOnComputeKernelSucceeds` |
 | A compute kernel that self-loops a DFB uses STRIDED on its CONSUMER binding | **Untested** |
 | A CONSUMER binding with access pattern ALL requires `num_threads <= 4` | **Untested** |
+| A compute kernel's bound DFBs set `data_format_metadata` | Q `DFBWithComputeEndpointRequiresDataFormat`. Accepted without a format when no compute kernel binds the DFB: Q `DMOnlyProgramSucceeds` |
 | `SemaphoreBinding::accessor_name` is a C++ identifier of at most `MAX_ACCESSOR_NAME_LENGTH` characters | Q `KernelSemaphoreBindingInvalidAccessorFails` (identifier only; the length limit is untested) |
 | `semaphore_spec_name` is unique across `semaphore_bindings` | **Untested** |
 | `accessor_name` is unique across `semaphore_bindings` | Q `KernelSemaphoreBindingDuplicateAccessorFails` |
@@ -48,7 +51,9 @@ the rest of the ProgramSpec, such as "the bound DFB is declared", are structural
 | No name repeats within `runtime_arg_names` or within `common_runtime_arg_names` | **Untested** |
 | No name repeats across `runtime_arg_names` and `common_runtime_arg_names` | Q `NamedRtaCrtaCollisionFails` |
 | Every `unpack_modes` key names a DFB this kernel binds | Q `ComputeConfigUnpackToDestModeReferencesUnboundDFBFails` |
-| Gen1: UnpackToDest on a DFB this kernel consumes requires `enable_32_bit_dest` | WH `ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf`. Accepted on Gen2: Q `ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds` |
+| UnpackToDest on a consumed DFB with a 32-bit data format requires `enable_32_bit_dest` | Q `UnpackToDestFp32WithoutFp32DestAccEnFails`. Accepted: Q `ValidUnpackToDestModeSucceeds`, Q `NonFP32DFBWithUnpackToDestFp32ModeSucceeds`, Q `UnpackToDestFp32OnProducerBindingSucceeds` (producer bindings are exempt) |
+| Gen1: UnpackToDest on any consumed DFB requires `enable_32_bit_dest` | WH `ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf`. Accepted on Gen2: Q `ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds` |
+| A consumed Float32 DFB with `enable_32_bit_dest` set has an `unpack_modes` entry (Int32 and UInt32 are exempt, issue #49936) | Q `FP32ConsumerWithFp32DestAccEnAndNoEntryFails`. Accepted: Q `FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntry`, Q `FP32ProducerOnlyBindingDoesNotRequireEntry`, Q `FP32DFBWithDefaultUnpackToDestModeSucceeds`, Q `NonFP32DFBWithoutUnpackToDestModeEntrySucceeds`, Q `NonFP32DFBWithExplicitDefaultUnpackToDestModeSucceeds` |
 | Every `config_2xx->disable_dfb_implicit_sync_for` entry names a DFB this kernel binds | **Untested** |
 
 Freedoms pinned by acceptance tests: one string may be a DFB, semaphore and tensor accessor name in the same kernel

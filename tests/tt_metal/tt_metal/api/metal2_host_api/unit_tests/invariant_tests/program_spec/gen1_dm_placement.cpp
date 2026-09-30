@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramSpec structural invariant on Gen1 data-movement placement (program_spec.hpp): within a
-// WorkUnitSpec, DM kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use
-// distinct NOCs.
+// Local invariant of WorkUnitSpec::kernels on Gen1 data-movement placement (program_spec.hpp): its DM
+// kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
