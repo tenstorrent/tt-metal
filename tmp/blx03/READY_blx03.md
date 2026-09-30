@@ -4,13 +4,16 @@ Adapted from tmp/READY_26.md (g15blx02). dv153 is left out (suspect: job 689 too
 
 Tree: blx03:~/fasth3/tt-metal, branch ttp/t36-blx03-ltx25 (t10/t26 line 9287c953eb8 + t22 merged, NA fix d079ee7cd11 included).
 Build: build_Release (Release only). Venv: ~/fasth3/tt-metal/python_env.
-Caches (all under ~/fasth3): DiT ~/fasth3/cache/dit-ltx25, kernels ~/fasth3/cache/tt-metal-cache.
+Caches (under $FASTH3_DATA=/var/tmp/fasth3): DiT /var/tmp/fasth3/cache/dit-ltx25, kernels /var/tmp/fasth3/cache/tt-metal-cache, Gemma /var/tmp/fasth3/models/gemma-3-12b-it-qat-q4_0-unquantized.
 Weights: LTX-2.5 split files on /mnt/MLPerf (weka, shared with g15blx02); 2.3 monolith (VAE config) in ~/.cache/ltx-checkpoints.
 Outputs: ~/fasth3/out/ltx25_1080p_6s/<label>/{run.log,ltx_av_fast_*.mp4}
 
 Env: submit.sh passes `-e tmp/blx03/env.yaml` to the broker (venv, TT_METAL_HOME, kernel cache). Without it a caller
 that has no venv active (nohup/setsid drivers, plain ssh) gets rejected: "Python env not found at .../tt-metal/tt-metal/python_env".
 A worktree with its own env passes its own yaml (see ~/fasth3/t32/tmp/env.yaml).
+
+Smoke (job 874, dv145, warm caches, seed 0): S1 2.27s, S2 2.50s, DiffVAE decode 11.77s, audio 0.39s, compute 19.02s,
+E2E_WALL_S 19.81s; whole broker job 405s (load ~60s + warmup gen ~50s + timed gen). Budget ~600-900s per job.
 
 Rules: one project device job at a time (submit.sh refuses while a smarton job is running/queued), short jobs, never reset.
 

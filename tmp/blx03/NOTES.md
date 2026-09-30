@@ -28,3 +28,10 @@ holds blx03 (869 from another task was running), then queues smoke2_dv145 (cap 1
 Next: when DRIVE36B_DONE, read LTX_TIME / stage lines from ~/fasth3/out/ltx25_1080p_6s/smoke2_dv145/run.log
 (expect all load-cache hits), grab a still, fill timing into READY_blx03.md.
 If blx03 reboots and drive36b is gone: check `tt-device-mcp status` for a smarton smoke2 job; resubmit via the driver if none.
+
+Attempt 4 (19:10): smoke2_dv145 = broker job 874 PASSED (405s job, warm caches, run25.sh at 68027fe1a used ~/fasth3/cache).
+Timed gen (gen#1, 1080p/145f seed 0, DiffVAE): S1 2.27s (8 steps ~275ms), S2 2.50s (3 steps ~823ms), DiffVAE decode 11.77s,
+audio 0.39s, compute total 19.02s, E2E_WALL_S 19.81s. Warmup gen#0: 49.9s compute. Video looks clean (still smoke2_dv145_t3s.png).
+Caches moved to $FASTH3_DATA=/var/tmp/fasth3 (charter 19:01); /var/tmp copy is a file-for-file superset of the old ~/fasth3/cache,
+so ~/fasth3/cache (80G) was removed. run25.sh/env.yaml now point at /var/tmp (not yet exercised by a device run).
+Disk after: /home 218 GB free (97%), ~/fasth3 12G, /var/tmp/fasth3 103G (DiT 72G, Gemma 23G, kernel caches ~8.5G).
