@@ -524,6 +524,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
         volume, context_window, stride, brick, device, resident=resident, shard_count=shard_count, sp_axis=sp_axis
     )
     channels = head_count * head_dim
+    # DIFFVAE_NA_RELAYOUT=1 keeps the untilize/permute round trips around the op, for A/B timing.
+    single_head_tiles = head_count == 1 and os.environ.get("DIFFVAE_NA_RELAYOUT") != "1"
     # K and V span the resident region (owned + halo); Q and the output span only the owned columns.
     owned_volume = (time_extent, height_extent, width_local)
     bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
@@ -621,7 +623,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
     # Q is NOT widened: the halo's queries belong to the neighbour, and the op is told so via
     # query_extent/query_origin below.
     with timing_tree.span(device, "q-to-seq", category=timing_tree.RESHAPE, deep=True):
-        if already_bricked:
+        if already_bricked and single_head_tiles and query.layout == ttnn.TILE_LAYOUT:
+            # One head per chip: the bricked (b, 1, sites, hd) tile form is already the op's layout.
+            query_op = ttnn.reshape(query, (batch, 1, query_bricked_sites, channels))
+        elif already_bricked:
             rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT)
             site_major = ttnn.reshape(rows, (batch, 1, query_bricked_sites, channels))
             query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
@@ -658,6 +663,16 @@ def neighborhood_attention_3d_bricked_w_sharded(
         )
 
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")
+    if tp_axis is not None and already_bricked and single_head_tiles:
+        # Gathering one head per chip on the channel dim lays the heads out as [chip0 | chip1 | ...]
+        # within each site, which is global head order folded into channels: the out-proj's layout,
+        # reached without an untilize, a head/site permute or a retilize.
+        with timing_tree.span(device, "head-allgather", category=timing_tree.ALLGATHER, deep=True):
+            tiles = ttnn.reshape(attended, (batch, 1, query_bricked_sites, channels))
+            gathered = ccl_manager.all_gather(tiles, dim=3, mesh_axis=tp_axis, use_hyperparams=False)
+            ttnn.deallocate(attended)
+        return gathered
+
     with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         merged = ttnn.reshape(rows, (batch, query_bricked_sites, channels))
