@@ -878,6 +878,14 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T14:41:10'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py: a08d08cdd126fdea5cae1cccae23b434e79757b09f2987c4754942253e6b7927
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.02
   title: 'moe block with steps 1-2 on device (last: attn_collapse)'
   step: implement
