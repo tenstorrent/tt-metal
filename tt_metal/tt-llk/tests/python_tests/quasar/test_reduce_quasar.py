@@ -30,6 +30,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
@@ -44,9 +45,11 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -109,8 +112,20 @@ def reduce_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def reduce_input_dimensions():
-    return [64, 64]
+def reduce_input_dimensions(tile_dimensions=None, *, is_perf=False):
+    """Input shapes to sweep. Perf keeps one fixed element shape, so its tile count tracks
+    the tile size. The functional shapes are expressed in tiles: 2x2 fits inside a single
+    dest section, while 4x8 is 32 tiles, which exceeds a full dest in every mode -- 16
+    tiles at DestSync.Full and 8 at Half in 16-bit dest, halved again for 32-bit dest --
+    and still divides into equal blocks in all of them, so both sync modes cross a dest
+    bank boundary.
+    """
+    if is_perf:
+        return [[64, 64]]
+    return [
+        [tile_dimensions[0] * 2, tile_dimensions[1] * 2],
+        [tile_dimensions[0] * 4, tile_dimensions[1] * 8],
+    ]
 
 
 def generate_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
@@ -140,6 +155,7 @@ def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
+    input_dimensions=lambda tile_dimensions: reduce_input_dimensions(tile_dimensions),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
@@ -155,6 +171,7 @@ def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
 def test_reduce_quasar(
     formats,
     tile_dimensions,
+    input_dimensions,
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
@@ -170,10 +187,9 @@ def test_reduce_quasar(
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    input_dimensions = (
-        reduce_input_dimensions()
-        if is_perf
-        else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
+    # Each block is one dest section, so a multi-block input walks the dest banks.
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode, dest_acc, formats, input_dimensions, tile_dimensions
     )
 
     src_A, tile_cnt, _, _ = generate_stimuli(
@@ -249,6 +265,8 @@ def test_reduce_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
@@ -362,8 +380,14 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     is_perf=False,
     perf_report=None,
 ):
-    input_dimensions = reduce_input_dimensions()
+    (input_dimensions,) = reduce_input_dimensions(is_perf=True)
     tile_shape = construct_tile_shape((32, 32))
+
+    # Each block is one dest section; the kernel is shared with test_reduce_quasar and
+    # reads both of these.
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode, dest_acc, formats, input_dimensions, (32, 32)
+    )
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -409,6 +433,8 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),

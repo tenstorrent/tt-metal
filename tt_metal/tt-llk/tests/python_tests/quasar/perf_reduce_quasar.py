@@ -17,6 +17,7 @@ from quasar.test_reduce_quasar import (
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
     reduce_implied_math_formats,
+    reduce_input_dimensions,
     reduce_pool_type_and_math_fidelity_combinations,
     reduce_tile_dimensions,
 )
@@ -32,6 +33,7 @@ from quasar.test_reduce_quasar import (
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
+    input_dimensions=reduce_input_dimensions(is_perf=True),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
@@ -49,6 +51,7 @@ def test_perf_reduce_quasar(
     perf_report,
     formats,
     tile_dimensions,
+    input_dimensions,
     dest_acc,
     reduce_dim,
     pool_type_and_math_fidelity,
@@ -61,6 +64,7 @@ def test_perf_reduce_quasar(
     run_reduce_quasar(
         formats,
         tile_dimensions,
+        input_dimensions,
         dest_acc,
         reduce_dim,
         pool_type_and_math_fidelity,

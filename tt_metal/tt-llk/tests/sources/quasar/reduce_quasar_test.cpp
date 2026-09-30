@@ -97,15 +97,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t num_faces   = params.num_faces;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t num_faces          = params.num_faces;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
     DataFormat src_format                     = static_cast<DataFormat>(formats.math);
     const bool use_int32_dest_alu             = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
-    constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
         ZONE_SCOPED("INIT")
@@ -161,10 +162,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {
-                        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                        // One block per dest section: under DstSync::SyncHalf the bank flips per block.
+                        for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                         {
-                            const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
-                            for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                            for (std::uint32_t block_tile = 0; block_tile < NUM_TILES_IN_BLOCK; ++block_tile)
                             {
                                 _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
                             }
@@ -180,10 +181,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                    // One block per dest section: under DstSync::SyncHalf the bank flips per block.
+                    for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                     {
-                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
-                        for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                        for (std::uint32_t block_tile = 0; block_tile < NUM_TILES_IN_BLOCK; ++block_tile)
                         {
                             _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
                         }
@@ -214,12 +215,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res              = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
-    constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
         ZONE_SCOPED("INIT")
@@ -249,12 +250,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                // One block per dest section: under DstSync::SyncHalf the bank flips per block.
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
-                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    for (std::uint32_t block_tile = 0; block_tile < NUM_TILES_IN_BLOCK; ++block_tile)
                     {
-                        _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
+                        _llk_pack_(block_tile, block * NUM_TILES_IN_BLOCK + block_tile, tensor_shape_A);
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
                     {
