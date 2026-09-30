@@ -87,7 +87,10 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
         dest_acc=dest_acc,
     )
     result = torch.tensor(configuration.run().result, dtype=torch.bfloat16)
-    assert result.numel() == 2 * ct_dim * 1024
+    expected_numel = 2 * ct_dim * 1024
+    assert (
+        result.numel() == expected_numel
+    ), f"Result size mismatch: expected {expected_numel} elements, got {result.numel()}"
     golden = get_golden_generator(MatmulGolden)
     for phase, b in enumerate((b_strided, b_contiguous)):
         expected = golden(

@@ -85,10 +85,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
         TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     for (std::uint32_t phase = 0; phase < 2; phase++)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();

@@ -1757,7 +1757,9 @@ static void sdpa_inner_loop_step(
                 PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    if (kt_sub + 1 < kt_num_full_subblocks) {
+                    const bool prepare_next_block = kt_sub + 1 < kt_num_full_subblocks;
+                    const bool accumulate_in_l1 = kt_sub > 0;  // Block 0 overwrites the output row.
+                    if (prepare_next_block) {
                         sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                             cb_qkt_im,
                             cur.max,
@@ -1772,7 +1774,7 @@ static void sdpa_inner_loop_step(
                     // Block kt's in-place exp must be committed before its V matmul unpacks it.
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-                    if (kt_sub > 0) {
+                    if (accumulate_in_l1) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
                     {
@@ -1789,7 +1791,7 @@ static void sdpa_inner_loop_step(
                             /*inner_start=*/kt_sub * actual_sbw);
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
-                    if (kt_sub > 0) {
+                    if (accumulate_in_l1) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
                 }

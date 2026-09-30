@@ -7314,9 +7314,9 @@ if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        # Historical targets measured with deferred K multicast; remeasure after its removal.
-        ("kimi50k", 32, 640, 8, 72.56),
-        ("kimi_k3", 32, 640, 8, 72.35),
+        # Three-run medians with compute optimizations and blocking K multicast: 5.676 / 8.599 ms.
+        ("kimi50k", 32, 640, 8, 69.39),
+        ("kimi_k3", 32, 640, 8, 68.71),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
