@@ -413,6 +413,15 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision;
 #endif
 #if !defined(TT_POLY_LLK_DISABLE)
+    if (tt_poly_bf16_unary_context_eligible && ops_chain[0].type() == UnaryOpType::SOFTSHRINK &&
+        (unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "softshrink_tt_poly_bf16_tile_init();" ||
+         unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "softshrink_tt_poly_bf16_tile_init<false>();") &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0)) {
+        unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
+        unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "softshrink_tt_poly_bf16_program_init();";
+    }
+#endif
+#if !defined(TT_POLY_LLK_DISABLE)
     if (tt_poly_bf16_unary_context_eligible && ops_chain[0].type() == UnaryOpType::RELU &&
         (unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "relu_tt_poly_bf16_tile_init();" ||
          unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "relu_tt_poly_bf16_tile_init<false>();") &&
