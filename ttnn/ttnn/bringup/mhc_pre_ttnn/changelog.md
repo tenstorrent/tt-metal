@@ -197,7 +197,7 @@
   fp32-X 640×7168 lost about 40 µs against the racy version: the sender's in-place split now waits for each
   chunk's mcast. It is still below the pre-R3 567 µs.
 - Issues encountered: None beyond the race.
-- Tests added: none. The stress probe was saved under `ttnn/ttnn/bringup/mhc_pre/tests/unit/probes/`.
+- Tests added: none. The stress probe was saved under `ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/probes/`.
 
 ## Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
 - Date: 2026-09-30
@@ -262,7 +262,7 @@
   pass, and the complementary slice was 86/86.
 - Issues encountered: the Tracy capture tool crashed on every `--profile` run (infra), so measurements used the
   in-process profiler. The L1 margin underestimate is fixed above.
-- Tests added: `ttnn/ttnn/bringup/mhc_pre/tests/unit/test_mhc_pre_perf_inproc.py`, an in-process device-ns
+- Tests added: `ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_mhc_pre_perf_inproc.py`, an in-process device-ns
   probe over `SHAPES` × dtypes × the knob sets in `test_mhc_pre_perf_sweep.py`. It is skipped unless
   `TT_METAL_DEVICE_PROFILER=1`.
 
@@ -495,7 +495,7 @@ Every variant of both experiments is **bitwise identical** to the baseline outpu
   above).
 - Correctness:
   - Golden `eval/golden_tests/mhc_pre/`: **206/206**.
-  - Unit `ttnn/ttnn/bringup/mhc_pre/tests/unit/`: 91 passed, 1 skipped.
+  - Unit `ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/`: 91 passed, 1 skipped.
   - Subagent stress: 11 shapes × 4 dtype pairs × alternating seeds, bitwise identical to base, with ragged and
     ring-wrap shapes of 3–13 blocks.
 
@@ -505,7 +505,7 @@ Every variant of both experiments is **bitwise identical** to the baseline outpu
 | matmul_block | capability | `in0` is always read from the CB front with no tile-index base / offset, so it cannot project the next block, which sits *behind* the resident X(b) in the same CB (wrap-aware page offset). The pipelined proj(b+1) on the bf16 X / bf16 W path therefore uses the existing raw `project_block_pieces<1>` (bitwise identical DEST accumulation). The front-block projection keeps the helper. | n/a (inexpressible) | 104500 (1000×1792 bf16X/bf16W, vs 104200 serial helper schedule; flat) | mhc_pre_compute.cpp:1189 |
 
 ### Artifacts
-`ttnn/ttnn/bringup/mhc_pre/perf_experiments/{prelude_off_critical_path,cross_block_pipeline}/` (README.md,
+`ttnn/ttnn/bringup/mhc_pre_ttnn/perf_experiments/{prelude_off_critical_path,cross_block_pipeline}/` (README.md,
 graduation patches, bench tests, zone dumps). `perf_experiments/` has no `__init__.py`, so `import ttnn`'s package
 walker does not execute the benches. They import as a namespace package.
 
