@@ -1717,8 +1717,15 @@ def _tt_poly_scalar_perf_binding(operation, dest_acc):
 
 _TT_POLY_SCALAR_PERF_OPERATIONS = ()
 
-_TT_POLY_PACK_CONFIGS = {}
-_TT_POLY_NATIVE_CALLS = {}
+_TT_POLY_PACK_CONFIGS = {
+    "relu": ("ckernel_sfpu_relu_bf16.h", "ttpoly_generated::ReluBf16Config")
+}
+_TT_POLY_NATIVE_CALLS = {
+    "relu": (
+        "relu_min",
+        "SFPU_UNARY_CALL( DST_SYNC, is_fp32_dest_acc_en, _relu_min_, (sfpi::vFloat , APPROX_MODE , 8 , std::uint32_t ), block_tile, VectorMode::RC, 0 );",
+    )
+}
 _TT_POLY_FP32_DEST = {
     "acos": (),
     "acosh": ("blackhole", "wormhole"),
@@ -1727,6 +1734,7 @@ _TT_POLY_FP32_DEST = {
     "erfc": (),
     "exp2": (),
     "expm1": (),
+    "relu": (),
 }
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ()
@@ -1838,6 +1846,7 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
     (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
+    (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
 ]
 
 
@@ -1887,7 +1896,27 @@ def test_tt_poly_generated_bf16_llk(
     )
 
 
-_TT_POLY_PERF_OPERATIONS = ("acos", "acosh", "atanh", "erf", "erfc", "exp2", "expm1")
+@pytest.mark.memory_layout("debug")
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
+    ],
+)
+def test_tt_poly_generated_bf16_llk_disabled(arguments):
+    test_tt_poly_generated_bf16_llk(*arguments, disabled=True)
+
+
+_TT_POLY_PERF_OPERATIONS = (
+    "acos",
+    "acosh",
+    "atanh",
+    "erf",
+    "erfc",
+    "exp2",
+    "expm1",
+    "relu",
+)
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
 
@@ -2116,4 +2145,5 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "erfc",
     "exp2",
     "expm1",
+    "relu",
 )
