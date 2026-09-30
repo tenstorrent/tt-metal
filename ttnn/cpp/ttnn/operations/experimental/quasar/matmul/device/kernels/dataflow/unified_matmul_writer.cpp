@@ -60,16 +60,16 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
             // Origin of this C slice, in tiles, from its position in the walk.
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
-            for (uint32_t thread = 0; thread < num_compute_threads; ++thread) {
+            for (uint32_t compute_thread = 0; compute_thread < num_compute_threads; ++compute_thread) {
                 C_slice.wait_front(C_entries_per_thread);
                 // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
-                // the C slice; entry_tile is where this thread's next subblock sits in its share.
+                // the C slice; entry_tile is where this compute thread's next subblock sits in its share.
                 uint32_t subblock = 0;
                 uint32_t entry_tile = 0;
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t C_m_tile = C_slice_first_M_tile + m_tile;  // subblock's first row in C, in tiles
                     for (uint32_t n_tile = 0; n_tile < C_slice_N_padded_tiles; n_tile += subblock_N_tiles) {
-                        if (subblock++ % num_compute_threads != thread) {
+                        if (subblock++ % num_compute_threads != compute_thread) {
                             continue;
                         }
                         const uint32_t C_n_tile = C_slice_first_N_tile + n_tile;  // subblock's first column in C
