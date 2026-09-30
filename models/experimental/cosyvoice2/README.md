@@ -147,8 +147,8 @@ $REF $S/eval_draws.py --out draws.json --group "TT Stage 1" <draws dir>/tt_stage
 # host tier: no device, 134 tests
 pytest models/experimental/cosyvoice2/tests -k "not test_device"
 
-# the whole suite (100 device tests, the two perf tests deselected). Some need reference-side files, and skip
-# without them.
+# the whole suite: the host tier and 98 device tests (the two perf tests deselected). Some need reference-side
+# files, and skip without them.
 COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS \
 COSYVOICE2_TOKEN_REF=<token_accuracy_reference.py out dir> \
 COSYVOICE2_HIFT_STREAM_REF=<hift_streaming_reference.py out dir> \

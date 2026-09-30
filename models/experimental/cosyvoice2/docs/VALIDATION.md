@@ -985,6 +985,54 @@ under `TT_METAL_TRACE_ALLOC_TRACKING=1`:
 - Non-streaming requests are unaffected: `generate()` releases the trace before the flow and HiFT run.
 - A cold streaming start is therefore the two warm-ups on an empty kernel cache. It is not measured yet.
 
+## Streaming RTF above 1.0: which utterance, and why (Stage 3, 2026-09-30)
+
+From the per-chunk records of the two masked-HiFT streaming runs ("Stage 1 and streaming re-run on the masked HiFT"
+above; notes: `scripts/2026-09-30/rtf_breakdown.py`).
+
+**A streamed utterance's wall time is the sum of its parts:** text and LLM, then each chunk's flow and HiFT, and
+nothing else (at most 0.01 s). Every chunk runs between two decode steps, or after the LLM for the final chunk.
+
+**Only 121-127105-0015 is above 1.0:** 1.121 and 1.103 (1.057 and 1.122 on 09-29). For its 3.80 s of audio:
+
+| | run 1 | run 2 |
+|---|---|---|
+| text and LLM | 1.07 s | 1.05 s |
+| three flows | 2.81 s (0.91 + 0.89 + 1.01), CFM 2.23 | 2.77 s (0.87 + 0.88 + 1.02), CFM 2.16 |
+| three HiFT calls | 0.39 s | 0.37 s |
+| wall | 4.26 s | 4.19 s |
+
+- **A chunk's flow costs at least 0.82 s, however little audio it adds.**
+  - Every chunk reruns the flow over the prompt and every token so far, as upstream does.
+  - With these prompts (168 and 175 tokens), even the first chunk runs at the 256-token flow bucket (512 mel frames).
+    There the CFM's 10 Euler steps take 68–74 ms each.
+- **0015's tokens spill into a third chunk.**
+  - Its 168-token prompt is padded to a multiple of 25, which makes the first hop 32.
+  - After 32 + 50, 13 of its 95 tokens remain for the final chunk. That chunk is a full non-streaming flow over all
+    263 tokens (bucket 320, 1.01 s) for 0.52 s of new audio.
+- **The other short utterance stays under 1.0.** 260-123286-0014 (3.00 s, 75 tokens, a 175-token prompt needing no
+  padding) splits into exactly 25 + 50. That is two flows, and RTF 0.957 and 0.905.
+- **The long utterances sit at 0.79–0.84.** Their 100-token hops add 4 s of audio for a 1.13–1.70 s flow.
+
+**The flow's cost per bucket**, both runs:
+
+| flow bucket, tokens (mel frames) | chunks | flow s | of it, the CFM | CFM per Euler step | the flow outside the CFM |
+|---|---|---|---|---|---|
+| 256 (512) | 24 | 0.82–0.91 | 0.68–0.74 s | 68–74 ms | 0.14–0.19 s |
+| 320 (640) | 2 | 1.01–1.02 | 0.78 s | 78 ms | 0.23–0.24 s |
+| 384 (768) | 12 | 1.13–1.20 | 0.85–0.86 s | 85–86 ms | 0.27–0.34 s |
+| 512 (1024) | 6 | 1.65–1.70 | 1.00–1.01 s | 100–101 ms | 0.64–0.70 s |
+| 640 (1280) | 2 | 2.35–2.71 | 1.35–1.36 s | 135–136 ms | 1.00–1.36 s |
+
+- **A CFM step's cost grows much more slowly than its length.** From 512 to 1,280 frames, 2.5 times the frames cost
+  twice as much per step. Much of each step is fixed cost, and the next step (a profile of one Euler step) breaks
+  it down.
+- **The rest of the flow** grows faster: the Conformer encoder, the projections and the host transfers.
+
+**Against the 0.4 target:** for every utterance, the flows alone take 0.47–0.74 of the audio's duration, before the
+LLM and HiFT are counted. No schedule of the same chunks reaches 0.4. A chunk's flow has to get cheaper, through
+fewer Euler steps or a cheaper step.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch

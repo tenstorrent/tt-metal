@@ -107,6 +107,10 @@ first audio 1,469 ms, worst RTF 1.110).
   - then HiFT, 0.12–0.13 s.
 
   Even a free flow would leave first audio at 0.49–0.60 s.
-- **RTF:** every chunk reruns the flow over the whole prefix, as upstream does, and the final chunk runs it
-  non-streaming. The two short utterances (3.0 and 3.8 s) are the worst: they carry the ~1.4 s first chunk over the
-  least audio.
+- **RTF:** every chunk reruns the flow over the prompt and the whole prefix, as upstream does, and the final chunk runs
+  it non-streaming. So a chunk's flow costs at least 0.82 s (bucket 256, 512 mel frames), and 1.01–2.71 s at the
+  larger buckets.
+  - The one utterance above 1.0 is the 3.8 s 121-127105-0015. Its tokens make three chunks (32 + 50 + 13), and the
+    13-token final chunk pays a full non-streaming flow, 1.01 s, for 0.52 s of audio.
+  - The 3.0 s utterance fits in two chunks (25 + 50): 0.905–0.957.
+  - The flows alone take 0.47–0.74 of every utterance's duration (`docs/VALIDATION.md`, "Streaming RTF above 1.0").
