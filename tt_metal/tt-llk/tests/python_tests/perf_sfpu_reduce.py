@@ -28,8 +28,8 @@ from helpers.test_variant_parameters import (
     # Float32 and Int32 are the formats ttnn routes to the SFPU row reduce (Int32 always, Float32 with
     # accurate fp32 mode). Float32 MAX runs the compare-and-swap horizontal_reduce_max (MIN differs only
     # by the SFPCONFIG direction bit) and SUM the add-based horizontal_reduce, for both formats. Int32 MAX
-    # takes the separate signed path (horizontal_reduce_max_int32), which is not the float/unsigned
-    # MAX body; it is kept as a control.
+    # takes the separate signed compare-and-swap path (horizontal_reduce_max_int32), which shares the
+    # MOV-free rotate butterfly with the float/unsigned body but not its compare-and-swap.
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Int32],
         same=True,

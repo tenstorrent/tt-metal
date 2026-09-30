@@ -24,6 +24,14 @@ full 32x32 tile: the column pass writes each column's mean (over 32 rows) into r
 averages those 32 column-means (over 32 columns) into element [0][0], which equals the overall tile
 mean. It stays float-only because integer row AVG is unsupported (the row divisor is the runtime column
 count, divided exactly only by the float reciprocal-multiply).
+
+MAX/MIN additionally run row-then-column and column-row-column under the same single init (``REDUCE_ORDER``,
+``ReduceOrder``), so a column reduce that follows a row reduce is covered too. That order breaks if the row
+path writes the replay slots holding the column path's window, or if a column path trusts the SFPSWAP
+direction its init wrote: the manual column paths (UInt16, signed Int32, every format under
+``DISABLE_SFPLOADMACRO``) read the opposite SFPSWAP operand from the row path and so need the opposite
+direction for the same pool type. Orders other than column-then-row run on Blackhole only until the Wormhole
+kernel is ported (see the skip below).
 """
 
 import pytest
@@ -36,6 +44,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    ReduceOrder,
     ReducePool,
     format_dict,
 )
@@ -77,8 +86,12 @@ def get_multidim_pools(formats: InputOutputFormat) -> list[ReducePool]:
 
 
 # Formats exercised. Int32 is the regression target (its column path flips the SFPSWAP-direction
-# config and uses two's-complement); the others are baselines that should pass on both buggy and
-# fixed kernels and guard the shared-init chain for non-Int32 paths.
+# config and uses two's-complement); the others take the LOADMACRO column path and guard the shared-init
+# chain for it. UInt16 is absent on purpose: its row MAX/MIN in a 32-bit dest is unsupported (the Int32
+# row path does not mask the garbage high bits; see the skip in test_sfpu_reduce), so no chain that
+# includes a row pass over raw UInt16 data is well-defined. Its manual column path,
+# calculate_reduce_max_min_uint16, is still covered here after a row pass: under DISABLE_SFPLOADMACRO
+# every non-Int32 format's column MAX/MIN goes through it.
 MULTIDIM_FORMATS = [
     DataFormat.Int32,
     DataFormat.Float32,
@@ -87,16 +100,18 @@ MULTIDIM_FORMATS = [
 ]
 
 
-def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[int]:
-    """Pass orders (REDUCE_ORDER in the kernel) under the single shared init: 0 = column then row,
-    1 = row then column, 2 = column, row, column. Orders 1 and 2 are MAX/MIN only -- there every order
-    leaves the tile extreme at [0][0] -- and put a column reduce after a row reduce, which is what
-    breaks if the row path writes the replay slots holding the column path's LOADMACRO window
-    (float/UInt32) or leaves an SFPSWAP direction the column path does not expect (signed Int32).
+def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
+    """Pass orders (REDUCE_ORDER in the kernel) under the single shared init. RowCol and ColRowCol are
+    MAX/MIN only -- there every order leaves the tile extreme at [0][0] -- and put a column reduce after
+    a row reduce, which is what breaks if the row path writes the replay slots holding the column path's
+    LOADMACRO window (float/UInt32) or if a column path trusts the SFPSWAP direction its init wrote: the
+    manual column paths (signed Int32, and every non-Int32 format under DISABLE_SFPLOADMACRO, which
+    routes them through the UInt16 column reducer) need the opposite direction from the row path for the
+    same pool type.
     """
     if reduce_pool in (ReducePool.Max, ReducePool.Min):
-        return [0, 1, 2]
-    return [0]
+        return [ReduceOrder.ColRow, ReduceOrder.RowCol, ReduceOrder.ColRowCol]
+    return [ReduceOrder.ColRow]
 
 
 def get_multidim_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
@@ -178,13 +193,16 @@ def test_sfpu_reduce_multidim(
 ):
     # Column-after-row under one init is fixed only in the Blackhole kernel so far. The Wormhole twin
     # (tt_metal/hw/ckernels/wormhole_b0/.../ckernel_sfpu_reduce.h) still re-records replay slots [0, 16)
-    # in every row MAX/MIN calculate, which clobbers the column LOADMACRO window, and its signed Int32
-    # column path still trusts the init's SFPSWAP direction. Until the WH port lands, orders 1/2 run on
-    # Blackhole only.
-    if reduce_order != 0 and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+    # in every row MAX/MIN calculate, which clobbers the column LOADMACRO window, and its manual column
+    # paths still trust the init's SFPSWAP direction. Until the WH port lands
+    # (https://github.com/tenstorrent/tt-metal/issues/58551), the row->col orders run on Blackhole only.
+    if (
+        reduce_order != ReduceOrder.ColRow
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
         pytest.skip(
-            reason="Row-then-column under one init is only fixed in the Blackhole reduce kernel "
-            "(Wormhole port pending)"
+            reason="Row-then-column under one init is only fixed in the Blackhole reduce kernel; "
+            "Wormhole port tracked in https://github.com/tenstorrent/tt-metal/issues/58551"
         )
 
     # A column of num_row_tiles tiles, one column-tile wide: [num_row_tiles*32, 32].

@@ -25,7 +25,9 @@
 //
 // REDUCE_ORDER (MAX/MIN only) also runs the passes row-then-column and column-row-column under the same
 // single init, so a column reduce that follows a row reduce is covered too: the column MAX/MIN path
-// replays a LOADMACRO window recorded by the init, and a row path that wrote replay slots would clobber it.
+// replays a window recorded by the init (a row path that wrote replay slots would clobber it), and the manual
+// column paths (UInt16, signed Int32, every format under DISABLE_SFPLOADMACRO) expect the opposite SFPSWAP
+// direction from the row path, so they must set it themselves.
 
 #include <algorithm>
 #include <cstdint>
@@ -78,6 +80,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
+
+// Which chain of passes to run under the one shared init. Mirrors ReduceOrder in helpers/llk_params.py.
+constexpr int REDUCE_ORDER_COL_ROW     = 0; // column, row          -- the multi-axis lowering (ttir.max dim=[1,2])
+constexpr int REDUCE_ORDER_ROW_COL     = 1; // row, column          -- a column reduce AFTER a row reduce (MAX/MIN only)
+constexpr int REDUCE_ORDER_COL_ROW_COL = 2; // column, row, column  -- both transitions in one kernel (MAX/MIN only)
+
+static_assert(REDUCE_ORDER >= REDUCE_ORDER_COL_ROW && REDUCE_ORDER <= REDUCE_ORDER_COL_ROW_COL, "unhandled REDUCE_ORDER");
+// Only MAX/MIN leave each tile's extreme at [0][0] whatever the order; a SUM/AVG chain is only meaningful
+// column-then-row.
+static_assert(
+    REDUCE_ORDER == REDUCE_ORDER_COL_ROW || POOL_TYPE == ckernel::PoolType::MAX || POOL_TYPE == ckernel::PoolType::MIN,
+    "row->col REDUCE_ORDERs are MAX/MIN only");
+
+constexpr bool COL_BEFORE_ROW = (REDUCE_ORDER == REDUCE_ORDER_COL_ROW || REDUCE_ORDER == REDUCE_ORDER_COL_ROW_COL);
+constexpr bool COL_AFTER_ROW  = (REDUCE_ORDER == REDUCE_ORDER_ROW_COL || REDUCE_ORDER == REDUCE_ORDER_COL_ROW_COL);
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -138,18 +155,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             static_cast<DataFormat>(formats.pack_dst)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
     };
 
-    // REDUCE_ORDER picks the chain (all under the one init above):
-    //   0: column, row          -- the multi-axis lowering (ttir.max dim=[1,2])
-    //   1: row, column          -- a column reduce AFTER a row reduce: guards the column path's replay
-    //                              window against anything the row path writes (MAX/MIN only)
-    //   2: column, row, column  -- both transitions in one kernel (MAX/MIN only)
+    // REDUCE_ORDER picks the chain (all under the one init above). A column reduce AFTER a row reduce guards
+    // the column path's replay window and its SFPSWAP direction against whatever the row path leaves behind.
     // For MAX/MIN every order leaves each tile's extreme at its element [0][0].
-    if constexpr (REDUCE_ORDER == 0 || REDUCE_ORDER == 2)
+    if constexpr (COL_BEFORE_ROW)
     {
         column_reduce_all_tiles();
     }
     row_reduce_block();
-    if constexpr (REDUCE_ORDER == 1 || REDUCE_ORDER == 2)
+    if constexpr (COL_AFTER_ROW)
     {
         column_reduce_all_tiles();
     }

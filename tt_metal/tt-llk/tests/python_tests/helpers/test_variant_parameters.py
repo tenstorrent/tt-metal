@@ -29,6 +29,7 @@ from .llk_params import (
     MathOperation,
     NarrowTile,
     PerfRunType,
+    ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
@@ -769,13 +770,13 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 @dataclass
 class REDUCE_ORDER(TemplateParameter):
     """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
-    shared init_reduce: 0 = column then row, 1 = row then column, 2 = column, row, column.
+    shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
     """
 
-    reduce_order: int = 0
+    reduce_order: ReduceOrder = ReduceOrder.ColRow
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int REDUCE_ORDER = {self.reduce_order};"
+        return f"constexpr int REDUCE_ORDER = {self.reduce_order.value};"
 
 
 @dataclass
