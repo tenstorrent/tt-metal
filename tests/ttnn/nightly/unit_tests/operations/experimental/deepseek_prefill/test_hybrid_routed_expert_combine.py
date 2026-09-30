@@ -58,33 +58,48 @@ _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
 _MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
-# Kimi K2.7 routing captured off-device from total_counts_per_expert, one dispatch group (experts 0-95) of
-# a 32-chip chunked prefill of the code_debug golden. Scaled to this test's 10240 in-group routings, which
-# leaves the 106.7 mean intact. Real routing is far lumpier than a uniform draw: even the flattest layer
-# runs max/mean 2.75 and leaves an expert empty.
+# Routing captured off-device from total_counts_per_expert, one dispatch group of a 32-chip chunked prefill
+# of each model's code_debug golden, scaled to this test's 10240 in-group routings. Scaling leaves the mean
+# intact -- 106.7 for Kimi's 96 experts, 160 for GLM's 64 -- and keeps the shape the model actually routes.
+# Real routing is far lumpier than a uniform draw: the flattest captured layer still runs max/mean 1.8-2.8,
+# and the most skewed puts a quarter of the chunk on one expert.
 # fmt: off
-_KIMI_K27_COUNTS = {
-    "balanced": (
-        # MoE layer 34, chunk 1
-        282, 85, 112, 78, 94, 35, 60, 73, 10, 80, 87, 122, 107, 215, 41, 85, 105, 76, 114, 37, 284, 146, 59,
-        44, 120, 78, 47, 0, 36, 162, 120, 247, 95, 115, 131, 228, 122, 103, 183, 52, 157, 18, 2, 294, 238,
-        105, 107, 27, 249, 23, 216, 99, 141, 162, 181, 62, 144, 125, 17, 33, 52, 73, 35, 200, 80, 138, 217,
-        69, 38, 114, 160, 38, 155, 42, 165, 114, 28, 87, 88, 2, 63, 93, 2, 99, 67, 45, 141, 287, 105, 27,
-        244, 159, 53, 194, 87, 9
-    ),
-    "hot-expert": (
-        # MoE layer 5, chunk 0
-        8, 109, 86, 102, 20, 221, 107, 54, 188, 5, 53, 67, 36, 50, 73, 91, 25, 108, 36, 43, 36, 172, 61, 46,
-        32, 115, 40, 4, 0, 58, 1, 40, 2878, 4, 108, 53, 286, 58, 92, 97, 48, 145, 68, 70, 67, 132, 35, 340,
-        41, 17, 53, 288, 130, 66, 49, 230, 52, 6, 47, 163, 6, 42, 17, 65, 56, 6, 2, 98, 138, 16, 43, 31,
-        112, 49, 110, 94, 85, 44, 121, 140, 76, 124, 65, 155, 181, 109, 60, 29, 38, 16, 53, 16, 139, 54, 82,
-        58
-    ),
+_CAPTURED_COUNTS = {
+    "kimi-k27": {
+        "balanced": (
+            # MoE layer 34, chunk 1
+            282, 85, 112, 78, 94, 35, 60, 73, 10, 80, 87, 122, 107, 215, 41, 85, 105, 76, 114, 37, 284, 146, 59,
+            44, 120, 78, 47, 0, 36, 162, 120, 247, 95, 115, 131, 228, 122, 103, 183, 52, 157, 18, 2, 294, 238,
+            105, 107, 27, 249, 23, 216, 99, 141, 162, 181, 62, 144, 125, 17, 33, 52, 73, 35, 200, 80, 138, 217,
+            69, 38, 114, 160, 38, 155, 42, 165, 114, 28, 87, 88, 2, 63, 93, 2, 99, 67, 45, 141, 287, 105, 27,
+            244, 159, 53, 194, 87, 9
+        ),
+        "hot-expert": (
+            # MoE layer 5, chunk 0
+            8, 109, 86, 102, 20, 221, 107, 54, 188, 5, 53, 67, 36, 50, 73, 91, 25, 108, 36, 43, 36, 172, 61, 46,
+            32, 115, 40, 4, 0, 58, 1, 40, 2878, 4, 108, 53, 286, 58, 92, 97, 48, 145, 68, 70, 67, 132, 35, 340,
+            41, 17, 53, 288, 130, 66, 49, 230, 52, 6, 47, 163, 6, 42, 17, 65, 56, 6, 2, 98, 138, 16, 43, 31,
+            112, 49, 110, 94, 85, 44, 121, 140, 76, 124, 65, 155, 181, 109, 60, 29, 38, 16, 53, 16, 139, 54, 82,
+            58
+        ),
+    },
+    "glm-53": {
+        "balanced": (
+            # MoE layer 3, chunk 5
+            196, 166, 180, 180, 212, 259, 136, 103, 250, 195, 176, 66, 203, 171, 179, 111, 61, 211, 78, 130,
+            129, 152, 231, 92, 178, 145, 149, 198, 92, 181, 126, 180, 216, 85, 192, 135, 190, 129, 205, 159,
+            114, 44, 157, 102, 123, 151, 146, 288, 167, 101, 185, 172, 204, 120, 249, 108, 179, 224, 208, 190,
+            66, 188, 102, 225
+        ),
+        "hot-expert": (
+            # MoE layer 21, chunk 9
+            146, 56, 90, 99, 149, 120, 215, 350, 25, 55, 129, 58, 153, 80, 155, 91, 52, 3, 143, 115, 32, 183,
+            142, 62, 148, 23, 0, 33, 69, 85, 178, 145, 4, 148, 23, 226, 129, 2877, 264, 54, 163, 117, 91, 49,
+            14, 182, 223, 419, 114, 78, 185, 124, 150, 209, 33, 120, 4, 177, 55, 29, 68, 67, 308, 152
+        ),
+    },
 }
 # fmt: on
-# GLM 5.3 has no capture here, so its routing is generated: uniform for the balanced case, and this share of
-# every origin chip's tokens forced onto one expert for the hot case.
-_HOT_SHARE = 0.4
 # Measured programs per configuration; the median is reported.
 _PERF_ITERS = 5
 # What tells the three programs apart in the real-time profiler's records. The overlap builds the routed
@@ -153,26 +168,6 @@ def _indices_from_counts(counts, chips, seq, topk):
     return torch.tensor([rows[i] for i in order], dtype=torch.int32).reshape(chips, seq, topk)
 
 
-def _hot_expert(idx_table, experts_per_chip, chips):
-    """The one expert the hot case overloads: the LAST local slot of the LAST chip, so both the chip's own
-    walk and the ring reach it last."""
-    return int(idx_table[0, chips - 1, experts_per_chip - 1])
-
-
-def _add_hot_experts(indices, idx_table, experts_per_chip):
-    """Route _HOT_SHARE of every origin chip's tokens to the one hot expert, in place. The token's other
-    picks stay distinct from it."""
-    chips, seq, topk = indices.shape
-    expert = _hot_expert(idx_table, experts_per_chip, chips)
-    for origin in range(chips):
-        for t in range(int(seq * _HOT_SHARE)):
-            row = indices[origin, t]
-            clash = (row == expert).nonzero()
-            if len(clash):
-                row[clash[0, 0]] = row[0]
-            row[0] = expert
-
-
 def _build_case(mesh_device, device_params, threshold_id, model_id):
     """One seq-640 layer of `model_id` on `mesh_device`: its inputs, and the three ways to run it."""
     torch.manual_seed(42)
@@ -217,13 +212,11 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    captured = _KIMI_K27_COUNTS.get(threshold_id) if model_id == "kimi-k27" else None
-    if captured is not None:
-        # Replay the measured routing rather than a draw. Only this model has a capture; the rest keep the
-        # generated form, so the two are not the same experiment and their numbers do not compare.
-        indices = _indices_from_counts(captured, dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok)
-    elif threshold_id == "hot-expert":
-        _add_hot_experts(indices, idx_table, experts_per_chip)
+    # Replay the measured routing rather than the draw initialize_test_inputs made; x and the gate weights
+    # it produced are kept.
+    indices = _indices_from_counts(
+        _CAPTURED_COUNTS[model_id][threshold_id], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
+    )
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
