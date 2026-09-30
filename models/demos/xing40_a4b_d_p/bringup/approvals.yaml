@@ -1,6 +1,7 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-30T05:31:23'
+  at: '2026-09-30T05:32:40'
   files:
-    models/demos/xing40_a4b_d_p/bringup/spec.yaml: b0b662bdb46ff6d714cca3639671cc4b1d13b01ecaff52ce8c1cdbf53694cc72
-  note: 'owner: mesh 4x2, SP=4 x TP=2 rule; component_review none (F56)'
+    models/demos/xing40_a4b_d_p/bringup/spec.yaml: fc0da3fa3257649a6fa6b7f325feeaa28d4f26c70e668377a80783b46e8908b9
+  note: 'owner: mesh 4x2, SP=4 x TP=2 rule (plan role: think hard); component_review
+    none (F56)'
