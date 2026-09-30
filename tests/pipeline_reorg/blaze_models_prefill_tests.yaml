@@ -1082,6 +1082,192 @@
   sp_config: sc1
 
 
+# ===== DeepSeek-V4.1-Flash =============================================================================
+
+# Bead tt-metal_tracker-8y7.13.4; gates and staging in artifacts deepseek-v4.1/galaxy-acceptance.md. Requires staged
+# mounts (not yet present): the V4.1-Flash checkpoint (TT_V41_CHECKPOINT), the precomputed CPU oracle cache
+# (TT_V41_ORACLE_CACHE, ~75 GB for these cases: computed once off-device by tests/v41/prepare_caches.py; a cold
+# oracle is hours of CPU and would blow every timeout) and a persistent TT weight cache (TT_V41_WEIGHT_CACHE, keyed
+# by mesh shape; a cold first run converts the MoE experts and needs a longer timeout). Timeouts are warm estimates
+# from LoudBox 2x4 runs plus device open, not Galaxy measurements.
+
+- name: "(DeepSeek-V4.1-Flash) prefill stack accuracy + determinism 2k, 10k@5k, 56k@5k"
+  # Gate v4 (per-layer free-running drift vs the reference's 5-seed noise floor, token agreement reported) on the six
+  # checkpoint layers; 11x5120 is scenario S1's chunk (at 51200). LoudBox 2x4 warm: 55 s + ~60 s + 366 s + 359 s.
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_transformer_v41.py::test_v41_transformer_production -k "torus-xy-8x4 and real and (one_chunk or two_chunks or 2x5120 or 11x5120)" -vvv --tb=short
+    '
+  test_type: v41_transformer
+  test_tags: [dsv41_flash, transformer, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4.1-Flash) prefill block accuracy + determinism 2k, 2k@1k"
+  # Teacher-forced block + cache acceptance, synthetic and real weights, one and two chunks, stack and SWA schedules
+  # (8 cases). LoudBox 2x4 warm ~70 s per case.
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_block_v41.py::test_v41_blocks_on_device_state -k "torus-xy-8x4 and full and bf16" -vvv --tb=short
+    '
+  test_type: v41_block
+  test_tags: [dsv41_flash, block, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4.1-Flash) MoE, embedding-head, TP-SP all_to_all accuracy 5k"
+  # MoE at 32 chips (12 experts per chip), TP-split head, and the attention reshard on both axes (bit exact).
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_moe_v41.py::test_v41_moe -k "torus-xy-8x4 and real and bfp8" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_head_v41.py::test_v41_embedding_head -k "torus-xy-8x4 and real" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_v41_all_to_all.py -k "torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: v41_modules
+  test_tags: [dsv41_flash, moe, ccl]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4.1-Flash) traced prefill determinism 2k, 2k@1k, 5k"
+  # Traced replay == untraced prefill bit-identically (logits and every cache). LoudBox 2x4 warm ~60 s per case.
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_v41_trace.py::test_v41_prefill_trace -k "torus-xy-8x4 and (real-one_chunk or real-two_chunks or real-c5120)" -vvv --tb=short
+    '
+  test_type: v41_trace
+  test_tags: [dsv41_flash, transformer, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4.1-Flash) prefill block perf 5k"
+  # Scenario S0 (5120 chunk, empty cache), six checkpoint layers: untraced, per-stage and traced times vs
+  # utils/v41_perf_model (V41_PERF_RESULT lines). Report only until the S0/S1/S2 targets gate (galaxy-acceptance.md).
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_v41_perf.py::test_v41_block_perf -k "torus-xy-8x4 and bfp8" -vvv --tb=short
+    '
+  test_type: v41_perf
+  test_tags: [dsv41_flash, block]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4.1-Flash) prefill stack accuracy 2k, 10k@5k + all_to_all + MoE 5k SP4xTP8"
+  # The 4x8 capacity-fallback layout (TP=8). No fabric_profile: tests/conftest.py allows only FABRIC_1D / FABRIC_2D
+  # for a 4x8 mesh on a Galaxy, so the test's own Fabric2D params apply (Linear collectives on both axes).
+  cmd: |
+    export TT_V41_CHECKPOINT=/mnt/models/blaze/deepseek-ai/DeepSeek-V4.1-Flash
+    export TT_V41_ORACLE_CACHE=/mnt/models/deepseek-prefill-cache/v41-oracle
+    export TT_V41_WEIGHT_CACHE=/mnt/models/deepseek-prefill-cache/v41-ttnn-cache
+    # the real-weight cases skip without the checkpoint: fail loudly instead of passing on skips
+    test -f "$TT_V41_CHECKPOINT/model.safetensors.index.json" || { echo "missing $TT_V41_CHECKPOINT"; exit 1; }
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=16
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_transformer_v41.py::test_v41_transformer_production -k "fabric2d-mesh-4x8 and real and (one_chunk or 2x5120)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_v41_all_to_all.py -k "fabric2d-mesh-4x8" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v41/test_moe_v41.py::test_v41_moe -k "fabric2d-mesh-4x8 and real and bfp8" -vvv --tb=short
+    '
+  test_type: v41_4x8
+  test_tags: [dsv41_flash, transformer, ccl, moe]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: TBD  # Momcilo Vasilijevic -- Slack member ID needed before this is upstreamed
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
