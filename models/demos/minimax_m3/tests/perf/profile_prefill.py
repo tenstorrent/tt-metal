@@ -17,7 +17,7 @@ single chunk profiles both classes; the report separates them by the layer tag.
 
 What you get per zone: summed DEVICE KERNEL DURATION [ns] per device (with the across-device skew),
 op count, bytes moved (from the CSV's input/output shapes + dtypes) and the implied GB/s. Parse with
-    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py <ops_perf_results_*.csv> --html report.html
+    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <ops_perf_results_*.csv>
 
 Zone list — dense layer: input_norm, attn/{qkv_proj,split_heads,qk_norm,rope,kv_write,
 ring_joint_sdpa,concat_heads,o_proj,ccl_out_allreduce}, post_attn_norm, mlp/{gate_up_proj,swiglu,
@@ -404,8 +404,8 @@ def main():
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
-            f"    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py "
-            f"<generated/profiler/reports/*/ops_perf_results_*.csv> --html zones.html",
+            f"    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py "
+            f"<generated/profiler/reports/*/ops_perf_results_*.csv>",
             flush=True,
         )
         print("[zone-prof] DONE", flush=True)

@@ -36,41 +36,36 @@ Run (single Blackhole galaxy, after weights + golden are staged):
 import json
 import math
 import os
-import resource
 import statistics
 import sys
 import time
 from pathlib import Path
 
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import raise_nproc_limit
 
 # The (4,8) galaxy = 32 devices. Below this we can't do TP=8 + EP=32, so auto-skip.
 GALAXY_NUM_DEVICES = 32
 ROWS, COLS = 4, 8  # SP=4 (rows), TP=8 (cols), EP=32
 
 
-def _raise_nproc_limit():
-    """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
-    procs) doesn't starve with EAGAIN mid-build. See M3's harness for the full rationale."""
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
-            print(f"[prefill-pcc] raised RLIMIT_NPROC soft {soft} -> {hard}")
-        except (ValueError, OSError) as e:
-            print(f"[prefill-pcc] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
+# chunk//sp feeds the MoE routing setup, which shard-splits it across num_cores=64 Tensix cores
+# (tt_moe_routing_setup asserts seq_len_per_chip % num_cores == 0).
+MOE_ROUTING_NUM_CORES = 64
+
+
+def chunk_alignment(sp):
+    """Token alignment a prefill chunk needs at sequence-parallel degree `sp`: num_cores*sp (=256 at sp=4),
+    which also satisfies build_indexed_rope's TILE_SIZE*sp (=128) constraint. TILE_SIZE*sp alone (128)
+    fails when the rounded length/sp isn't a multiple of 64 (e.g. 10000 -> 10112 -> 2528)."""
+    return max(ttnn.TILE_SIZE, MOE_ROUTING_NUM_CORES) * sp
 
 
 def plan(n_tokens, chunk_size, chunked, sp):
     """Resolve (n_chunks, chunk, total). one-shot: a single chunk == total, padded up to a multiple of
-    TILE_SIZE*sp (=128 at sp=4) so build_indexed_rope's chunk_size % (TILE_SIZE*sp) == 0 holds and the
-    SP shard stays tile-aligned. chunked: full chunk_size chunks (tail padded)."""
-    # chunk//sp feeds the MoE routing setup, which shard-splits it across num_cores=64 Tensix cores
-    # (tt_moe_routing_setup asserts seq_len_per_chip % num_cores == 0). So align to num_cores*sp (=256
-    # at sp=4), which also satisfies build_indexed_rope's TILE_SIZE*sp (=128) constraint. TILE_SIZE*sp
-    # alone (128) fails when the rounded length/sp isn't a multiple of 64 (e.g. 10000 -> 10112 -> 2528).
-    MOE_ROUTING_NUM_CORES = 64
-    align = max(ttnn.TILE_SIZE, MOE_ROUTING_NUM_CORES) * sp
+    chunk_alignment(sp) so build_indexed_rope's chunk_size % (TILE_SIZE*sp) == 0 holds and the SP
+    shard stays tile-aligned. chunked: full chunk_size chunks (tail padded)."""
+    align = chunk_alignment(sp)
     if chunked:
         chunk = math.ceil(chunk_size / align) * align
         n_chunks = max(1, math.ceil(n_tokens / chunk))
@@ -81,7 +76,7 @@ def plan(n_tokens, chunk_size, chunked, sp):
 
 
 def main():
-    _raise_nproc_limit()
+    raise_nproc_limit("prefill-pcc")
 
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
     if not golden_dir:

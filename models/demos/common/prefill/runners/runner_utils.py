@@ -3,11 +3,29 @@
 
 
 import os
+import resource
 from pathlib import Path
 
 from loguru import logger
 
 import ttnn
+
+
+def raise_nproc_limit(tag: str = "prefill") -> None:
+    """Raise RLIMIT_NPROC's soft limit to the hard limit for this process and its children.
+
+    tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of short-lived
+    processes (g++, cc1plus/lto1, as, ld); at the per-user default on the galaxy hosts (counted across
+    every process the user owns) clone3 fails mid-build with "posix_spawn: Operation not permitted" /
+    "Resource temporarily unavailable". Call it first thing in any harness that builds a model.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+            logger.info(f"[{tag}] raised RLIMIT_NPROC soft {soft} -> {hard}")
+        except (ValueError, OSError) as e:
+            logger.warning(f"[{tag}] could not raise RLIMIT_NPROC (soft={soft}): {e}")
 
 
 def _create_fabric_router_config(max_payload_size):
