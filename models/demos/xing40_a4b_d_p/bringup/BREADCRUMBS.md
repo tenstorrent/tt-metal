@@ -165,3 +165,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: pcc_attn_residual_L00 0.999997; vs cpu rel 3.7e-8; vs golden rel 0.0025 (limit 0.0069); layer39 / mixed / small / big
   rel <= 5e-8.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py`
+
+## C.dense.ffn_norm implement (attempt 1)
+- `tt/norm.py:TtDistributedRmsNorm` got `gather=False` option; `build_norm(..., "ffn_norm")` uses
+  `post_attention_layernorm.weight` and `gather=True`: same pre_all_gather -> col-0 mask -> stats all_gather (axis 1)
+  -> post_all_gather (HiFi4 + fp32 dest, bf16 out), then `ttnn.all_gather(dim=3, cluster_axis=1, Linear)` ->
+  [1, 1, S/4, 3584] bf16 per chip, replicated within a row. attn_norm path unchanged (gather off).
+- hooks: `_GATHERED_NORM_STEPS = {"ffn_norm"}`, `_gathered_norm_host_fn` (column-split fp32 in, `row_split_to_host`
+  out, column 0's copy); ffn_norm added to `DEVICE_STEPS["dense"]`.
+- Gate: pcc_ffn_norm_L00 0.999996; rel vs cpu 0.0018 (limit 0.0062), norm ratio [0.9985, 1.0004].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_norm.py`
