@@ -14,3 +14,19 @@
   cross k in attention_ltx.py, confirm with block A/B (test_ltx_transformer_block_trace_perf 8k) and an e2e run.
   If split-K clearly beats the ring cross at acceptable rel_l2, wire it behind a flag in attention_ltx.py.
 - t22 (general denoise) works on noise prefetch / prompt handoff: no overlap with SDPA.
+
+## 2026-09-30 16:xx, device pause (attempt 1 resumed)
+- Job 656 was the capture-only prewarm (kernels never executed): its SWEEP numbers are meaningless. drive.sh
+  is gone and none of our broker jobs are queued. No broker submissions while the pause holds.
+- V2A split-K CPU reference: models/tt_dit/tests/models/ltx/test_v2a_split_k_reference.py (6 pass, torch only).
+  Math matches dense attention to 1e-5 at S1/S2 shapes, incl. an all-padding shard and far-apart logits.
+  bf16 emulation: split-K rel_l2 0.0063 (S1) / 0.0066 (S2) vs 0.0061 / 0.0064 unsplit. Dropping the
+  shared-max rescale fails all 6, so the test guards the merge.
+- Chunk candidates picked analytically (tmp/chunk_model.py): work units = 8 heads x q-chunks over 110 cores,
+  partial last K chunk computed in full. S1 q=96 is already optimal (104 units, 1 wave); k=608 (19 tiles)
+  divides the 38-tile shard. S2 q=192 (208 units, 2 waves) ties q=128/96; candidates (384,256), (192,448), (128,608).
+- Sweep test now takes LTX_SWEEP_SELF / LTX_SWEEP_CROSS_K / LTX_SWEEP_SPLITK for single-config jobs and logs
+  host_rel_l2 (vs fp32 host attention) for the ring cross and split-K.
+- Next: when the pause lifts, run tmp/READY_32.md jobs one at a time (1 = S2 split-K first).
+  If split-K wins: move _v2a_split_k into attention_ltx.py behind LTX_V2A_SPLIT_K (key_bias/row_zeros must be
+  built before trace capture), then block A/B + e2e.

@@ -2146,16 +2146,41 @@ def _sweep_compare(ref: ttnn.Tensor, out: ttnn.Tensor, *, composer, n_real: int)
 
 # Candidate (q_chunk, k_chunk) per stage for the video self-attn ring SDPA, and k_chunk for the
 # V2A cross ring SDPA (its q_chunk is the 32-row audio Q shard). The first entry is the shipped config.
+# Work units are 8 heads x q-chunks over 110 cores and a partial last K chunk is computed in full, so
+# the candidates keep one (S1) or two (S2) core waves and divide the 38 / 152-tile shard: 608 = 19 tiles.
 _RING_SWEEP = {
     "stage_1": {
-        "self": [(96, 256)] + [(q, k) for q in (64, 96, 128, 160, 192, 256) for k in (128, 256, 384, 512)],
+        "self": [(96, 256), (96, 608), (96, 416)]
+        + [(q, k) for q in (64, 96, 128, 160, 192, 256) for k in (128, 256, 384, 512)],
         "cross_k": [512, 128, 256, 1024],
     },
     "stage_2": {
-        "self": [(192, 512)] + [(q, k) for q in (128, 160, 192, 224, 256, 320) for k in (256, 384, 512, 640)],
+        "self": [(192, 512), (384, 256), (192, 448), (128, 608)]
+        + [(q, k) for q in (128, 160, 192, 224, 256, 320) for k in (256, 384, 512, 640)],
         "cross_k": [512, 256, 1024, 2048],
     },
 }
+
+
+def _sweep_subset(configs: list, env: str, parse) -> list:
+    """The shipped config (first entry) plus the space-separated configs in ``env``; all when unset."""
+    picked = os.environ.get(env)
+    if picked is None:
+        return configs
+    return configs[:1] + [parse(c) for c in picked.split()]
+
+
+def _host_attn_rel_l2(out: ttnn.Tensor, q, k, v, *, composer, n_q: int, n_kv: int) -> float:
+    """Relative L2 of a device attention output against fp32 dense attention over the real rows."""
+    got = ttnn.to_torch(out, mesh_composer=composer)[:, :, :n_q].double()
+    err = norm = 0.0
+    for h in range(q.shape[1]):  # per head keeps the (n_q, n_kv) score matrix small on the host
+        ref = torch.nn.functional.scaled_dot_product_attention(
+            q[:, h : h + 1, :n_q], k[:, h : h + 1, :n_kv], v[:, h : h + 1, :n_kv]
+        ).double()
+        err += (got[:, h : h + 1] - ref).square().sum().item()
+        norm += ref.square().sum().item()
+    return (err / norm) ** 0.5
 
 
 @pytest.mark.parametrize(
@@ -2174,7 +2199,10 @@ def test_ltx_ring_sdpa_chunk_sweep(
     """Traced per-op time of the video self-attn and V2A cross ring SDPA over chunk configs.
 
     Logs one SWEEP line per config: µs per call and the output against the shipped config.
-    Also times the V2A split-K alternative (SWEEP v2a_splitk) against the shipped ring cross.
+    Also times the V2A split-K alternative (SWEEP v2a_splitk) against the shipped ring cross; both
+    V2A paths also log their error against fp32 host attention (host_rel_l2). For a short run,
+    LTX_SWEEP_SELF="q,k ..." and LTX_SWEEP_CROSS_K="k ..." keep the shipped config plus the listed
+    ones (empty string: shipped only) and LTX_SWEEP_SPLITK=0 skips split-K.
     """
     stage = next(s for s in _RING_SWEEP if s in request.node.callspec.id)
     n_ops = int(os.environ.get("LTX_SWEEP_OPS", "10"))
@@ -2206,12 +2234,15 @@ def test_ltx_ring_sdpa_chunk_sweep(
         )
 
     def rand_bhnd(n, d):
-        x = torch.randn(1, NUM_HEADS, n, d)
-        return bf16_tensor_2dshard(x, device=mesh_device, shard_mapping=shard)
+        x = torch.randn(1, NUM_HEADS, n, d).bfloat16().float()
+        return bf16_tensor_2dshard(x, device=mesh_device, shard_mapping=shard), x
 
-    q, k, v = (rand_bhnd(video_N, HEAD_DIM) for _ in range(3))
+    (q, _), (k, _), (v, _) = (rand_bhnd(video_N, HEAD_DIM) for _ in range(3))
     ref = None
-    for q_chunk, k_chunk in _RING_SWEEP[stage]["self"]:
+    self_cfgs = _sweep_subset(
+        _RING_SWEEP[stage]["self"], "LTX_SWEEP_SELF", lambda c: tuple(int(x) for x in c.split(","))
+    )
+    for q_chunk, k_chunk in self_cfgs:
         try:
             us, out = _time_traced(
                 mesh_device,
@@ -2229,11 +2260,14 @@ def test_ltx_ring_sdpa_chunk_sweep(
     for t in (q, k, v) + ((ref,) if ref is not None else ()):
         ttnn.deallocate(t)
 
-    aq = rand_bhnd(audio_N, AUDIO_HEAD_DIM)
-    ak, av = (rand_bhnd(video_N, AUDIO_HEAD_DIM) for _ in range(2))
+    (aq, aq_h), (ak, ak_h), (av, av_h) = (rand_bhnd(n, AUDIO_HEAD_DIM) for n in (audio_N, video_N, video_N))
+
+    def host_err(out):
+        return _host_attn_rel_l2(out, aq_h, ak_h, av_h, composer=composer, n_q=audio_N_real, n_kv=video_N_real)
+
     cross_q = attn_v2a.cross_ring_sdpa_program_config.q_chunk_size
     ref = None
-    for k_chunk in _RING_SWEEP[stage]["cross_k"]:
+    for k_chunk in _sweep_subset(_RING_SWEEP[stage]["cross_k"], "LTX_SWEEP_CROSS_K", int):
         try:
             us, out = _time_traced(
                 mesh_device,
@@ -2247,7 +2281,10 @@ def test_ltx_ring_sdpa_chunk_sweep(
             continue
         cmp = "ref" if ref is None else _sweep_compare(ref, out, composer=composer, n_real=audio_N_real)
         ref = ttnn.clone(out) if ref is None else ref
-        logger.info(f"SWEEP {stage} v2a q={cross_q} k={k_chunk} us={us:.1f} {cmp}")
+        logger.info(f"SWEEP {stage} v2a q={cross_q} k={k_chunk} us={us:.1f} {cmp} host_rel_l2={host_err(out):.3g}")
+
+    if os.environ.get("LTX_SWEEP_SPLITK", "1") == "0":
+        return
 
     bias = torch.zeros(1, 1, 1, video_N)
     bias[..., video_N_real:] = -1e9
@@ -2258,6 +2295,6 @@ def test_ltx_ring_sdpa_chunk_sweep(
             mesh_device, lambda: _v2a_split_k(attn_v2a, aq, ak, av, key_bias=key_bias, row_zeros=row_zeros), n_ops
         )
         cmp = _sweep_compare(ref, out, composer=composer, n_real=audio_N_real)
-        logger.info(f"SWEEP {stage} v2a_splitk us={us:.1f} {cmp}")
+        logger.info(f"SWEEP {stage} v2a_splitk us={us:.1f} {cmp} host_rel_l2={host_err(out):.3g}")
     except Exception as e:
         logger.info(f"SWEEP {stage} v2a_splitk FAIL {str(e).splitlines()[0][:300]}")
