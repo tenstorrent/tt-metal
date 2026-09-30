@@ -149,3 +149,19 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py`
   (`XING_MLA_SDPA=source` for the bf16-dest comparison); fork test: `scripts/run_safe_pytest.sh --run-all
   ttnn/ttnn/bringup/sdpa/tests/unit/test_ring_mla_fp32_dest.py`
+
+## C.dense.attn_residual implement (run1, attempt 1)
+- New `tt/residual.py:TtHcResidual`: per chip, streams [1, 1, S/4, 4 x 1792] fp32 + hc [1, 1, S/4, 24] fp32 (replicated
+  over axis 1) + y [1, 1, S/4, 1792] (column split) -> streams fp32. out_i = post_i y + sum_j comb[i, j] x_j, where
+  post_i is hc column 4 + i and comb[i, j] is column 8 + 4 i + j (Xing comb, not glm53's comb^T). No collective, no weights.
+- Default `XING_RESIDUAL_MIX=addcmul`: 4 x (multiply + 4 addcmul), all on the SFPU in fp32, so the fp32 streams stay exact.
+  `XING_RESIDUAL_MIX=matmul` is glm53's block-diagonal Mix with a transposed selector (one batched HiFi4 fp32-DEST
+  matmul). It also passes: pcc 0.999997, rel vs cpu 4.1e-8. It is kept for comparison and for the perf step.
+- hooks: `_RESIDUAL_STEPS = {attn_residual, ffn_residual}` -> `_residual_host_fn` (harness boundary:
+  streams_to_device / row_split_to_device / col_split_to_device in, streams_to_host out). `attn_residual` added to
+  `DEVICE_STEPS["dense"]`, so the hybrid device_model runs it on the device.
+- Gotcha: the precompile collect pass prints `FAIL pcc_... 0.000000` lines before the real pass (stubbed outputs,
+  known issue "Precompile collect pass"). Only the second block of lines counts.
+- Gate: pcc_attn_residual_L00 0.999997; vs cpu rel 3.7e-8; vs golden rel 0.0025 (limit 0.0069); layer39 / mixed / small / big
+  rel <= 5e-8.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_residual.py`
