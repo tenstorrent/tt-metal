@@ -380,7 +380,7 @@ void blocked_matmul_and_pack(
 #define PA_PV_BEGIN(pv_cb, acc)                     \
     do {                                            \
         pack_reconfig_data_format(pv_cb);           \
-        PACK((llk_pack_reconfig_l1_acc(((acc) && !(SDPA_PA_DBG & 1)) ? 1 : 0))); \
+        PACK((llk_pack_reconfig_l1_acc((((acc) || (SDPA_PA_DBG & 8)) && !(SDPA_PA_DBG & 1)) ? 1 : 0))); \
     } while (0)
 #define PA_PV_END(restore_cb)                 \
     do {                                      \
@@ -1627,11 +1627,23 @@ static void sdpa_inner_loop_step(
             tile_regs_wait();
             configure_single_tile_pack(out_cb);
             PACK((llk_pack_reconfig_l1_acc(0)));
+#if defined(SDPA_PA) && (SDPA_PA_DBG & 8)
+            // Debug: zero the Float32 numerator plane explicitly; every PV pack then accumulates.
+            pack_reconfig_data_format(out_cb);
+            configure_single_tile_pack(out_cb);
+            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                for (uint32_t c = 0; c < vDHt; ++c) {
+                    pack_tile<true>(0, out_cb, 2 * r * vDHt + c);
+                }
+            }
+            pack_reconfig_data_format(cb_qkt_im);
+#else
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                 for (uint32_t c = 0; c < vDHt; ++c) {
                     pack_tile<true>(0, out_cb, (2 * r + 1) * vDHt + c);
                 }
             }
+#endif
             tile_regs_release();
         }
 #endif
