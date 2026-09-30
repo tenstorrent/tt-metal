@@ -807,6 +807,23 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+// Native sharding aliases each sharded operand's buffer as a circular buffer and pairs the input shard
+// resident on a core with the output shard resident on that same core, with no data movement in
+// between. The two configs must therefore place the same tensor region on every core: same grid, shard
+// shape and orientation (all held by ShardSpec) and the same memory layout, which ShardSpec does not
+// hold -- HEIGHT and BLOCK shards with one spec put different tiles on each core. A ShardSpec-only or
+// grid-only match returned a permuted result (#58467).
+//
+// Both shard specs must be present. An ND_SHARDED config carries nd_shard_spec instead of shard_spec,
+// so there is nothing to compare and we decline rather than compare across representations. This also
+// keeps is_uneven() -- which dereferences shard_spec() after testing only is_sharded() -- off an
+// ND-sharded operand.
+bool sharded_layout_matches(const MemoryConfig& input, const MemoryConfig& output) {
+    return input.is_sharded() && output.is_sharded() && input.shard_spec().has_value() &&
+           output.shard_spec().has_value() && *input.shard_spec() == *output.shard_spec() &&
+           input.memory_layout() == output.memory_layout();
+}
+
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
@@ -822,15 +839,11 @@ bool is_native_L1_sharding(
     const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
     const bool c_is_l1 = c.buffer_type() == BufferType::L1;
 
-    // Distinct from a mismatch: an ND_SHARDED config carries nd_shard_spec instead of shard_spec, so
-    // there is nothing to compare and we decline rather than compare across representations. Checking
-    // this also keeps is_uneven() -- which dereferences shard_spec() after testing only is_sharded() --
-    // off an ND-sharded operand.
-    const bool shard_specs_comparable = a.memory_config().shard_spec().has_value() && c.shard_spec().has_value();
     // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
-    // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
-    // unsupplied output config is derived from a's, so the common case still matches.
-    const bool c_shard_matches_a = shard_specs_comparable && *c.shard_spec() == *a.memory_config().shard_spec();
+    // agree or the output is addressed on cores where it is not allocated -- which hangs the device --
+    // or, with the same cores but another layout, holds the wrong tiles. An unsupplied output config is
+    // derived from a's, so the common case still matches.
+    const bool c_shard_matches_a = sharded_layout_matches(a.memory_config(), c);
 
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
@@ -877,32 +890,18 @@ bool is_native_L1_sharding(
             // binary behavior. a.memory_config() == b->memory_config() already guarantees a == b.
             bool all_l1 = a.memory_config().buffer_type() == BufferType::L1 &&
                           b->memory_config().buffer_type() == BufferType::L1 && c.buffer_type() == BufferType::L1;
-            bool c_shard_matches = c.is_sharded() && c.shard_spec().has_value() &&
-                                   a.memory_config().shard_spec().has_value() &&
-                                   *c.shard_spec() == *a.memory_config().shard_spec();
-            return all_l1 && c_shard_matches;
+            return all_l1 && c_shard_matches_a;
         }
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
         }
 
-        // Check if output grid differs from input grids - if so, cannot use native sharding
-        // This will force resharding through interleaved path
-        if (c.is_sharded() && c.shard_spec().has_value()) {
-            const auto& c_grid = c.shard_spec()->grid;
-            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-                const auto& a_grid = a.memory_config().shard_spec()->grid;
-                if (a_grid != c_grid) {
-                    return false;
-                }
-            }
-            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
-                const auto& b_grid = b->memory_config().shard_spec()->grid;
-                if (b_grid != c_grid) {
-                    return false;
-                }
-            }
+        // A sharded input must place the same tensor region on each core as the output; a mismatch --
+        // another grid, shard shape, orientation or layout -- goes through the TensorAccessor path, which
+        // reshards. b needs no check of its own: the condition above makes its memory config a's.
+        if (a.memory_config().is_sharded() && !c_shard_matches_a) {
+            return false;
         }
 
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
