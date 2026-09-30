@@ -73,7 +73,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile);
+            format_descriptor.tile,
+            format_descriptor.face_geometry);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
