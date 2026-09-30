@@ -48,6 +48,7 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_BLOCK,
     RELU_CONFIG,
     TILE_COUNT,
     TILIZE,
@@ -99,6 +100,7 @@ def test_pack(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
+    pack_block: bool = False,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -204,6 +206,7 @@ def test_pack(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
+            PACK_BLOCK(pack_block),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -270,3 +273,39 @@ def test_pack(
         test_passed = True
 
     assert test_passed
+
+
+# The block pack: every dest block packed with one _llk_pack_block_ run (one pack program run per block, the path
+# behind tt-metal's pack_block_mop) instead of one _llk_pack_ per tile. Same formats, dest modes and sync modes as
+# PACK_SWEEP, blocks of 1 to 16 tiles, no relu axis (relu is a packer config bit that the block pack does not touch).
+# Bfp8_b outputs take the per-tile pack inside the kernel, as the API does. Shared with perf_pack_block.py.
+PACK_BLOCK_SWEEP = dict(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[32, 32], [64, 64], [128, 64], [128, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
+        dest_sync, dest_acc, formats, input_dimensions
+    ),
+)
+
+
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=True,
+    )
