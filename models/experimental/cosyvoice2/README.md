@@ -45,7 +45,7 @@ How the figures were taken:
 | prompt features: speech tokens, speaker embedding, prompt mel | host, once per prompt | the upstream frontend (ONNX speech tokenizer, CAM++). It runs in the reference venv, and `scripts/prepare_inputs.py` writes one `.npz` per case |
 | LLM: Qwen2-0.5B backbone, speech-token head | device | prefill, then a traced decode loop; sampling (RAS) on the host |
 | flow: Conformer encoder + conditional flow matching (10 Euler steps) | device | bucketed lengths with padding masks |
-| HiFT vocoder: F0 predictor, NSF source, upsampling stack, iSTFT | device, fp32 | a mel of 512 frames or more runs in 512-frame chunks with upstream's streaming cache |
+| HiFT vocoder: F0 predictor, NSF source, upsampling stack, iSTFT | device, fp32 | a mel of 512 frames or more runs in 512-frame chunks with upstream's streaming cache; a shorter one, and streaming's final call, run at a bucket, masked past the real length so they compute upstream's call exactly ([`tt/hifigan/valid_length.py`](tt/hifigan/valid_length.py)) |
 
 - Between stages, only the sampled token ids, the mel and the waveform return to the host.
 - The configuration behind every reported figure is `CosyVoice2Config.reported()` in

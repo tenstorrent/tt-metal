@@ -62,6 +62,7 @@ except ImportError:  # pragma: no cover - matches upstream's own fallback
 import ttnn
 
 from .conv import TtConv1d
+from .valid_length import apply_mask
 
 COND_CHANNELS = 512
 NUM_CONV_LAYERS = 5
@@ -137,8 +138,11 @@ class TtConvRNNF0Predictor:
         self.classifier_weight = ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         self.classifier_bias = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    def __call__(self, mel, mel_frames: int, batch_size: int = 1):
+    def __call__(self, mel, mel_frames: int, batch_size: int = 1, mask=None):
         """mel: ttnn [B, T_mel, 80] channels-last -> ttnn [B, T_mel] Hz (non-negative).
+
+        `mask` (`[1, T_mel, 1]`, tt/hifigan/valid_length.py): a padded call's; each conv's output is zeroed past the
+        real frames (ELU keeps zeros at zero). `mel` must already be zero there. The F0 past them is the caller's.
 
         OWNERSHIP: frees only the intermediates it creates, never `mel` (matches
         `TtResBlock.__call__`'s convention -- see that class's docstring).
@@ -146,6 +150,7 @@ class TtConvRNNF0Predictor:
         x, length = mel, mel_frames
         for i, conv in enumerate(self.convs):
             nxt, length = conv(x, length, batch_size)
+            nxt = apply_mask(nxt, mask)
             if x is not mel:
                 ttnn.deallocate(x)
             x = ttnn.elu(nxt, alpha=1.0)

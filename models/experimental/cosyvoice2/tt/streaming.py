@@ -21,7 +21,9 @@ HiFT geometries here (`HiFTStream`): the middle calls run at their exact lengths
 The first call (`2 x first hop` = 50-98 frames, no cache) is padded to 128 with silence IN FRONT: its last 8 frames
 are held back and crossfaded, so they must see upstream's right context (the conv's own zero padding), not silence
 frames; front padding is unvoiced, so the sine phase at the first real frame is upstream's. The final call is padded at
-the end to 128 or 256 (the tail effect docs/VALIDATION.md measures for bucketing).
+the end to 128 or 256 and masked there (`valid_frames`, tt/hifigan/valid_length.py), so it computes upstream's call over
+its real frames to the last sample (before 2026-09-30 the padding was silence, and it silenced the last ~25 ms of every
+utterance: notes B28).
 
 Offline (stage A, `stream_fixed_tokens`): the tokens are given up front, as if the LLM had finished; no trace is
 involved. Live (stage B, `StreamSession`, driven by `CosyVoice2TTNN.synthesize_stream`): the LLM's
@@ -48,7 +50,7 @@ HOP_SCALE = 2  # stream_scale_factor
 PRE_LOOKAHEAD = 3  # the flow encoder's pre_lookahead_len
 SOURCE_CACHE = OVERLAP_FRAMES * HOP  # 3,840 samples
 FIRST_CALL_FRAMES = 128  # the first HiFT call, padded in front
-FINAL_CALL_BUCKETS = (128, 256)  # the final HiFT call, padded at the end
+FINAL_CALL_BUCKETS = (128, 256)  # the final HiFT call, padded at the end and masked there
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,8 @@ class HiFTStream:
         else:
             front, run = 0, frames  # 108 or 208, exact
         back = run - front - frames
-        mel_run = torch.cat([silence_mel(front), mel, silence_mel(back)], dim=1)
+        assert back == 0 or front == 0, (front, back)  # only the final call is padded at its end, and never in front
+        mel_run = torch.cat([silence_mel(front), mel, torch.zeros(1, back, mel.shape[2])], dim=1)  # the end: masked
         noise_run = torch.cat(
             [torch.zeros(1, front * HOP, self.harmonics), noise, torch.zeros(1, back * HOP, self.harmonics)], dim=1
         )
@@ -128,8 +131,12 @@ class HiFTStream:
             f0=f0_run,
             cache_source=self.source_cache,
             return_source=True,
+            valid_frames=frames if back else None,
         )
         wav = ttnn.to_torch(wav_dev).float().reshape(-1)[front * HOP : (front + frames) * HOP]
+        if back:  # the real call's window normalization on its last samples
+            index, gain = self.hift.end_gain(frames, run)
+            wav[index] = wav[index] * gain
         ttnn.deallocate(wav_dev)
         ttnn.deallocate(mel_dev)
         source = source.reshape(-1)[front * HOP : (front + frames) * HOP]

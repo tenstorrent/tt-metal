@@ -386,7 +386,8 @@ token, so the flow sees at most 750 prompt + 1,600 generated tokens, and HiFT 3,
 
 The test gates on max |diff| ≤ 0.4 and PCC ≥ 0.9995. The control fails it by a factor of 6 or more.
 
-**HiFT: padding with silence, the tail it touches.** The mel is padded with `log(1e-5)`, the mel's own silence floor
+**HiFT: padding with silence, the tail it touches.** (Superseded on 2026-09-30: the padding is masked and the tail
+matches upstream's; "Masked end padding in HiFT".) The mel is padded with `log(1e-5)`, the mel's own silence floor
 (the quietest frames of real prompts sit exactly there), and the audio is trimmed back. The measurement injects
 torch F0 (D16) and uses the same sine noise over the valid region. It separates two effects:
 - **leakage:** silence padding vs zero padding at the same bucket, so the kernels are identical and any difference is
@@ -550,7 +551,8 @@ A mel of 512 frames or more now runs through HiFT in 512-frame calls with upstre
   carried over, and the two outputs are crossfaded with upstream's Hamming window (7,680 samples);
 - the last call is anchored to the end of the mel, so nothing is padded, and it carries the source over its whole
   overlap;
-- a mel shorter than 512 frames runs once at 256 or 512 frames, padded with silence as before.
+- a mel shorter than 512 frames runs once at 256 or 512 frames, padded with silence as before. (Since 2026-09-30
+  that padding is masked, so it computes upstream's call exactly: "Masked end padding in HiFT" below.)
 
 So HiFT has two geometries instead of twelve, and no length limit: the segment cap is back to upstream's own 1,600
 tokens (the flow's buckets and the LLM context grow to cover it: 17 flow buckets up to 2,560 tokens, context 2,560).
@@ -629,6 +631,91 @@ The gate: whole ≤ 0.13, and no seam above 1.5x its utterance's whole-signal fi
 - In the waveform, chunked vs single pass has PCC only 0.49–0.82, even in upstream itself: past the carried overlap,
   each call's sine phase restarts. The spectrum barely moves.
 
+## Masked end padding in HiFT (2026-09-30)
+
+**Why.** Stage A's streaming WER was 1.36 % against 0.68 % on 09-28, because Whisper appended "you" to
+260-123440-0010 (notes: B28). The cause was the padding of two HiFT calls:
+- streaming's final call, padded at its end with silence mel to 128 or 256 frames;
+- Stage 1's single call for a mel under 512 frames, padded the same way to 256 or 512.
+
+HiFT's convs look ahead into that silence. So the last 500–620 samples (~25 ms) of every streamed utterance, and of
+three Stage 1 utterances, fell to −104 to −139 dBFS, where upstream's audio runs on at −52 to −89 dBFS. On that clip
+Whisper's first-token decision sits near a tie. The silenced ending tips it into a mode that decodes the last 20 ms
+as "you" in 5 of 11 noise draws. It was not the scorer (12 identical runs) and not the lengths (identical to
+upstream's, whole and per chunk).
+
+**The fix** (`tt/hifigan/valid_length.py`). The call is still padded to its bucket, so no new geometry is compiled.
+But it computes upstream's call at the real length, because every padding site is checked against upstream's code:
+- the mel, every conv's output and each stage's sum are zeroed past the real length at their own rate. Snake,
+  leaky ReLU and ELU keep zeros at zero;
+- F0 is zero past the real frames. SineGen2's phase is a cumsum interpolated back up linearly, and upstream's
+  interpolation clamps at the last real frame; a flat phase past it is the same thing;
+- the 8 source samples after the real end become the reflection of the last real ones (`torch.stft`'s centering),
+  and the STFT frames past the real ones are zeroed;
+- the iSTFT's magnitude is zeroed past the real frames (`exp(0)` would be 1). The last 3 samples are rescaled to the
+  real call's window normalization (`istft_end_gain`).
+
+ReflectionPad1d((1, 0)) pads the start only, so it is untouched. The streaming first call, padded in front at the
+utterance's start, is unchanged.
+
+**The rules on the host** (`tests/pcc/test_hift_masked.py`, torch with the real checkpoint, 8 real/bucket pairs from
+34/128 to 426/512):
+- **With the same F0 on both sides**, the masked padded call equals the call at the real length: max |diff| ≤ 1.2e-6
+  and PCC 1.00000000, over the whole waveform and over its last 20 ms.
+- **The F0 predictor alone** equals it exactly in 5 of 8 cases, and within 7e-3 Hz in the others (its convs round
+  differently at another length). SineGen2 integrates F0 into the phase over the whole call, so compared end to end
+  that rounding grows to ~1e-3 in the waveform. Hence the two parts.
+- **Each rule matters** (the "you" clip's shape, 62 of 128, last 20 ms max |diff|): without the source's
+  reflection, 2.4e-5; without the end gain, 5.6e-4; with F0 held past the end instead of zeroed, 2.4e-3; with no
+  masks at all, 4.7e-2.
+
+**On the device, against the exact-length call**: the same HiFT at the real length, compiled for each length. That
+was 5,429 kernels for ten lengths, which is why the exact length is only a reference, not the fix.
+
+| call | real / bucket frames | last 20 ms: max \|diff\|, PCC | whole utterance: PCC |
+|---|---|---|---|
+| streaming final calls, six (same F0 / own F0) | 34–138 / 128–256 | ≤ 4.1e-4, 0.9988–0.9999 | 0.99993–1.000000 |
+| Stage 1's padded calls, four (same F0 / own F0) | 150–426 / 256–512 | ≤ 4.9e-4, 0.9987–0.9998 | 0.99983–0.99994 |
+
+- **The whole-utterance max |diff| reaches 3.6e-2.** The device builds SineGen2's phase with matrices sized to the
+  call, so another length rounds the running phase differently. This is the geometry effect "Bucketing" describes.
+  Silence padding scored PCC 0.9836–0.9994 on the same comparison.
+- **The final chunk against upstream's streaming**, whole chunk, masked / exact: 0.99696 / 0.99749 on 121-127105-0015
+  and 0.99931–0.99979 / 0.99953–0.99982 on the others. 0015's final chunk is 13 tokens ending near −71 dBFS, so its
+  PCC measures the port's own noise floor at the exact length too.
+
+**The end gate (notes: D41)** replaces D38's tail criterion. The last 20 ms must be within 3 dB of the reference's
+RMS level, with no absolute floor:
+- Stage 1: against torch's HiFT at the real length, same F0 and noise (`test_hift_masked.py`);
+- streaming: against upstream's streaming, fed upstream's mel, F0 and noise (`test_streaming.py`).
+
+D38's −50 dBFS floor is what let the silenced endings through: it passed 260-123440-0010's with the difference
+2.5 dB below the signal. The new gate fails on the old padding and passes on the fix:
+
+| gate | case | last 20 ms, dBFS: silence padding / masked / reference |
+|---|---|---|
+| Stage 1 | 121-127105-0003 | −115.2 / −64.5 / −65.0 |
+| Stage 1 | 121-127105-0015 | −104.1 / −88.1 / −88.9 |
+| Stage 1 | 260-123286-0014 | −138.2 / −62.7 / −63.1 |
+| Stage 1 | 260-123440-0010 | −130.1 / −51.5 / −51.9 |
+| streaming | 121-127105-0003 | −117.6 / −64.6 / −64.9 |
+| streaming | 121-127105-0015 | −103.8 / −88.4 / −88.8 |
+| streaming | 121-127105-0024 | −112.3 / −67.7 / −68.0 |
+| streaming | 260-123286-0014 | −138.7 / −63.2 / −63.4 |
+| streaming | 260-123440-0002 | −113.9 / −81.1 / −81.6 |
+| streaming | 260-123440-0010 | −131.1 / −51.7 / −51.9 |
+
+**The "you" clip, 11 noise draws** (`test_streaming.py::test_device_you_clip_noise_draws` renders them, and
+`tests/reference/test_you_clip.py` transcribes them in the reference venv):
+- Before: 5 of 11 ended in "you". The first token was within ±0.16 nats of a tie in every draw.
+- Masked: 0 of 11, with 0 word errors in each. Every ending is within 0.2–0.6 dB of upstream's.
+
+**Cost.**
+- About 80 elementwise masks per padded call, and a host round trip of the source.
+- No kernels per length: the masked programs are the bucket's, compiled in the warm-ups.
+- The final call's HiFT took 0.140 s against 0.120 s in the interleaved test. That run shared the host with CPU jobs;
+  the clean figure is in "Streaming, measured".
+
 ## Streaming, stage A: offline, from fixed tokens (2026-09-29)
 
 `tt/streaming.py` runs upstream's streaming schedule (`CosyVoice2Model.tts(stream=True)`, reproduced in its module
@@ -663,20 +750,24 @@ docstring) over a fixed token list, as if the LLM had finished.
 | control: upstream's non-streaming mel of the same frames vs its streaming mel | 0.022–0.130 | further away than ours, at every middle chunk |
 | HiFT, mechanism (upstream's mel, F0 and noise per call): each chunk's emitted audio | PCC 0.99921–0.99985 | ≥ 0.999 |
 | HiFT, mechanism: each seam (the crossfade ±40 ms) | PCC 0.99900–0.99989 | ≥ 0.998 |
-| HiFT, the final chunk's last 0.4 s | difference at −55 to −82 dBFS | 20 dB below the signal, or under −50 dBFS |
+| HiFT, the utterance's last 20 ms: level against upstream's (the masked final call, 2026-09-30) | within 0.2–0.5 dB | within 3 dB, no floor (D41) |
+| HiFT, the final chunk's last 0.4 s: difference below the signal (masked) | 21–27 dB | at least 20 dB, no floor |
 | HiFT, own F0: log-mel L1 vs upstream's streamed audio | 0.069–0.088 | ≤ 0.13 |
 
-- **The final chunk's tail.** Its end padding reaches back into the last ~0.4 s, like bucketing's ("Bucketing"
-  above).
-  - Where the utterance ends in near-silence, the difference sits at the silence's own level (121-127105-0003:
-    signal −71.3, difference −70.4 dBFS).
-  - Elsewhere it sits 18–23 dB below the signal.
-  - Over the whole of 121-127105-0015's short final chunk (0.68 s), PCC is 0.965; before its last 0.4 s, 0.99921.
+- **The final chunk's end.** Until 2026-09-30 the final call was padded with silence. Its last ~25 ms went silent
+  in every case, and D38's tail criterion let that through its −50 dBFS floor (B28).
+  - It is now masked ("Masked end padding in HiFT" above). The last 20 ms sit within 0.2–0.5 dB of upstream's, the
+    last 0.4 s's difference 21–27 dB below the signal, and the final chunk's PCC before those 0.4 s is
+    0.99921–0.99979.
+  - Over the whole of 121-127105-0015's 13-token final chunk, PCC is 0.9970, and 0.9975 with the call at its exact
+    length. The chunk ends near −71 dBFS, where PCC measures the port's own noise floor, so it is not gated.
 - **WER and SIM** (`scripts/eval_wer_sim.py`) of our offline-streamed audio (our flow, our HiFT, own F0), against
   upstream's streaming of the same tokens:
   - WER 1.36 % vs 0.68 %; SIM 95.83 vs 95.90.
   - The one extra word is Whisper appending "you" after the last word of 260-123440-0010. Otherwise the
     transcripts match upstream's word for word.
+  - That was the silenced ending (B28). With the masked final call, none of 11 noise draws of that clip ends in
+    "you" ("Masked end padding in HiFT" above).
   - For scale, the same tokens non-streamed (the Stage 1 demo) score 0.68 % and 95.87.
 
 ## Streaming, stage B: interleaved with the LLM (2026-09-29)

@@ -10,9 +10,10 @@ streaming run on the same tokens (`COSYVOICE2_STREAM_REF`, scripts/streaming_ref
   final chunk is non-streaming on both sides);
 - **HiFT, mechanism**: `HiFTStream` fed upstream's mel pieces with upstream's F0 and noise for each call. Every chunk's
   emitted audio (the padded first and final ones included) and every seam against upstream's. The final call is
-  padded at its end with silence, and HiFT looks ahead, so the last ~0.4 s of the utterance differ from upstream's
-  (the bucketing tail, docs/VALIDATION.md): the final chunk is gated on PCC before that tail, and in the tail on how
-  far below the signal the difference sits;
+  padded to a bucket at its end and masked (tt/hifigan/valid_length.py), so it must end as upstream's does. The
+  utterance's last 20 ms are gated on level, within 3 dB of upstream's, and its last 0.4 s on the difference, 20 dB
+  below the signal, neither with an absolute floor (notes: D41); the final chunk's PCC is gated before those 0.4 s,
+  where a quiet ending (-71 dBFS) would make PCC measure the port's own noise floor;
 - **HiFT, own F0**: the same with our F0 predictor, judged on log-mel L1 (F0 differences drift the sine phase).
 `COSYVOICE2_STREAM_OUT`, if set, also gets the fully offline-streamed audio (our flow and our HiFT) as wavs and a
 results.json, for scripts/eval_wer_sim.py.
@@ -63,15 +64,20 @@ def test_stream_schedule_is_upstreams():
 
 # The gate, set from the first measurement (2026-09-29; docs/VALIDATION.md, "Streaming"):
 # - flow: our chunk mel vs upstream's streaming mel, relative L2 <= 0.03 (measured 0.0085-0.0182);
-# - HiFT mechanism: each chunk's emitted audio PCC >= 0.999 (measured 0.99931-0.99985), before the final chunk's
-#   tail; each crossfade +-40 ms PCC >= 0.998 (measured 0.99900-0.99989);
-# - the final chunk's last TAIL_S: the difference at least 20 dB below the signal (RMS), or under -50 dBFS where the
-#   utterance ends in near-silence and the difference sits at the silence's own level (as docs/VALIDATION.md found
-#   for the bucketing tail);
+# - HiFT mechanism: each chunk's emitted audio PCC >= 0.999 (measured 0.99931-0.99985), the final chunk's before
+#   its last TAIL_S; each crossfade +-40 ms PCC >= 0.998 (measured 0.99900-0.99989);
+# - the utterance's end (2026-09-30, notes D41), neither with an absolute floor: the last 20 ms within 3 dB of
+#   upstream's (RMS level; measured 0.2-0.5 dB), and over the last TAIL_S the difference at least 20 dB below the
+#   signal. The criterion before (D38) had a -50 dBFS floor, and it let the end-padded final call silence the last
+#   ~25 ms of every utterance: it passed 260-123440-0010's ending with the difference 2.5 dB below the signal (B28).
+#   The whole final chunk's PCC is not gated: 121-127105-0015's, 13 tokens ending near -71 dBFS, is 0.9975 even with
+#   the call at its exact length (0.9970 masked), the port's own error at that level;
 # - own F0: whole-utterance log-mel L1 <= 0.13 (measured 0.069-0.088).
 FLOW_REL = 0.03
 HIFT_CHUNK_PCC, HIFT_SEAM_PCC = 0.999, 0.998
-TAIL_S, TAIL_DB_BELOW, TAIL_FLOOR_DBFS = 0.4, 20.0, -50.0
+END_S, END_DB = 0.02, 3.0
+TAIL_S, TAIL_DB_BELOW = 0.4, 20.0
+YOU_END_DB = END_DB  # the "you" clip's 11 draws (their own noise) against upstream's ending: measured 0.2-0.6 dB
 OWN_F0_LOGMEL_L1 = 0.13
 SEAM_PAD = 960
 
@@ -138,15 +144,22 @@ def test_device_offline_streaming_matches_upstream_streaming(device):
             own_audio.append(own.step(want_mel, chunk.final, noise))
             want = ref[f"speech_{k}"]
             tail_note = ""
-            if chunk.final:  # the end padding's reach: gated on level, the rest of the chunk on PCC
-                tail = int(TAIL_S * 24000)
+            got_body, want_body = got, want
+            if chunk.final:  # the utterance's end, against upstream's, with no floor (D41)
+                n, tail = int(END_S * 24000), int(TAIL_S * 24000)
+                got_db, want_db = _dbfs(got[-n:]), _dbfs(want[-n:])
                 sig_db, diff_db = _dbfs(want[-tail:]), _dbfs(got[-tail:] - want[-tail:])
-                tail_note = f"; last {TAIL_S} s: signal {sig_db:.1f} dBFS, difference {diff_db:.1f} dBFS"
-                if sig_db - diff_db < TAIL_DB_BELOW and diff_db > TAIL_FLOOR_DBFS:
-                    failures.append(f"{case_id} final chunk: tail difference {diff_db:.1f} dBFS, signal {sig_db:.1f}")
+                tail_note = (f"; last {END_S * 1000:.0f} ms: {got_db:.1f} dBFS, upstream {want_db:.1f}; last {TAIL_S} s: "
+                             f"signal {sig_db:.1f}, difference {diff_db:.1f} dBFS")  # fmt: skip
+                if abs(got_db - want_db) > END_DB:
+                    failures.append(
+                        f"{case_id} final chunk: last {END_S * 1000:.0f} ms at {got_db:.1f} dBFS, upstream's {want_db:.1f}"
+                    )
+                if sig_db - diff_db < TAIL_DB_BELOW:
+                    failures.append(
+                        f"{case_id} final chunk: last {TAIL_S} s difference {diff_db:.1f} dBFS, signal {sig_db:.1f}"
+                    )
                 got_body, want_body = got[:-tail], want[:-tail]
-            else:
-                got_body, want_body = got, want
             chunk_pcc = _pcc(got_body, want_body) if len(want_body) > 2 * SEAM_PAD else float("nan")
             seam_pcc = float("nan")
             if k > 0:  # this chunk's first 3,840 samples are the crossfade with the previous chunk
@@ -238,3 +251,59 @@ def test_device_streaming_interleaved_with_llm(device, expect_error):
     assert tokens == batch, "streaming changed the greedy tokens"
     offline = np.concatenate([c.audio for c in stream_fixed_tokens(pipeline, ctx, tokens, noise_for)])
     assert np.array_equal(streamed.audio, offline), float(np.abs(streamed.audio - offline).max())
+
+
+# The "you" clip (notes: B28): 260-123440-0010 streamed over 11 noise draws. With the final HiFT call padded with
+# silence, the last ~25 ms went silent, and Whisper appended "you" in 5 of the 11 draws. The device half renders the
+# draws (stage A, TT's Stage 1 tokens) and checks each ending's level; with COSYVOICE2_YOU_OUT set it writes them,
+# with a results.json, for tests/reference/test_you_clip.py to transcribe in the reference venv.
+YOU_CASE = "zero_shot_260-123440-0010"
+YOU_SEEDS = (1987, 1, 2, 3, 4, 5, 6, 7, 8, 9)  # R5's default draw, then nine more; the eleventh is upstream's noise
+YOU_OUT = os.environ.get("COSYVOICE2_YOU_OUT", "")
+
+
+@pytest.mark.skipif(not (REF_DIR and INPUTS_DIR), reason="set COSYVOICE2_STREAM_REF and COSYVOICE2_INPUTS")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 50_000_000}], indirect=True)
+@pytest.mark.timeout(0)  # a device job is never killed mid-op (pytest.ini sets 300 s)
+def test_device_you_clip_noise_draws(device):
+    """Every draw's last 20 ms against upstream's streamed audio of the same tokens: within YOU_END_DB (its own noise
+    moves the level a little; the silenced ending was 79 dB below)."""
+    import soundfile
+
+    from models.experimental.cosyvoice2.tt.pipeline import CosyVoice2TTNN
+    from models.experimental.cosyvoice2.tt.prompt import PromptContext
+    from models.experimental.cosyvoice2.tt.streaming import stream_fixed_tokens
+
+    ref = np.load(os.path.join(REF_DIR, f"{YOU_CASE}.npz"))
+    ctx = PromptContext.from_npz(os.path.join(INPUTS_DIR, f"{YOU_CASE}.npz"))
+    tokens = ref["tokens"].tolist()
+    want_db = _dbfs(ref["audio"][-int(END_S * 24000) :])
+    pipeline = CosyVoice2TTNN(device)
+
+    def seeded(seed):
+        gen = torch.Generator().manual_seed(seed)
+        return lambda k, samples: torch.randn(1, samples, pipeline.harmonics, generator=gen)
+
+    def upstream(k, samples):
+        return torch.from_numpy(ref[f"hift_noise_{k}"][:, :samples])
+
+    draws = [(f"seed{s}", seeded(s)) for s in YOU_SEEDS] + [("upstream_noise", upstream)]
+    failures, results = [], []
+    case = json.loads(str(np.load(os.path.join(INPUTS_DIR, f"{YOU_CASE}.npz"))["case_json"]))
+    for name, noise_for in draws:
+        audio = np.concatenate([c.audio for c in stream_fixed_tokens(pipeline, ctx, tokens, noise_for)]).astype(
+            np.float32
+        )
+        got_db = _dbfs(audio[-int(END_S * 24000) :])
+        print(f"  {YOU_CASE} {name}: last {END_S * 1000:.0f} ms {got_db:.1f} dBFS, upstream's {want_db:.1f}")
+        if abs(got_db - want_db) > YOU_END_DB:
+            failures.append(f"{name}: last 20 ms at {got_db:.1f} dBFS, upstream's {want_db:.1f}")
+        if YOU_OUT:
+            os.makedirs(YOU_OUT, exist_ok=True)
+            soundfile.write(os.path.join(YOU_OUT, f"{YOU_CASE}_{name}.wav"), audio, 24000)
+            results.append({**case, "case_id": f"{YOU_CASE}_{name}", "wav": f"{YOU_CASE}_{name}.wav",
+                            "audio_s": round(len(audio) / 24000, 3), "segment_tokens": [tokens]})  # fmt: skip
+    if YOU_OUT:
+        with open(os.path.join(YOU_OUT, "results.json"), "w") as fh:
+            json.dump({"backend": "ttnn-streaming-offline", "results": results}, fh, indent=2, ensure_ascii=False)
+    assert not failures, failures

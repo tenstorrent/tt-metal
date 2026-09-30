@@ -29,6 +29,7 @@ import ttnn
 
 from .conv import TtConv1d, extract_conv_weights
 from .snake import TtSnake
+from .valid_length import apply_mask
 
 
 def get_padding(kernel_size: int, dilation: int = 1) -> int:
@@ -95,8 +96,12 @@ class TtResBlock:
             dtype=dtype,
         )
 
-    def __call__(self, x, length: int, batch_size: int = 1):
+    def __call__(self, x, length: int, batch_size: int = 1, mask=None):
         """x: ttnn [N, L, C] -> ttnn [N, L, C]. Length is unchanged ("same" padding).
+
+        `mask` (`[1, L, 1]`, tt/hifigan/valid_length.py): a padded call's; every conv's output is zeroed past the
+        real length, so the next conv sees the zeros upstream's own padding would give it. `x` must already be zero
+        there; Snake keeps zeros at zero.
 
         OWNERSHIP: frees only the intermediates it creates, never `x`. HiFT runs
         three ResBlocks over the *same* input per stage and averages them, so a
@@ -106,8 +111,10 @@ class TtResBlock:
         for i in range(self.n):
             xt = self.act1[i](cur)
             xt, _ = self.convs1[i](xt, length, batch_size)
+            xt = apply_mask(xt, mask)
             xt = self.act2[i](xt)
             xt, _ = self.convs2[i](xt, length, batch_size)
+            xt = apply_mask(xt, mask)
             nxt = ttnn.add(cur, xt)
             ttnn.deallocate(xt)
             if cur is not x:  # ours to free; the caller's is not

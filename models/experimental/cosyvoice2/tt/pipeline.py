@@ -528,10 +528,10 @@ class CosyVoice2TTNN:
         - a mel of 512 frames or more runs in 512-frame chunks with upstream's streaming cache: source carry-over and
           a Hamming crossfade (`TtHiFTGenerator.inference_chunked`). Every call is the same geometry, and nothing
           is padded.
-        - a shorter mel runs once at the smallest HiFT bucket at or above it (256 or 512 frames). It is padded with
-          `MEL_SILENCE` (silence, not zeros: 0 is a loud mel), the source noise with zeros, and the audio is trimmed
-          back. HiFT's convs look ahead, so the padding reaches into the last few hundred milliseconds;
-          docs/VALIDATION.md has the measured tail error.
+        - a shorter mel runs once at the smallest HiFT bucket at or above it (256 or 512 frames), padded at its end
+          and masked there (`TtHiFTGenerator.inference_padded`, tt/hifigan/valid_length.py), so it computes
+          upstream's call at the real length to the last sample. (Padded with silence instead, HiFT's look-ahead
+          silenced the last ~25 ms: notes B28.)
         Unbucketed, it runs once at the exact length (single-pass HiFT tops out near 2,900 frames on an N150)."""
         from .hifigan.chunking import CHUNK_FRAMES
 
@@ -543,18 +543,7 @@ class CosyVoice2TTNN:
         run_frames = mel_frames
         if self.config.bucketing:
             run_frames = bucket_at_least(mel_frames, self.config.hift_frame_buckets())
-            mel = torch.cat([mel, torch.full((1, run_frames - mel_frames, mel.shape[2]), MEL_SILENCE)], dim=1)
-            noise = torch.cat(
-                [noise, torch.zeros(1, (run_frames - mel_frames) * self.hift.upsample_scale, self.harmonics)], 1
-            )
-        mel_dev = ttnn.from_torch(
-            mel, dtype=getattr(ttnn, self.config.hift_source_dtype), layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        wav_dev = self.hift.inference(mel_dev, run_frames, 1, sine_noise=noise)
-        wav = ttnn.to_torch(wav_dev).float().reshape(-1)[:audio_len]
-        ttnn.deallocate(wav_dev)
-        ttnn.deallocate(mel_dev)
-        return wav
+        return self.hift.inference_padded(mel, noise, run_frames)
 
     # ------------------------------------------------------------------------------------------------------------
     def synthesize(self, ctx: PromptContext, text: str, *, rng: RandomSources | None = None) -> Synthesis:
@@ -624,9 +613,10 @@ class CosyVoice2TTNN:
         docs/VALIDATION.md). `generate()` releases the trace when it returns, before the final chunk (notes: D22, D31).
         `on_audio(audio)` receives each chunk's audio as soon as it is ready.
 
-        `noise_for(k, samples)` gives HiFT call k's sine noise. The default draws from a generator of its own: host-side
-        RAS sampling draws from torch's global RNG, and noise drawn from it between decode steps would change the
-        tokens, so a seeded call would not sample what `synthesize` samples. The result carries one record per chunk
+        `noise_for(k, samples)` gives HiFT call k's sine noise. The default draws from a generator of its own (seeded
+        `rng.noise_seed`, else `rng.llm_seed + 1`): host-side RAS sampling draws from torch's global RNG, and noise
+        drawn from it between decode steps would change the tokens, so a seeded call would not sample what
+        `synthesize` samples. The result carries one record per chunk
         (`chunks`, times since the call began) and `first_audio_s`."""
         from .streaming import StreamSession
 
@@ -640,7 +630,7 @@ class CosyVoice2TTNN:
             raise NotImplementedError(f"mode {ctx.mode!r}: only zero_shot is wired end to end so far")
         rng = rng or RandomSources()
         if noise_for is None:
-            noise_gen = torch.Generator().manual_seed((rng.llm_seed or 0) + 1)
+            noise_gen = rng.noise_generator() or torch.Generator().manual_seed((rng.llm_seed or 0) + 1)
 
             def noise_for(k, samples):
                 return torch.randn(1, samples, self.harmonics, generator=noise_gen)
@@ -803,16 +793,14 @@ class CosyVoice2TTNN:
         return clock
 
     def _hift_at(self, frames: int) -> None:
-        """HiFT once at exactly `frames` (a bucket), on a silent mel."""
-        mel = ttnn.from_torch(
-            torch.full((1, frames, 80), MEL_SILENCE),
-            dtype=getattr(ttnn, self.config.hift_source_dtype),
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        """HiFT once at the bucket `frames`, on a silent mel one frame shorter: the padded, masked call a shorter mel
+        makes (`TtHiFTGenerator.inference_padded`), so its masking programs are compiled too."""
+        real = frames - 1
+        self.hift.inference_padded(
+            torch.full((1, real, 80), MEL_SILENCE),
+            torch.zeros(1, real * self.hift.upsample_scale, self.harmonics),
+            frames,
         )
-        noise = torch.zeros(1, frames * self.hift.upsample_scale, self.harmonics)
-        ttnn.deallocate(self.hift.inference(mel, frames, 1, sine_noise=noise))
-        ttnn.deallocate(mel)
 
     def conv_cache_evictions(self) -> int:
         """Entries the per-geometry conv caches have evicted for DRAM pressure. Always 0 in bucketed mode."""

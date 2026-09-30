@@ -85,6 +85,7 @@ from .snake import TtSnake
 from .source import TtSourceModuleHnNSF
 from .stft import TtStft
 from .upsample import TtConvTranspose1d
+from .valid_length import ValidMasks, apply_mask, istft_end_gain, reflect_source_end
 
 
 @dataclass
@@ -432,8 +433,14 @@ class TtHiFTDecoder:
     def _as_own_dtype(self, t):
         return t if t.dtype == self.dtype else ttnn.typecast(t, self.dtype)
 
-    def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
+    def decode(self, mel, s, mel_frames: int, batch_size: int = 1, valid_frames: int | None = None):
         """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform (NHWC).
+
+        `valid_frames` (tt/hifigan/valid_length.py): the real frames of a call padded to `mel_frames`. `mel` must be
+        zero past them and `s` reflected at their end (`TtHiFTGenerator.inference` does both). Every conv's output,
+        each stage's sum, the source STFT's frames and the iSTFT's magnitude are then zeroed past the real length
+        at their own rate, so the real part computes upstream's call at `valid_frames`; the last few samples' window
+        normalization is the caller's (`istft_end_gain`).
 
         Every length this needs comes from `shape_trace`, called here with this
         instance's *own* `upsample_rates`/`upsample_kernel_sizes` -- explicitly,
@@ -457,16 +464,37 @@ class TtHiFTDecoder:
             self.in_channels,
         )
 
+        masks = valid = None
+        if valid_frames is not None and valid_frames < mel_frames:
+            masks = ValidMasks(self.device)
+            valid = shape_trace(
+                valid_frames,
+                self.base_channels,
+                self.upsample_rates,
+                self.upsample_kernel_sizes,
+                self.n_fft,
+                self.hop_len,
+                self.in_channels,
+            )
+
+        def mask(key_length, key_valid, across="channels"):
+            return None if masks is None else masks.get(key_length, key_valid, self.dtype, across)
+
         s_stft, _ = self.stft(s_own, trace["audio_length"], batch_size)  # [B, 2*bins, T]
         if s_own is not s:
             ttnn.deallocate(s_own)  # a converted copy made above; the caller still owns `s`
         s_stft = ttnn.permute(s_stft, (0, 2, 1))  # [B, T, 2*bins]
+        if masks is not None:
+            s_stft = apply_mask(s_stft, mask(trace["stft_frames"], valid["stft_frames"]))
 
         x, _ = self.conv_pre(mel_own, mel_frames, batch_size)
         if mel_own is not mel:
             ttnn.deallocate(mel_own)
+        if masks is not None:
+            x = apply_mask(x, mask(mel_frames, valid_frames))
 
         for st in trace["stages"]:
+            stage_mask = None if masks is None else mask(st.padded_length, valid["stages"][st.index].padded_length)
             act = ttnn.leaky_relu(x, self.lrelu_slope)
             ttnn.deallocate(x)
             x, _ = self.ups[st.index](act, st.in_length, batch_size)
@@ -481,18 +509,19 @@ class TtHiFTDecoder:
                 x = padded
 
             si, _ = self.source_downs[st.index](s_stft, trace["stft_frames"], batch_size)
-            si_res = self.source_resblocks[st.index](si, st.source_length, batch_size)
+            si = apply_mask(si, stage_mask)
+            si_res = self.source_resblocks[st.index](si, st.source_length, batch_size, mask=stage_mask)
             ttnn.deallocate(si)
             nx = ttnn.add(x, si_res)
             ttnn.deallocate(si_res)
             ttnn.deallocate(x)
-            x = nx
+            x = apply_mask(nx, stage_mask)  # the upsampled half past the real length, with it
 
             # Three (or however many num_kernels) ResBlocks read the SAME x and
             # their outputs are averaged, so x must outlive all of them.
             acc = None
             for j in range(self.num_kernels):
-                out = self.resblocks[st.index * self.num_kernels + j](x, st.padded_length, batch_size)
+                out = self.resblocks[st.index * self.num_kernels + j](x, st.padded_length, batch_size, mask=stage_mask)
                 if acc is None:
                     acc = out
                 else:
@@ -520,6 +549,8 @@ class TtHiFTDecoder:
         ttnn.deallocate(mag_lin)
         mag_c = ttnn.clamp(mag, 0.0, 1e2)
         ttnn.deallocate(mag)
+        if masks is not None:  # exp(0) is 1: the frames past the real ones must carry no energy into the iSTFT
+            mag_c = apply_mask(mag_c, mask(T, valid["conv_post_length"], "bins"))
 
         pha = ttnn.sin(pha_lin)
         ttnn.deallocate(pha_lin)
@@ -536,6 +567,8 @@ class TtHiFTDecoder:
         ttnn.deallocate(imag)
         out = ttnn.clamp(wav, -self.audio_limit, self.audio_limit)
         ttnn.deallocate(wav)
+        if masks is not None:
+            masks.release()
         return out
 
 
@@ -680,6 +713,7 @@ class TtHiFTGenerator:
             dtype=dtype,
         )
         self.dtype = dtype
+        self._end_gains: dict[tuple[int, int], tuple] = {}
 
     def inference(
         self,
@@ -691,6 +725,7 @@ class TtHiFTGenerator:
         f0: torch.Tensor | None = None,
         cache_source: torch.Tensor | None = None,
         return_source: bool = False,
+        valid_frames: int | None = None,
     ):
         """mel: ttnn [B, T_mel, 80] (straight from `TtCausalMaskedDiffWithXvec`,
         unchanged). Returns ttnn [B, L, 1] waveform. f0 is computed here by the
@@ -730,17 +765,28 @@ class TtHiFTGenerator:
           call to call and a device slice of each new n would be a new program.
         - `return_source=True` also returns the host source `[B, L]` (after any replacement), for the next call.
         - `f0`, host `[B, T_mel]`: skips the F0 predictor and uses this F0 (the seam gate injects torch's).
+
+        `valid_frames` (tt/hifigan/valid_length.py): a call padded at its end to `mel_frames` (a bucket) computes
+        upstream's call over its first `valid_frames` there. The mel, the F0 predictor's convs and the F0 are zeroed
+        past them, the source's next 8 samples become its reflection (on the host, with the cache), and the decoder
+        masks the rest. The last few samples' window normalization is the caller's (`end_gain`).
         """
+        padded = valid_frames is not None and valid_frames < mel_frames
+        masks = ValidMasks(self.device) if padded else None
+        if padded:
+            mel = ttnn.multiply(mel, masks.get(mel_frames, valid_frames, mel.dtype))  # a copy; the caller's stays
         if f0 is None:
-            f0_mel_rate = self.f0_predictor(mel, mel_frames, batch_size)  # ttnn [B, T_mel]
+            f0_mask = masks.get(mel_frames, valid_frames, self.f0_predictor.dtype) if padded else None
+            f0_mel_rate = self.f0_predictor(mel, mel_frames, batch_size, mask=f0_mask)  # ttnn [B, T_mel]
         else:
-            f0_mel_rate = ttnn.from_torch(
-                f0.reshape(batch_size, mel_frames).float(),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
+            f0 = f0.reshape(batch_size, mel_frames).float()
+            if padded:
+                f0 = f0.clone()
+                f0[:, valid_frames:] = 0
+            f0_mel_rate = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
         f0_mel_rate = ttnn.reshape(f0_mel_rate, (batch_size, mel_frames, 1))
+        if padded and f0 is None:  # |bias| past the real frames: zero keeps SineGen2's phase flat there
+            f0_mel_rate = apply_mask(f0_mel_rate, masks.get(mel_frames, valid_frames, f0_mel_rate.dtype))
         f0_audio = ttnn.repeat_interleave(f0_mel_rate, self.upsample_scale, dim=1)  # [B, T_audio, 1]
         audio_len = mel_frames * self.upsample_scale
         harmonics = self.source.sine_gen.harmonic_num + 1
@@ -751,10 +797,13 @@ class TtHiFTGenerator:
         ttnn.deallocate(f0_audio)
         ttnn.deallocate(sine_noise_dev)
         source = None
-        if cache_source is not None or return_source:
+        if cache_source is not None or return_source or padded:
             source = ttnn.to_torch(sine_merge).float().reshape(batch_size, audio_len)
             if cache_source is not None:
                 source[:, : cache_source.shape[-1]] = cache_source.reshape(batch_size, -1)
+            if padded:
+                reflect_source_end(source, valid_frames * self.upsample_scale, self.decoder.n_fft // 2)
+            if cache_source is not None or padded:
                 replaced = ttnn.from_torch(
                     source.reshape(batch_size, audio_len, 1),
                     dtype=sine_merge.dtype,
@@ -764,8 +813,51 @@ class TtHiFTGenerator:
                 )
                 ttnn.deallocate(sine_merge)
                 sine_merge = replaced
-        wav = self.decoder.decode(mel, sine_merge, mel_frames, batch_size)
+        wav = self.decoder.decode(
+            mel, sine_merge, mel_frames, batch_size, valid_frames=valid_frames if padded else None
+        )
+        if padded:
+            ttnn.deallocate(mel)
+            masks.release()
         return (wav, source) if return_source else wav
+
+    def end_gain(self, valid_frames: int, run_frames: int):
+        """`istft_end_gain` for this HiFT: the last output samples of a call padded from `valid_frames` to
+        `run_frames`, and the factors that give them the real call's window normalization. Cached per pair."""
+        key = (valid_frames, run_frames)
+        if key not in self._end_gains:
+            self._end_gains[key] = istft_end_gain(
+                valid_frames,
+                run_frames,
+                self.upsample_scale,
+                self.decoder.n_fft,
+                self.decoder.hop_len,
+                self.decoder.istft.window,
+            )
+        index, gain = self._end_gains[key]
+        return index, torch.from_numpy(gain)
+
+    def inference_padded(
+        self, mel: torch.Tensor, sine_noise: torch.Tensor, run_frames: int, *, f0: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """HiFT once over a host mel `[1, T, 80]` padded to `run_frames` (a bucket) and masked there
+        (`valid_frames`), so it computes upstream's call over the T real frames: the pipeline's call for a mel
+        shorter than one chunk. `sine_noise` (host `[1, T x 480, 9]`) and `f0` (host `[1, T]`, optional) cover the
+        real frames. Returns the host waveform of the real frames, `T x 480` samples."""
+        frames = int(mel.shape[1])
+        pad = run_frames - frames
+        assert pad >= 0, (frames, run_frames)
+        mel_run = torch.cat([mel, torch.zeros(1, pad, mel.shape[2])], dim=1)  # masked past `frames` anyway
+        noise_run = torch.cat([sine_noise, torch.zeros(1, pad * self.upsample_scale, sine_noise.shape[2])], dim=1)
+        f0_run = None if f0 is None else torch.cat([f0.reshape(1, frames).float(), torch.zeros(1, pad)], dim=1)
+        mel_dev = ttnn.from_torch(mel_run, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        wav_dev = self.inference(mel_dev, run_frames, 1, sine_noise=noise_run, f0=f0_run, valid_frames=frames)
+        wav = ttnn.to_torch(wav_dev).float().reshape(-1)[: frames * self.upsample_scale]
+        ttnn.deallocate(wav_dev)
+        ttnn.deallocate(mel_dev)
+        index, gain = self.end_gain(frames, run_frames)
+        wav[index] = wav[index] * gain
+        return wav
 
     def inference_chunked(
         self, mel: torch.Tensor, sine_noise: torch.Tensor, *, f0s: list | None = None, crossfade: bool = True

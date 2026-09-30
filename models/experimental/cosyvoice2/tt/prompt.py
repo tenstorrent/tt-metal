@@ -62,14 +62,26 @@ class RandomSources:
     shape (SineGen2 scales it by its voiced/unvoiced amplitude itself). `llm_seed` seeds torch's global RNG
     before generation, which is what host-side RAS draws from. The torch version sets that stream, so a seed
     reproduces tokens only against the same torch (see scripts/run_reference.py).
+
+    `noise_seed` draws the vocoder's noise from a generator of its own instead (one per call, drawn from in order),
+    so the tokens stay those of `llm_seed` whatever the noise: a noise draw over fixed tokens (scripts/noise_draws.py).
+    Streaming uses it too, in place of its default `llm_seed + 1` (`CosyVoice2TTNN.synthesize_stream`).
     """
 
     sine_noise: torch.Tensor | None = None
     llm_seed: int | None = None
+    noise_seed: int | None = None
+    _noise_gen: torch.Generator | None = field(default=None, repr=False, compare=False)
+
+    def noise_generator(self) -> torch.Generator | None:
+        """The generator `noise_seed` draws from, made on first use; None without a `noise_seed`."""
+        if self.noise_seed is not None and self._noise_gen is None:
+            self._noise_gen = torch.Generator().manual_seed(self.noise_seed)
+        return self._noise_gen
 
     def sine_noise_for(self, audio_len: int, harmonics: int) -> torch.Tensor:
         if self.sine_noise is None:
-            return torch.randn(1, audio_len, harmonics)
+            return torch.randn(1, audio_len, harmonics, generator=self.noise_generator())
         if tuple(self.sine_noise.shape) != (1, audio_len, harmonics):
             raise ValueError(f"captured sine_noise is {tuple(self.sine_noise.shape)}; need {(1, audio_len, harmonics)}")
         return self.sine_noise
