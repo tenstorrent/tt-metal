@@ -5,7 +5,6 @@
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
 
 #include <algorithm>
-#include <array>
 #include <iterator>
 #include <optional>
 
@@ -95,85 +94,75 @@ bool tile_geometry_ok(const Tensor& input) {
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
-// A measured perf loss matched exactly on one case, not on a condition. `input_shard_cores` is 0 for an
-// interleaved input; a sharded input or output is ROW_MAJOR-oriented. An interleaved output matches in
-// either buffer type unless `output_buffer` pins one.
-struct UngeneralizedDemotion {
-    std::array<uint32_t, 4> shape;
-    std::array<uint32_t, 4> repeat_dims;
-    DataType dtype;
-    Layout layout;
-    TensorMemoryLayout input_layout;
-    uint32_t input_shard_cores;
-    TensorMemoryLayout output_layout;
-    std::optional<BufferType> output_buffer;
-};
+// Thresholds of the row-hotspot demotion below, measured on Wormhole: a row-major outer-axis leg
+// reading a HEIGHT_SHARDED L1 input in place loses to native once both hold.
+constexpr uint64_t kRowHotspotMinBytesPerShardCore = 64 * 1024;
+constexpr uint64_t kRowHotspotMinReadsPerShardRow = 12;
 
-constexpr TensorMemoryLayout kInterleaved = TensorMemoryLayout::INTERLEAVED;
-constexpr TensorMemoryLayout kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
-constexpr TensorMemoryLayout kWidth = TensorMemoryLayout::WIDTH_SHARDED;
-const std::array<UngeneralizedDemotion, 17> kUngeneralizedDemotions = {{
-    // No mechanism identified; each entry is one measured case. Replace with a predicate once the cause
-    // of the loss is known.
-    {{1, 1, 1, 1}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 4, 4}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 6, 12}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 8, 16}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 10, 20}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 12, 24}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 14, 28}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 16, 32}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 18, 36}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 20, 40}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 22, 44}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
-    {{1, 2, 64, 128}, {2, 2, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kWidth, 4, kWidth, {}},
-    // Identified but not fixed: the higher-dim row-major leg splits its sticks over the whole grid, so
-    // every worker reads from the few cores holding the HEIGHT_SHARDED input, a many-to-few read hotspot
-    // native avoids by repeating each shard where it lies. The output is interleaved, so no split keeps
-    // both sides local. Kept exact because the edge of that loss in shard count and size is unmeasured.
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 8, kInterleaved, BufferType::L1},
-    // A last-dim row-major repeat between HEIGHT_SHARDED placements with the same rows per shard. The
-    // factory splits it over the shard cores themselves (shard_local_split) so every row stays local,
-    // and it still measures slower than native; whether the few-core split or the per-row work is the
-    // cost is unmeasured.
-    {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::BFLOAT16, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
-    {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
-    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output. The factory already reads each source
-    // tile once and writes every copy from the reader (direct_outer_tile); kept demoted as measured.
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::BFLOAT16, Layout::TILE, kHeight, 8, kHeight, {}},
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::TILE, kHeight, 8, kHeight, {}},
-}};
-
-bool placement_matches(const MemoryConfig& memory_config, TensorMemoryLayout layout, uint32_t shard_cores) {
-    if (memory_config.memory_layout() != layout) {
+// The first row-major leg of an outer-axis repeat reads a HEIGHT_SHARDED L1 input where it lies. Its
+// sticks are split over the whole worker grid, so every worker reads from the few cores holding the
+// shards, and the reader re-reads the source once per repeat. When those cores sit along a row, the
+// reads converge on it across the grid's columns: the loss grows with the number of reads per shard
+// row (repeats times shard columns over shard rows) and with the bytes each shard core serves.
+// Native unshards once and repeats from interleaved storage, so it is spread evenly. Only an
+// interleaved L1 output was measured losing; a DRAM or sharded output keeps codegen ahead.
+bool is_row_hotspot_outer_leg(
+    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    const auto& input_mc = input.memory_config();
+    const auto& shape = input.logical_shape();
+    const uint32_t ndim = shape.rank();
+    if (input.layout() != Layout::ROW_MAJOR || input_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_mc.buffer_type() != BufferType::L1 || !input_mc.shard_spec().has_value() ||
+        output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED ||
+        output_mem_config.buffer_type() != BufferType::L1 || ndim < 3 || repeat_dims.size() != ndim ||
+        repeat_dims[ndim - 1] != 1 || repeat_dims[ndim - 2] != 1 ||
+        !shard_spec_is_page_identical(input_mc, shape, Layout::ROW_MAJOR)) {
         return false;
     }
-    if (layout == kInterleaved) {
-        return true;
+    const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
+    if (plan.rep_dims.empty()) {
+        return false;
     }
-    const auto& shard_spec = memory_config.shard_spec();
-    return shard_spec.has_value() && shard_spec->orientation == ShardOrientation::ROW_MAJOR &&
-           (shard_cores == 0 || shard_spec->grid.num_cores() == shard_cores);
+    const uint64_t first_leg_repeats = plan.leg_repeats[plan.rep_dims.front()];
+    const auto& shard_spec = *input_mc.shard_spec();
+    const uint64_t bytes_per_shard_core =
+        static_cast<uint64_t>(shard_spec.shape[0]) * shape[-1] * input.element_size() * first_leg_repeats;
+    const CoreCoord extent = shard_spec.grid.bounding_box().grid_size();
+    return bytes_per_shard_core >= kRowHotspotMinBytesPerShardCore &&
+           first_leg_repeats * extent.x >= kRowHotspotMinReadsPerShardRow * extent.y;
 }
 
-bool is_ungeneralized_demotion(
+// Threshold of the few-core last-dim demotion below, measured on Wormhole.
+constexpr uint64_t kFewCoreLastDimMinBytesPerShardCore = 32 * 1024;
+constexpr uint32_t kFewCoreLastDimMaxShardCores = 4;
+
+// A last-dim row-major repeat from a HEIGHT_SHARDED L1 input into a HEIGHT_SHARDED output, both where
+// they lie. The widened sticks are split over the whole worker grid, so every worker reads from and
+// writes back to the cores holding the shards, while native repeats each shard on its own core. With
+// a few shard cores along a row that round trip loses once each core writes enough; spread over more
+// cores, or down a column, the grid-wide split still wins.
+bool is_few_core_row_last_dim(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    const auto& input_mc = input.memory_config();
     const auto& shape = input.logical_shape();
-    if (shape.rank() != 4 || repeat_dims.size() != 4) {
+    const uint32_t ndim = shape.rank();
+    if (input.layout() != Layout::ROW_MAJOR || input_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_mc.buffer_type() != BufferType::L1 || !input_mc.shard_spec().has_value() ||
+        output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED || repeat_dims.size() != ndim ||
+        ndim < 2 || !shard_spec_is_page_identical(input_mc, shape, Layout::ROW_MAJOR)) {
         return false;
     }
-    return std::any_of(kUngeneralizedDemotions.cbegin(), kUngeneralizedDemotions.cend(), [&](const auto& c) {
-        for (uint32_t d = 0; d < 4; ++d) {
-            if (shape[d] != c.shape[d] || repeat_dims[d] != c.repeat_dims[d]) {
-                return false;
-            }
+    for (uint32_t d = 0; d + 1 < ndim; ++d) {
+        if (repeat_dims[d] != 1) {
+            return false;
         }
-        // The output shard spec is resized for the repeated shape, so only its strategy is pinned.
-        return input.dtype() == c.dtype && input.layout() == c.layout &&
-               placement_matches(input.memory_config(), c.input_layout, c.input_shard_cores) &&
-               placement_matches(output_mem_config, c.output_layout, 0) &&
-               (!c.output_buffer.has_value() || output_mem_config.buffer_type() == *c.output_buffer);
-    });
+    }
+    const auto& shard_spec = *input_mc.shard_spec();
+    const CoreCoord extent = shard_spec.grid.bounding_box().grid_size();
+    const uint64_t out_bytes_per_shard_core =
+        static_cast<uint64_t>(shard_spec.shape[0]) * shape[-1] * input.element_size() * repeat_dims[ndim - 1];
+    return shard_spec.grid.num_cores() <= kFewCoreLastDimMaxShardCores && extent.x > extent.y &&
+           out_bytes_per_shard_core >= kFewCoreLastDimMinBytesPerShardCore;
 }
 
 }  // namespace
@@ -416,6 +405,16 @@ bool supported_by_codegen(
         // Not yet on device (e.g. host-side probing); nothing to bound against.
         return true;
     }
+    // With the input, the output and so every intermediate in DRAM, no leg commits any L1 and all
+    // pages share DRAM's alignment. A leg never narrows the stick, so the last leg's output stick is
+    // the largest slot any leg sizes, and it alone decides the gate.
+    if (input.memory_config().buffer_type() == BufferType::DRAM &&
+        output_mem_config.buffer_type() == BufferType::DRAM) {
+        const uint64_t widest_stick = static_cast<uint64_t>(shape[-1]) * repeat_dims.back() * input.element_size();
+        const uint64_t slot = tt::round_up(
+            widest_stick, static_cast<uint64_t>(input.device()->allocator()->get_alignment(BufferType::DRAM)));
+        return ttnn::prim::plan_rm_cb(slot, ttnn::prim::static_l1_window(input)).has_value();
+    }
     // The row-major legs, in the order the router executes them. Each one's CB shares L1 with the
     // input, the round trip's untilized copy and every leg output so far; all of them are counted as
     // live for the whole call, which never undercounts whatever the allocator frees in between.
@@ -454,7 +453,8 @@ bool supported_by_codegen(
 // repeated axes native unshards up front too, and the two routes compete on equal terms.
 bool is_demoted(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
-    if (is_ungeneralized_demotion(input, repeat_dims, output_mem_config)) {
+    if (is_row_hotspot_outer_leg(input, repeat_dims, output_mem_config) ||
+        is_few_core_row_last_dim(input, repeat_dims, output_mem_config)) {
         return true;
     }
     const auto& input_mc = input.memory_config();

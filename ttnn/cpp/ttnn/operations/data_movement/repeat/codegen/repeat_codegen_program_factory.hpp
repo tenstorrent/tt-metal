@@ -57,11 +57,6 @@ inline uint32_t rm_slot_bytes(uint32_t in_aligned_page, uint32_t out_aligned_pag
 // its aligned_page_size() instead.
 uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const tt::tt_metal::TensorSpec& spec);
 
-// The CB plan a ROW_MAJOR leg is built with for a `slot_bytes` slot, sized to the L1 left free right
-// now; nullopt for TILE or when not even a one-page batch fits. The program-cache key carries it, so a
-// program built under one allocator state is never replayed under a key that implies another.
-std::optional<RepeatRmCbPlan> live_rm_cb_plan(const Tensor& input, uint32_t slot_bytes);
-
 struct RepeatCodegenParams {
     uint32_t rep_dim{};
     uint32_t num_repeats{};
@@ -71,6 +66,10 @@ struct RepeatCodegenParams {
     // RM only; unused on the TILE branch (tile size is fixed by dtype).
     uint32_t stick_size{};
     tt::tt_metal::MemoryConfig output_mem_config;
+    // RM only: pages per reader/writer turn, the CB holding two turns. The prim sizes it to the L1 left
+    // free when it is called, and it is an attribute so that the program-cache key carries it: a
+    // program built under one allocator state is never replayed under a key that implies another.
+    uint32_t rm_cb_batch{};
 };
 
 // The page map a repeat of `input` along `rep_dim` by `num_repeats` addresses: the lower_pages,

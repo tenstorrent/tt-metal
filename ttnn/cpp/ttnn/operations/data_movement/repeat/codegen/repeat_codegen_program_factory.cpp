@@ -107,41 +107,6 @@ CoreSplit split_work(const Tensor& input, uint32_t total_work, std::optional<uin
     return split;
 }
 
-// A last-dim row-major repeat keeps the row count, so when input and output are HEIGHT_SHARDED in L1
-// over the same cores with the same rows per shard, every output row lives on the core that holds its
-// input row. Giving each core exactly its own shard's rows keeps both the read and the write local; a
-// grid-wide split would send every row across the NoC twice to reach a handful of shard cores.
-std::optional<CoreSplit> shard_local_split(const Tensor& input, const Tensor& output, uint32_t total_pages) {
-    const auto& in_mc = input.memory_config();
-    const auto& out_mc = output.memory_config();
-    if (in_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED ||
-        out_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED || in_mc.buffer_type() != BufferType::L1 ||
-        out_mc.buffer_type() != BufferType::L1) {
-        return std::nullopt;
-    }
-    const auto& in_shard = in_mc.shard_spec();
-    const auto& out_shard = out_mc.shard_spec();
-    if (!in_shard.has_value() || !out_shard.has_value() || in_shard->grid != out_shard->grid ||
-        in_shard->orientation != out_shard->orientation || in_shard->shape[0] != out_shard->shape[0]) {
-        return std::nullopt;
-    }
-    const uint32_t rows = in_shard->shape[0];
-    if (rows == 0 || total_pages % rows != 0) {
-        return std::nullopt;
-    }
-    // The buffer places shard i on the i-th core of its grid in shard orientation.
-    auto cores = corerange_to_cores(
-        in_shard->grid, std::nullopt, /*row_wise=*/in_shard->orientation == ShardOrientation::ROW_MAJOR);
-    const uint32_t active = total_pages / rows;
-    if (active > cores.size()) {
-        return std::nullopt;
-    }
-    cores.resize(active);
-    CoreSplit split{.all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores)), .cores_in_order = std::move(cores)};
-    split.work.assign(active, rows);
-    return split;
-}
-
 }  // namespace
 
 uint64_t static_l1_window(const Tensor& input) {
@@ -189,13 +154,6 @@ RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t nu
     map.rep_dim_pages = dim_pages[rep_dim];
     map.total_out_pages = sticks * num_repeats;
     return map;
-}
-
-std::optional<RepeatRmCbPlan> live_rm_cb_plan(const Tensor& input, uint32_t slot_bytes) {
-    if (input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
-        return std::nullopt;
-    }
-    return plan_rm_cb(slot_bytes, ttnn::operations::data_movement::get_max_l1_space(input));
 }
 
 ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
@@ -264,15 +222,10 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    std::optional<CoreSplit> local_split =
-        is_last_dim_rm ? shard_local_split(input, output, operation_attributes.total_out_pages) : std::nullopt;
-    const CoreSplit split =
-        local_split.has_value()
-            ? std::move(*local_split)
-            : split_work(
-                  input,
-                  operation_attributes.total_out_pages,
-                  is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
+    const CoreSplit split = split_work(
+        input,
+        operation_attributes.total_out_pages,
+        is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
 
     if (!is_row_major) {
         // TILE-interleaved path: shared pluggable sequencer reader (seq_id=1 == SEQ_REPEAT)
@@ -347,17 +300,21 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const uint32_t in_aligned = static_cast<uint32_t>(src_buffer->aligned_page_size());
     const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
     const uint32_t slot_size = rm_slot_bytes(in_aligned, out_aligned);
-    // The key sized this slot from the output spec, before it could see the output buffer.
+    // The prim sized this slot from the output stick, before the output buffer existed.
     TT_ASSERT(out_aligned == spec_aligned_page_bytes(input, output.tensor_spec()));
-    // Sized to the L1 left free right now, which is what the program-cache key was hashed with.
-    const auto cb_plan = live_rm_cb_plan(input, slot_size);
+    // The prim sized the batch before this op's own output was allocated; the output can only have
+    // lowered the frontier by what the prim set aside for it.
+    const uint32_t cb_batch = operation_attributes.rm_cb_batch;
+    const uint32_t cb_depth = 2 * cb_batch;
     TT_FATAL(
-        cb_plan.has_value(),
-        "RepeatCodegen: a {}-byte row-major stick leaves no room for a two-slot CB in free L1",
+        cb_batch > 0 &&
+            static_cast<uint64_t>(cb_depth) * slot_size <= ttnn::operations::data_movement::get_max_l1_space(input),
+        "RepeatCodegen: a {}-slot CB of {}-byte row-major sticks does not fit in free L1",
+        cb_depth,
         slot_size);
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_plan->depth * slot_size,
+        .total_size = cb_depth * slot_size,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = 0,
@@ -380,7 +337,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
         reader_ct_args.push_back(0);  // cb_id
         reader_ct_args.push_back(operation_attributes.num_repeats);
-        reader_ct_args.push_back(cb_plan->batch);
+        reader_ct_args.push_back(cb_batch);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
     } else {
@@ -390,7 +347,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         reader_ct_args.push_back(operation_attributes.num_repeats);
         reader_ct_args.push_back(operation_attributes.lower_pages);
         reader_ct_args.push_back(operation_attributes.rep_dim_pages);
-        reader_ct_args.push_back(cb_plan->batch);
+        reader_ct_args.push_back(cb_batch);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
     }
@@ -400,7 +357,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     // it needs only the requested transfer size: the output's aligned page.
     std::vector<uint32_t> writer_ct_args = {0, out_aligned};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(cb_plan->batch);
+    writer_ct_args.push_back(cb_batch);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterInterleaved;

@@ -654,9 +654,11 @@ ttnn::Tensor repeat(
     // does not share would reach kernels generated for the input's pages.
     const bool output_page_ok = !optional_output_tensor.has_value() ||
                                 repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
+    // The demotion predicates are cheap placement and shape tests; the support gate budgets L1 per leg,
+    // so it runs only for a call that could still take the codegen route.
     if (output_page_ok &&
-        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
-        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config)) {
+        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
+        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config)) {
         // The final leg lands in the prealloc when it can write that placement directly; otherwise the
         // result is copied in.
         return detail::finalize_into_preallocated(
