@@ -366,8 +366,9 @@ def _classify_stimuli_source(mathop):
 
 
 def _mask_stimuli_specs():
-    # mask zeroes data (in0) where mask (in1) is 0. Data and mask are separate tiles: keep
-    # data strictly non-zero (1..8) and zero ~1/3 of the mask, so a passthrough kernel fails.
+    # mask forces data (in0) to the op's fill value (0 for MASK, +inf for MASK_POSINF) where
+    # mask (in1) is 0. Data and mask are separate tiles: keep data strictly non-zero (1..8) and
+    # zero ~1/3 of the mask, so a passthrough kernel fails.
     def data_face(size, dtype, generator):
         _, ramp = _positions_and_ramp(size)
         return ramp.to(dtype)  # 1..8, always non-zero
@@ -429,7 +430,6 @@ def _isclose_nan_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
-def _eq_ne_stimuli_specs():
 def _xlogy_denormal_stimuli_specs():
     # The log operand (in1) on the biased-exponent-0 lane, which the kernel maps to ln = -inf:
     # +0, the smallest and the largest positive denormal, then FLT_MIN and 1.0 as finite
@@ -455,6 +455,7 @@ def _xlogy_denormal_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
+def _eq_ne_stimuli_specs():
     # Eq/Ne compare paired operands (a = tile0, b = tile1). Fill the two tiles so even p ->
     # identical (Eq 1), odd p -> differ by 1.0 (Eq 0), a clean ~50/50 mix.
     def a_face(size, dtype, generator):
@@ -958,14 +959,13 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     # answer; see _isclose_nan_stimuli_specs for the lane table. Only on pipelines that deliver
     # a NaN operand to the SFPU intact.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    effective_dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        else dest_acc
-    )
-    if not specials_safe(
-        formats.input_format, formats.output_format, effective_dest_acc
+    if not specials_safe(formats.input_format, formats.output_format, dest_acc):
+        pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
+
+    spec_A, spec_B = _isclose_nan_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=[MathOperation.SfpuXlogy],
@@ -981,13 +981,6 @@ def test_eltwise_binary_sfpu_xlogy_denormal(formats, dest_acc, mathop):
         )
 
     spec_A, spec_B = _xlogy_denormal_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
-
-
-    ):
-        pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
-
-    spec_A, spec_B = _isclose_nan_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 

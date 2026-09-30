@@ -4294,29 +4294,28 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # Widen to int64 for the multiply so the intermediate can't overflow.
         return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
 
-    def _isclose(self, t1, t2):
-        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0. Uses torch's
-        # default tolerances, which match the fp32 bit patterns hard-coded in the ISCLOSE
-        # dispatch, and is evaluated in fp32.
+    # torch.isclose defaults; the same two values the ISCLOSE / ISCLOSE_EQUAL_NAN dispatch in
+    # sfpu_operations.h hard-codes as fp32 bit patterns (ISCLOSE_RTOL_BITS / ISCLOSE_ATOL_BITS).
+    _ISCLOSE_RTOL = 1e-5
+    _ISCLOSE_ATOL = 1e-8
+
+    def _isclose_impl(self, t1, t2, equal_nan):
+        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0 and evaluated in
+        # fp32. equal_nan=True makes two NaN operands compare close.
         close = torch.isclose(
             t1.to(torch.float32),
             t2.to(torch.float32),
-            rtol=1e-5,
-            atol=1e-8,
-            equal_nan=False,
+            rtol=self._ISCLOSE_RTOL,
+            atol=self._ISCLOSE_ATOL,
+            equal_nan=equal_nan,
         )
         return 1.0 if bool(close) else 0.0
 
+    def _isclose(self, t1, t2):
+        return self._isclose_impl(t1, t2, equal_nan=False)
+
     def _isclose_equal_nan(self, t1, t2):
-        # As _isclose with equal_nan=True: two NaN operands compare close.
-        close = torch.isclose(
-            t1.to(torch.float32),
-            t2.to(torch.float32),
-            rtol=1e-5,
-            atol=1e-8,
-            equal_nan=True,
-        )
-        return 1.0 if bool(close) else 0.0
+        return self._isclose_impl(t1, t2, equal_nan=True)
 
     def _logsigmoid(self, t1, t2):
         # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
