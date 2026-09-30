@@ -314,8 +314,8 @@ void kernel_main() {
             noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
             noc_read.async_read_barrier();
             if (counts_num_receivers > 0) {
-                // linked=true so the valid-sem multicast is ordered behind both data
-                // multicasts on the same reserved path (as for the weight mcast).
+                // linked disabled (no-linked-mcast experiment): the ack barrier below
+                // orders both data multicasts before the valid-sem multicast.
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(counts_l1),
                     MulticastEndpoint{},
@@ -327,7 +327,7 @@ void kernel_main() {
                      .noc_x_end = cb_nx_end,
                      .noc_y_end = cb_ny_end,
                      .addr = counts_l1},
-                    /*linked=*/true);
+                    /*linked=*/false);
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(idx_l1),
                     MulticastEndpoint{},
@@ -339,8 +339,8 @@ void kernel_main() {
                      .noc_x_end = cb_nx_end,
                      .noc_y_end = cb_ny_end,
                      .addr = idx_l1},
-                    /*linked=*/true);
-                noc.async_writes_flushed();
+                    /*linked=*/false);
+                noc.async_write_barrier();
                 counts_valid_sem.set(1);
                 counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
                     noc, cb_nx_start, cb_ny_start, cb_nx_end, cb_ny_end, counts_num_receivers);
@@ -673,16 +673,8 @@ void kernel_main() {
                 } else {
                     mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
                 }
-                // linked=true keeps the multicast path RESERVED so the in0_valid
-                // sem multicast below travels the SAME path and is delivered
-                // AFTER the data at every receiver. With linked=false the path is
-                // released and the (posted) valid-sem multicast can overtake the
-                // bulk data multicast at a receiver under NoC contention (heavy
-                // fabric load) -> the receiver observes in0_valid, pushes
-                // cb_in0_x, and compute reads STALE x from L1 -> wrong gate/up
-                // matmul output for that core (rare, timing-dependent). A write
-                // barrier does NOT fix this on Blackhole (multicast writes are
-                // posted; no completion ack). Mirrors the phase-4 activated mcast.
+                // linked disabled (no-linked-mcast experiment): the valid sem must not
+                // overtake the x data, so the sender waits for the data acks below.
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(block_start),
@@ -695,11 +687,11 @@ void kernel_main() {
                          .noc_x_end = in0_mcast_nx_end,
                          .noc_y_end = in0_mcast_ny_end,
                          .addr = block_start},
-                        /*linked=*/true);
+                        /*linked=*/false);
                 }
                 x_stage_obj.push_back(g_in0_block_tiles_max);
 
-                noc.async_writes_flushed();
+                noc.async_write_barrier();
                 in0_valid_sem.set(IN0_VALID);
                 in0_valid_sem.set_multicast<NocOptions::DEFAULT>(
                     noc, in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, in0_num_receivers);
@@ -786,19 +778,8 @@ void kernel_main() {
                 // IN1_WRITER_MCAST moves this whole multicast to the writer's NoC 1.
                 if (!writer_mcasts_in1 && in1_num_receivers > 0) {
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
-                    // The LAST in1 data multicast before the in1_valid sem must
-                    // be linked=true so the (posted) valid-sem multicast travels
-                    // the SAME reserved path and lands AFTER the data at every
-                    // receiver. Otherwise, under NoC contention (heavy fabric
-                    // load), the valid sem can overtake the weight data -> the
-                    // receiver pushes cb_in1_{gate,up} and compute reads STALE
-                    // weights -> wrong matmul output (rare, timing-dependent;
-                    // a flush/barrier does not fix posted multicast writes on
-                    // Blackhole). Mirrors the phase-4 activated mcast. When `up`
-                    // is mcast (LEGACY/UP_SPLIT) it is the last write, so gate
-                    // links into it and up holds the path for the sem; in the
-                    // retired UP_WRITER_MCAST mode (no up mcast) gate is last and
-                    // holds the path itself.
+                    // linked disabled (no-linked-mcast experiment) on gate and up: the
+                    // ack barrier before the in1_valid sem orders both weight mcasts first.
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(gate_block_start),
                         MulticastEndpoint{},
@@ -810,7 +791,7 @@ void kernel_main() {
                          .noc_x_end = in1_mcast_nx_end,
                          .noc_y_end = in1_mcast_ny_end,
                          .addr = gate_block_start},
-                        /*linked=*/true);
+                        /*linked=*/false);
 
                     if constexpr (reader_mcasts_up) {
                         const uint32_t up_block_bytes = g_in1_block_num_tiles * up_tile_bytes;
@@ -825,7 +806,7 @@ void kernel_main() {
                              .noc_x_end = in1_mcast_nx_end,
                              .noc_y_end = in1_mcast_ny_end,
                              .addr = up_block_start},
-                            /*linked=*/true);
+                            /*linked=*/false);
                     }
                 }
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
@@ -833,7 +814,7 @@ void kernel_main() {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
                 if (!writer_mcasts_in1 && in1_num_receivers > 0) {
-                    noc.async_writes_flushed();
+                    noc.async_write_barrier();
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
                         noc,
@@ -971,9 +952,8 @@ void kernel_main() {
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {
                     const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
-                    // linked=true so the in1_valid-sem multicast is ordered behind
-                    // the weight data on the same reserved path (see the activated
-                    // mcast below for the full rationale).
+                    // linked disabled (no-linked-mcast experiment): the ack barrier
+                    // orders the weight data before the in1_valid-sem multicast.
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(in1_block_start),
                         MulticastEndpoint{},
@@ -985,8 +965,8 @@ void kernel_main() {
                          .noc_x_end = in1_mcast_nx_end,
                          .noc_y_end = in1_mcast_ny_end,
                          .addr = in1_block_start},
-                        /*linked=*/true);
-                    noc.async_writes_flushed();
+                        /*linked=*/false);
+                    noc.async_write_barrier();
 
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
@@ -1017,20 +997,8 @@ void kernel_main() {
                 const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
                 const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
                 const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
-                // linked=true keeps the multicast path RESERVED so the
-                // valid-semaphore multicast below travels the SAME path and is
-                // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the valid-sem multicast can
-                // overtake the bulk data multicast at a receiver -> the receiver
-                // observes act_valid, pushes cb_in0_down_full, and compute reads
-                // stale L1 -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). Path-linking orders the sem behind
-                // the data for free; the alternative, an ack-wait before sending the
-                // sem, would stall this core on every receiver's ack. (The mcast is
-                // non-posted and ack-counted, so an ack-wait also orders it — step 5
-                // needs exactly that for the sender's own loopback copy.) Mirrors the
-                // canonical matmul in0 sender
-                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
+                // linked disabled (no-linked-mcast experiment): the mcast is non-posted,
+                // so the ack barrier below orders the data before the act_valid sem.
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         CoreLocalMem<uint32_t>(src_l1),
@@ -1043,9 +1011,9 @@ void kernel_main() {
                          .noc_x_end = mrow_last_nx,
                          .noc_y_end = mrow_last_ny,
                          .addr = dst_l1},
-                        /*linked=*/true);
+                        /*linked=*/false);
                 }
-                noc.async_writes_flushed();
+                noc.async_write_barrier();
 
                 act_valid_sem.set(ACT_VALID);
                 act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(

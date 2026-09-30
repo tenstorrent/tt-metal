@@ -58,7 +58,7 @@ constexpr uint32_t MBOX_READY = 3;     // == MAILBOX_MAGIC once words 0..2, 4 ar
 // rows, not tile rows — the row-major x read offsets STICKS while the tiled x read and the output
 // write offset TILE rows, and each site divides by TILE_H itself.
 constexpr uint32_t MBOX_START_ROW = 4;
-// Writer-owned whole h rounds publish completion here after their linked NoC1 payload+flag chain
+// Writer-owned whole h rounds publish completion here after their NoC1 payload+flag chain
 // has flushed.  One diagonal writer owns at most one round, so b+1 is a monotone per-core counter.
 constexpr uint32_t MBOX_HSEND_DONE = 5;
 // Reader -> writer, same core: the NoC0 up-scatter writes for block b have landed.  The optional

@@ -318,9 +318,8 @@ void kernel_main() {
                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                             const uint32_t gate_block_start =
                                 cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
-                            // linked=true on both data multicasts and the sem, so the posted
-                            // valid-sem write cannot overtake the data (same rationale as the
-                            // reader's NoC-0 version this replaces).
+                            // linked disabled (no-linked-mcast experiment): the NoC-1 ack
+                            // barrier orders gate+up data before the valid-sem multicast.
                             noc_up.async_write_multicast(
                                 CoreLocalMem<uint32_t>(gate_block_start),
                                 MulticastEndpoint{},
@@ -332,7 +331,7 @@ void kernel_main() {
                                  .noc_x_end = in1_mc_nx_end,
                                  .noc_y_end = in1_mc_ny_end,
                                  .addr = gate_block_start},
-                                /*linked=*/true);
+                                /*linked=*/false);
                             noc_up.async_write_multicast(
                                 CoreLocalMem<uint32_t>(l1_w_up_block_start),
                                 MulticastEndpoint{},
@@ -344,8 +343,8 @@ void kernel_main() {
                                  .noc_x_end = in1_mc_nx_end,
                                  .noc_y_end = in1_mc_ny_end,
                                  .addr = l1_w_up_block_start},
-                                /*linked=*/true);
-                            noc_up.async_writes_flushed();
+                                /*linked=*/false);
+                            noc_up.async_write_barrier();
                             in1_valid_sem.set(1);
                             in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
                                 noc_up,
