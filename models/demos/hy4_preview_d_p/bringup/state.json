@@ -10892,6 +10892,207 @@
   "status": "PASS",
   "waiting": "pick opportunities in models/demos/hy4_preview_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
+ "X.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "bd6a6826-02ed-4f83-8e1a-b30bdf82556a"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 1034.5,
+    "session_id": "d20d1928-6f91-459f-be8d-d62731431643",
+    "t": "2026-09-30T00:20:59"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/X.3.fix.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/X.3.fix.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 1314.0,
+    "session_id": "bd6a6826-02ed-4f83-8e1a-b30bdf82556a",
+    "t": "2026-09-30T00:49:28"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 503.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T00:03:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T00:27:34"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T00:57:52"
+   }
+  ],
+  "last_run": "2026-09-30T00:57:52",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/X.3.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_seconds_c00": 0.858,
+   "chunk_seconds_c01": 0.436,
+   "chunk_seconds_c02": 0.438,
+   "chunk_seconds_c03": 0.442,
+   "chunk_seconds_c04": 0.444,
+   "chunk_seconds_c05": 0.447,
+   "chunk_seconds_c06": 0.449,
+   "chunk_seconds_c07": 0.452,
+   "chunk_seconds_c08": 0.455,
+   "chunk_seconds_c09": 0.456,
+   "chunk_seconds_c10": 17.984,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 461.1,
+   "covered_layers": 6,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 152.98,
+   "device_ms_attn_hc": 11.59,
+   "device_ms_attn_hc_pre": 9.24,
+   "device_ms_attn_norm": 1.78,
+   "device_ms_attn_residual": 13.41,
+   "device_ms_chip0": 458.22,
+   "device_ms_chip1": 458.15,
+   "device_ms_chip2": 458.06,
+   "device_ms_chip3": 458.09,
+   "device_ms_experts": 166.05,
+   "device_ms_ffn_hc": 11.57,
+   "device_ms_ffn_hc_pre": 9.25,
+   "device_ms_ffn_norm": 6.25,
+   "device_ms_ffn_residual": 13.4,
+   "device_ms_indexer": 31.55,
+   "device_ms_mlp": 8.9,
+   "device_ms_moe_combine": 1.07,
+   "device_ms_q_a": 8.23,
+   "device_ms_router": 4.12,
+   "device_ms_shared_expert": 9.3,
+   "device_ms_topk_shared": 0.0,
+   "device_ms_total": 458.71,
+   "host_overhead_ms": 2.4,
+   "host_transfers_per_layer": 0,
+   "model_load_s": 19.7,
+   "op_rows": 829,
+   "pcc_chunk_out": 0.9998945427376834,
+   "pcc_layer_L00": 0.9999830635181799,
+   "pcc_layer_L01": 0.9999522539239603,
+   "pcc_layer_L02": 0.9999374796448939,
+   "pcc_layer_L03": 0.9999309498153307,
+   "pcc_layer_L04": 0.9999048260893132,
+   "pcc_layer_L05": 0.9998880579850957,
+   "pcc_state_index_key_L00": 0.9999952909505767,
+   "pcc_state_index_key_L01": 0.9999782154663399,
+   "pcc_state_index_key_L02": 1.0,
+   "pcc_state_index_key_L03": 1.0,
+   "pcc_state_index_key_L04": 1.0,
+   "pcc_state_index_key_L05": 0.9999591990537656,
+   "pcc_state_kv_latent_L00": 0.9999943718992335,
+   "pcc_state_kv_latent_L01": 0.9999927323000753,
+   "pcc_state_kv_latent_L02": 0.9999915543828786,
+   "pcc_state_kv_latent_L03": 0.9999907080524507,
+   "pcc_state_kv_latent_L04": 0.9999879744420002,
+   "pcc_state_kv_latent_L05": 0.9999918336253761,
+   "pcc_state_min": 0.9999591990537656,
+   "pos_chunk": 5120,
+   "pos_ms_0": 449.9,
+   "pos_ms_102400": 520.8,
+   "pos_ms_153600": 546.6,
+   "pos_ms_204800": 577.4,
+   "pos_ms_51200": 484.3,
+   "prefill_chunk": 5120,
+   "prefill_chunk_ms_c00": 430.9,
+   "prefill_chunk_ms_c01": 435.4,
+   "prefill_chunk_ms_c02": 437.2,
+   "prefill_chunk_ms_c03": 442.0,
+   "prefill_chunk_ms_c04": 443.4,
+   "prefill_chunk_ms_c05": 446.8,
+   "prefill_chunk_ms_c06": 448.7,
+   "prefill_chunk_ms_c07": 451.6,
+   "prefill_chunk_ms_c08": 455.1,
+   "prefill_chunk_ms_c09": 456.1,
+   "prefill_chunk_ms_c10": 461.0,
+   "prefill_layers": 6,
+   "prefill_ms_full": 4899.8,
+   "prefill_seconds": 22.86,
+   "prefill_seq": 56320,
+   "prefill_tok_s": 11494.5,
+   "profiled_programs": 4696,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 0,
+   "subset": 1,
+   "timeline_device_timeline_ms": 459.92,
+   "timeline_gap_ms": 0.68,
+   "timeline_host_dispatch_ms": 90.361,
+   "timeline_host_wall_ms": 461.066,
+   "timeline_kernel_ms": 459.11,
+   "timeline_ok": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "started": "2026-09-30T00:49:28",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T22:36:12",
