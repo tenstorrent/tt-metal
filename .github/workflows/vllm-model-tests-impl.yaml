@@ -260,7 +260,7 @@ jobs:
           git -C vllm-source checkout --detach FETCH_HEAD
 
       - name: 🔬 Prepare isolated GPT B1 formatter diagnostic
-        if: ${{ matrix.test-group.name == 'GPT-OSS-120B (low-latency)' }}
+        if: ${{ matrix.test-group.name == 'GPT-OSS-120B (low-latency) [wh_galaxy_perf]' }}
         run: |
           python3 models/demos/gpt_oss/tests/formatter_b1_diagnostic.py --prepare "$PLUGIN_DIR" "$BENCH_SRC_DIR"
 
