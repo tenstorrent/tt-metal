@@ -22,9 +22,9 @@ ULP -- which is how the block floats keep their block-aware lattice compares.
 
 **Numbers are measured, not guessed**, and every unkeyed number came from
 :data:`MEASURED_ARCH`; a ULP row binds elsewhere only if its own key names that
-architecture. Only declared tolerances live in the table so far. ``max_ulp`` is
-accepted and validated, but a step budget is enrolled once the exhaustive sweep exists
-to measure it, not declared against nothing.
+architecture. A step budget is enrolled from the exhaustive sweep
+(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing; the rows it does
+not reach keep the declared tolerance, or a sampled measurement no gate reads yet.
 """
 
 from __future__ import annotations
@@ -474,8 +474,8 @@ def validate_registry() -> None:
     # Per op, an axis is the values its own rows pin, plus None: any other value matches
     # exactly the rows None matches, so it repeats a query already made. Output format
     # and arch stay whole because accuracy_contract reads their real values on the
-    # downgrade path (has_ulp_gate, MEASURED_ARCH). 4,348 rows resolve in ~2 s this way
-    # against 12 s over the enum cross-product, with the same matched sets throughout.
+    # downgrade path (has_ulp_gate, MEASURED_ARCH). Measured on a 4,348-row table: ~2 s
+    # this way against 12 s over the enum cross-product, with the same matched sets.
     for op, table in _SFPU_ACCURACY_BUDGET.items():
 
         def pinned(field: str) -> list:

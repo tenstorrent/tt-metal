@@ -1,21 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Nightly: every 16-bit value, every ULP-gateable unary SFPU op.
+"""Every distinct finite 16-bit value, every ULP-gateable unary SFPU op.
 
 The functional drivers in test_eltwise_unary_sfpu.py sample a few thousand points from
 an op's safe domain, so a budget measured that way can only ever be re-confirmed by
-them. Approximate ``Reciprocal`` reads 1 ULP there and 128 ULP over every bf16 value.
+them: it cannot see a tail the sample never reaches.
 
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
-in. Run it as a gate (the nightly default)::
+in. Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name
+or with ``-m accuracy``. Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
 
 or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
 
-    pytest test_unary_sfpu_ulp.py --ulp-emit
+    pytest test_unary_sfpu_ulp.py --ulp-emit            # every op with a key line
+    pytest test_unary_sfpu_ulp.py --ulp-emit --op MyOp  # one op, matched exactly
 """
 
 import sys
@@ -74,6 +76,9 @@ pytestmark = pytest.mark.accuracy
 #: 64 tiles: the whole bf16/fp16 value set in one run, and the generator's own ceiling.
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 
+#: How many offending lanes a non-finite failure spells out in its message.
+_MAX_LANES_IN_MESSAGE = 4
+
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
     """One exhaustive variant on hardware. Returns ``(src, golden, result)``."""
@@ -131,6 +136,13 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
+    )
+    # `sweep_cells` re-derives TestConfig's silent dest promotion to leave out the cells
+    # it would run as another; if the two ever drift, a measurement is keyed on a
+    # kernel that never ran. Fail here rather than record it.
+    assert configuration.dest_acc == dest_acc, (
+        f"{mathop.name}: asked for dest_acc={dest_acc.name}, TestConfig built "
+        f"{configuration.dest_acc.name} -- sweep_cells() is out of step with it"
     )
     result = configuration.run().result
     assert len(result) == len(golden), (
@@ -197,14 +209,24 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     try:
         src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
     except OverflowError as exc:
+        if not ulp_sweep.EMIT:
+            # A gated cell's golden already ran over the full range when its budget was
+            # measured, so an overflow now is a regression, not a limit of the reference.
+            raise
         # The float64 host golden overflows on inputs no sampled domain reaches
-        # (cosh(3.4e38)): a limit of the reference, not a measurement. Only
-        # OverflowError -- a ValueError here is a real "Unsupported operation".
+        # (cosh(3.4e38)): a limit of the reference, not a measurement, for an op emit
+        # is measuring for the first time. Only OverflowError -- a ValueError here is a
+        # real "Unsupported operation".
         pytest.skip(f"golden cannot be computed over the full range: {exc}")
 
     mask = measurable_mask(src, golden, result, in_fmt)
     overflowed = nonfinite_failures(mathop, src, golden, result, in_fmt, out_fmt)
-    stats = ulp_stats(ulp_distance(golden, result), mask)
+    # Subnormal outputs flushed on every format, fp16 included. The metric keeps fp16's
+    # subnormal band by default, but the golden keeps IEEE subnormals the pack path
+    # does not reproduce: an exact op read 512 steps on Float16_b->Float16 from that
+    # band alone. A difference below 6.1e-05 is the store's, not the op's. The gate
+    # below takes the same flag, so emit and gate rank identically.
+    stats = ulp_stats(ulp_distance(golden, result, flush_subnormals=True), mask)
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
@@ -217,11 +239,11 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     elif overflowed.any():
         named = "; ".join(
             f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
-            for i in overflowed.nonzero().flatten()[:4].tolist()
+            for i in overflowed.nonzero().flatten()[:_MAX_LANES_IN_MESSAGE].tolist()
         )
         reason = (
-            f"{int(overflowed.sum())} lane(s) non-finite against a finite golden "
-            f"({named})"
+            f"{int(overflowed.sum())} lane(s) disagreeing with the golden about being "
+            f"finite (golden -> result: {named})"
         )
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
@@ -240,11 +262,16 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
-    # (Erfinv bf16->bf16 holds 84 lanes at 14690 steps with it) is honoured. That makes
-    # `stats` the raw maximum, which can be a lane the floor rescued: the failing lanes
-    # are the ones passed_test logs.
+    # (Erfinv Float16_b->Float16_b reads 14704 steps raw, and 2 with it) is honoured.
+    # That makes `stats` the raw maximum, which can be a lane the floor rescued: the
+    # failing lanes are the ones passed_test logs.
     assert passed_test(
-        golden, result, out_fmt, mask=mask, **contract.passed_test_kwargs()
+        golden,
+        result,
+        out_fmt,
+        mask=mask,
+        flush_subnormals=True,
+        **contract.passed_test_kwargs(),
     ), (
         f"{cell}: failed a {contract.max_ulp}-step budget over {lanes} swept lanes; "
         "the failing lanes are in the ULP-budget log above. Raw maximum before any "

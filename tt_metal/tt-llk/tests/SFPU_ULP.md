@@ -3,8 +3,9 @@
 Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
-N representable values of the reference", checked against *every value the input format
-can take*.
+N representable values of the reference", checked against *every distinct finite value
+of the input format* -- `±inf` and NaN are never fed, and `-0.0` is the same value as
+`+0.0`.
 
 This document is how you add an op to that second group.
 
@@ -14,20 +15,27 @@ This document is how you add an op to that second group.
 cd tests/python_tests
 
 # What the hardware measures for your op, over the whole format.
-CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -k MyOp --ulp-emit \
+CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit \
   --compile-producer -n 8
-CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -k MyOp --ulp-emit \
+CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit \
   --compile-consumer
 
 # ...which rewrites your op's block in the table. Read the diff, then gate on it.
 git diff helpers/sfpu_accuracy_budget.yaml
-CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -k MyOp --compile-consumer
+CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
+
+`--op` matches the op name exactly. `-k MyOp` is a substring match: `-k Exp` also runs
+`ExpWithBase`, `Expm1` and `Expm1Cw`, and an op it pulls in that has no block in the
+table is measured but cannot be written (see step 2).
 
 `--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
 `-n` the controller merges every worker's measurements first. It refuses to write unless
-you are on Wormhole and no test in the session failed — but it is still a deliberate
-act, so read the diff before committing it.
+you are on Wormhole, no test in the session failed and every touched `(in, out)` grid is
+complete — but it is still a deliberate act, so read the diff before committing it. The
+producer half only compiles, so it writes nothing and says so. An op it measured but
+could not place (no key line, or a floor it cannot regenerate) fails the session *after*
+every other op has been written.
 
 ## Why a step budget rather than a tolerance
 
@@ -38,8 +46,8 @@ everywhere.
 
 And the sweep measures a different number than a functional driver does. The drivers
 sample a few thousand points from an op's *safe* domain; a budget measured that way
-describes the sample. Approximate `Reciprocal` reads **1 ULP** on `uniform(0.1, 1.1)`
-and **128 ULP** over every bfloat16 value there is.
+describes the sample, and cannot see a tail the sample never reaches. The sweep's number
+is the format's.
 
 ## What the sweep feeds
 
@@ -83,7 +91,13 @@ undefined side of each singularity `sfpu_domains._OP_SINGULARITIES` registers (`
 below zero, `Reciprocal` at zero) and a per-op argument-reduction limit (`Sin` and `Cos`
 past pi). Not the functional driver's sampling window, which is where points are drawn
 rather than where an op stops being defined, and not `_SFPU_UNDEFINED_RANGES`, whose
-holes are guard bands around those points rather than the points themselves.
+holes are guard bands around those points rather than the points themselves. A golden
+past the output format's range is excused only where the store saturated -- NaN, or an
+infinity of the golden's sign; a finite answer to an infinite golden is a failure.
+
+Subnormal *outputs* are ranked with the band flushed, on `Float16` as well: the golden
+keeps IEEE fp16 subnormals that the pack path does not reproduce, and an exact op read
+512 steps on `Float16_b -> Float16` from that band alone.
 
 ## Enrolling an op, step by step
 
@@ -138,8 +152,9 @@ Four verdicts:
   output. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
   and the exponent fits all of them: the best case for quantization, not a
-  representative one. `Abs` reads **393 steps** there from random mixed-magnitude blocks
-  and **3** from the sorted sweep, so neither number is enrollable.
+  representative one. `Abs` reads **15,616 steps** there from random mixed-magnitude
+  blocks (the table's `Bfp8_b` note) and **393** from the sorted sweep of a bfloat16
+  input, so neither number is enrollable.
 - **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
   describe, or answered inf/NaN where the op claims a finite result. No budget buys that;
   the row says why instead of leaving a hole the next emit would paper over.
@@ -206,7 +221,8 @@ with the measurement beside them.
   or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
 - **`--ulp-emit` widens the op set** to every measurable unary op, not just the enrolled
   ones. Restricting it to ops that already carry a budget is the loop the sweep exists
-  to break. Pass the flag to the **producer too** -- without it the producer collects the
+  to break. An op with no block in the table is measured and named at the end, not
+  written. Pass the flag to the **producer too** -- without it the producer collects the
   narrow gating set and the consumer fails on missing ELFs, not on budgets.
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to write on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.

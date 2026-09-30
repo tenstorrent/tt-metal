@@ -42,6 +42,9 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
+
+#: The approximation mode test_sfpu_ternary compiles, and so the one its contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
@@ -124,7 +127,7 @@ def _run_sfpu_ternary(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],
@@ -165,10 +168,9 @@ def _run_sfpu_ternary(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
-        # Fixed, because this driver compiles APPROX_MODE(ApproximationMode.No). Left
-        # unset, a row keyed `approx: "No"` would not match and would silently fall back
-        # to the default tolerance.
-        approx_mode=ApproximationMode.No,
+        # The mode the kernel compiled. Left unset, a row keyed `approx: "No"` would not
+        # match and would silently fall back to the default tolerance.
+        approx_mode=_APPROX_MODE,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )

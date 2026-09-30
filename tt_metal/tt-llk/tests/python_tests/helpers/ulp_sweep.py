@@ -4,9 +4,8 @@
 """Exhaustive 16-bit ULP sweeps, and folding what they measure back into the table.
 
 The functional drivers sample a few thousand points from an op's *safe* domain. A budget
-measured that way describes the sample, not the format: approximate ``Reciprocal`` reads
-1 ULP on ``uniform(0.1, 1.1)`` and 128 ULP over every bf16 value there is. This module
-measures the second number.
+measured that way describes the sample, not the format, and cannot see a tail the sample
+never reaches. This module measures the format's number.
 
 Exhaustive is only honest for the 16-bit formats. bfloat16 has 65,279 finite values and
 float16 63,487, so either fits one 64-tile device run; Float32's 2**32 does not, and is
@@ -45,20 +44,26 @@ _OP_KEY = re.compile(r"^([A-Za-z_]\w*):")
 _INF = float("inf")
 
 
-def sweep_cells() -> List[Tuple[DataFormat, DataFormat, object, object]]:
-    """Every ``(input, output, approx_mode, dest_acc)`` cell the sweep runs.
+def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]]:
+    """Every ``(input, output, approx_mode, dest_acc)`` cell the sweep runs on *arch*
+    (default: the chip this session targets).
 
     Less the cells ``TestConfig`` would silently run as another: on Wormhole and
     Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest, so a
     ``dest_acc=No`` request runs the ``Yes`` kernel. Measuring it under ``No`` would
     judge the hardware against a golden modelling a 16-bit Dest, and record the result
     under a key that kernel never ran with.
+
+    A host check of the Wormhole table passes ``MEASURED_ARCH``, so its verdict does not
+    depend on which ``CHIP_ARCH`` the host happens to set.
     """
     from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
     from helpers.data_format_inference import is_format_combination_outlier
     from helpers.llk_params import ApproximationMode, DestAccumulation
 
-    promotes = get_chip_architecture() != ChipArchitecture.QUASAR
+    if arch is None:
+        arch = get_chip_architecture()
+    promotes = arch != ChipArchitecture.QUASAR
     return [
         (in_fmt, out_fmt, approx, dest)
         for in_fmt in SWEEP_FORMATS
@@ -132,7 +137,7 @@ def measurable_mask(
     own, so there is nothing per-op to look up.
 
     The sweep feeds every non-special value of the format, with no per-op domain
-    clipping -- an op is measured wherever its format can reach. Three lane kinds come
+    clipping -- an op is measured wherever its format can reach. Four lane kinds come
     back out, none of them a budget question:
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
@@ -230,6 +235,17 @@ def _claimed(op, src: torch.Tensor) -> torch.Tensor:
     return claimed
 
 
+def _at_a_singularity(op, src: torch.Tensor) -> torch.Tensor:
+    """Lanes sitting exactly on one of *op*'s ``_OP_SINGULARITIES`` points, either side."""
+    from helpers.sfpu_domains import _OP_SINGULARITIES, Operand
+
+    value = src.detach().to(torch.float32)
+    on_point = torch.zeros_like(value, dtype=torch.bool)
+    for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
+        on_point |= value == point
+    return on_point
+
+
 def nonfinite_failures(
     op,
     src: torch.Tensor,
@@ -251,14 +267,22 @@ def nonfinite_failures(
 
     * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
       flushes them and the golden does not, so a disagreement there is the flush.
-    * **a golden the output format cannot hold**, which includes an infinite or NaN
-      golden -- ``log(0)``, ``exp`` past its overflow -- so this function judges only
-      lanes where the *hardware* went non-finite against a finite answer. A full-range
+    * **a NaN golden**, and **a golden past the output format's range answered by a
+      saturated store** -- ``NaN`` or an infinity of the golden's sign. A full-range
       sweep feeds every value of a 16-bit input, and ``relu_min`` passes most of them
       straight through, so a bf16 input against a Float16 output reaches magnitudes fp16
       cannot represent -- 14,334 lanes of it. Saturating there is the store doing what
       it must (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel
-      being wrong, and no budget on any op could be met.
+      being wrong, and no budget on any op could be met. A *finite* or wrong-signed
+      answer against such a golden is still judged: ``exp`` past overflow returning
+      3.39e38 where the golden is ``+inf`` is the kernel being wrong, and the ranking
+      mask drops that lane too.
+    * **an infinite golden on a registered singularity point itself** -- ``log(0)``,
+      ``rsqrt(0)``, ``atanh(-1)``. The value there is a limit, not a number, and what
+      the pipeline makes of it is not the op's accuracy: the unpack drops the sign of
+      ``-0.0``, so ``rsqrt(-0)`` answers ``+inf`` against ``-inf``, and a 16-bit fp16
+      Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step off
+      it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
     * **an input the op makes no claim on** (:func:`_claimed`): the undefined side of
       a registered singularity, or past an argument-reduction limit. ``Sin`` and
@@ -269,7 +293,7 @@ def nonfinite_failures(
 
     What is left is the case the mask would otherwise hide: an op returning ``inf`` or
     ``NaN`` where it is defined, the input is normal, and the output could have held
-    the answer.
+    the answer -- or a finite answer where the answer is infinite.
     """
     from helpers.llk_params import format_dict
 
@@ -281,11 +305,19 @@ def nonfinite_failures(
         magnitude == 0
     )
     output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
-    in_range = golden.detach().to(torch.float32).abs() <= output_max
+    # `golden` is usually already in the output dtype, so "past the range" is mostly an
+    # infinity; a wider golden can also be finite and past it. NaN compares false here.
+    past_range = golden.detach().to(torch.float32).abs() > output_max
+    saturated = torch.isnan(result) | (
+        torch.isinf(result) & (torch.signbit(result) == torch.signbit(golden))
+    )
+    excused = torch.isnan(golden) | (
+        past_range & (saturated | _at_a_singularity(op, src))
+    )
     return (
         nonfinite_mismatches(golden, result)
         & normal_input
-        & in_range
+        & ~excused
         & _claimed(op, src)
         & ~padding_lanes(src, input_format)
     )
@@ -374,9 +406,17 @@ def _incomplete_grids() -> List[str]:
 def finish_emit(arch, testsfailed: int, path=None) -> str:
     """Write this session's measurements into the table, and say what was written.
 
-    Raises ``RuntimeError`` rather than write when the session cannot vouch for them:
-    off ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
-    Wormhole's name, or after a failure, when only a subset was measured.
+    Five outcomes:
+
+    * **nothing written, ``RuntimeError``** when the session cannot vouch for them: off
+      ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
+      Wormhole's name; after a failure, when only a subset was measured; or when an
+      op's ``(in, out)`` grid is incomplete, when a write would drop the rest's rows.
+    * **written, then ``RuntimeError``** when some ops could not be placed: an op kept
+      verbatim because a row the run covers carries a field ``_render`` cannot put
+      back, or an op measured with no key line to write into. Every *other* op's block
+      has already been rewritten, so a red emit is not an untouched table.
+    * **written**, returning the summary line.
     """
     from datetime import date
 
@@ -405,13 +445,30 @@ def finish_emit(arch, testsfailed: int, path=None) -> str:
         f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
         f"{arch.value}, {date.today().isoformat()}"
     )
-    n, kept = write_table(path, suffix)
+    try:
+        n, kept = write_table(path, suffix)
+        unplaced = []
+    except UnplacedMeasurements as exc:
+        n, kept, unplaced = exc.written, exc.kept, exc.missing
     message = f"--ulp-emit: rewrote {n} op block(s) in {path.name}"
+    problems = []
     if kept:
+        problems.append(
+            f"kept {', '.join(kept)} verbatim: a row this sweep covers carries a field "
+            f"it cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}). Settle those "
+            "cells by hand"
+        )
+    if unplaced:
+        problems.append(
+            f"measured {', '.join(unplaced)} but the table has no key line for them, "
+            "so they were not written. Give an op its block first (SFPU_ULP.md, step "
+            "2) to enrol it"
+        )
+    if problems:
         raise RuntimeError(
-            f"rewrote {n} op block(s) in {path.name}, but kept {', '.join(kept)} "
-            "verbatim: a row this sweep covers carries a field it cannot regenerate "
-            f"(beyond {sorted(_RENDERABLE_FIELDS)}). Settle those cells by hand."
+            f"rewrote {n} op block(s) in {path.name}, but "
+            + "; and ".join(problems)
+            + "."
         )
     return message
 
@@ -426,8 +483,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     format and collapsing may drop it.
 
     Without this the sweep enrols what it should not. ``Abs`` measures 393 steps on a
-    Bfp8_b output -- the block exponent quantizing a small element, not the op -- and a
-    433-step budget on a format whose ceiling is 25 gates nothing at all.
+    Bfp8_b output from a bf16 input -- the block exponent quantizing a small element, not
+    the op -- and a 433-step budget on a format whose ceiling is 25 gates nothing.
 
     Headroom is 1.1x, except at zero: the sweep saw every value, so a measured 0 means
     the op is exactly rounded on this format, and widening it to 1 retires that claim.
@@ -441,9 +498,9 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # A block float never enrols from *this* sweep, whatever it measures. The sweep
         # enumerates a format in value order, so sixteen adjacent values share a block
         # and the exponent fits all of them -- which is the best case for quantization,
-        # not a representative one. Measured the two ways: `Abs` reads 393 steps on a
-        # Bfp8_b output from random mixed-magnitude blocks and 3 from the sorted sweep.
-        # Enrolling the second number would gate nothing and hide the first.
+        # not a representative one. Measured the two ways: `Abs` reads 15616 steps on a
+        # Bfp8_b output from random mixed-magnitude blocks (the table's Bfp8_b note) and
+        # 393 from the sorted sweep. Enrolling the second would hide the first.
         return ("block", measured)
     budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
@@ -451,7 +508,9 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     return ("ulp", budget)
 
 
-def _decide(cells: Dict[Tuple[str, str, str, str], int]) -> Dict[Tuple, Tuple]:
+def _decide(
+    cells: Dict[Tuple[str, str, str, str], Union[int, str]],
+) -> Dict[Tuple, Tuple]:
     """Each measured cell as ``(verdict, measured)``, verdict decided per output format;
     an unmeasurable cell as ``(("unmeasurable", why), None)``."""
     return {
@@ -560,6 +619,46 @@ def _row_fields(line: str) -> Dict[str, str]:
     return dict(_ROW_FIELD.findall(body[body.index("{") + 1 : body.rindex("}")]))
 
 
+def _pins_a_measured_cell(line: str, measured: Set[Tuple[str, str, str, str]]) -> bool:
+    """Whether some cell this run measured resolves through *line*'s key: every key
+    field *line* pins agrees with it. A wildcard row -- an op-wide ``{metric:
+    tolerance, atol: 0.13}``, or a YAML alias whose fields are not inline -- pins
+    nothing, so it answers for every cell.
+
+    Wider than :func:`_covered`, which asks whether the run measured the row's own
+    ``(in, out)``: a rendered row is more specific than a wildcard, so it would shadow
+    the wildcard's ``atol``/``rtol`` on every cell it names.
+    """
+    if line.strip().startswith("- *"):
+        return True  # an alias: its fields live on the anchor, so assume the widest
+    fields = _row_fields(line)
+    pinned = [
+        (i, fields[axis])
+        for i, axis in enumerate(("in", "out", "approx", "dest"))
+        if axis in fields
+    ]
+    return any(all(key[i] == value for i, value in pinned) for key in measured)
+
+
+def _unrenderable(line: str) -> bool:
+    """A row carrying something ``_render`` cannot put back: a field beyond
+    ``_RENDERABLE_FIELDS``, or an alias whose fields are not inline. Arch-keyed rows are
+    never touched, so they are not counted."""
+    if line.strip().startswith("- *"):
+        return True
+    fields = _row_fields(line)
+    return "arch" not in fields and bool(set(fields) - _RENDERABLE_FIELDS)
+
+
+class UnplacedMeasurements(ValueError):
+    """``write_table`` wrote every op it could, and measured some it had no key line
+    for. Carries what a normal return would, plus the ops it could not place."""
+
+    def __init__(self, message: str, written: int, kept: List[str], missing: List[str]):
+        super().__init__(message)
+        self.written, self.kept, self.missing = written, kept, missing
+
+
 def _covered(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     """Whether this run measured the ``(in, out)`` cell *line* declares.
 
@@ -606,10 +705,12 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
     re-dump through PyYAML would drop every one of them, including for the ops this
     sweep never touched.
 
-    Raises if an op in ``MEASURED`` has no key line to write into: the measurement would
-    otherwise be dropped in silence, and the sampled rows it was meant to replace would
-    stay in place looking measured -- the failure the ``_OP_KEY`` comment below records
-    biting once already.
+    Raises :class:`UnplacedMeasurements` if an op in ``MEASURED`` has no key line to
+    write into -- *after* writing every op that has one, so one unenrolled op does not
+    throw away the rest of a whole-table emit. The measurement would otherwise be
+    dropped in silence, and the sampled rows it was meant to replace would stay in place
+    looking measured -- the failure the ``_OP_KEY`` comment below records biting once
+    already.
     """
     import pathlib as _pathlib
 
@@ -634,12 +735,14 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
                 j -= 1
             emitted_cells = {(k[0], k[1]) for k in MEASURED[name]}
             rows = [l for l in lines[i + 1 : j] if l.strip().startswith("- ")]
+            # Any row a measured cell resolves through, not only one pinning the
+            # measured (in, out): an op-wide `{metric: tolerance, atol: 0.13}` would
+            # otherwise be shadowed by the bare rows rendered below it, and every cell
+            # they name would silently lose its declared atol.
             unrenderable = [
                 l
                 for l in rows
-                if "arch" not in _row_fields(l)
-                and set(_row_fields(l)) - _RENDERABLE_FIELDS
-                and _covered(l, emitted_cells)
+                if _unrenderable(l) and _pins_a_measured_cell(l, set(MEASURED[name]))
             ]
             if unrenderable:
                 # Emitting over it would drop the floor; keeping it as well would give
@@ -663,16 +766,19 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
             continue
         out.append(line)
         i += 1
-    missing = sorted(set(MEASURED) - written)
-    if missing:
-        raise ValueError(
-            f"{path.name}: measured {', '.join(missing)} but found no key line to "
-            "write into. Add the op's block to the table first -- the key line is "
-            "passed through verbatim so a header comment survives, and cannot be "
-            "generated here."
-        )
     # Exactly one trailing newline: an op block carries its own trailing blank lines,
     # and the last block's leave the file ending in several. `end-of-file-fixer` then
     # rewrites the table on every commit.
     path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
+    missing = sorted(set(MEASURED) - written)
+    if missing:
+        raise UnplacedMeasurements(
+            f"{path.name}: measured {', '.join(missing)} but found no key line to "
+            "write into, so those were not written; every other op was. Add the op's "
+            "block to the table first -- the key line is passed through verbatim so a "
+            "header comment survives, and cannot be generated here.",
+            written=len(written) - len(kept_verbatim),
+            kept=kept_verbatim,
+            missing=missing,
+        )
     return len(written) - len(kept_verbatim), kept_verbatim

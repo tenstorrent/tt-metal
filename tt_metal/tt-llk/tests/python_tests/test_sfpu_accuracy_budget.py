@@ -638,7 +638,10 @@ def test_every_enrolled_op_reaches_its_step_budget():
         for op, table in _SFPU_ACCURACY_BUDGET.items()
         if any(key.input_format is not None for key in table)
     }
-    assert len(input_keyed) == 26, sorted(op.name for op in input_keyed)
+    # Every enrolled op but the tolerance-only ones keys on its input format.
+    assert input_keyed == set(enrolled_ops()) - ONLY_EVER_TOLERANCE, sorted(
+        op.name for op in input_keyed
+    )
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
@@ -708,13 +711,10 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
 #: metric, with what was measured there. Each is a real deviation on an op that should
 #: be exact, and none has a cause established yet; the test below keeps the list from
-#: growing unnoticed, and fails when an entry is no longer needed.
+#: growing unnoticed, and fails when an entry is no longer needed. (Abs/Neg/Identity's
+#: 512-step Float16 cells were the metric keeping fp16 subnormals the pack does not
+#: reproduce; the sweep flushes them now, and those cells measure 0.)
 _EXACT_OP_DEMOTIONS = {
-    **{
-        (op, in_fmt, DataFormat.Float16, DestAccumulation.Yes): "512 ULP measured"
-        for op in (MathOperation.Abs, MathOperation.Neg, MathOperation.Identity)
-        for in_fmt in (DataFormat.Float16_b, DataFormat.Bfp8_b)
-    },
     (
         MathOperation.Floor,
         DataFormat.Bfp8_b,
@@ -739,7 +739,9 @@ def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
     from helpers.ulp_sweep import sweep_cells
 
     demoted = set()
-    for in_fmt, out_fmt, approx, dest in sweep_cells():
+    # The Wormhole cells, whatever CHIP_ARCH this host sets: the contracts below are
+    # resolved at MEASURED_ARCH, and Quasar promotes nothing.
+    for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
         if out_fmt in _ULP_PROXY_DTYPES:
             continue  # a block output is never enrolled from this sweep
         contract = accuracy_contract(

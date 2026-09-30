@@ -1017,15 +1017,25 @@ def _finish_ulp_emit(session):
 
     if not ulp_sweep.EMIT:
         return
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        # The producer only compiles -- TestConfig.run() skips before the device -- so it
+        # can never measure. It takes --ulp-emit only to collect the wider op set the
+        # consumer will run, and failing it would fail the documented emit workflow.
+        _ulp_emit_line(session, "--ulp-emit: compile-only session; nothing to write")
+        return
     try:
         if not ulp_sweep.MEASURED:
             # Silence here read as a successful rewrite: a `-k` that matched nothing, a
-            # --compile-producer run, a mode that deselects the sweep.
+            # mode that deselects the sweep.
             raise RuntimeError("nothing was measured, so the table was not touched")
         message = ulp_sweep.finish_emit(get_chip_architecture(), session.testsfailed)
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    _ulp_emit_line(session, message)
+
+
+def _ulp_emit_line(session, message):
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(message)

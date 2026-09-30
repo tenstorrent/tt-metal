@@ -877,8 +877,9 @@ def passed_test(
     is_within_tolerance = torch.all(is_valid)
 
     if ulp_distances is not None:
-        # Ahead of the tile dump, so the worst lane leads the log. Logged on a pass too,
-        # at debug level, so collecting those datapoints needs --logging-level=DEBUG.
+        # Ahead of the tile dump, so the worst lane leads the log. Logged on a pass too:
+        # at INFO under --ulp-report, otherwise at debug level, where collecting those
+        # datapoints needs --logging-level=DEBUG.
         #
         # Lazily: the message is several full-tensor reductions and on a normal run no
         # sink accepts the pass line. The error path is not lazy; it is always wanted.

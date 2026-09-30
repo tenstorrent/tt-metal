@@ -747,8 +747,10 @@ def test_a_silenced_failure_is_reported_at_info_under_the_report_flag():
     with _ulp_report_enabled():
         assert not _logs_for(verdict, "ERROR")
         assert "ULP budget exceeded" in "\n".join(_logs_for(verdict, "INFO"))
-    # And without the flag it stays below INFO, so the flag is what moved it.
-    assert not _logs_for(verdict, "INFO")
+    # And without the flag it stays below INFO, so the flag is what moved it. Pinned
+    # off explicitly: this suite may itself run under --ulp-report.
+    with _ulp_report_enabled(False):
+        assert not _logs_for(verdict, "INFO")
 
 
 @pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)

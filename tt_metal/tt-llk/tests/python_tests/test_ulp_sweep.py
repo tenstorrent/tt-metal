@@ -98,7 +98,7 @@ def test_a_row_for_another_architecture_survives_a_regeneration(table):
     assert any("arch: BLACKHOLE, max_ulp: 44" in row for row in _rows(table))
 
 
-def test_a_row_carrying_a_floor_is_refused_rather_than_regenerated(table):
+def test_a_row_carrying_a_floor_is_kept_rather_than_regenerated(table):
     """`_render` emits only `max_ulp` or `metric: tolerance`, so a `near_zero_atol`
     floor cannot be put back — and it cannot ride along on a demotion either, since
     `AccuracyContract` refuses the field outside the ULP metric. Emitting over it would
@@ -114,13 +114,65 @@ def test_a_row_carrying_a_floor_is_refused_rather_than_regenerated(table):
     assert "near_zero_atol: 5.59e-07}  # floor" in table.read_text()  # kept verbatim
 
 
-def test_a_measurement_with_nowhere_to_go_is_refused(table):
+@pytest.mark.parametrize(
+    "wildcard",
+    [
+        "{metric: tolerance, atol: 0.13, rtol: 0.05}",
+        "&lut {metric: tolerance, atol: 0.13, rtol: 0.05}",
+        "*lut",
+    ],
+    ids=["inline", "anchor", "alias"],
+)
+def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
+    table, wildcard
+):
+    """SigmoidAppx's op-wide `atol: 0.13` pins no `(in, out)`, so it is not "covered" by
+    any one measured cell -- but every rendered row is more specific than it, and a bare
+    `metric: tolerance` there resolves to `atol=None`: the driver's 0.05, not the 0.13
+    the table says the LUT needs. Such a row answers for every measured cell, so the op
+    is kept verbatim like a floor."""
+    anchor = (
+        ""
+        if not wildcard.startswith("*")
+        else ("Anchor:\n  - &lut {metric: tolerance, atol: 0.13, rtol: 0.05}\n\n")
+    )
+    table.write_text(f"{anchor}Gelu:\n  - {wildcard}\n", encoding="utf-8")
+    before = table.read_text()
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 100)
+    assert write_table(table, "today") == (0, ["Gelu"])
+    assert table.read_text() == before
+
+
+def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op(table):
+    """The widening above is by what a row *pins*: an `atol` row on a cell this run did
+    not measure answers for none of its cells, so the op is still regenerated."""
+    table.write_text(
+        "Gelu:\n  - {in: Float16, out: Float16, metric: tolerance, atol: 0.2}  # kept\n",
+        encoding="utf-8",
+    )
+    record("Gelu", ("Float16_b", "Float16_b", "No", "No"), 1)
+    assert write_table(table, "today") == (1, [])
+    assert any("atol: 0.2}  # kept" in row for row in _rows(table))
+
+
+def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
     """The key line is passed through verbatim so a header comment survives, so a new
     op's block has to be hand-authored first. Dropping the measurement in silence is
-    what left 17 ops' sampled rows in place looking measured."""
+    what left 17 ops' sampled rows in place looking measured.
+
+    Refused only *after* every op that has a key line is written: a whole-table emit
+    measures every sweepable op, and one unenrolled op must not throw the rest away."""
+    from helpers.ulp_sweep import UnplacedMeasurements
+
     record("Sqrt", ("Float16", "Float16", "No", "No"), 1)
-    with _refuses("no key line"):
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    with _refuses("no key line") as caught:
         write_table(table, "today")
+    assert isinstance(caught.value, UnplacedMeasurements)
+    assert (caught.value.written, caught.value.missing) == (1, ["Sqrt"])
+    assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
 
 
 def test_a_cell_recorded_twice_keeps_the_worst_lane():
@@ -188,6 +240,38 @@ def test_a_flushed_subnormal_input_is_not_a_nonfinite_failure():
     ).any()
 
 
+def test_a_finite_answer_to_an_infinite_golden_is_a_nonfinite_failure():
+    """Only a *saturated* store is excused past the output range. `exp` past overflow
+    returning the largest finite bf16 where the golden is `+inf`, or an infinity of the
+    wrong sign, is the kernel being wrong -- and the ranking mask drops the lane too, so
+    this is the only place it can fail."""
+    fmt = DataFormat.Float16_b
+    src = torch.tensor([5.0, 5.0, 5.0], dtype=torch.bfloat16)
+    golden = torch.full((3,), float("inf"), dtype=torch.bfloat16)
+    result = torch.tensor([3.39e38, float("-inf"), float("inf")], dtype=torch.bfloat16)
+    assert nonfinite_failures(_OP, src, golden, result, fmt, fmt).tolist() == [
+        True,
+        True,
+        False,
+    ]
+
+
+def test_an_infinite_golden_on_the_singularity_point_is_not_a_nonfinite_failure():
+    """`rsqrt(-0)` answers `+inf` against `-inf` because the unpack drops the sign, and
+    a 16-bit fp16 Dest answers `log(0)` with -130560 because it has no infinity. The
+    value at a pole is a limit, so only the point itself is excused -- a finite answer
+    one step off it, where the golden is also infinite in the output format, fails."""
+    fmt = DataFormat.Float16_b
+    src = torch.tensor([-0.0, 0.0, 1e-30], dtype=torch.bfloat16)
+    golden = torch.tensor(
+        [float("-inf"), float("inf"), float("inf")], dtype=torch.bfloat16
+    )
+    result = torch.tensor([float("inf"), -130560.0, 3.0e38], dtype=torch.bfloat16)
+    assert nonfinite_failures(
+        MathOperation.Rsqrt, src, golden, result, fmt, fmt
+    ).tolist() == [False, False, True]
+
+
 def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
     """A full-range sweep of a bf16 input reaches magnitudes a Float16 output cannot
     hold, and `relu_min` passes most of them straight through -- 14,334 lanes of it.
@@ -208,9 +292,8 @@ def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
 def test_the_sweeps_own_zero_padding_is_not_data():
     """`generate_full_tensor` pads to the tile count, so the last 257 bf16 lanes are
     zeros the sweep never chose to feed. They inflate every lane count, and on an op
-    singular at zero they would read as a real failure -- `reciprocal` returns `Inf`
-    there against a finite golden clamp, and only its registered domain excluding zero
-    keeps those lanes out of the verdict today.
+    singular at zero they land on the pole -- 257 copies of one value nobody chose. Both
+    masks drop them by position, for every op, whatever its singularities say.
 
     By position, not by value: one legitimate `0.0` is swept, in the middle.
     """
@@ -219,9 +302,10 @@ def test_the_sweeps_own_zero_padding_is_not_data():
 
     fmt = DataFormat.Float16_b
     swept = ulp_sweep_value_count(fmt, float("-inf"), float("inf"))
-    src = torch.zeros(swept + 257, dtype=torch.bfloat16)
+    pad_lanes = 257
+    src = torch.zeros(swept + pad_lanes, dtype=torch.bfloat16)
     pad = padding_lanes(src, fmt)
-    assert int(pad.sum()) == 257
+    assert int(pad.sum()) == pad_lanes
     assert not bool(pad[:swept].any()) and bool(pad[swept:].all())
 
     # And it reaches both masks: a padded lane is neither measurable nor a failure.

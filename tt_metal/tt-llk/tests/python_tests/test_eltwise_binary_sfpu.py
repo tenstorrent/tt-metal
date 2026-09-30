@@ -109,6 +109,10 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
+
+#: The approximation mode the contract-gated drivers below compile, and so the one their
+#: contract names.
+_APPROX_MODE = ApproximationMode.No
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
@@ -584,7 +588,7 @@ def sfpu_binary(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(_APPROX_MODE),
             BROADCAST_TYPE(bcast),
         ],
         runtimes=[
@@ -628,14 +632,13 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    # This driver compiles APPROX_MODE(), whose default is No.
     _assert_against_contract(
         mathop,
         formats,
         dest_acc,
         golden_tensor,
         res_tensor,
-        approx_mode=ApproximationMode.No,
+        approx_mode=_APPROX_MODE,
     )
 
 
@@ -1599,7 +1602,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(_APPROX_MODE),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
         runtimes=[
@@ -1631,15 +1634,14 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    # Without this a row for SfpuAddTopRow would be inert. This driver compiles
-    # APPROX_MODE() too.
+    # Without this a row for SfpuAddTopRow would be inert.
     _assert_against_contract(
         mathop,
         formats,
         dest_acc,
         golden_tensor,
         res_tensor,
-        approx_mode=ApproximationMode.No,
+        approx_mode=_APPROX_MODE,
     )
 
 
