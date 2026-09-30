@@ -935,6 +935,14 @@ tasks:
     kind: norm
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T14:43:45'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_norm.py: 21dc22ee67e7d8ae1729ca9d1768cdf6d526e12f3f904cd3b7fe42f918ee8211
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.03
   title: 'moe block with steps 1-3 on device (last: attn_norm)'
   step: implement
