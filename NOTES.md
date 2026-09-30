@@ -15,3 +15,10 @@ faster with reuse=1. gen#0 is the capture gen; compare replays gen#1/gen#2 for t
 Next step on resume: ssh g14blx03 cat ~/fasth3/t37/compare.txt; copy the still + one mp4 back to tmp/t37/;
 if not identical set LTX_S2_PROMPT_REUSE default to 0 on the t22 branch and push; then rm -rf blx03:~/fasth3/out/t37
 (keep nothing there) and ~/fasth3/t37.
+
+## 2026-09-30 20:46 UTC (after reboot)
+blx03 rebooted 20:25 UTC; the driver died before submitting anything (no jobs file, empty log). Nothing measured.
+blx03 broker: device HELD (degraded), 8/32 chips off PCIe after our t41 job 904 was broker-killed (chips left PCIe);
+auto-recovery (bridge-reset, glx_reset) failing. Did NOT relaunch the driver: no autonomous submitter while the
+device is flaky and a pause may come. On resume: check steer/pause, confirm broker not HELD and no smarton job,
+then relaunch `setsid nohup bash ~/fasth3/t37/drive37.sh > ~/fasth3/t37/drive37.log 2>&1 &` on blx03.
