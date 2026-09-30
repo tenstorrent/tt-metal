@@ -1218,8 +1218,12 @@ class TestConfig:
         return '#include "barrier.h"\n'
 
     def _kernel_placement_include(self) -> str:
-        """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h). The fuser writes its own."""
-        return "" if self.skip_build_header else '#include "kernel_placement.h"\n'
+        """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
+        ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
+        """
+        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "kernel_placement.h"\n'
 
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
