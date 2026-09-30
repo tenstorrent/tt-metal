@@ -1947,7 +1947,22 @@
  },
  "S.dense.10": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 31.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:35:02"
+   }
+  ],
+  "last_run": "2026-09-30T14:35:02",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.10.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999960467960625
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:34:30",
+  "status": "PASS"
  },
  "S.dense.11": {
   "attempts": 0,
