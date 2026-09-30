@@ -8,7 +8,7 @@ worth pinning is about what it must *not* touch. The table's rows are contracts,
 regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
-import math
+import os
 import re
 
 import pytest
@@ -94,6 +94,10 @@ def _rows(path):
     ]
 
 
+def _key_line(path, op):
+    return next(l for l in path.read_text().splitlines() if l.startswith(f"{op}:"))
+
+
 def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
@@ -105,15 +109,15 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
     assert "max 5 ULP" in rows[0]
     # The run identity is on the op's key line, once, not repeated on every row.
-    key_line = next(l for l in table.read_text().splitlines() if l.startswith("Gelu:"))
+    key_line = _key_line(table, "Gelu")
     assert "measured by: today, except where a row says otherwise" in key_line
     assert "header provenance, ungeneratable" in key_line  # and what it already said
     assert "today" not in rows[0]
     assert not any("max_ulp: 7" in row for row in rows)  # the superseded cell is gone
-    # The same op's other (in, out) cell, and the op this run never measured: untouched.
+    # The same op's other (in, out) cell: kept.
     assert any("{in: Float16_b, out: Float32, max_ulp: 9}" in row for row in rows)
-    # The op this run never measured, untouched.
-    assert any("Log1p" in l for l in table.read_text().splitlines())
+    # The op this run never measured: untouched, key line and row alike.
+    assert _key_line(table, "Log1p") == "Log1p:"
     assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
 
 
@@ -127,11 +131,66 @@ def test_a_second_regeneration_replaces_the_run_identity(table):
     record("Gelu", ("Float16", "Float16", "No", "No"), 5)
     write_table(table, "sweep B, wormhole, 2026-09-24")
 
-    key_line = next(l for l in table.read_text().splitlines() if l.startswith("Gelu:"))
+    key_line = _key_line(table, "Gelu")
     assert key_line.count("measured by:") == 1
     assert "sweep B, wormhole, 2026-09-24" in key_line
     assert "sweep A" not in key_line
     assert "header provenance, ungeneratable" in key_line  # and the original survives
+
+
+def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
+    """Emit one `(in, out)` pair, then a different one. The second run replaces the key
+    line's clause with its own, so the first pair's rows -- which named no run, the key
+    line did -- would be credited to a sweep that never measured them. They take the
+    outgoing identity with them instead; a bare, hand-authored row takes the key line's
+    header, which is what it was written against."""
+    table.write_text(
+        "Gelu:  # 0 ULP, 16 variants, 2026-09-18\n" "  - {out: Float32, max_ulp: 0}\n",
+        encoding="utf-8",
+    )
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 1)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    assert "measured by: sweep B, wormhole, 2026-09-24" in _key_line(table, "Gelu")
+    rows = _rows(table)
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 5 ULP, sweep A, wormhole, 2026-09-23")
+    bare = next(r for r in rows if r.startswith("- {out: Float32"))
+    assert bare.endswith("# 0 ULP, 16 variants, 2026-09-18")
+    second = next(r for r in rows if "in: Float16_b, out: Float16_b" in r)
+    assert "2026" not in second  # this run's rows name it through the key line
+
+
+def test_a_demotion_names_the_budget_that_crossed_the_line(table):
+    """`_verdict` hands back the *budget* on a demotion, so the note's "budget would be
+    N > C-step ceiling" is checkable. Handing back the measurement read "budget would
+    be 100" for a budget of 110 -- a claim the ceiling check cannot confirm."""
+    from helpers.ulp_sweep import _verdict
+
+    assert _verdict(100, "Float16_b") == ("tolerance", 110)
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 100)
+            record("Gelu", ("Float16_b", "Bfp8_b", approx, dest), 3)
+    write_table(table, "today")
+    rows = _rows(table)
+    assert any(
+        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget would be "
+        "110 > 6-step ceiling" in r
+        for r in rows
+    )
+    assert any(
+        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized, so tolerance"
+        in r
+        for r in rows
+    )
 
 
 def test_a_row_for_another_architecture_survives_a_regeneration(table):
@@ -201,7 +260,8 @@ def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
-    """The key line is passed through verbatim so a header comment survives, so a new
+    """The emitter keeps a key line's name and header comment and only adds or replaces
+    its `measured by:` clause -- it never writes a key line -- so a new
     op's block has to be hand-authored first. Dropping the measurement in silence is
     what left 17 ops' sampled rows in place looking measured.
 
@@ -245,7 +305,9 @@ def test_the_emitted_budget_uses_the_declared_headroom():
     """The factor was hardcoded beside the constant, so tuning it did nothing."""
     from helpers.ulp_sweep import _verdict
 
-    assert _verdict(100, "Float32") == ("ulp", math.ceil(100 * EMIT_HEADROOM))
+    assert _verdict(100, "Float32") == ("ulp", 110)  # exactly 1.1x, not float-rounded
+    assert _verdict(10, "Float32") == ("ulp", 11)
+    assert EMIT_HEADROOM == 1.1  # the two figures above are written against it
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
     # A block float never enrols from a sorted sweep, however small the reading.

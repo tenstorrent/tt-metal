@@ -622,6 +622,87 @@ def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
     assert rows[0]["op"] == "Abs" and rows[0]["in"] == "Float16"
     assert rows[0]["out"] == "Float16_b" and rows[0]["dest"] == "Yes"
     assert rows[0]["approx"] is None and rows[0]["max"] == 0
+    # A max of 0 means something only over lanes that were measured.
+    assert (rows[0]["lanes"], rows[0]["unmeasurable"]) == (32, 0)
+
+
+def _measure_rows(tmp_path, monkeypatch):
+    import helpers.utils as utils
+
+    path = tmp_path / "measure.jsonl"
+    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(path))
+    return lambda: [
+        __import__("json").loads(line)
+        for line in (path.read_text().splitlines() if path.exists() else [])
+    ]
+
+
+def test_the_measure_recorder_ranks_the_lanes_the_verdict_ranks(tmp_path, monkeypatch):
+    """The ULP arm hands the recorder the lanes it ranks, without the ones a
+    ``near_zero_atol`` floor rescued: those carry the largest step counts by
+    construction, and filing them would fold a floor-carried pass back as a budget."""
+    rows = _measure_rows(tmp_path, monkeypatch)
+    fmt = DataFormat.Float16_b
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    golden[0] = 1e-6
+    result = golden.clone()
+    result[0] = 3e-6  # thousands of steps away, but 2e-6 in absolute terms
+    result[1] = 1.5078125  # one real bf16 step above 1.5
+
+    accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
+    assert passed_test(golden, result, fmt, max_ulp=1, near_zero_atol=1e-5)
+    (row,) = rows()
+    assert row["max"] == 1, row
+
+
+def test_the_measure_recorder_drops_an_ambiguous_or_promoted_variant(
+    tmp_path, monkeypatch
+):
+    """Two lookups and then one comparison cannot say which variant it was, and a
+    variant TestConfig promoted to a 32-bit Dest ran another kernel than it names --
+    against a golden built for the one it names. Neither is filed."""
+    import helpers.chip_architecture as chip
+
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setattr(chip, "_cached_chip_architecture", None)
+    rows = _measure_rows(tmp_path, monkeypatch)
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+
+    for _ in range(2):
+        accuracy_contract(
+            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+        )
+    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
+    assert rows() == []
+
+    half = golden.to(torch.float16)
+    accuracy_contract(
+        MathOperation.Abs,
+        output_format=DataFormat.Float16,
+        input_format=DataFormat.Float16_b,
+        dest_acc=DestAccumulation.No,
+        arch=MEASURED_ARCH,
+    )
+    assert passed_test(half, half.clone(), DataFormat.Float16)
+    assert rows() == []
+
+
+def test_a_measure_recorder_write_failure_does_not_fail_the_comparison(
+    tmp_path, monkeypatch
+):
+    """Reporting only: an unwritable path warns and is otherwise ignored, so it can
+    neither fail a passing test nor hide a failing comparison's summary."""
+    import helpers.utils as utils
+
+    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(tmp_path))  # a directory
+    monkeypatch.setattr(utils, "_ULP_MEASURE_WARNED", False)
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    for _ in range(2):
+        accuracy_contract(
+            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+        )
+        assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
+    assert utils._ULP_MEASURE_WARNED
 
 
 def test_arch_must_be_passed_explicitly():
@@ -752,29 +833,14 @@ ONLY_EVER_TOLERANCE = frozenset(
 )
 
 
-#: Enrolled ops whose every row keys on the output format alone: the arithmetic binary
-#: ops and the ternary ops, measured per output, so one row covers every input that
-#: reaches it (most binary drivers run a full input x output cross product), and the
-#: op-wide LUT tolerance. The binary predicates and selections -- Eq/Ne/Lt/Gt/Le/Ge,
-#: Isclose, Mask, AddTopRow -- key on their input. Every other enrolled op keys on its
-#: input too, so an enrolment has to land in one set or the other deliberately.
+#: Enrolled ops whose every row keys on the output format alone: the per-format
+#: tolerances of the two binaries that moved into the table, and the op-wide LUT
+#: tolerance. Every other enrolled op keys on its input too, so an enrolment has to land
+#: in one set or the other deliberately.
 OUT_KEYED_ONLY = frozenset(
     {
         MathOperation.GeluAppx,
-        MathOperation.SfpuAddcdiv,
-        MathOperation.SfpuAddcmul,
-        MathOperation.SfpuAtan2,
-        MathOperation.SfpuBinaryFmod,
-        MathOperation.SfpuBinaryRemainder,
-        MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwdiv,
-        MathOperation.SfpuElwmul,
         MathOperation.SfpuElwpow,
-        MathOperation.SfpuElwrsub,
-        MathOperation.SfpuElwsub,
-        MathOperation.SfpuLerp,
-        MathOperation.SfpuLogsigmoid,
-        MathOperation.SfpuSnakeBeta,
         MathOperation.SfpuXlogy,
         MathOperation.SigmoidAppx,
     }
@@ -1402,6 +1468,58 @@ def test_every_step_budget_names_the_measurement_it_came_from():
     assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
         f"  {op}: {body}" for op, body in unbacked
     )
+
+
+#: Exact by construction without being canaries: a selection or clamp returns one of
+#: its operands, and x - trunc(x) is exact, so a sampled 0 on these states what the op
+#: guarantees rather than what the sample happened to miss.
+EXACT_SELECTIONS = (
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+    MathOperation.Frac,
+    MathOperation.SfpuBinaryMax,
+    MathOperation.SfpuBinaryMin,
+)
+
+_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _sampled_zero_budgets(path=_TABLE_PATH):
+    """``(op_name, row_text)`` for every ``max_ulp: 0`` row whose measurement was a
+    sample: it names its own dated run, and that run is not the exhaustive sweep. A row
+    naming no run of its own was emitted by the run on its key line."""
+    found, op, key_run = [], None, ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):
+            op, _, key_run = line.partition(":")[0].strip(), None, line
+            continue
+        body, _, note = line.strip().partition("#")
+        if not re.search(r"max_ulp:\s*0\b", body):
+            continue
+        run = note if _DATED.search(note) else key_run
+        if "exhaustive" not in run:
+            found.append((op, body.strip()))
+    return found
+
+
+def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
+    """A finite sample cannot assert exactness, so a sampled 0 is written as 1 unless
+    the op is exact by construction; only the exhaustive sweep, which saw every value,
+    may keep a 0 on an op that rounds. A sampled 0 gated bit-exact fails on any golden,
+    domain or rounding change -- the Elwdiv note records that happening."""
+    exact = {
+        *EXACT_BY_CONSTRUCTION,
+        *EXACT_ZERO_BY_CONSTRUCTION,
+        *EXACT_SELECTIONS,
+    }
+    unfloored = [
+        f"{op}: {body}"
+        for op, body in _sampled_zero_budgets()
+        if MathOperation[op] not in exact
+    ]
+    assert not unfloored, "\n".join(unfloored)
 
 
 def test_no_step_budget_exceeds_the_measurement_it_records():

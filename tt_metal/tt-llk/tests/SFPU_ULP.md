@@ -137,8 +137,9 @@ or the sweep has nothing to feed it.
 
 ### 2. Give it a block in the table
 
-The emitter passes an op's key line through verbatim, so a *new* op needs one by hand
-first. Add the name and one placeholder row (a key with no rows fails to load):
+The emitter keeps an op's key line -- its name and any header comment -- and only adds
+or replaces the `measured by:` clause on it; it never writes a key line itself. So a
+*new* op needs one by hand first. Add the name and nothing else:
 
 ```yaml
 MyOp:
