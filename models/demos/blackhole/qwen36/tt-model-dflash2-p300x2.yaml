@@ -1,0 +1,250 @@
+# tt-model-dflash2-p300x2.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM,
+# serving WITH the DFlash2 block-diffusion speculative-decode drafter (models/demos/blackhole/qwen36/tt/dflash2*.py,
+# qwen36_vllm_dflash.py) through the Tenstorrent vLLM plugin's block-output contracts. Built for small batches
+# (1-8 users): profiles `batch8-dflash2` (default: eight speculative slots in two verify buckets -- K=7 at 1-4 live
+# users, K=3 at 5-8, switched at runtime with no recapture; ragged widths; chunked prefill: a prompt of 8192+ tokens
+# that arrives while earlier requests decode is prefilled in 2048-token chunks between their speculative steps) and
+# `single-user-dflash2` (one slot, fastest for exactly one request). For 8+ users or sampled output use
+# changh95/qwen3.8-27b-p300x2 (plain decode, 32 users).
+#
+# This file used to be models/demos/blackhole/qwen36/tt-model.yaml on branch qwen36-dflash-batch (published package
+# v13: tt-metal c6bf41673e2, plugin 7ddf2c8); that path now holds the p150x2 manifest (changh95/qwen3.8-27b-p150x2).
+# tt-model takes any manifest path:
+#
+#   tt-model package --container models/demos/blackhole/qwen36/tt-model-dflash2-p300x2.yaml --out <builds>
+#   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json [--profile single-user-dflash2]
+#   tt-model push    <builds>/qwen3.8-27b-dflash2-p300x2 --private
+schema: "5.1"
+repo: changh95/qwen3.8-27b-dflash2-p300x2
+name: qwen3.8-27b-dflash2-p300x2
+weights:
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0   # refs/main as validated, 2026-09-12
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  # Branch qwen36-dflash2-p300x2-pkg = qwen36-int3 (qwen36-p150x2 + TP=2 prefill + tp2/TP=4 chunked prefill, validated
+  # in profiles/tp4_chunked/{EVAL,VALIDATE_INT3}.md) + this manifest.
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-pkg4
+  code:                                                        # import closure of qwen36_vllm.py + the demo/spec-decode path
+    - models/common
+    - models/tt_transformers
+    - models/demos/blackhole/qwen36                            # model, DFlash drafters, demo, tests, vllm_bundle
+    - models/demos/qwen3_vl/tt/common.py
+    - models/demos/utils
+    - models/experimental/gated_attention_gated_deltanet
+    - models/perf
+    - models/tt_dit/utils/tensor.py
+    - models/model_trace_region_sizes.yaml
+    - models/model_targets.yaml
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
+  # vllm-tt-plugin branch pd-disagg: superset of the published 7ddf2c8 (the block-output / batched / ragged contracts the
+  # DFlash2 profiles use, plus PD connector, host sampler and scheduler fixes, inert for these single-process profiles) +
+  # the TT chunk policy and the block-output chunked-prefill capability batch8-dflash2 now uses. Pinned to the pushed commit.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 96d4416d31f79973c9ff10b3b41e15d0b06e3430}
+  extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle  # same adapter the plugin registers built-in
+
+serve:
+  hardware: p300x2
+  mesh_device: P150x4          # tt-metal's name for the (1,4) Blackhole mesh a P300x2 opens
+  port: 8000
+  max_model_len: 262144
+  max_num_seqs: 32             # overridden per profile below (1 = speculative, 32 = batched plain decode)
+  block_size: 64
+  capabilities:
+    tool_parser: qwen3_coder
+    reasoning_parser: qwen3
+  additional_config:
+    tt:
+      fabric_config: FABRIC_1D
+      trace_region_size: 1073741824
+      l1_small_size: 24576
+      sample_on_device_mode: decode_only
+  env:
+    ARCH_NAME: blackhole
+    TT_QWEN35_TEXT_VER: qwen36_blackhole
+    TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
+    QWEN36_MAX_TOKENS_ALL_USERS: "525312"
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_CONFIGURE_LOGGING: "1"
+    TORCHDYNAMO_DISABLE: "1"
+    HF_HUB_OFFLINE: "1"
+    # DFlash2 speculative decoding (incoai/Qwen3.8-27B-DFlash2, block 8 -> 7 drafts per verify, lossless greedy).
+    # The drafter is a second checkpoint the single `weights` pointer cannot carry: it is resolved from the HF cache
+    # mounted at /hf, so run `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4`
+    # once before `tt-model serve` (quickstart below). QWEN36_DRAFTER=mtp turns speculation off (plain decode; not exposed as a profile here).
+    DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
+    QWEN36_DFLASH_BLOCK: "8"
+    QWEN36_DFLASH_MAX_PROMPT: "2048"     # prompts up to this take the single masked-bucket prefill; longer ones the
+                                         # eager chunked spec prefill. EVERY text prompt speculates.
+    QWEN36_DFLASH_SERVE_BLOCK: "32"      # tokens committed per vLLM step on a speculative request
+  args:
+    - [--max-num-batched-tokens, "262144"]
+
+serve_profiles:
+  - name: single-user-dflash2
+    description: One request at a time with lossless DFlash2 speculative decoding (block-output serving).
+    max_num_seqs: 1
+    env:
+      QWEN36_DRAFTER: dflash2
+      QWEN36_GDN_SPEC_FUSED: "1"      # fused gdn_spec_step verify (M2): verify 49.8 -> 37.7 ms at 8 rows, 70 -> 39-41 at 32 rows
+    args:
+      - [--max-num-batched-tokens, "262144"]
+      - --no-async-scheduling           # the plugin's block-output contract is synchronous
+  - name: batch8-dflash2
+    description: Up to 8 concurrent requests with lossless DFlash2 speculative decoding in two verify buckets — K=7 drafts per step (4x8) while up to 4 requests are live, K=3 (8x4) at 5-8 — switched at runtime with no recapture (batched ragged block-output serving).
+    max_num_seqs: 8
+    env:
+      QWEN36_DRAFTER: dflash2
+      QWEN36_GDN_SPEC_FUSED: "1"      # fused gdn_spec_step verify (M2): verify 49.8 -> 37.7 ms at 8 rows, 70 -> 39-41 at 32 rows
+      QWEN36_DFLASH_BLOCK: "8"        # K_max = 7: the 4x8 bucket drafts the checkpoint's whole block; every bucket's K <= BLOCK-1
+      QWEN36_DFLASH_BUCKETS: "8x4,4x8"  # verify geometries B x T (profiles/dual_bucket_spec.json): the decoder verifies in the
+                                        # smallest bucket that seats the live requests and reseeds them across a switch bit-exactly
+      QWEN36_DFLASH_RAGGED: "1"       # one speculative iteration per decode step: a bucket switch stays inside one step
+      QWEN36_DFLASH_FOLD_SEED: "1"    # (both verify traces + both buckets' draft/extend traces fit: TRACE region 137 MiB of 1 GiB)
+      QWEN36_DFLASH_CHUNKED_PREFILL: "1"  # chunked prefill (qwen36_vllm_dflash.py declares supports_chunked_prefill +
+                                          # tt_prefill_chunk_tokens 2048 + tt_block_output_chunked_prefill; refused at
+                                          # TP != 4 and max_num_seqs 1). Evaluated OFF vs ON: profiles/tp4_chunked/EVAL.md
+    additional_config:
+      tt:                               # deep-merged over serve.additional_config.tt
+        prefill_chunk_tokens: 2048      # chunk size (a multiple of the model's tt_prefill_chunk_tokens and of block_size)
+        chunked_prefill_decode_steps: 4 # speculative decode steps between two chunk steps while requests decode
+        # Other chunk-policy keys keep their block-output defaults (vllm_tt_plugin/config.py
+        # resolve_tt_prefill_chunk_policy): only a prompt with >= 8192 tokens left (chunked_prefill_min_tokens) that
+        # arrives while an EARLIER request decodes (chunked_prefill_protect_prior_decoders) is chunked; bursts
+        # (burst_longs 2) and idle steps prefill whole, exactly as without chunking.
+    args:
+      - [--max-num-batched-tokens, "262144"]
+      - --no-async-scheduling           # the block-output contract and the chunk cadence are synchronous
+default_profile: batch8-dflash2
+
+verify:
+  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_output'] and C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['output_tokens_per_step'] == 32, C.model_capabilities"
+  - "from models.demos.blackhole.qwen36.tt.dflash2_serving import DFlash2ServingDecoder; assert DFlash2ServingDecoder"
+  - "from models.demos.blackhole.qwen36.tt.dflash2_serving import DFlash2DualBucketDecoder, BucketPlanner; assert DFlash2DualBucketDecoder and BucketPlanner"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import parse_buckets, check_buckets; assert check_buckets(parse_buckets('8x4,4x8'), 8, 7, True) == ((8, 4), (4, 8))"
+  - "import json; m=json.load(open('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json')); assert m['main_class'].endswith(':Qwen36DFlashForCausalLM'), m"
+  - "from vllm_tt_plugin.config import get_tt_block_output_kv_lookahead_tokens, is_tt_adaptive_block_output_model, is_tt_adaptive_block_batched, is_tt_adaptive_block_ragged"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ['QWEN36_DFLASH_RAGGED']='1'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['tt_adaptive_block_ragged']"
+  - "from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder; from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP; assert DFlash2Decoder and DFlash2DrafterTP"
+  # batch8-dflash2 chunked prefill: the model declares the block-output chunk contract only with the knob on (never with it
+  # off: single-user-dflash2), and the plugin carries the chunk policy that reads prefill_chunk_tokens / chunked_prefill_decode_steps.
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ['QWEN36_DFLASH_CHUNKED_PREFILL']='1'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; c=C.model_capabilities; assert c['supports_chunked_prefill'] and c['tt_block_output_chunked_prefill'] and c['tt_prefill_chunk_tokens'] == 2048, dict(c)"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ.pop('QWEN36_DFLASH_CHUNKED_PREFILL', None); from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; c=C.model_capabilities; assert not c.get('supports_chunked_prefill') and 'tt_block_output_chunked_prefill' not in c, dict(c)"
+  - "from vllm_tt_plugin.config import resolve_tt_prefill_chunk_policy, is_tt_block_output_chunked_prefill, get_tt_prefill_chunk_extras"
+  - "import vllm.model_executor.models.qwen3_5"
+  - "import transformers.models.qwen3_5"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/model_trace_region_sizes.yaml').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json').is_file()"
+
+# Card: rendered by profiles/render_card.py dflash2 <this file> (reads profiles/card_dflash2_bench.md from build_cards.py;
+# with CHUNKED_SECTION=profiles/tp4_chunked/card_dflash2_chunked.md it adds the batch8-dflash2-chunked bullet and section).
+# The chunked section below is a DRAFT: every {{...}} is a placeholder for a number measured on the republish build.
+card:
+  description: |
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. It is built for coding: 112 tokens/s per user on SPEED-Bench coding prompts at one user (119 on `single-user-dflash2`, 76 with the default thinking mode on) vs 36 plain. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
+  quickstart: |
+    ### Drafter weights (once, before the first `serve`)
+
+    ```bash
+    hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
+    ```
+
+    ### Query
+
+    OpenAI-compatible API on port 20000, model id `Qwen/Qwen3.8-27B`:
+
+    ```bash
+    curl -s http://localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
+      -d '{"model": "Qwen/Qwen3.8-27B", "messages": [{"role": "user", "content": "Write a Python function that merges two sorted lists."}], "max_tokens": 512}'
+    ```
+
+    ### Profiles
+
+    * `batch8-dflash2` (default): up to 8 concurrent requests. 7 drafts per step while up to 4 are live, 3 at 5 to 8; the switch happens at runtime and does not change any output. A long prompt (8,192 tokens or more) that arrives while earlier requests decode is prefilled in 2,048-token chunks between their steps, so they keep streaming (worst pause 0.5-0.6 s instead of about 5 s) at the cost of that prompt's own time to first token.
+    * `single-user-dflash2`: one request at a time; fastest for a single user.
+
+    ```bash
+    tt-model serve changh95/qwen3.8-27b-dflash2-p300x2 --profile single-user-dflash2   # default: batch8-dflash2
+    tt-model profiles changh95/qwen3.8-27b-dflash2-p300x2                              # list them
+    ```
+
+    * Output is the target model's greedy trajectory: `temperature`/`top_p` affect only the first token; `logprobs`, structured outputs and images are not supported. For sampling or more than 8 users use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
+
+    ## Benchmarks
+
+    tt-inference-server `--workflow benchmarks` (standard P300X2 grid: random prompts of exactly ISL tokens, `ignore_eos`, greedy, streaming) on one P300x2. `t/s` = aggregate output tokens per second, `(t/s/u)` = per user; plain = the same box without speculation ([changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2)).
+
+    ### `batch8-dflash2` (default), t/s (t/s/u), 1, 2, 4, 8 concurrent users
+
+    | ISL | OSL | 1 user | 2 users | 4 users | 8 users | plain 1 user |
+    |---|---|---|---|---|---|---|
+    | 128 | 128 | 56.1 (56.2) | 100.6 (53.1) | 182.3 (46.2) | 273.2 (35.1) | 32.3 |
+    | 1,024 | 128 | 53.6 (53.6) | 99.0 (50.2) | 159.6 (42.5) | 244.0 (31.4) | 31.3 |
+    | 2,048 | 128 | 51.4 (51.4) | 86.6 (44.4) | 131.5 (34.8) | 194.3 (24.9) | 30.7 |
+    | 4,096 | 128 | 45.7 (45.8) | 76.7 (38.8) | 102.8 (26.7) | 134.9 (17.1) | 28.8 |
+    | 8,192 | 128 | 35.0 (35.0) | 53.2 (26.7) | 68.8 (17.8) | 80.1 (10.4) | 25.9 |
+    | 16,384 | 128 | 26.0 (26.0) | 33.5 (16.9) | 38.5 (10.2) | 44.0 (5.7) | 21.2 |
+    | 32,768 | 128 | 16.3 (16.3) | 19.7 (10.2) | 22.1 (5.6) | 23.3 (2.9) | 15.1 |
+    | 65,536 | 128 | 9.7 (9.7) | 10.3 (5.2) | 10.7 (2.7) | 9.8 (1.3) | 9.2 |
+    | 131,072 | 128 | 4.4 (4.4) | 4.6 (2.3) | 4.7 (1.2) | – | 4.6 |
+    | 128 | 1024 | 51.4 (51.4) | 86.8 (43.9) | 168.3 (49.2) | 297.8 (41.9) | 32.6 |
+    | 8,192 | 1024 | 57.5 (57.5) | 62.7 (33.0) | 123.3 (36.0) | 196.9 (29.8) | 31.1 |
+    | 10,000 | 1024 | 58.5 (58.5) | 63.6 (33.4) | 100.1 (33.1) | 184.0 (26.0) | 30.9 |
+
+    * A dash = the KV pool does not seat that many users at that length (the workflow skips the point). At 1 to 4 users the server drafts 7 tokens per step; at 5 to 8, 3 per step. Long prompts (8k tokens or more) that arrive while other users decode are prefilled in 2,048-token chunks, which keeps the other users' tokens flowing and raises that prompt's own TTFT.
+
+    ### `single-user-dflash2`, one user
+
+    | ISL | OSL | TTFT ms | TPOT ms | t/s/u | plain t/s/u |
+    |---|---|---|---|---|---|
+    | 128 | 128 | 135 | 16.2 | 58.5 | 32.3 |
+    | 1,024 | 128 | 182 | 16.3 | 56.8 | 31.3 |
+    | 2,048 | 128 | 300 | 16.9 | 52.4 | 30.7 |
+    | 4,096 | 128 | 597 | 18.4 | 43.8 | 28.8 |
+    | 8,192 | 128 | 1,184 | 20.0 | 34.4 | 25.9 |
+    | 16,384 | 128 | 2,436 | 19.5 | 26.1 | 21.2 |
+    | 32,768 | 128 | 5,077 | 18.4 | 17.3 | 15.1 |
+    | 65,536 | 128 | 11,109 | 18.7 | 9.5 | 9.2 |
+    | 131,072 | 128 | 26,006 | 17.2 | 4.5 | 4.6 |
+    | 128 | 1024 | 134 | 12.5 | 79.0 | 32.6 |
+    | 8,192 | 1024 | 1,182 | 11.2 | 80.9 | 31.1 |
+    | 10,000 | 1024 | 1,493 | 11.4 | 77.9 | 30.9 |
+
+    * Median of 3 runs per row; the run-to-run spread is at most 2.3% on TTFT, 2.0% on TPOT and 1.2% on t/s/u. (The plain column is unchanged from the published card.)
+
+    ### Code (SPEED-Bench `coding`, 80 prompts; greedy; answers end at EOS), t/s (tok/s per user); speed-up per user
+
+    | thinking | users | `batch8-dflash2` | `single-user-dflash2` | plain | speed-up |
+    |---|---|---|---|---|---|
+    | off | 1 | 84 (112) | 95 (119) | 35 (36) | 3.3× |
+    | off | 8 | 211 (59) | – | 111 (23) | 2.6× |
+    | on | 1 | 73 (76) | 80 (83) | – | – |
+    | on | 8 | 396 (55) | – | 218 (29) | 1.9× |
+
+
+    * Per-user speed = 1000 / mean time per output token (decode only); `t/s` = aggregate output tokens per second over the run, which includes prefill and the gaps between a user's requests. `thinking off` passes `"chat_template_kwargs": {"enable_thinking": false}`; `thinking on` is the served default (the harness's prompts), with answers capped at 4,096 tokens. Requests are greedy (`temperature` 0). Speed-up = per-user speed of the faster speculative profile over plain decode at the same user count.
+
+    ### Chat (SPEED-Bench `qa`, `roleplay`, `writing`, `humanities`, 80 prompts each; greedy), tok/s per user
+
+    | thinking | category | 1 user `batch8-dflash2` | 1 user `single-user-dflash2` | 8 users `batch8-dflash2` (t/s total) | code, same column |
+    |---|---|---|---|---|---|
+    | off | qa | 61 | 64 | 44 (344) | 112 / 119 / 59 |
+    | off | roleplay | 59 | 63 | 33 (248) | |
+    | off | writing | 60 | 64 | 49 (365) | |
+    | off | humanities | 64 | 65 | 42 (215) | |
+    | on | qa | 72 | 78 | 54 (421) | 76 / 83 / 55 |
+    | on | roleplay | 65 | 70 | 49 (373) | |
+    | on | writing | 67 | 73 | 52 (387) | |
+    | on | humanities | 63 | 67 | 49 (341) | |
+
+    * Per-user speed = 1000 / mean time per output token. Thinking on caps answers at 4,096 tokens. The drafter accepts fewer tokens on chat than on code: 3.3-3.7 tokens committed per verify step, against 4.8-5.0 for code, with thinking off at 1 user. The step itself costs the same (about 52-55 ms). Plain decode runs at about 31-33 tok/s per user at these lengths.
+
+    * The plain columns are the plain package's published measurements (2026-09-12).
