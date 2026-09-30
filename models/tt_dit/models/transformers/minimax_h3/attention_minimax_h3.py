@@ -202,8 +202,8 @@ class MiniMaxH3Attention(Module):
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
-        self.sdpa_fixed_offset = self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX") == "1"
-        self.sdpa_fixed_offset_value = float(os.environ.get("MINIMAX_H3_SDPA_FIXED_OFFSET", "0"))
+        self.sdpa_fixed_offset = False
+        self.sdpa_fixed_offset_value = 0.0
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
         self.sdpa_chunks_override: tuple[int, int] | None = None
         if self.use_ring:
