@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt_stl/cleanup.hpp>
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/distributed/utils.hpp"
 
+#include "ttnn/config.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -17,12 +21,15 @@
 
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ttnn {
 namespace {
 
 using ::testing::FloatEq;
+using ::testing::HasSubstr;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
@@ -488,6 +495,207 @@ TEST(TensorSerializationFlatbufferAlignmentTest, ShardsAreAlignedForPinnedMemory
     ASSERT_THAT(loaded_shards, SizeIs(kNumShards));
     for (size_t i = 0; i < kNumShards; i++) {
         EXPECT_THAT(loaded_shards[i].to_vector<float>(), Pointwise(FloatEq(), shards[i].to_vector<float>()));
+    }
+}
+
+// Write-side guards: `to_flatbuffer` writes shards that the topology labels as replicas once, so it has to check
+// the label against the data first. The tests below build host tensors straight from a `DistributedHostBuffer`
+// instead of going through `from_host_shards` or a mesh mapper, which both open the cluster to get a distributed
+// context, so they need no device.
+
+using Placement = ttnn::distributed::MeshMapperConfig::Placement;
+using Placements = ttsl::SmallVector<Placement>;
+constexpr auto kReplicate = ttnn::distributed::MeshMapperConfig::Replicate{};
+
+// Builds a float32 host tensor with `shard_data[i]` placed at `shard_coords[i]` in a `buffer_shape` host buffer,
+// labelled with `topology`. Each shard gets its own HostBuffer, so equal values never alias.
+Tensor make_host_tensor(
+    const MeshShape& buffer_shape,
+    const std::vector<MeshCoordinate>& shard_coords,
+    const std::vector<std::vector<float>>& shard_data,
+    const TensorTopology& topology) {
+    ASSERT_EQ(shard_coords.size(), shard_data.size()) << "test bug: one data vector per coordinate";
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    for (size_t i = 0; i < shard_coords.size(); ++i) {
+        buffer.emplace_shard(
+            shard_coords[i], [&data = shard_data[i]]() { return HostBuffer(std::vector<float>(data)); });
+    }
+    const auto shard_shape = ttnn::Shape{1, static_cast<uint32_t>(shard_data.front().size())};
+    return Tensor(host_tensor_from_buffer_with_topology(
+        std::move(buffer), get_tensor_spec(shard_shape, DataType::FLOAT32), topology));
+}
+
+std::vector<float> shard_values(const Tensor& tensor, const MeshCoordinate& coord) {
+    const auto shard = tensor.host_storage().buffer().get_shard(coord);
+    if (!shard.has_value()) {
+        ADD_FAILURE() << "no shard at " << coord;
+        return {};
+    }
+    const auto values = shard->view_as<float>();
+    return std::vector<float>(values.begin(), values.end());
+}
+
+// Runs `dump_tensor_flatbuffer` in LOCAL mode expecting it to be rejected, and checks that the rejection names
+// `diagnostic` and that no file was created.
+void expect_dump_rejected(const TemporaryFile& file, const Tensor& tensor, const std::string& diagnostic) {
+    try {
+        dump_tensor_flatbuffer(file.string(), tensor, DumpTensorMode::LOCAL);
+        FAIL() << "dump was accepted; expected a rejection mentioning: " << diagnostic;
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), HasSubstr(diagnostic));
+    }
+    EXPECT_FALSE(std::filesystem::exists(file.path())) << "a rejected dump must not leave a file behind";
+}
+
+// Two distinct shards under the collapsed 1-D Replicate label the default mappers produce. Before the byte compare
+// this dumped successfully and wrote the (0,0) shard for both coordinates, so loading the file lost (0,1).
+TEST(TensorSerializationFlatbufferGuardTest, MislabelledReplicateRejected) {
+    TemporaryFile test_file("mislabelled_replicate.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    Tensor tensor = make_host_tensor(
+        MeshShape(1, 2), coords, {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, TensorTopology(MeshShape(2), Placements{kReplicate}, coords));
+
+    expect_dump_rejected(test_file, tensor, "contents differ");
+}
+
+// A 2x2 tensor sharded along both axes and relabelled as if its columns were replicas. The dedup groups are the
+// rows, so (0,0) and (0,1) are compared and differ.
+TEST(TensorSerializationFlatbufferGuardTest, MislabelledPartialReplicateRejected) {
+    TemporaryFile test_file("mislabelled_partial_replicate.tensorbin");
+    const std::vector<MeshCoordinate> coords{
+        MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(1, 0), MeshCoordinate(1, 1)};
+    const std::vector<std::vector<float>> data{{0.0f, 0.0f}, {1.0f, 1.0f}, {2.0f, 2.0f}, {3.0f, 3.0f}};
+    const Placements true_label{ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}};
+    const Placements wrong_label{ttnn::distributed::MeshMapperConfig::Shard{1}, kReplicate};
+
+    // Control: with the label that describes the data the dump is accepted.
+    Tensor tensor = make_host_tensor(MeshShape(2, 2), coords, data, TensorTopology(MeshShape(2, 2), true_label, coords));
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+    EXPECT_TRUE(std::filesystem::exists(test_file.path()));
+    std::filesystem::remove(test_file.path());
+
+    tensor.update_tensor_topology(TensorTopology(MeshShape(2, 2), wrong_label, coords));
+    expect_dump_rejected(test_file, tensor, "contents differ");
+}
+
+// Replicas that really are identical still share one copy on disk, and the label survives the round-trip.
+TEST(TensorSerializationFlatbufferGuardTest, IdenticalReplicasStillDeduplicated) {
+    TemporaryFile test_file("identical_replicas.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    const std::vector<float> values{1.0f, 2.0f, 3.0f};
+    const TensorTopology topology(MeshShape(2), Placements{kReplicate}, coords);
+    Tensor tensor = make_host_tensor(MeshShape(1, 2), coords, {values, values}, topology);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+
+    const uint64_t one_shard_bytes = values.size() * sizeof(float);
+    EXPECT_EQ(std::filesystem::file_size(test_file.path()), read_data_region_offset(test_file.string()) + one_shard_bytes);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_topology(), topology);
+    for (const auto& coord : coords) {
+        EXPECT_THAT(shard_values(loaded_tensor, coord), Pointwise(FloatEq(), values));
+    }
+}
+
+// With the byte compare turned off, the mislabelled tensor is written the way it was before the check existed:
+// one copy, taken from the first replica, for the whole group.
+TEST(TensorSerializationFlatbufferGuardTest, ReplicaCheckOptOutWritesFirstReplica) {
+    const bool previous = ttnn::CONFIG.get<"verify_replicated_shards_on_dump">();
+    ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(false);
+    auto restore = ttsl::make_cleanup([previous]() { ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(previous); });
+
+    TemporaryFile test_file("replica_check_opt_out.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    const std::vector<float> first{1.0f, 2.0f, 3.0f};
+    Tensor tensor = make_host_tensor(
+        MeshShape(1, 2), coords, {first, {4.0f, 5.0f, 6.0f}}, TensorTopology(MeshShape(2), Placements{kReplicate}, coords));
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+
+    EXPECT_EQ(std::filesystem::file_size(test_file.path()), read_data_region_offset(test_file.string()) + first.size() * sizeof(float));
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    for (const auto& coord : coords) {
+        EXPECT_THAT(shard_values(loaded_tensor, coord), Pointwise(FloatEq(), first));
+    }
+}
+
+// The size check is not gated by the opt-out: replicas of different sizes cannot share a record.
+TEST(TensorSerializationFlatbufferGuardTest, ReplicaSizeMismatchRejectedEvenWhenOptedOut) {
+    const bool previous = ttnn::CONFIG.get<"verify_replicated_shards_on_dump">();
+    ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(false);
+    auto restore = ttsl::make_cleanup([previous]() { ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(previous); });
+
+    TemporaryFile test_file("replica_size_mismatch.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    Tensor tensor = make_host_tensor(
+        MeshShape(1, 2), coords, {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f}}, TensorTopology(MeshShape(2), Placements{kReplicate}, coords));
+
+    expect_dump_rejected(test_file, tensor, "sizes differ");
+}
+
+// The label lists (0,1) but only (0,0) holds a shard, as for a single shard taken out of a distributed tensor.
+// Before the guard this dumped one shard under a two-coordinate label.
+TEST(TensorSerializationFlatbufferGuardTest, LabelCoordWithoutShardRejected) {
+    TemporaryFile test_file("label_coord_without_shard.tensorbin");
+    const std::vector<MeshCoordinate> label_coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    Tensor tensor = make_host_tensor(
+        MeshShape(1, 2),
+        {MeshCoordinate(0, 0)},
+        {{1.0f, 2.0f, 3.0f}},
+        TensorTopology(MeshShape(2), Placements{ttnn::distributed::MeshMapperConfig::Shard{1}}, label_coords));
+
+    expect_dump_rejected(test_file, tensor, "has no shard there");
+}
+
+// Both coordinates hold a shard but the label only covers (0,0). Before the guard the (0,1) shard was silently
+// left out of the file.
+TEST(TensorSerializationFlatbufferGuardTest, ShardOutsideLabelRejected) {
+    TemporaryFile test_file("shard_outside_label.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1)};
+    Tensor tensor = make_host_tensor(
+        MeshShape(1, 2),
+        coords,
+        {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}},
+        TensorTopology(MeshShape(1), Placements{kReplicate}, {MeshCoordinate(0, 0)}));
+
+    expect_dump_rejected(test_file, tensor, "does not cover");
+}
+
+TEST(TensorSerializationFlatbufferGuardTest, ShardedRoundtripPreservesTopology1D) {
+    TemporaryFile test_file("sharded_1d_topology.tensorbin");
+    const std::vector<MeshCoordinate> coords{MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(0, 2)};
+    const std::vector<std::vector<float>> data{{1.0f, 2.0f}, {3.0f, 4.0f}, {5.0f, 6.0f}};
+    const TensorTopology topology(MeshShape(3), Placements{ttnn::distributed::MeshMapperConfig::Shard{1}}, coords);
+    Tensor tensor = make_host_tensor(MeshShape(1, 3), coords, data, topology);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_EQ(loaded_tensor.tensor_topology(), topology);
+    for (size_t i = 0; i < coords.size(); ++i) {
+        EXPECT_THAT(shard_values(loaded_tensor, coords[i]), Pointwise(FloatEq(), data[i]));
+    }
+}
+
+TEST(TensorSerializationFlatbufferGuardTest, ShardedRoundtripPreservesTopology2D) {
+    TemporaryFile test_file("sharded_2d_topology.tensorbin");
+    const std::vector<MeshCoordinate> coords{
+        MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(1, 0), MeshCoordinate(1, 1)};
+    const std::vector<std::vector<float>> data{{0.0f, 1.0f}, {2.0f, 3.0f}, {4.0f, 5.0f}, {6.0f, 7.0f}};
+    const TensorTopology topology(
+        MeshShape(2, 2),
+        Placements{ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
+        coords);
+    Tensor tensor = make_host_tensor(MeshShape(2, 2), coords, data, topology);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_EQ(loaded_tensor.tensor_topology(), topology);
+    for (size_t i = 0; i < coords.size(); ++i) {
+        EXPECT_THAT(shard_values(loaded_tensor, coords[i]), Pointwise(FloatEq(), data[i]));
     }
 }
 

@@ -19,6 +19,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/config.hpp"
 
 #include "mesh_shape_generated.h"
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
@@ -26,8 +27,12 @@
 
 #include <vector>
 #include <cstdint>
+#include <cstring>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <string>
 #include <unordered_map>
-#include <limits>
 
 namespace ttnn {
 namespace {
@@ -164,6 +169,13 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
     return tt::tt_metal::TensorTopology(dist_shape, placements, mesh_coords);
 }
 
+// Renders the topology for a diagnostic. Only evaluated on the failure path.
+std::string describe(const tt::tt_metal::TensorTopology& topology) {
+    std::ostringstream os;
+    os << topology;
+    return os.str();
+}
+
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
@@ -174,31 +186,65 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
 
     const auto& host_storage = tensor.host_storage();
+    const auto& distributed_buffer = host_storage.buffer();
+    const auto& topology = tensor.tensor_topology();
 
     // Deduplicate replicated shards: two shards are duplicates if their coordinates differ only
     // along Replicate dimensions. The deduplication key is built from coordinates at sharded
     // dimensions only.
-    const auto& placements = tensor.tensor_topology().placements();
-    const auto& mesh_shape = tensor.tensor_topology().distribution_shape();
+    const auto& placements = topology.placements();
+    const auto& mesh_shape = topology.distribution_shape();
     size_t unique_keys = 1;
     for (size_t dim = 0; dim < placements.size(); ++dim) {
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
             unique_keys *= mesh_shape[dim];
         }
     }
-    std::vector<uint64_t> dedup_key_to_offset(unique_keys, std::numeric_limits<uint64_t>::max());
+
+    // The topology is a label, and the file trusts it: shards it calls replicas of each other are written once and
+    // every record in the group points at that one copy. Device ops relabel their outputs, so the label can be wrong,
+    // and a wrong Replicate would drop a shard silently. Each group therefore remembers the buffer that stands for
+    // it, and every later member is compared against that buffer before it is folded in.
+    struct DedupGroup {
+        size_t buffer_index = 0;  // Index into `buffers` of the copy written for this group.
+        tt::tt_metal::distributed::MeshCoordinate first_coord;  // Where that copy came from, for diagnostics.
+    };
+    std::vector<std::optional<DedupGroup>> dedup_groups(unique_keys);
+    const bool verify_replicas = ttnn::CONFIG.get<"verify_replicated_shards_on_dump">();
 
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     shards_vector.reserve(mesh_shape.mesh_size());
-    // Used to deduplicate buffer addresses for replicated tensor data.
-    std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
+    // Two shards backed by the same HostBuffer object hold the same bytes by construction (the fully replicated
+    // mapper path aliases one buffer), so they share one copy without a compare, whatever the label says.
+    std::unordered_map<const std::byte*, size_t> buffer_to_index;
 
-    const auto& topology_mesh_coords = tensor.tensor_topology().mesh_coords();
+    const auto& topology_mesh_coords = topology.mesh_coords();
     TT_FATAL(
         topology_mesh_coords.size() == mesh_shape.mesh_size(),
         "Topology mesh coords size {} should match distribution shape size {}",
         topology_mesh_coords.size(),
         mesh_shape.mesh_size());
+
+    // Every populated local shard has to be reachable through the label, or it is left out of the file. Remote
+    // coordinates (multi-host LOCAL dumps) hold no data on this host and are exempt.
+    const std::set<tt::tt_metal::distributed::MeshCoordinate> labelled_coords(
+        topology_mesh_coords.begin(), topology_mesh_coords.end());
+    size_t num_populated_local_shards = 0;
+    for (const auto& shard_coord : distributed_buffer.shard_coords()) {
+        if (!distributed_buffer.is_local(shard_coord) || !distributed_buffer.get_shard(shard_coord).has_value()) {
+            continue;
+        }
+        ++num_populated_local_shards;
+        TT_FATAL(
+            labelled_coords.contains(shard_coord),
+            "Host storage holds a shard at mesh coordinate {} that the tensor topology does not cover ({}; host "
+            "storage shape {}). The topology label does not describe the data, so this shard would be left out of "
+            "the file. Relabel the tensor with update_tensor_topology() so the label matches how the shards were "
+            "produced before dumping it.",
+            shard_coord,
+            describe(topology),
+            distributed_buffer.shape());
+    }
 
     // Iterate over distribution coordinates and map to physical coordinates via the topology.
     uint64_t next_buffer_offset = 0;
@@ -206,54 +252,103 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
         const auto& coord = topology_mesh_coords[dist_idx++];
 
-        if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
-            const auto* buffer_address = buffer->view_bytes().data();
-            const std::size_t buffer_size = buffer->view_bytes().size();
+        const auto buffer = distributed_buffer.get_shard(coord);
+        if (!buffer.has_value()) {
+            // A labelled coordinate without a shard is only legitimate when the shard lives on another host.
+            TT_FATAL(
+                !distributed_buffer.is_local(coord),
+                "Tensor topology lists mesh coordinate {} but the host storage has no shard there ({}; host storage "
+                "shape {} with {} populated shard(s)). The topology label describes data that does not exist, "
+                "typically because the tensor is a single shard taken out of a distributed tensor "
+                "(get_device_tensors(...)[i].cpu()) or a host tensor whose coordinates were never all populated. "
+                "Relabel the tensor with update_tensor_topology() so the label matches how the shards were produced "
+                "before dumping it.",
+                coord,
+                describe(topology),
+                distributed_buffer.shape(),
+                num_populated_local_shards);
+            continue;
+        }
 
-            size_t key = 0;
-            for (size_t dim = 0; dim < placements.size(); ++dim) {
-                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-                    key = key * mesh_shape[dim] + dist_coord[dim];
+        const auto* buffer_address = buffer->view_bytes().data();
+        const std::size_t buffer_size = buffer->view_bytes().size();
+
+        size_t key = 0;
+        for (size_t dim = 0; dim < placements.size(); ++dim) {
+            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+                key = key * mesh_shape[dim] + dist_coord[dim];
+            }
+        }
+
+        std::optional<size_t> buffer_index;
+        if (auto it = buffer_to_index.find(buffer_address); it != buffer_to_index.end()) {
+            buffer_index = it->second;
+        }
+        if (auto& group = dedup_groups[key]; group.has_value()) {
+            if (buffer_index != group->buffer_index) {
+                // A distinct buffer that the label calls a replica of the group's copy. Both records will point at
+                // that copy, so the bytes have to match: the size always, the contents unless opted out.
+                const auto group_bytes = buffers[group->buffer_index].buffer.view_bytes();
+                TT_FATAL(
+                    group_bytes.size() == buffer_size,
+                    "Tensor topology labels mesh coordinates {} and {} as replicas of each other ({}; host storage "
+                    "shape {}), but their shard sizes differ ({} vs {} bytes). The topology label does not describe "
+                    "the data. Relabel the tensor with update_tensor_topology() so the label matches how the shards "
+                    "were produced.",
+                    group->first_coord,
+                    coord,
+                    describe(topology),
+                    distributed_buffer.shape(),
+                    group_bytes.size(),
+                    buffer_size);
+                if (verify_replicas) {
+                    TT_FATAL(
+                        std::memcmp(group_bytes.data(), buffer_address, buffer_size) == 0,
+                        "Tensor topology labels mesh coordinates {} and {} as replicas of each other ({}; host "
+                        "storage shape {}), but their shard contents differ. The topology label does not describe "
+                        "the data, and writing one copy for both would lose the shard at {}. Relabel the tensor with "
+                        "update_tensor_topology() so the label matches how the shards were produced; if the replicas "
+                        "legitimately differ, set verify_replicated_shards_on_dump=false via "
+                        "TTNN_CONFIG_OVERRIDES='{{\"verify_replicated_shards_on_dump\": false}}' to write only the "
+                        "first replica.",
+                        group->first_coord,
+                        coord,
+                        describe(topology),
+                        distributed_buffer.shape(),
+                        coord);
                 }
             }
-
-            const uint64_t shard_buffer_offset = [&]() -> uint64_t {
-                if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
-                    // Shards whose coordinates differ only along replicated dimensions are identical.
-                    return dedup_key_to_offset[key];
-                }
-                if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
-                    // If two shards share the same buffer, they are identical.
-                    return it->second;
-                }
+            buffer_index = group->buffer_index;
+        } else {
+            if (!buffer_index.has_value()) {
                 // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
                 // file directly. The padded position is what gets recorded, so readers never see the gap.
                 const uint64_t aligned_offset = tt::align(next_buffer_offset, kTensorDataAlignment);
                 next_buffer_offset = aligned_offset + buffer_size;
                 buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
-                return aligned_offset;
-            }();
-
-            buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
-            dedup_key_to_offset[key] = shard_buffer_offset;
-
-            auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
-            auto mesh_coord_offset = to_flatbuffer(coord, builder);
-
-            auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
-                builder,
-                ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
-                builder.CreateStruct(inline_storage).Union(),
-                mesh_coord_offset);
-
-            shards_vector.push_back(shard_offset);
+                buffer_index = buffers.size() - 1;
+            }
+            group = DedupGroup{.buffer_index = *buffer_index, .first_coord = coord};
         }
+        buffer_to_index.emplace(buffer_address, *buffer_index);
+        const uint64_t shard_buffer_offset = buffers[*buffer_index].offset;
+
+        auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
+        auto mesh_coord_offset = to_flatbuffer(coord, builder);
+
+        auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
+            builder,
+            ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
+            builder.CreateStruct(inline_storage).Union(),
+            mesh_coord_offset);
+
+        shards_vector.push_back(shard_offset);
     }
     auto shards = builder.CreateVector(shards_vector);
 
-    auto mesh_shape_offset = to_flatbuffer(host_storage.buffer().shape(), builder);
+    auto mesh_shape_offset = to_flatbuffer(distributed_buffer.shape(), builder);
 
-    auto topology_offset = to_flatbuffer(tensor.tensor_topology(), builder);
+    auto topology_offset = to_flatbuffer(topology, builder);
 
     auto tensor_offset =
         ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);

@@ -48,6 +48,13 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     }
 
+    // Serialize before opening the output file, so that a tensor `to_flatbuffer` rejects leaves no file behind: an
+    // empty file at the target path would otherwise replace the previous dump and read back as corrupt.
+    std::vector<SerializedTensorBuffer> buffers;
+    flatbuffers::FlatBufferBuilder builder;
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+    builder.Finish(tensor_offset);
+
     FILE* output_file = fopen(file_name.c_str(), "wb");
     TT_FATAL(
         output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
@@ -56,11 +63,6 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
             log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
         }
     });
-
-    std::vector<SerializedTensorBuffer> buffers;
-    flatbuffers::FlatBufferBuilder builder;
-    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
-    builder.Finish(tensor_offset);
 
     write_tensor_file(output_file, file_name, builder, buffers);
 
