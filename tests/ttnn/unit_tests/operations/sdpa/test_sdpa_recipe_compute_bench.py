@@ -107,6 +107,9 @@ def build(device, inputs, variant, q_tiles, k_tiles, jobs, chunks):
 def test_sdpa_recipe_compute_throughput(device, q_chunk, k_chunk, variant, record_property):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
+    only_variant = os.getenv("SDPA_BENCH_VARIANT")
+    if only_variant and variant not in only_variant.split(","):
+        pytest.skip("variant filtered")
     only = os.getenv("SDPA_BENCH_QK")
     if only and f"{q_chunk}x{k_chunk}" not in only.split(","):
         pytest.skip("geometry filtered")
