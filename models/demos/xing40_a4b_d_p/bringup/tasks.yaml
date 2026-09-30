@@ -265,6 +265,14 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T06:10:28'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_norm.py: 28e81c10f7985f0f48016b6f7e1b2aaebce203681b6f80775d4d74c2e6cc9951
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.03
   title: 'dense block with steps 1-3 on device (last: attn_norm)'
   step: implement
