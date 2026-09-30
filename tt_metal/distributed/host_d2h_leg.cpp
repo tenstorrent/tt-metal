@@ -299,7 +299,7 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
     }
 
     // Disarm each page as it is freed -- this is the point the transport is done with it.
-    // host_uva_frame.hpp makes a zero guard "not armed", so a reused slot cannot read fresh.
+    // uva_frame.h makes a zero guard "not armed", so a reused slot cannot read fresh.
     uint32_t disarm_off = im.core[core].read_ptr;
     for (uint32_t i = 0; i < pages; ++i) {
         auto* const t = reinterpret_cast<FrameTrailer*>(
