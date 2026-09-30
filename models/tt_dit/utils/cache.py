@@ -324,7 +324,11 @@ def miss_reason(cache_dir: str | Path) -> str:
         # The capture pass never publishes, so its misses say nothing about the next run's hits.
         return f"kernel capture-only pass, cache not written to '{cache_dir}'"
     if not (Path(cache_dir) / CACHE_DICT_FILE).is_file():
-        return f"no cache at '{cache_dir}' yet, writing it"
+        reason = f"no cache at '{cache_dir}' yet, writing it"
+        if Path("/tmp") in Path(cache_dir).resolve().parents:
+            # systemd-tmpfiles empties /tmp at boot, so a reboot silently turns a warm cache cold.
+            reason += "; /tmp is wiped at every boot, keep TT_DIT_CACHE_DIR on persistent storage"
+        return reason
     return f"cache at '{cache_dir}' rejected by the manifest check, rebuilding"
 
 

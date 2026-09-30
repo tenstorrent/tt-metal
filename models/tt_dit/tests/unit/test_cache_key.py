@@ -256,3 +256,10 @@ def test_a_miss_says_whether_the_cache_was_absent_or_rejected(checkpoint, monkey
     (cache_dir / "weight.tensorbin").write_bytes(b"\x00" * 8)
 
     assert "rejected" in cache.miss_reason(cache_dir)
+
+
+def test_a_miss_under_tmp_warns_that_reboots_wipe_it(monkeypatch):
+    monkeypatch.delenv("TT_METAL_KERNEL_CAPTURE_ONLY", raising=False)
+
+    assert "wiped at every boot" in cache.miss_reason("/tmp/tt-dit-cache-test/absent/key")
+    assert "wiped" not in cache.miss_reason("/var/tmp/tt-dit-cache-test/absent/key")
