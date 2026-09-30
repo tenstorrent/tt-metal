@@ -449,6 +449,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
+    inc/api/compute/eltwise_unary/selu_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
