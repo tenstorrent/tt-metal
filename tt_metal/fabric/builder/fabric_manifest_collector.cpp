@@ -12,9 +12,11 @@
 #include <array>
 #include <numeric>
 #include <optional>
+#include <utility>
 #include <variant>
 
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
@@ -513,6 +515,75 @@ manifest::ReceiverChannel collect_receiver_channel(
     return receiver;
 }
 
+// The edges receiver VC `vc` forwards on, ordered by slot. The kernel keys each edge by its compact slot
+// (EDGE_<slot + 1>) and takes its teardown semaphore at its dense index: its rank among the VC's edges,
+// after all of VC0's edges for VC1.
+std::vector<manifest::DownstreamEdge> collect_downstream_edges(
+    const ChannelCollectionContext& ctx, uint32_t vc, bool receiver_serviced) {
+    const auto& erisc_builder = ctx.erisc_builder;
+    const auto& config = erisc_builder.config;
+    const auto& adapter = *erisc_builder.receiver_channel_to_downstream_adapter;
+
+    const auto& connections = adapter.get_downstream_connections(vc);
+    check_named_arg(
+        ctx.named_ct_args_per_risc,
+        fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc),
+        static_cast<uint32_t>(connections.size()));
+    check_named_arg(ctx.named_ct_args_per_risc, "NUM_DOWNSTREAM_CHANNELS", static_cast<uint32_t>(config.num_fwd_paths));
+
+    std::vector<std::pair<uint32_t, const DownstreamConnection*>> by_slot;
+    for (const auto& connection : connections) {
+        by_slot.emplace_back(adapter.get_downstream_slot(connection.direction), &connection);
+    }
+    std::ranges::sort(by_slot, {}, &std::pair<uint32_t, const DownstreamConnection*>::first);
+
+    const size_t teardown_base = vc == 1 ? adapter.get_downstream_connections(0).size() : 0;
+    std::vector<manifest::DownstreamEdge> edges;
+    for (size_t dense = 0; dense < by_slot.size(); ++dense) {
+        const auto [slot, connection] = by_slot[dense];
+        // The kernel's counts come from the connections and its slots from the mask, so a repeated slot
+        // would make them disagree.
+        TT_FATAL(
+            dense == 0 || by_slot[dense - 1].first != slot,
+            "Fabric manifest: VC{} has two downstream edges in slot {}",
+            vc,
+            slot);
+        TT_FATAL(
+            connection->landing_vc == vc,
+            "Fabric manifest: a VC{} downstream edge lands on VC{}",
+            vc,
+            connection->landing_vc);
+
+        const size_t teardown_index = teardown_base + dense;
+        TT_FATAL(
+            teardown_index < config.num_fwd_paths,
+            "Fabric manifest: VC{} edge {} takes teardown semaphore {}, but the kernel has {}",
+            vc,
+            slot + 1,
+            teardown_index,
+            config.num_fwd_paths);
+
+        manifest::DownstreamEdge edge{
+            .edge = slot + 1,
+            .target = {.direction = connection->direction},
+            .landing_vc = connection->landing_vc,
+            .landing_channel = connection->landing_channel,
+            .free_slots = assigned_stream(
+                ctx, fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, slot + 1)),
+            .teardown_sem = l1_region(
+                config.receiver_channels_downstream_teardown_semaphore_address.at(teardown_index),
+                FabricEriscDatamoverConfig::field_size,
+                "u32",
+                ctx.addresses_to_clear),
+        };
+        if (receiver_serviced) {
+            require_allocated("receiver", vc, 0, fmt::format("edge {} free_slots", edge.edge).c_str(), edge.free_slots);
+        }
+        edges.push_back(std::move(edge));
+    }
+    return edges;
+}
+
 // Every sender and receiver channel in the router's shape, each indexed [vc][channel].
 manifest::Channels collect_channels(
     const FabricEriscDatamoverBuilder& erisc_builder,
@@ -569,6 +640,18 @@ manifest::Channels collect_channels(
             channels.receivers[vc].push_back(collect_receiver_channel(
                 ctx, {.vc = vc, .channel = channel, .compact = vc_shape.flat_receiver_id(vc, channel)}));
         }
+
+        // The adapter keys edges by inbound VC, so they belong to the VC's single receiver channel.
+        if (erisc_builder.receiver_channel_to_downstream_adapter->get_downstream_connections(vc).empty()) {
+            continue;
+        }
+        TT_FATAL(
+            channels.receivers[vc].size() == 1,
+            "Fabric manifest: VC{} has downstream edges, but {} receiver channels",
+            vc,
+            channels.receivers[vc].size());
+        auto& receiver = channels.receivers[vc].front();
+        receiver.downstream_edges = collect_downstream_edges(ctx, vc, !receiver.serviced_by.empty());
     }
     return channels;
 }

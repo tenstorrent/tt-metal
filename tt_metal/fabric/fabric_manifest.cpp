@@ -413,8 +413,38 @@ json senders_json(const manifest::Router& router, const ControlPlane& control_pl
     return out;
 }
 
+// A sender channel's path, e.g. "M0/C7/E0/senders/vc0/ch1".
+std::string sender_channel_path(const std::string& router, uint32_t vc, uint32_t channel) {
+    return fmt::format("{}/senders/vc{}/ch{}", router, vc, channel);
+}
+
+// Keyed edge<N>, the kernel's EDGE_<N>. The target router and landing channel are the downstream_channel path.
+json downstream_edges_json(
+    const std::vector<manifest::DownstreamEdge>& edges,
+    const ControlPlane& control_plane,
+    FabricNodeId node,
+    chan_id_t chan) {
+    json out = json::object();
+    for (const auto& edge : edges) {
+        json entry;
+        entry["downstream_channel"] = sender_channel_path(
+            sibling_router_path(control_plane, node, chan, edge.target.direction),
+            edge.landing_vc,
+            edge.landing_channel);
+        entry["free_slots"] = stream_ref_json(edge.free_slots);
+        entry["teardown_sem"] = l1_region_json(edge.teardown_sem);
+        out[fmt::format("edge{}", edge.edge)] = std::move(entry);
+    }
+    return out;
+}
+
 // A receiver's producer is always the peer router, so it is the link's peer.
-json receiver_channel_json(const manifest::ReceiverChannel& receiver, const std::optional<std::string>& peer_path) {
+json receiver_channel_json(
+    const manifest::ReceiverChannel& receiver,
+    const std::optional<std::string>& peer_path,
+    const ControlPlane& control_plane,
+    FabricNodeId node,
+    chan_id_t chan) {
     json out;
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["producer"] = peer_path.has_value() ? json(*peer_path) : json(nullptr);
@@ -427,11 +457,16 @@ json receiver_channel_json(const manifest::ReceiverChannel& receiver, const std:
     if (receiver.free_slots.has_value()) {
         out["free_slots"] = stream_ref_json(*receiver.free_slots);
     }
+    out["downstream_edges"] = downstream_edges_json(receiver.downstream_edges, control_plane, node, chan);
     return out;
 }
 
 // Keyed like senders_json. VCs this router has no receivers on are left out.
-json receivers_json(const manifest::Router& router, const std::optional<std::string>& peer_path) {
+json receivers_json(
+    const manifest::Router& router,
+    const std::optional<std::string>& peer_path,
+    const ControlPlane& control_plane,
+    FabricNodeId node) {
     json out = json::object();
     for (size_t vc = 0; vc < router.channels.receivers.size(); ++vc) {
         const auto& channels = router.channels.receivers[vc];
@@ -440,7 +475,8 @@ json receivers_json(const manifest::Router& router, const std::optional<std::str
         }
         json vc_json;
         for (size_t channel = 0; channel < channels.size(); ++channel) {
-            vc_json[fmt::format("ch{}", channel)] = receiver_channel_json(channels[channel], peer_path);
+            vc_json[fmt::format("ch{}", channel)] =
+                receiver_channel_json(channels[channel], peer_path, control_plane, node, router.identity.eth_chan);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
     }
@@ -482,8 +518,58 @@ json make_router_json(
     out["shape"] = router_shape_json(router.shape);
     out["credit_counters"] = credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = senders_json(router, control_plane, node);
-    out["channels"]["receivers"] = receivers_json(router, peer_path);
+    out["channels"]["receivers"] = receivers_json(router, peer_path, control_plane, node);
     return out;
+}
+
+// Every sender channel a sibling router feeds is exactly one downstream edge of that router, and every
+// downstream edge lands on a sender channel fed by the router it leaves.
+void check_edges_match_producers(const json& routers, FabricNodeId node) {
+    std::map<std::string, std::string> fed_by;
+    std::map<std::string, std::string> edges_into;
+    for (const auto& [key, router] : routers.items()) {
+        const auto path = router_path(node, key);
+        const auto& channels = router.at("channels");
+        for (const auto& [vc_key, vc_channels] : channels.at("senders").items()) {
+            for (const auto& [ch_key, sender] : vc_channels.items()) {
+                const auto& producer = sender.at("producer");
+                if (producer.is_string() && producer != "worker") {
+                    fed_by[fmt::format("{}/senders/{}/{}", path, vc_key, ch_key)] = producer.get<std::string>();
+                }
+            }
+        }
+        for (const auto& [vc_key, vc_channels] : channels.at("receivers").items()) {
+            for (const auto& [ch_key, receiver] : vc_channels.items()) {
+                for (const auto& [edge_key, edge] : receiver.at("downstream_edges").items()) {
+                    const auto target = edge.at("downstream_channel").get<std::string>();
+                    const auto [it, inserted] = edges_into.emplace(target, path);
+                    TT_FATAL(
+                        inserted,
+                        "Fabric manifest: {} and {} both have a downstream edge into {}",
+                        it->second,
+                        path,
+                        target);
+                }
+            }
+        }
+    }
+
+    for (const auto& [target, source] : edges_into) {
+        const auto it = fed_by.find(target);
+        TT_FATAL(
+            it != fed_by.end() && it->second == source,
+            "Fabric manifest: {} has a downstream edge into {}, but that channel's producer is {}",
+            source,
+            target,
+            it != fed_by.end() ? it->second : "not a sibling router");
+    }
+    for (const auto& [channel, producer] : fed_by) {
+        TT_FATAL(
+            edges_into.contains(channel),
+            "Fabric manifest: {} is fed by {}, but no downstream edge of that router lands on it",
+            channel,
+            producer);
+    }
 }
 
 // ============ Chip and mesh ============
@@ -533,6 +619,7 @@ json make_chip_routers_json(
         "Fabric manifest: {} has {} collected routers on channels that are not active fabric routers",
         node,
         collected.size());
+    check_edges_match_producers(routers, node);
     return routers;
 }
 

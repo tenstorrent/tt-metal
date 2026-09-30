@@ -36,6 +36,14 @@ struct SenderWorkerAdapterSpec {
     eth_chan_directions edm_direction = eth_chan_directions::EAST;
 };
 
+// One downstream connection of an inbound VC: the router it feeds and the sender channel it lands on there.
+struct DownstreamConnection {
+    eth_chan_directions direction = eth_chan_directions::EAST;  // the downstream router's
+    tt::tt_metal::CoreCoord noc_xy;
+    uint32_t landing_vc = 0;
+    uint32_t landing_channel = 0;  // VC-relative, on the downstream router
+};
+
 /*
  * Base class for channel connection writer adapters.
  * These adapters are used during the fabric build phase and hold information about the connection between
@@ -52,10 +60,14 @@ struct SenderWorkerAdapterSpec {
 class ChannelConnectionWriterAdapter {
 public:
     // Adds downstream noc x/y
+    // `sender_channel_idx` is the downstream sender's compact index, and `downstream_vc_idx` and
+    // `downstream_vc_channel_idx` the same channel as (VC, VC-relative channel).
     virtual void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
+        uint32_t downstream_vc_idx,
+        uint32_t downstream_vc_channel_idx,
         eth_chan_directions downstream_direction,
         tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
@@ -75,6 +87,12 @@ public:
 
     // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
     virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
+
+    // Every downstream connection of an inbound VC, in the order they were added.
+    virtual const std::vector<DownstreamConnection>& get_downstream_connections(uint32_t vc_idx) const = 0;
+
+    // The compact slot (the kernel's EDGE_<slot + 1>) a connection to `downstream_direction` occupies.
+    virtual uint32_t get_downstream_slot(eth_chan_directions downstream_direction) const = 0;
 
 protected:
     ~ChannelConnectionWriterAdapter() = default;
@@ -103,6 +121,8 @@ public:
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
+        uint32_t downstream_vc_idx,
+        uint32_t downstream_vc_channel_idx,
         eth_chan_directions downstream_direction,
         tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
@@ -129,6 +149,12 @@ public:
 
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
 
+    const std::vector<DownstreamConnection>& get_downstream_connections(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx);
+    }
+
+    uint32_t get_downstream_slot(eth_chan_directions downstream_direction) const override;
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
@@ -138,9 +164,8 @@ private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
     uint32_t encode_noc_ord_for_2d(
-        const std::array<
-            std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>,
-            builder_config::num_max_receiver_channels>& downstream_edms_connected_by_vc,
+        const std::array<std::vector<DownstreamConnection>, builder_config::num_max_receiver_channels>&
+            downstream_edms_connected_by_vc,
         uint32_t vc_idx,
         const std::function<uint32_t(tt::tt_metal::CoreCoord)>& get_noc_ord) const;
 
@@ -149,7 +174,7 @@ private:
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>, builder_config::num_max_receiver_channels>
+    std::array<std::vector<DownstreamConnection>, builder_config::num_max_receiver_channels>
         downstream_edms_connected_by_vc = {};
 
     // holds the number of buffer slots per downstream sender channel
