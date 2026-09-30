@@ -47,13 +47,18 @@ fix: |
 perf: |
   Role: perf. Make one performance change to $model and keep it correct:
   $details
-  The gate re-runs an accuracy rung and the warm profile; it passes only if every accuracy threshold still holds and
-  the measured time drops below its threshold. Keep the previous behaviour selectable (a named setting or an env var,
-  recorded in the profile's settings) so the two can be compared. Do not change thresholds, goldens or frozen tests.
-  Measure only the e2e chunk time and the changed section's time, before and after, with the plain profile
+  Keep the previous behaviour selectable (a named setting or an env var, recorded in the profile's settings): the
+  orchestrator measures the change on and off with it. Do not change thresholds, goldens or frozen tests.
+  Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
+  the gate below, in gate order, each once. If one fails and the details above give no way around it, stop at once:
+  do not profile, do not try settings the details do not name; append the failing metric(s) with their limits (the
+  test's `FAIL <metric>: ...` lines) to `$breadcrumbs` and your final summary, and exit. Never profile a change that
+  fails accuracy (testing/profile.py refuses while this task's frozen test has failed). Only when they all pass may
+  you profile, to tune: only the e2e chunk time and the changed section's time, with the plain profile
   (test_profile.py without BRINGUP_PROFILE_OPS; a few minutes). Never profile per op over the whole model: per-op mode
-  runs on the representative layers only (BRINGUP_PROFILE_LAYERS picks others) and only when the section time
-  cannot explain a result.
+  runs on the representative layers only (BRINGUP_PROFILE_LAYERS picks others) and only when the section time cannot
+  explain a result. Do not run the whole gate: when you exit, the orchestrator runs the frozen tests, the ladder and
+  one plain profile with the change on and off, and the owner decides from that table whether it is applied.
 optests: |
   Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
   distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real

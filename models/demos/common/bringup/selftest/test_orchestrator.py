@@ -252,7 +252,10 @@ def test_opportunity_list_does_not_stop_when_the_picks_are_in(orch):
         ],
         {},
     )
-    assert o.run() == DONE and o.led.status("P.1") == "PASS"
+    # X.2 does not stop for picks; the pick itself (F57) runs its agent and then waits for the owner's decision
+    assert o.run() == HUMAN and o.led.status("X.2") == "PASS"
+    assert orch.calls() == ["P.1.perf.1.md bringup-engineer"]
+    assert "apply P.1 or not" in o.led.state()["P.1"]["waiting"]
 
 
 def test_full_model_gates_skip_the_precompile_pass():

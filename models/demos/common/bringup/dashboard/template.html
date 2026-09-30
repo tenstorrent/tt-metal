@@ -315,9 +315,10 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 const STATUS = {
   PASS:{c:"--good", i:"✓", l:"PASS"}, FAIL:{c:"--crit", i:"✕", l:"FAIL"}, HANG:{c:"--crit", i:"⧗", l:"HANG"},
   RUNNING:{c:"--warn", i:"◐", l:"RUNNING"}, TODO:{c:"--muted", i:"○", l:"TODO"}, BLOCKED:{c:"--serious", i:"!", l:"BLOCKED"},
-  STOPPED:{c:"--serious", i:"■", l:"STOPPED"}, DEFERRED:{c:"--accent", i:"↷", l:"DEFERRED"}
+  STOPPED:{c:"--serious", i:"■", l:"STOPPED"}, DEFERRED:{c:"--accent", i:"↷", l:"DEFERRED"},
+  REJECTED:{c:"--muted", i:"⊘", l:"REJECTED"}
 };
-const DONE = s => s === "PASS" || s === "DEFERRED";
+const DONE = s => s === "PASS" || s === "DEFERRED" || s === "REJECTED";
 const STEP_NAMES = {reference:"Reference (CPU) and HF parity", goldens:"Goldens", box:"Box", plan:"Plan (approved by a person)",
   implement:"Implement: components and swap order", integrate:"Integrate: ladder on device", contract:"Serving contract",
   perf:"Performance review", framework:"Framework"};
@@ -361,7 +362,7 @@ function header(){
   D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
   $("#passn").textContent = `${counts.PASS || 0}/${n}`;
   $("#passof").textContent = "gates passed";
-  const keys = ["PASS","DEFERRED","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
+  const keys = ["PASS","DEFERRED","REJECTED","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
   $("#meter").innerHTML = keys.map(k => `<span style="width:${100*counts[k]/n}%;background:var(${STATUS[k].c})" title="${k}: ${counts[k]}"></span>`).join("");
   $("#meter-legend").innerHTML = keys.map(k => `<span><span class="dot" style="background:var(${STATUS[k].c})"></span> ${STATUS[k].i} ${k} <span class="num">${counts[k]}</span></span>`).join("");
   const st = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));

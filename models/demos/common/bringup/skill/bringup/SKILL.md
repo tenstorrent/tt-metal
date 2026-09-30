@@ -123,6 +123,11 @@ Never:
   from the plain profile (minutes). Per-op mode (BRINGUP_PROFILE_OPS) syncs after every ttnn call, about a minute per
   layer: it runs on the representative layers only, never the whole model (Xing P.3: a per-op before/after over 40
   layers ran 40 minutes for a change to the experts, and was then killed by the agent's task time limit);
+- run device measurements for a perf pick by hand. Every perf task gets an `ab` switch in tasks.yaml (`ab: {env:
+  {<VAR>: <old value>}}`, the old path; optional `ab_rungs`). After its agent (which stops at the first frozen-test
+  failure), the orchestrator itself produces the on/off table (frozen tests, ladder at `last` and the full-target
+  rung, one plain profile each) at `runs/<run>/ab/<task>/table.md` and waits for the owner; bring the owner the table
+  and record their answer with `orchestrator decide --task <id> --accept|--reject`, then resume;
 - change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
