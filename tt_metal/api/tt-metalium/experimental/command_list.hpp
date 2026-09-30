@@ -19,6 +19,9 @@ using distributed::MeshDevice;
 using distributed::MeshWorkload;
 
 class CommandList;
+namespace detail {
+class CommandListBuilderImpl;
+}
 
 /**
  * @brief Records MeshWorkloads for later replay.
@@ -74,8 +77,7 @@ public:
     void deallocate();
 
 private:
-    class Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<detail::CommandListBuilderImpl> impl_;
 };
 
 /**
@@ -115,7 +117,7 @@ public:
     void deallocate();
 
 private:
-    friend class CommandListBuilder;
+    friend class detail::CommandListBuilderImpl;
     class Impl;
     explicit CommandList(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
