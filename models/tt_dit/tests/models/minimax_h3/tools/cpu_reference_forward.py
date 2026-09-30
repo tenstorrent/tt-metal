@@ -87,7 +87,10 @@ def run_reference(inp: dict, threads: int) -> dict:
     model = MiniMaxH3Transformer3DModel(**config)
     model.load_state_dict(t._load_reference_state_dict(directory), strict=True)
     model = model.to(torch.float32).eval()
-    print(f"reference model loaded in {time.time() - start:.0f} s ({sum(p.numel() for p in model.parameters()) / 1e9:.1f} B params)", flush=True)
+    print(
+        f"reference model loaded in {time.time() - start:.0f} s ({sum(p.numel() for p in model.parameters()) / 1e9:.1f} B params)",
+        flush=True,
+    )
 
     num_text, num_audio, num_video = int(inp["num_text"]), int(inp["num_audio"]), int(inp["num_video"])
     text_indices = torch.arange(num_text)

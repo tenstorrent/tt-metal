@@ -430,7 +430,9 @@ class MiniMaxH3Transformer3DModel(Module):
         if local_assembly is not None:
             hidden = self._assemble_locally(static_prefix, audio_1BAC, video_1BVC, local_assembly, as_indices)
             if os.environ.get("MINIMAX_H3_LOCAL_ASSEMBLY_CHECK") == "1":
-                self._check_local_assembly(hidden, static_prefix, audio_1BAC, video_1BVC, local_assembly, assembly_indices, as_indices)
+                self._check_local_assembly(
+                    hidden, static_prefix, audio_1BAC, video_1BVC, local_assembly, assembly_indices, as_indices
+                )
         else:
             hidden = self._assemble_arena(static_prefix, audio_1BAC, video_1BVC, assembly_indices, as_indices)
 
@@ -529,7 +531,9 @@ class MiniMaxH3Transformer3DModel(Module):
         ttnn.deallocate(candidates)
         return hidden
 
-    def _check_local_assembly(self, hidden, static_prefix, audio_1BAC, video_1BVC, la, assembly_indices, as_indices) -> None:
+    def _check_local_assembly(
+        self, hidden, static_prefix, audio_1BAC, video_1BVC, la, assembly_indices, as_indices
+    ) -> None:
         """Diagnostic (MINIMAX_H3_LOCAL_ASSEMBLY_CHECK=1): compare the local path with the arena path on this host's
         device 0 shard, stage by stage: raw gathers vs a host gather, projections of gathered rows vs gathered
         projections, and the final select."""

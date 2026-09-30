@@ -22,6 +22,15 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, typed_tensor
 from .agmm_config import agmm_block_size
 
+_SDPA_DTYPES = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b, "bfloat4_b": ttnn.bfloat4_b}
+
+
+def _sdpa_dtype(name: str) -> ttnn.DataType:
+    """The K/V dtype knobs accept these names only."""
+    if name not in _SDPA_DTYPES:
+        raise ValueError(f"unsupported SDPA K/V dtype {name!r}; choose one of {sorted(_SDPA_DTYPES)}")
+    return _SDPA_DTYPES[name]
+
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
     """Reorder a head's channels from MiniMax-H3's half-split RoPE layout to the interleaved one.
@@ -187,12 +196,14 @@ class MiniMaxH3Attention(Module):
             kv = os.environ.get("MINIMAX_H3_SDPA_KV_DTYPE")
             v_only = os.environ.get("MINIMAX_H3_SDPA_V_DTYPE")
             if kv:
-                self.sdpa_k_dtype = self.sdpa_v_dtype = getattr(ttnn, kv)
+                self.sdpa_k_dtype = self.sdpa_v_dtype = _sdpa_dtype(kv)
             if v_only:
-                self.sdpa_v_dtype = getattr(ttnn, v_only)
+                self.sdpa_v_dtype = _sdpa_dtype(v_only)
             for name, dtype in (("dummy_joint_k", self.sdpa_k_dtype), ("dummy_joint_v", self.sdpa_v_dtype)):
                 if dtype is not None:
-                    setattr(self, name, typed_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), dtype, mesh_device))
+                    setattr(
+                        self, name, typed_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), dtype, mesh_device)
+                    )
 
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid

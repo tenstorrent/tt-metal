@@ -73,7 +73,11 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
         attn.sdpa_fixed_offset_value = 0.0
         attn._sdpa_program_configs.clear()  # per-phase fidelity is read from the environment when a config is built
         attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=False, dst_full_sync_en=False
+            mesh_device.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            dst_full_sync_en=False,
         )
 
         def dummy(dtype):
@@ -98,7 +102,11 @@ def _apply_knobs(tt_model, knobs: dict[str, str], mesh_device) -> str:
     weights = "bf8:" + ",".join(sorted(applied)) if applied else "bf16"
     if hasattr(tt_model, "fused_heads"):
         tt_model.fused_heads = knobs.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
-    return " ".join(f"{k}={v}" for k, v in sorted(knobs.items())) + f" [weights {weights}]" if knobs else f"(tip) [weights {weights}]"
+    return (
+        " ".join(f"{k}={v}" for k, v in sorted(knobs.items())) + f" [weights {weights}]"
+        if knobs
+        else f"(tip) [weights {weights}]"
+    )
 
 
 @pytest.mark.timeout(10800)
@@ -136,7 +144,9 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
         host_inputs=host_inputs,
     )
     # the same metadata as the reference run, or the comparison is meaningless
-    assert np.array_equal(inputs.position_ids.numpy(), ref["position_ids"]) and np.array_equal(inputs.tags.numpy(), ref["tags"])
+    assert np.array_equal(inputs.position_ids.numpy(), ref["position_ids"]) and np.array_equal(
+        inputs.tags.numpy(), ref["tags"]
+    )
 
     # build the model in the plain-tip state; every knob set is applied in place afterwards
     _apply_knobs_env_only = [k for k in os.environ if k.startswith("MINIMAX_H3_") and k not in _KEEP]
@@ -153,7 +163,9 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
     state_dict = _load_reference_state_dict(directory)
     tt_model.load_torch_state_dict(state_dict)
     del state_dict
-    logger.info(f"checkpoint on the mesh in {time.time() - start:.0f} s; {len(configs)} knob set(s): {[c[0] for c in configs]}")
+    logger.info(
+        f"checkpoint on the mesh in {time.time() - start:.0f} s; {len(configs)} knob set(s): {[c[0] for c in configs]}"
+    )
     tt_model.prepare_static_sources(**inputs.tt_static, prompt_cap=inputs.tt_static["prompt_1BLP"].shape[2])
 
     out_dir = Path(os.environ.get("H3_CPU_REF_OUT", Path(ref_path).parent))
@@ -179,13 +191,22 @@ def test_cpu_ref_forward(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topo
         tt_video, tt_audio = compose(tt_video)[:, :num_video], compose(tt_audio)[:, :num_audio]
         out_path = out_dir / f"tt_{tag}.npz"
         np.savez(out_path, tt_video=tt_video, tt_audio=tt_audio, tag=tag, knobs=knob_str)
-        row = (tag, warm, psnr(ref["ref_video"], tt_video), pcc(ref["ref_video"], tt_video), psnr(ref["ref_audio"], tt_audio), pcc(ref["ref_audio"], tt_audio))
+        row = (
+            tag,
+            warm,
+            psnr(ref["ref_video"], tt_video),
+            pcc(ref["ref_video"], tt_video),
+            psnr(ref["ref_audio"], tt_audio),
+            pcc(ref["ref_audio"], tt_audio),
+        )
         results.append(row)
         logger.info(
             f"[{tag}] warm forward {warm:.2f} s; vs CPU reference: video PSNR {row[2]:.2f} dB PCC {row[3]:.6f}; "
             f"audio PSNR {row[4]:.2f} dB PCC {row[5]:.6f}; wrote {out_path}"
         )
 
-    logger.info("SUMMARY vs CPU reference (5 s shape, full depth, fp32 CPU): tag | warm s | video dB | video PCC | audio dB | audio PCC")
+    logger.info(
+        "SUMMARY vs CPU reference (5 s shape, full depth, fp32 CPU): tag | warm s | video dB | video PCC | audio dB | audio PCC"
+    )
     for tag, warm, vp, vc, ap, ac in results:
         logger.info(f"SUMMARY {tag:12s} | {warm:6.2f} | {vp:7.2f} | {vc:.6f} | {ap:7.2f} | {ac:.6f}")

@@ -1412,14 +1412,20 @@ class MiniMaxH3Pipeline:
         s_local = rung // self.sp_factor
         local = torch.arange(rung, dtype=torch.int32) % s_local
         # int32 rows: the open upper bound must fit int32 (1 << 31 compared false for every row).
-        bounds = {"static": (0, src["audio"]), "audio": (src["audio"], src["video"]), "video": (src["video"], 2**31 - 1)}
+        bounds = {
+            "static": (0, src["audio"]),
+            "audio": (src["audio"], src["video"]),
+            "video": (src["video"], 2**31 - 1),
+        }
         select = torch.zeros(rung, dtype=torch.int32)
         out = {}
         for kind, (name, (lo, hi)) in enumerate(bounds.items()):
             sel = (rows >= lo) & (rows < hi)
             select = torch.where(sel, local + kind * s_local, select)
             rows_state = getattr(state, f"local_{name}_rows")
-            rows_state.update(self._row_indices(torch.where(sel, rows - lo, torch.zeros_like(rows)), rung), traced=traced)
+            rows_state.update(
+                self._row_indices(torch.where(sel, rows - lo, torch.zeros_like(rows)), rung), traced=traced
+            )
             out[f"{name}_rows"] = rows_state.value
         state.local_select_rows.update(self._row_indices(select, rung), traced=traced)
         out["select_rows"] = state.local_select_rows.value
@@ -2526,7 +2532,9 @@ class MiniMaxH3Pipeline:
         local_kwargs = {}
         if transformer.local_assembly:
             local_kwargs = {
-                "local_assembly": self._local_assembly(state, condition_spec, caps, l_len, a_target, v_target, rung, traced)
+                "local_assembly": self._local_assembly(
+                    state, condition_spec, caps, l_len, a_target, v_target, rung, traced
+                )
             }
         self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
         audio_start = l_len + num_cond + num_cond_audio
