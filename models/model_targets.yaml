@@ -1512,9 +1512,9 @@ targets:
             seq_len: 4096
             status: active
             perf:
-              prefill_time_to_first_token: 2030.0
-              decode_t/s: 18.13
-              decode_t/s/u: 18.13
+              prefill_time_to_first_token: 496.0
+              decode_t/s: 27.64
+              decode_t/s/u: 27.64
               tolerance: 0.2
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe
@@ -1523,9 +1523,9 @@ targets:
             seq_len: 8192
             status: active
             perf:
-              prefill_time_to_first_token: 4620.0
-              decode_t/s: 18.01
-              decode_t/s/u: 18.01
+              prefill_time_to_first_token: 1216.0
+              decode_t/s: 27.31
+              decode_t/s/u: 27.31
               tolerance: 0.2
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe
