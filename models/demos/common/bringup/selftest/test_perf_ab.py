@@ -40,7 +40,7 @@ def pick(**kw):
         "deps": [],
         "paths": ["src"],
         "brief": {"details": "run the experts at HiFi2"},
-        "ab": {"env": {"TOY_FIDELITY": "hifi4"}},
+        "ab": {"env": {"TOY_FIDELITY": "hifi4"}, "change": {"TOY_FIDELITY": "hifi2"}},
         "gate": {"cmd": GATE, "metrics": {"device_ms_experts": "< 10", "pcc_chunk_out": ">= 0.97"}},
     }
     t.update(kw)
@@ -51,7 +51,7 @@ def fake_runner(calls):
     """Stands in for the device: the change (no TOY_FIDELITY) fails the component check and runs faster."""
 
     def run_cmd(cmd, env, log):
-        on = "TOY_FIDELITY" not in env
+        on = env.get("TOY_FIDELITY", "hifi2") == "hifi2"
         out = Path(env[M.RESULTS_ENV])
         calls.append({"cmd": cmd, "on": on, "dir": out, "rung": env.get("BRINGUP_RUNG"), "ab": env.get("BRINGUP_AB")})
         rec = {}
@@ -102,7 +102,14 @@ def mk(sandbox, monkeypatch, tmp_path):
     return make
 
 
-CHANGE = {"P.1.perf.1.md": {"write": {"src/impl.txt": "hifi2\n", "src/new_path.py": "x = 1\n"}}}
+CHANGE = {
+    "P.1.perf.1.md": {
+        "write": {
+            "src/impl.txt": "hifi2\n",
+            "src/new_path.py": "import os\nF = os.environ.get('TOY_FIDELITY', 'hifi2')\n",
+        }
+    }
+}
 
 
 def test_the_ab_report_runs_off_and_on_then_waits_for_the_owner(mk):
@@ -251,3 +258,36 @@ def test_each_agent_attempt_starts_with_a_clean_marker(mk, sandbox):
     accuracy_guard.write(o.spec, "P.1", ["tests/test_c_x.py::test_component"])
     o.run()
     assert not accuracy_guard.marker(o.spec, "P.1").exists()
+
+
+def test_the_switch_is_set_explicitly_on_both_sides(mk):
+    """The agent may leave either default in the tree: 'on' runs with ab.change, 'off' with ab.env."""
+    o = mk([pick()], CHANGE)
+    assert o.run() == HUMAN
+    envs = {c["dir"].parent.name for c in mk.calls if c["on"]}
+    assert envs == {"new"} and not any(c["on"] for c in mk.calls if c["dir"].parent.name == "old")
+
+
+def test_a_switch_the_code_never_reads_is_invalid(mk):
+    o = mk([pick(ab={"env": {"NOPE_SWITCH": "a"}, "change": {"NOPE_SWITCH": "b"}})], CHANGE)
+    assert o.run() == HUMAN
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["note"].startswith("INVALID") and "NOPE_SWITCH" in rec["note"] and not mk.calls
+
+
+def test_bit_identical_sides_are_flagged(mk):
+    o = mk([pick()], CHANGE)
+    run = fake_runner(mk.calls)
+    o.run_cmd = lambda cmd, env, log: run(cmd, dict(env, TOY_FIDELITY="hifi4"), log)  # the switch does nothing
+    assert o.run() == HUMAN
+    assert o.led.state()["P.1"]["ab"]["note"].startswith("INVALID: off and on gave bit-identical")
+
+
+def test_a_measured_side_is_reused(mk):
+    o = mk([pick()], CHANGE)
+    assert o.run() == HUMAN
+    n = len(mk.calls)
+    assert decide(o, "P.1", "rerun") == 0
+    assert o.run() == HUMAN
+    assert len(mk.calls) == n  # same code and switch: both sides reused, nothing re-run
+    assert sum(": reused (" in x for x in mk.lines) == 2
