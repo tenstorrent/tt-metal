@@ -25,7 +25,7 @@ constexpr std::uint8_t PACK_SEM   = semaphore::MATH_DONE;
 
 // This thread has nothing in flight on any engine that reads the dest-acc fields (FPU, SFPU, packer) or
 // the unpacker. Any thread can drive any engine (e.g. SFPU from PACK), so each thread drains all of them.
-constexpr std::uint32_t THREAD_IDLE = p_stall::UNPACK | p_stall::PACK | p_stall::MATH | p_stall::WAIT_SFPU;
+constexpr std::uint32_t THREAD_IDLE = p_stall::UNPACK | p_stall::PACK | p_stall::MATH | p_stall::WAIT_SFPU | p_stall::TRISC_CFG;
 } // namespace fp32_dest_acc
 
 /**
