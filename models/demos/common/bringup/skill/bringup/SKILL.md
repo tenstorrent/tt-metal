@@ -89,6 +89,14 @@ an op request's approval and the op-gen launch (section 5), and evidence that th
 needing a shared file, a wider allowed path, a framework fix, a rerun, a retry after a stop) you decide, do, log in
 supervision.md, and report in one line.
 
+Verify, do not ask. When you doubt an agent's change (a fork edit, an unusual precision or config choice, a claim in
+a CHANGELOG or a commit message), check it yourself: pause at the next task boundary, run the fork's tests, a sweep
+over the shapes the model uses (every ladder rung, other block sizes), bit-identical reruns, a comparison with the
+source op; then resume. Never ask the person whether to run a check. A change that passes its gates and your checks
+stands, also when it departs from the plan or from the literal wording of an owner instruction while meeting its goal
+(record why); a change that breaks an explicit owner rule without the tests forcing it is rejected (below). The
+person sees every such change in the end-of-run report (section 4, "At the end").
+
 Judge every agent's work before you let it stand, most of all when a gate passes after a struggle. Read the diff of
 the gate commit (`git show --stat`, then the parts that matter), not only the verdict. Reject it as cheating if it:
 - loosens a threshold, edits a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`, or skips a check;
@@ -115,6 +123,14 @@ Never:
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
 Report briefly on each gate the person would care about; say plainly what you decided, stopped or rejected, and why.
+After every gate, re-export and republish both dashboards (never switch to "problems only" watching).
+
+### At the end
+
+Besides the metrics the person asked for, report every change the agents made beyond the model's own code, one line
+each with its commit and your verdict: fork changes (ttnn/ttnn/bringup: what, why, which tests), framework, test or
+knowledge edits, departures from the plan or from owner rules and the reason the gates forced them, the checks you ran
+and their results, and anything you rejected or reverted. The person approves these after the fact, not during the run.
 
 ### Keep the session's context small
 
