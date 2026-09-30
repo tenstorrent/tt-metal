@@ -14,6 +14,17 @@ name: "LLK SFPU report"
 #   * the head SHA is pinned by the plan job; a later push is reported, not tested.
 
 on:
+  # Also callable, so a wrapper can run it (e.g. to try a branch before this file is
+  # on main: workflow_dispatch only finds workflows that exist on the default branch).
+  workflow_call:
+    inputs:
+      pr_number: {type: string, required: true}
+      head_sha: {type: string, required: false, default: ""}
+      ops: {type: string, required: false, default: ""}
+      arch: {type: string, required: false, default: all}
+      base: {type: string, required: false, default: merge-base}
+      iterations: {type: string, required: false, default: "3"}
+      context: {type: string, required: false, default: "{}"}
   workflow_dispatch:
     inputs:
       pr_number:
