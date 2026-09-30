@@ -11,8 +11,8 @@
 #include <fmt/format.h>
 
 #include "tt_metal/distributed/host_rdma_window.hpp"
-#include "tt_metal/distributed/host_uva_frame.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_frame.h"
+#include "hostdevcommon/uva_layout.h"
 
 namespace tt::tt_metal::experimental {
 

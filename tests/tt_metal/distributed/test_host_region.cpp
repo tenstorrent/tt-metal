@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 #include "tt_metal/distributed/host_region.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "hostdevcommon/uva_layout.h"
 
 namespace tt::tt_metal::experimental {
 namespace {
