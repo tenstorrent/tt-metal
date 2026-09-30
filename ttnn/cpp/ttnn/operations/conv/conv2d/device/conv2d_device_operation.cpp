@@ -28,8 +28,6 @@
 
 namespace ttnn::prim {
 
-using ttnn::operations::conv::calculate_output_image_size;
-
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -146,15 +144,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
-    uint32_t conv_activation_h = input_tensor_a_shape[1];
-    uint32_t conv_activation_w = input_tensor_a_shape[2];
     uint32_t conv_activation_c = input_tensor_a_shape[3];
     uint32_t filter_h = (uint32_t)args.sliding_window_config.window_hw.first;   // filter_h
     uint32_t filter_w = (uint32_t)args.sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)args.sliding_window_config.stride_hw.first;
-    uint32_t stride_w = (uint32_t)args.sliding_window_config.stride_hw.second;
-    uint32_t dilation_h = (uint32_t)args.sliding_window_config.dilation_hw.first;
-    uint32_t dilation_w = (uint32_t)args.sliding_window_config.dilation_hw.second;
 
     const CoreCoord compute_grid = output_tensor.device()->compute_with_storage_grid_size();
     const int num_cores = compute_grid.x * compute_grid.y;
@@ -162,13 +154,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation
     // This is 2*8*16*16 = 4096 muladds in a single cycle.
     constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
-    // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
-    auto [output_height, output_width] = calculate_output_image_size(
-        {conv_activation_h, conv_activation_w},
-        {filter_h, filter_w},
-        {stride_h, stride_w},
-        args.sliding_window_config.padding,
-        {dilation_h, dilation_w});
+    // Use the real output shape (as compute_output_specs does); it also covers conv_transpose2d.
+    const auto sliding_window_output_shape = args.sliding_window_config.get_output_shape();
+    const uint32_t output_height = sliding_window_output_shape[1];
+    const uint32_t output_width = sliding_window_output_shape[2];
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
