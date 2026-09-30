@@ -449,7 +449,11 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         return chunk_start
 
     def _make_forward(lt):
-        """Build a layer forward with RoPE gathered inside the trace."""
+        """Build (prepare, forward) for one layer type.
+
+        prepare runs the once-per-chunk inputs of the model: the token embedding, the RoPE
+        lookups and their packing. forward runs the layer on them. They are traced separately so the measured trace
+        holds only the layer; in the model the prepare ops run once per chunk, not once per layer."""
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
@@ -461,38 +465,46 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
         pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
-        def forward(chunk_start):
+        def prepare():
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
+            return embeds, (cos, sin), packed_rope
+
+        def forward(inputs, chunk_start):
+            embeds, rope_mats, packed_rope = inputs
             return layer(
                 hidden_states=embeds,
-                rope_mats=(cos, sin),
+                rope_mats=rope_mats,
                 prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,
             )
 
-        return forward
+        return prepare, forward
 
-    traces, outs = {}, {}
+    traces, prep_traces, outs = {}, {}, {}
     capture_at = chunk_idxs[0]
     for lt in layer_types:
-        fwd = _make_forward(lt)
+        prepare, fwd = _make_forward(lt)
         t0 = time.time()
-        compile_out = fwd(_stage(capture_at))
+        compile_out = fwd(prepare(), _stage(capture_at))
         ttnn.synchronize_device(mesh_device)
         compile_out.deallocate(True)
         compile_s = time.time() - t0
 
         t0 = time.time()
         cap_start = _stage(capture_at)
+        prep_tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        inputs = prepare()
+        ttnn.end_trace_capture(mesh_device, prep_tid, cq_id=0)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        outs[lt] = fwd(cap_start)
+        outs[lt] = fwd(inputs, cap_start)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
+        prep_traces[lt] = prep_tid
         traces[lt] = tid
         capture_s = time.time() - t0
         logger.info(
@@ -528,6 +540,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 sp_start, sp_stop = _perf_signposts(lt, idx)
 
                 chunk_start = _stage(idx)
+                ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
                 signpost(sp_start)
                 t_i = time.time()
                 ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
@@ -554,7 +568,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_config)
     finally:
-        for tid in traces.values():
+        for tid in (*traces.values(), *prep_traces.values()):
             ttnn.release_trace(mesh_device, tid)
 
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
