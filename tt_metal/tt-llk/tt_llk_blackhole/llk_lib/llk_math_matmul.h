@@ -298,15 +298,15 @@ inline void matmul_configure_addrmod(
 // covers one tile (tiny tiles, partial faces, the throttled MOP). _llk_math_matmul_ issues one MOP per row or per tile
 // accordingly.
 static bool matmul_mop_covers_row = false;
-// The row MOP's parameters as programmed, packed in one word so that a call compares them at once: the DEST stride
-// from one tile of the row to the next in DEST rows (the DEST increment of ADDR_MOD_3) in the low half and the
-// streamed tiles per row (the outer loop count) in the high half. _llk_math_matmul_ refreshes them when a call's
-// block dimensions differ from the init's.
-static std::uint32_t matmul_mop_row_key = 0;
+// The block dimensions the row MOP was programmed for (ct_dim in the high half, rt_dim in the low half), which fix
+// its outer loop count (the streamed tiles per row) and the DEST stride from one tile of the row to the next (the
+// DEST increment of ADDR_MOD_3). _llk_math_matmul_ compares a call's dimensions against them with one load and one
+// compare, and refreshes both when they differ.
+static std::uint32_t matmul_mop_dims = 0;
 
-constexpr std::uint32_t matmul_row_key(const std::uint32_t row_tiles, const std::uint32_t dest_tile_stride)
+constexpr std::uint32_t matmul_block_dims(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    return (row_tiles << 16) | dest_tile_stride;
+    return (ct_dim << 16) | rt_dim;
 }
 
 // DEST rows one 32x32 output tile occupies (the tile index shift of set_dst_write_addr).
@@ -456,7 +456,7 @@ inline void matmul_configure_mop(
         // MVMUL 16 of the last phase of the last tile of the row: clear both source banks, every counter to zero.
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
         tmp.program();
-        matmul_mop_row_key    = matmul_row_key(rut_dim, dest_tile_stride);
+        matmul_mop_dims       = matmul_block_dims(ct_dim, rt_dim);
         matmul_mop_covers_row = true;
         return;
     }
@@ -861,8 +861,8 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
-    // Read the row MOP's programmed parameters first so that the load's latency overlaps the arithmetic below.
-    const std::uint32_t programmed_row_key = matmul_mop_row_key;
+    // Read the dimensions the row MOP was programmed for first so that the load's latency overlaps the arithmetic below.
+    const std::uint32_t programmed_dims = matmul_mop_dims;
 
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
@@ -874,24 +874,26 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         if (matmul_mop_covers_row)
         {
             // Full 32x32 tiles: one DEST offset and one MOP per reuse row. The MOP was programmed for the init's block;
-            // a call with another block width (matmul_block narrowed to the valid columns of a padded block) first
+            // a call with other block dimensions (matmul_block narrowed to the valid columns of a padded block) first
             // refreshes the DEST stride of the tile end and the outer loop count. The reuse direction has to be the
             // init's, as for the tile MOP.
-            const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS;
-            const std::uint32_t row_key          = matmul_row_key(rut_dim, dest_tile_stride);
-            if (row_key != programmed_row_key)
+            if (matmul_block_dims(ct_dim, rt_dim) != programmed_dims)
             {
-                if (dest_tile_stride != (programmed_row_key & 0xFFFF))
+                const std::uint32_t programmed_ct = programmed_dims >> 16;
+                const std::uint32_t programmed_rt = programmed_dims & 0xFFFF;
+                const bool programmed_reuse_a     = programmed_ct >= programmed_rt;
+                const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) * MATMUL_DEST_TILE_ROWS;
+                if (dest_tile_stride != (programmed_reuse_a ? 1 : programmed_ct) * MATMUL_DEST_TILE_ROWS)
                 {
                     matmul_set_row_tile_end_dest(dest_tile_stride);
                 }
-                if (rut_dim != (programmed_row_key >> 16))
+                if (rut_dim != (programmed_reuse_a ? programmed_ct : programmed_rt))
                 {
                     // The MOP expander reads its configuration while it expands: wait for the previous MOP to finish.
                     mop_sync();
                     reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE)[0] = rut_dim;
                 }
-                matmul_mop_row_key = row_key;
+                matmul_mop_dims = matmul_block_dims(ct_dim, rt_dim);
             }
             for (std::uint32_t t = 0; t < t_dim; t++)
             {
