@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
