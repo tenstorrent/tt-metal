@@ -298,3 +298,23 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   Chunk 1 [8192,16384) took 89 s warm.
 - Watch: the JIT cache (~3 GB, one 2.8G hash dir) keeps growing on the home quota; check `df -h $HOME` before long rungs.
 - Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py`
+
+## K.1 contract (run1, attempt 1)
+- Previous attempt failed only because `xing40_a4b_d_p` was not in `ADAPTER_PATHS`; registered it
+  (`models/demos/common/prefill/adapter.py`) -> `models.demos.xing40_a4b_d_p.tt.runners.adapter:XingPrefillAdapter`.
+- New `tt/runners/adapter.py` (XingPrefillAdapter + XingPrefillRuntime, pattern of hy4_preview_d_p's runners) and
+  `tt/runners/kv_contract.py` (XingContractKV). The engine cache IS the model state: one
+  `init_kvpe_cache(576, sp_axis 0, tp_axis None)` bf16 TILE cache, [num_users * L, 1, max_seq/4, 576] per chip,
+  batch = slot * L + layer row, block-cyclic over the 4 rows with period = the served chunk, replicated over the columns
+  (same layout as the attention's geometry cache).
+- `tt/attention.py`: new serving option `TtMlaAttention.bind_cache(cache, slot, row, rows)` / `unbind_cache`; `_cache()`
+  feeds `update_padded_kv_cache(slot_idx, layer_idx, num_layers)` and `ring_mla(kv_cache_batch_idx = slot*rows+row)`.
+  Unbound (default, ladder / component tests) = the geometry cache at batch 0, unchanged behaviour.
+- Table: config "0", one 32-token entry = 18 bf16 tiles (36864 B); ROUND_ROBIN_1D walk (bank j % B, offset j // B);
+  one device group per mesh row with both column replicas (as DeepSeek's TP-replicated table).
+- Engine input [4, 1, chunk/4] sharded over axis 0 is already the embedding's contiguous row split: on the device
+  `ttnn.minimum(ids, V-1)` then reshape to [1, 1, 1, chunk/4]. Ack after `event_synchronize` per layer, global layer id.
+- Runtime builds TtXingModel with max_rows = chunk/4, max_chunk = chunk and `setup(chunk, max_seq)` once; compile()
+  warms every chunk offset in slot 0.
+- Gate: PASS in 69 s; producer kv_latent min PCC 0.99761 (layer 31) over [0, 4064), slot 1; no contract failures.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
