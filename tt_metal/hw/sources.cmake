@@ -399,6 +399,9 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_cbrt_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_dense.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_dense_polynomial.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
