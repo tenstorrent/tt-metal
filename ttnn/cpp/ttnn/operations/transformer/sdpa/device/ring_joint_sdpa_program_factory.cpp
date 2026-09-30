@@ -1404,12 +1404,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             1u,
             std::min({ksplit_requested, uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount}));
     }
-    // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
-    // restore CBs, on single-Q-chunk cores that do not split K.
-    const bool seg_accum = args.program_config.has_value() && args.program_config->segmented_accumulation &&
-                           ksplit_count == 1 && !has_sliding_window && kernel_chunked && !args.is_balanced &&
-                           use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1;
-    log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1454,6 +1448,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ksplit_count = 1;
     }
     log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
+    // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
+    // restore CBs, on single-Q-chunk cores that do not split K. Its merge walks whole row groups too.
+    const bool seg_accum = args.program_config.has_value() && args.program_config->segmented_accumulation &&
+                           ksplit_count == 1 && !has_sliding_window && kernel_chunked && !args.is_balanced &&
+                           use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1 &&
+                           Sq_chunk_t % writer_out_row_group_h == 0;
+    log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
