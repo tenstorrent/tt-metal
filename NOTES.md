@@ -46,3 +46,10 @@ If the driver is gone and no dumps exist, relaunch drive19.sh detached (setsid n
 blx03 had rebooted again (up 3 min at wake). drive19.log was empty, driver gone, no dumps. Broker not held; t37 job 937 running.
 Relaunched drive19.sh detached (pid 9695, log ~/fasth3/drive19.log); it submits once 937 and any other smarton job finish.
 Same next steps as above.
+
+## 2026-09-30 22:50 PT (rescope: no full-mesh runs; done off-device)
+blx03 rebooted again (up 5 min at wake); driver gone, no dumps. The 22:10 rescope bars the 4x8 run that makes new
+latents, so drive19 was not relaunched. Instead used t37 job 931's saved 2.5 stage-2 latents (3 prompts, seed 0,
+conv decoder) for the CPU crop A/B, plus device conv gen0 vs t16 device DiffVAE seed0 full-frame. Results: FINDINGS.md.
+Cleanup done: local tmp/t19/data, blx03 worktree ~/fasth3/t19, ~/fasth3/drive19.log. Deliverables in
+tt-project/baselines/t19 (23 MB, not in git). blx03 ~/fasth3/out/t37 belongs to t37; left alone.
