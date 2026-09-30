@@ -6,10 +6,16 @@ intake:
   note: 'owner: fp32_dest_acc_en off for ring_mla (streaming compute)'
 plan:
   by: dnijemcevic
-  at: '2026-09-30T05:48:07'
+  at: '2026-09-30T18:07:18'
   files:
     models/demos/xing40_a4b_d_p/bringup/plan.yaml: 803324f68938086d442c80407997e19131a29909181faf33b93120c7d00925a1
     models/demos/xing40_a4b_d_p/bringup/plan.md: fe8a71604fa3921089d2df1729c0fa8d82e9c17bc854533239651c2924d7e2de
     models/demos/xing40_a4b_d_p/bringup/components.yaml: 313ca49843a3f39f67a3e47e97ca9fd99df820a805d52d9247b8cebefed7694f
-  note: owner approved the 4x2 SP=4 x TP=2 plan
+  note: ''
   ledger: 71bc2842c423faae161b51b341c0ae2eb45775f1f8f228472bddb8d3e9020301
+perf:
+  by: dnijemcevic
+  at: '2026-09-30T18:07:14'
+  files:
+    models/demos/xing40_a4b_d_p/bringup/opportunities.md: d00551a0bfdebd93d73da51c956b9d6655e22dd19cbc73fdf1301e64ef61894d
+  note: 'owner picks: P.1 HiFi2 SDPA, P.2 fused mHC, P.3 HiFi2 experts'
