@@ -857,17 +857,26 @@ def _ragged_width_grid(grid_cols, grid_rows):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
 
 
-def _run_width_concat_u32(device, widths, grid_cols, grid_rows, height=64):
-    """uint32 so the alignment arithmetic is legible: 4 columns per 16-byte unit."""
+def _run_width_concat_u32(device, widths, grid_cols, grid_rows, height=64, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """uint32 so the alignment arithmetic is legible: 4 columns per 16-byte unit.
+
+    Under COL_MAJOR the width splits across the grid *rows* and the height across the
+    grid *cols*, so the shard shape and the source-core lookup both change axis. Note
+    ShardSpec takes the shard shape literally, unlike create_sharded_memory_config,
+    which swaps it for COL_MAJOR.
+    """
     div_up = lambda a, b: -(-a // b)
     grid = _ragged_width_grid(grid_cols, grid_rows)
-    shard_h = div_up(height, grid_rows)
+    col_major = orientation == ttnn.ShardOrientation.COL_MAJOR
+    shard_grid_h = grid_cols if col_major else grid_rows
+    shard_grid_w = grid_rows if col_major else grid_cols
+    shard_h = div_up(height, shard_grid_h)
 
     def mem(w):
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (shard_h, div_up(w, grid_cols)), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(grid, (shard_h, div_up(w, shard_grid_w)), orientation),
         )
 
     tensors = [
@@ -885,7 +894,7 @@ def _run_width_concat_u32(device, widths, grid_cols, grid_rows, height=64):
     assert tuple(result.shape) == tuple(expected.shape), f"wrong shape for widths={widths}"
     assert torch.equal(
         expected.to(torch.int64), result.to(torch.int64)
-    ), f"wrong values for widths={widths} on {grid_cols}x{grid_rows}"
+    ), f"wrong values for widths={widths} on {grid_cols}x{grid_rows} {orientation}"
 
 
 def test_ragged_width_concat_equal_widths(device):
@@ -910,6 +919,18 @@ def test_ragged_width_concat_three_unequal(device):
 def test_exact_width_concat_control(device):
     """Control: width divides the grid columns, so capacity equals the real width."""
     _run_width_concat_u32(device, [20, 20], grid_cols=5, grid_rows=2)
+
+
+def test_ragged_width_concat_col_major(device):
+    """Ragged width under COL_MAJOR, where the width splits across the grid rows.
+
+    The grid is deliberately non-square (2 cols x 5 rows): with a square grid the two
+    orientations give the same split and cannot be told apart. Width 16 over the 5 grid
+    rows gives shard 4 and capacity 20, so the capacity-vs-logical-width defect is live
+    on this path too -- the existing COL_MAJOR width test uses exact shards and cannot
+    reach it.
+    """
+    _run_width_concat_u32(device, [16] * 5, grid_cols=2, grid_rows=5, orientation=ttnn.ShardOrientation.COL_MAJOR)
 
 
 def test_ragged_width_unaligned_prefix_rejected(device, expect_error):
