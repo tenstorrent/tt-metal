@@ -479,7 +479,10 @@ def sfpu_binary(
     how a float ADD/SUB/RSUB result is narrowed into a bf16 Dest. Other ops ignore it.
 
     *exact* compares bit for bit instead of within tolerance; a tolerance cannot tell a
-    round-to-even lane from a round-half-away one.
+    round-to-even lane from a round-half-away one. Only meaningful where the kernel narrows
+    with round-to-nearest-even, as the golden's final cast does: MUL and DIV always on a bf16
+    Dest, ADD/SUB/RSUB only in NearestEven mode. Default ADD/SUB/RSUB truncate into a bf16
+    Dest and are rejected, since they could never match.
     """
 
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
@@ -633,7 +636,19 @@ def sfpu_binary(
     ), "Result tensor and golden tensor are not of the same length"
 
     if exact:
-        bit_type = torch.int16 if torch_format == torch.bfloat16 else torch.int32
+        if (
+            dest_acc == DestAccumulation.No
+            and torch_format == torch.bfloat16
+            and mathop not in (MathOperation.SfpuElwmul, MathOperation.SfpuElwdiv)
+            and dst_rounding_mode != DstRoundingMode.NearestEven
+        ):
+            raise ValueError(
+                f"exact=True: {mathop.name} in {dst_rounding_mode.name} mode truncates into "
+                "a bf16 Dest while the golden rounds to nearest even; a bit-for-bit compare "
+                "cannot pass there. Use DstRoundingMode.NearestEven or dest_acc=Yes."
+            )
+        # View by the output's width, so a Float16 result is not paired up into int32 lanes.
+        bit_type = {2: torch.int16, 4: torch.int32}[res_tensor.element_size()]
         res_bits = res_tensor.view(bit_type)
         golden_bits = golden_tensor.to(torch_format).flatten().view(bit_type)
         diff = torch.nonzero(res_bits != golden_bits).flatten()
@@ -1570,6 +1585,14 @@ _BF16_RNE_OPS = [
 ]
 _BF16_RNE_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 
+# bf16 significand geometry for the tie builder: 7 explicit fraction bits, so an integer
+# significand runs over [_BF16_SIG_ONE, 2 * _BF16_SIG_ONE), and an fp32 value is a bf16 tie
+# when the 16 bits the narrowing drops are exactly the half-ULP pattern.
+_BF16_FRAC_BITS = 7
+_BF16_SIG_ONE = 1 << _BF16_FRAC_BITS
+_FP32_LOW_HALF_MASK = 0xFFFF
+_FP32_TIE_LOW_HALF = 0x8000
+
 
 @parametrize(formats=_BF16_RNE_FORMATS, mathop=_BF16_RNE_OPS)
 def test_eltwise_binary_sfpu_float_rne(formats, mathop):
@@ -1604,32 +1627,35 @@ def _bf16_tie_pairs(mathop, count, seed=0):
     """*count* (a, b) bf16 pairs whose exact result lies halfway between two bf16 values.
 
     ADD/SUB/RSUB: b is half a bf16 ULP of a, and a's mantissa is non-zero so both neighbours of
-    the sum share a's exponent. MUL: the 8x8-bit mantissa product has the bit below the bf16 LSB
-    set and nothing under it. Random signs and exponents put about half the ties on an even LSB,
-    the only lanes where round-to-nearest-even and round-half-away disagree.
+    the sum share a's exponent. MUL: the 8x8-bit significand product has the bit below the bf16
+    LSB set and nothing under it. Random signs and exponents put about half the ties on an even
+    LSB, the only lanes where round-to-nearest-even and round-half-away disagree.
     """
     rng = random.Random(seed)
     sign = lambda: -1.0 if rng.random() < 0.5 else 1.0
     pairs = []
     if mathop == MathOperation.SfpuElwmul:
-        tie_mantissas = []
-        for ma in range(128, 256):
-            for mb in range(128, 256):
+        tie_significands = []
+        for ma in range(_BF16_SIG_ONE, 2 * _BF16_SIG_ONE):
+            for mb in range(_BF16_SIG_ONE, 2 * _BF16_SIG_ONE):
                 p = ma * mb
-                if (p >= 32768 and (p & 0xFF) == 0x80) or (
-                    p < 32768 and (p & 0x7F) == 0x40
-                ):
-                    tie_mantissas.append((ma, mb))
+                # The product (15 or 16 bits) keeps its top _BF16_FRAC_BITS + 1 bits as the bf16
+                # significand; a tie has the first dropped bit set and nothing below it.
+                dropped = p.bit_length() - (_BF16_FRAC_BITS + 1)
+                if p & ((1 << dropped) - 1) == 1 << (dropped - 1):
+                    tie_significands.append((ma, mb))
         for _ in range(count):
-            ma, mb = rng.choice(tie_mantissas)
-            a = sign() * math.ldexp(ma / 128.0, rng.randint(-10, 10))
-            b = sign() * math.ldexp(mb / 128.0, rng.randint(-10, 10))
+            ma, mb = rng.choice(tie_significands)
+            a = sign() * math.ldexp(ma, rng.randint(-10, 10) - _BF16_FRAC_BITS)
+            b = sign() * math.ldexp(mb, rng.randint(-10, 10) - _BF16_FRAC_BITS)
             pairs.append((a, b))
     else:
         for _ in range(count):
             exp = rng.randint(-20, 20)
-            a = sign() * math.ldexp(1.0 + rng.randint(1, 127) / 128.0, exp)
-            b = sign() * math.ldexp(1.0, exp - 8)
+            # a = +/-(1 + m / 128) * 2^exp with m >= 1; b = half of a's bf16 ULP, 2^(exp - 8).
+            sig = _BF16_SIG_ONE + rng.randint(1, _BF16_SIG_ONE - 1)
+            a = sign() * math.ldexp(sig, exp - _BF16_FRAC_BITS)
+            b = sign() * math.ldexp(1.0, exp - (_BF16_FRAC_BITS + 1))
             pairs.append((a, b))
 
     # Self-check on the host: every pair must be an exact fp32 tie, else the test proves nothing.
@@ -1643,7 +1669,7 @@ def _bf16_tie_pairs(mathop, count, seed=0):
         )
         (bits,) = struct.unpack("<I", struct.pack("<f", exact))
         assert (
-            bits & 0xFFFF == 0x8000
+            bits & _FP32_LOW_HALF_MASK == _FP32_TIE_LOW_HALF
         ), f"({a}, {b}) is not a bf16 tie for {mathop.name}"
     return pairs
 

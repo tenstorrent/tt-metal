@@ -35,7 +35,10 @@ sfpi_inline sfpi::vUInt bf16_rne_bias() { return sfpi::vUInt(0x7fffU); }
 
 // fp32 -> bf16 round-to-nearest-even, 4 SFPU instructions: bits + 0x7fff + lsb, where lsb is
 // the bf16 LSB (fp32 bit 16), so a tie (low half exactly 0x8000) carries only when that LSB is
-// 1 and rounds to even. Carry into the exponent gives +/-inf, NaN payloads stay NaN.
+// 1 and rounds to even. A carry out of the mantissa bumps the exponent; only the largest finite
+// binade rounds up to +/-inf. Canonical NaN (0x7FC00000, what SFPMAD emits) and a bf16-sourced
+// NaN (zero low half) stay NaN; other fp32 NaN payloads are not preserved (0x7F800001 rounds to
+// +inf, 0x7FFFFFFF wraps to -0); none of the call sites can produce one.
 // The low 16 bits are left unspecified: store the result straight to a 16-bit Float16_b Dest,
 // whose SFPSTORE keeps only the high half. Never read it back or store it as fp32.
 // SFPSTOCHRND is not a substitute: on Blackhole silicon it rounds ties away from zero, maps

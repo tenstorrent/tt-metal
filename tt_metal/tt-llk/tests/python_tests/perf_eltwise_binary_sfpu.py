@@ -84,7 +84,7 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations,
     input_dimensions,
 ):
-    _run_float(
+    _run_binary_sfpu_perf(
         perf_report,
         formats,
         mathop,
@@ -104,34 +104,24 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwrsub,
     ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_eltwise_binary_sfpu_float_rne(
-    perf_report,
-    formats,
-    mathop,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
+def test_perf_eltwise_binary_sfpu_float_rne(perf_report, formats, mathop):
     # The NearestEven arm binary_ng runs for bf16 ADD/SUB/RSUB on the SFPU. bf16 Dest only: with
     # fp32 accumulation the rounding is skipped and the variant would duplicate the Default one.
-    _run_float(
+    _run_binary_sfpu_perf(
         perf_report,
         formats,
         mathop,
         ApproximationMode.No,
         DestAccumulation.No,
-        loop_factor,
-        iterations,
-        input_dimensions,
+        loop_factor=16,
+        iterations=32,
+        input_dimensions=[128, 64],  # tile_cnt: 8
         dst_rounding_mode=DstRoundingMode.NearestEven,
     )
 
 
-def _run_float(
+def _run_binary_sfpu_perf(
     perf_report,
     formats,
     mathop,
@@ -142,6 +132,8 @@ def _run_float(
     input_dimensions,
     dst_rounding_mode=DstRoundingMode.Default,
 ):
+    """One eltwise_binary_sfpu_perf variant; the sweeps above and below differ only in their
+    parametrize axes and skip guards, so they all build the same configuration here."""
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -224,47 +216,16 @@ def test_perf_eltwise_binary_sfpu_int(
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_sfpu_perf.cpp",
+    _run_binary_sfpu_perf(
+        perf_report,
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            SFPU_DST_ROUNDING_MODE(),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        compile_time_formats=True,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
     )
-
-    configuration.run(perf_report)
 
 
 @pytest.mark.perf
@@ -316,44 +277,13 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
         pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_sfpu_perf.cpp",
+    _run_binary_sfpu_perf(
+        perf_report,
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            SFPU_DST_ROUNDING_MODE(),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        compile_time_formats=True,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
     )
-
-    configuration.run(perf_report)
