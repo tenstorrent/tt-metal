@@ -109,7 +109,8 @@ def pack_reduce_mask_config(operation: "L1Operation", node: "PackNode") -> str:
     reduce_dim = operation.reduce_dim.cpp_enum_value
     reduce_pool = operation.reduce_pool.cpp_enum_value
     pack_dst = node.output.data_format.cpp_underlying_value
-    return f"_llk_pack_reduce_mask_config_<{reduce_pool}, {reduce_dim}>({pack_dst});\n"
+    tensor_shape = operation.tile_shape.cpp_value
+    return f"_llk_pack_reduce_mask_config_<{reduce_pool}, {reduce_dim}>({pack_dst}, {tensor_shape});\n"
 
 
 def pack_reduce_mask_clear(operation) -> str:
