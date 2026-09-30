@@ -159,9 +159,7 @@ def test_pipeline_distilled(
     # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
     traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
-    # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
-    # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
-    # the fast scalar-AdaLN path. Resolved before create_pipeline so the bool can gate the build.
+    # Conditioning image (I2V). The pipeline decides image capability itself (RUN_I2V=0 opts out).
     image_path = os.environ.get("LTX_I2V_IMAGE")
     images = None
     if image_path:
@@ -186,7 +184,6 @@ def test_pipeline_distilled(
         height=height,
         width=width,
         fps=fps,
-        image_conditioning=bool(image_path),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
