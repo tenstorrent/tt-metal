@@ -221,13 +221,13 @@ using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
     MeshWorkload workload;
 
-    EXPECT_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()), std::exception);
+    EXPECT_THROW(experimental::program_preparation::prepare(workload, *mesh_device_), std::exception);
 
     // The rejected call must leave the workload open, so the caller can add a program and retry.
     Program program = CreateProgram();
     CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
     EXPECT_NO_THROW(workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program)));
-    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, *mesh_device_));
 }
 
 TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice) {
@@ -249,11 +249,11 @@ TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice)
     MeshWorkload workload;
     workload.add_program(MeshCoordinateRange(*sub_shape), std::move(program));
 
-    experimental::program_preparation::prepare(workload, submeshes[0].get());
+    experimental::program_preparation::prepare(workload, *submeshes[0]);
 
     // Finalized offsets and binary sizes belong to the first submesh; reusing them elsewhere must fail.
-    EXPECT_THROW(experimental::program_preparation::prepare(workload, submeshes[1].get()), std::exception);
-    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, submeshes[0].get()));
+    EXPECT_THROW(experimental::program_preparation::prepare(workload, *submeshes[1]), std::exception);
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, *submeshes[0]));
 }
 
 // A worker still reading its kernel config must not have that config overwritten, including on devices left out of the

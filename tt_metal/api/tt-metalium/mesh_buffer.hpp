@@ -85,14 +85,6 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshCoordinate& coord);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
-namespace tt::tt_metal::experimental::retained_buffer_view {
-std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create(
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> owner,
-    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
-    tt::tt_metal::DeviceAddr shard_offset);
-}  // namespace tt::tt_metal::experimental::retained_buffer_view
-
 namespace tt::tt_metal::distributed {
 
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
@@ -104,7 +96,6 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
-
     ~MeshBuffer();
 
     // MeshBuffer manages device memory and owns the backing allocation. Copying would create
@@ -184,21 +175,6 @@ private:
         buffers_(MeshShape(mesh_device->shape())),
         state_(ExternallyOwnedState{}) {}
 
-    MeshBuffer(
-        const MeshBufferConfig& config,
-        const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr address,
-        DeviceAddr device_local_size,
-        MeshDevice* mesh_device,
-        std::shared_ptr<MeshBuffer> owner,
-        DeviceAddr shard_offset);
-
-    static std::shared_ptr<MeshBuffer> create_retained_sharded_view(
-        std::shared_ptr<MeshBuffer> owner,
-        const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr shard_offset);
-
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
@@ -208,32 +184,16 @@ private:
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
-    // `MeshBufferState` specifies the state of the MeshBuffer:
-    // 1. Owned - a single backing buffer owns the allocation and provides the address for the whole mesh.
-    // 2. Externally owned - a view over an existing address; it owns no allocation.
-    // 3. Deallocated.
-    // 4. Per-core owned - each device buffer owns its own per-core allocation.
-    // 5. Retained view - aliases an offset within an owner MeshBuffer and holds a strong reference to it. Deallocating
-    //    the view releases that reference; the view is invalidated once its owner is deallocated.
+    // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
+    // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
+    // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
+    // 3. Deallocated - the MeshBuffer is in the deallocated state.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
     struct ExternallyOwnedState {};
     struct DeallocatedState {};
-    struct RetainedViewState {
-        struct Impl;
-        std::shared_ptr<Impl> impl;
-    };
-    struct PerCoreOwnedState {};
-    using LegacyMeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
-    using MeshBufferState =
-        std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState, PerCoreOwnedState, RetainedViewState>;
-    static_assert(
-        sizeof(MeshBufferState) == sizeof(LegacyMeshBufferState),
-        "Experimental MeshBuffer states must preserve the stable object size");
-    static_assert(
-        alignof(MeshBufferState) == alignof(LegacyMeshBufferState),
-        "Experimental MeshBuffer states must preserve the stable object alignment");
+    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
@@ -241,11 +201,6 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
-    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::retained_buffer_view::create(
-        std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>,
-        const tt::tt_metal::distributed::MeshBufferConfig&,
-        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
-        tt::tt_metal::DeviceAddr);
 };
 
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {

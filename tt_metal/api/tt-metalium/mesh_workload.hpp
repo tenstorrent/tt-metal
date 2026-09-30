@@ -15,7 +15,7 @@ class MeshWorkloadImpl;
 
 namespace tt::tt_metal::experimental::program_preparation {
 struct ProgramCapacity;
-ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device);
+ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice& mesh_device);
 }  // namespace tt::tt_metal::experimental::program_preparation
 
 namespace tt::tt_metal::distributed {
@@ -58,6 +58,6 @@ private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
     friend experimental::program_preparation::ProgramCapacity experimental::program_preparation::prepare(
-        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice*);
+        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice&);
 };
 }  // namespace tt::tt_metal::distributed

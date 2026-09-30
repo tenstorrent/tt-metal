@@ -525,19 +525,17 @@ uint32_t MeshWorkload::get_cb_size(
 
 namespace tt::tt_metal::experimental::program_preparation {
 
-ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device) {
-    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice& mesh_device) {
     // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
-    TT_FATAL(
-        !mesh_device->get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
+    TT_FATAL(!mesh_device.get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
     // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
-    workload.pimpl_->compile(mesh_device);
+    workload.pimpl_->compile(&mesh_device);
     ProgramCapacity result;
     const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
     const uint32_t programmable_core_type_count =
-        MetalContext::instance(extract_context_id(mesh_device)).hal().get_programmable_core_type_count();
+        MetalContext::instance(extract_context_id(&mesh_device)).hal().get_programmable_core_type_count();
     TT_FATAL(
         config_sizes.size() >= programmable_core_type_count,
         "Prepared workload reported configuration sizes for {} programmable core types; expected at least {}",

@@ -380,6 +380,7 @@ from ttnn.core import (
 
 tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
+
 import ttnn.reflection
 
 from ttnn.decorators import (
@@ -440,7 +441,6 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-experimental.create_sharded_tensor_view = ttnn._ttnn.operations.experimental.create_sharded_tensor_view
 experimental.prepare_generic_op = ttnn._ttnn.operations.experimental.prepare_generic_op
 experimental.GenericOpPreparationResult = ttnn._ttnn.operations.experimental.GenericOpPreparationResult
 

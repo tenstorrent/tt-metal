@@ -25,7 +25,7 @@ namespace ttnn::device_operation::detail {
 
 ProgramPreparationResult summarize_prepared_workload(
     tt::tt_metal::distributed::MeshWorkload& workload, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    auto result = tt::tt_metal::experimental::program_preparation::prepare(workload, mesh_device);
+    auto result = tt::tt_metal::experimental::program_preparation::prepare(workload, *mesh_device);
     return {
         .max_program_config_size_bytes = result.max_program_config_size_bytes,
         .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,

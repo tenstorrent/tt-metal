@@ -126,29 +126,29 @@ ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
-ttnn::operations::generic::tensor_return_value_t generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
-    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+namespace {
+
+using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+
+OperationType::tensor_args_t make_tensor_args(const std::vector<Tensor>& io_tensors) {
     TT_FATAL(
         io_tensors.size() >= 2,
         "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
         io_tensors.size());
+    return OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+}
 
-    auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+}  // namespace
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+ttnn::operations::generic::tensor_return_value_t generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
 
 ttnn::device_operation::detail::ProgramPreparationResult prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
-    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
-    TT_FATAL(
-        io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
-        io_tensors.size());
-    auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
-    return ttnn::device_operation::detail::prepare<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::detail::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
 }  // namespace ttnn::prim

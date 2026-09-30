@@ -51,22 +51,6 @@ private:
 // - It is copyable, copying a DeviceStorage shares the underlying device memory.
 // - It represents a MeshTensor at specific coordinates of the MeshDevice.
 //
-// Ownership model:
-// Copies, assignments, and the coordinate-subset constructor share ownership of one reference-counted MeshTensor,
-// like std::shared_ptr; device memory lives until the last reference is released or it is deallocated explicitly.
-// - Owner: constructed from a MeshTensor; owns its device memory.
-// - Retained view (create_sharded_tensor_view, or a reinterpretation of a retained view): aliases a subrange of its
-//   base, an owner or another retained view, and holds a strong reference to it. It is invalidated (is_allocated()
-//   returns false, accessors throw) when any base is deallocated; deallocating it releases only its own reference.
-// - Reinterpretation (Tensor::view or unchecked_reinterpret_layout of an owner): aliases the owner's memory and holds
-//   a strong reference to it; deallocating it frees the owner's memory.
-// - deallocate() on an owner frees its memory even while views reference it. Without force, Tensor::deallocate()
-//   proceeds only when the storage is uniquely referenced (is_sole_owner_of_device_memory()); a retained view counts
-//   only references to itself. Python ttnn.deallocate forces by default.
-// - A retained view cannot be released with release_mesh_tensor() or created from a reinterpretation.
-// - Limitation: a reinterpretation is not invalidated when its owner is deallocated, and operations check only
-//   is_allocated(), so using it afterwards accesses freed memory; is_root_allocated() detects this.
-//
 // Invariant:
 // - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with
 // tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology.
@@ -74,6 +58,7 @@ private:
 //   DeviceStorage.
 // - tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology are always accessible for a DeviceStorage constructed
 // from a MeshTensor. This stays true even after deallocate() is called.
+// - deallocate() releases the underlying device memory.
 // - MeshTensor getters will always throw if the DeviceStorage is deallocated.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
@@ -130,8 +115,7 @@ struct DeviceStorage {
     // use release_mesh_tensor instead.
     tt::tt_metal::MeshTensor& get_mesh_tensor();
 
-    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated or is a retained
-    // view.
+    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
     // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
     tt::tt_metal::MeshTensor release_mesh_tensor();
 
@@ -219,16 +203,6 @@ private:
         std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
         std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
-
-    // Constructs a view whose holder retains owning_storage, which may itself be a view. Deallocating the view
-    // releases that retention without deallocating owning_storage; deallocating owning_storage or any storage
-    // it depends on invalidates the view.
-    static DeviceStorage create_retained_view(
-        const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
-    // Declared in ttnn/core/tensor/retained_tensor_view_factory.hpp, for
-    // ttnn::experimental::create_sharded_tensor_view. A friend class keeps ttnn::experimental out of this widely
-    // included header.
-    friend class RetainedTensorViewFactory;
 
     // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;

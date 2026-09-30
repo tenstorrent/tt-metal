@@ -23,7 +23,6 @@ namespace program_dispatch {
 // NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
-
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -103,7 +102,7 @@ private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
     friend experimental::program_preparation::ProgramCapacity experimental::program_preparation::prepare(
-        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice*);
+        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice&);
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;

@@ -13,8 +13,6 @@
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
-#include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
-#include "ttnn/core/tensor/retained_tensor_view_factory.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -88,13 +86,6 @@ struct DeviceStorage::MeshTensorHolder {
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
     States state_;
-    // Set only on a retained view: the holder of the storage this view was created from. A view of a view
-    // retains its immediate source, which retains its own source in turn, so the whole chain stays alive and
-    // deallocating any link invalidates everything downstream of it. Every DeviceStorage copy of the view
-    // shares this holder, so deallocating any copy releases the retention for all of them.
-    std::shared_ptr<MeshTensorHolder> retained_owner_;
-    // Set on every reinterpretation. It holds no reference, so it does not extend any allocation's lifetime.
-    bool is_reinterpretation_ = false;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
     MeshTensorHolder(MeshTensor mesh_tensor) {
@@ -103,7 +94,6 @@ struct DeviceStorage::MeshTensorHolder {
     }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
-    bool is_retained_view() const { return retained_owner_ != nullptr; }
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
@@ -112,17 +102,6 @@ struct DeviceStorage::MeshTensorHolder {
             state_ = DeallocatedTombStone{
                 allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
-        retained_owner_.reset();
-    }
-
-    // Other MeshBuffers can reference this holder's MeshBuffer through RetainedViewState, so dropping the
-    // MeshTensor alone would keep it alive until they are destroyed. On an owning holder this frees the device
-    // memory; on a retained view it releases only the view's reference to its source MeshBuffer.
-    void deallocate_device_memory() {
-        if (auto* allocated = std::get_if<Allocated>(&state_)) {
-            allocated->mesh_tensor_.impl().raw_mesh_buffer()->deallocate();
-        }
-        deallocate();
     }
 };
 
@@ -146,9 +125,8 @@ DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
 }
 
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
-    mesh_tensor_holder_(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor))) {
-    coords_ = CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(get_mesh_tensor().device());
-}
+    mesh_tensor_holder_(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor))),
+    coords_(CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(get_mesh_tensor().device())) {}
 
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor_)), std::move(coords), nullptr) {}
@@ -161,32 +139,7 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
     DeviceStorage(
         std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
-        owning_storage.mesh_tensor_holder_->is_retained_view() ? nullptr : owning_storage.get_root_mesh_tensor()) {
-    mesh_tensor_holder_->is_reinterpretation_ = true;
-    // A reinterpretation of a retained view is itself a retained view of that view: it follows the view's source
-    // chain, which is its only strong reference to the root, and deallocating it releases only the reinterpretation.
-    if (owning_storage.mesh_tensor_holder_->is_retained_view()) {
-        mesh_tensor_holder_->retained_owner_ = owning_storage.mesh_tensor_holder_;
-    }
-}
-
-DeviceStorage DeviceStorage::create_retained_view(
-    const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
-    auto view_holder = std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor));
-    view_holder->retained_owner_ = owning_storage.mesh_tensor_holder_;
-    return DeviceStorage(std::move(view_holder), owning_storage.coords_, nullptr);
-}
-
-void RetainedTensorViewFactory::validate_source(const DeviceStorage& source) {
-    TT_FATAL(
-        !source.mesh_tensor_holder_->is_reinterpretation_,
-        "A sharded tensor view requires a source that owns its allocation or is itself a sharded tensor view; "
-        "reinterpreted storage is not supported");
-}
-
-DeviceStorage RetainedTensorViewFactory::create(const DeviceStorage& owning_storage, MeshTensor view_mesh_tensor) {
-    return DeviceStorage::create_retained_view(owning_storage, std::move(view_mesh_tensor));
-}
+        owning_storage.get_root_mesh_tensor()) {}
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
@@ -203,7 +156,6 @@ DeviceStorage::DeviceStorage(
 Buffer* DeviceStorage::get_buffer() const { return get_mesh_buffer().get_reference_buffer(); }
 
 const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
-    TT_FATAL(is_allocated(), "Tensor is not allocated");
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const tt::tt_metal::distributed::MeshBuffer& {
@@ -227,17 +179,10 @@ bool DeviceStorage::is_sole_owner_of_device_memory() const {
     if (!is_allocated()) {
         return false;
     }
-    // A retained view's underlying MeshTensor is its own: deallocating the view releases only the view, never its
-    // source, so the view needs only its holder to be unshared. Counting the root holder would make deallocate()
-    // without force a no-op for as long as the owner tensor exists.
-    if (mesh_tensor_holder_->is_retained_view()) {
-        return mesh_tensor_holder_.use_count() == 1;
-    }
     return mesh_tensor_holder_.use_count() == 1 && get_root_mesh_tensor().use_count() == 1;
 }
 
 const MeshTensor& DeviceStorage::get_mesh_tensor() const {
-    TT_FATAL(is_allocated(), "Tensor is not allocated");
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const MeshTensor& { return allocated.mesh_tensor_; },
@@ -246,12 +191,6 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
 }
 
 MeshTensor DeviceStorage::release_mesh_tensor() {
-    TT_FATAL(is_allocated(), "Tensor is not allocated");
-    // A released MeshTensor wrapped in a new Tensor would no longer track the view's source, so it could report
-    // allocated after the source is explicitly deallocated.
-    TT_FATAL(
-        !mesh_tensor_holder_->is_retained_view(),
-        "DeviceStorage cannot release a retained view's MeshTensor; the view must stay attached to its source");
     auto result = std::visit(
         ttsl::overloaded{
             [](MeshTensorHolder::Allocated& allocated) -> MeshTensor { return std::move(allocated.mesh_tensor_); },
@@ -262,7 +201,6 @@ MeshTensor DeviceStorage::release_mesh_tensor() {
 }
 
 MeshTensor& DeviceStorage::get_mesh_tensor() {
-    TT_FATAL(is_allocated(), "Tensor is not allocated");
     return std::visit(
         ttsl::overloaded{
             [](MeshTensorHolder::Allocated& allocated) -> MeshTensor& { return allocated.mesh_tensor_; },
@@ -271,43 +209,19 @@ MeshTensor& DeviceStorage::get_mesh_tensor() {
 }
 
 const std::shared_ptr<DeviceStorage::MeshTensorHolder>& DeviceStorage::get_root_mesh_tensor() const {
-    if (mesh_tensor_holder_->retained_owner_) {
-        const std::shared_ptr<MeshTensorHolder>* root = &mesh_tensor_holder_->retained_owner_;
-        while ((*root)->retained_owner_) {
-            root = &(*root)->retained_owner_;
-        }
-        return *root;
-    }
     return root_mesh_tensor_holder_ ? root_mesh_tensor_holder_ : mesh_tensor_holder_;
 }
 
 void DeviceStorage::deallocate() {
-    if (!mesh_tensor_holder_->is_allocated()) {
+    if (!is_allocated()) {
         return;
     }
 
-    if (mesh_tensor_holder_->is_retained_view()) {
-        mesh_tensor_holder_->deallocate_device_memory();
-        return;
-    }
-    get_root_mesh_tensor()->deallocate_device_memory();
+    get_root_mesh_tensor()->deallocate();
     mesh_tensor_holder_->deallocate();
 }
 
-bool DeviceStorage::is_allocated() const {
-    if (!mesh_tensor_holder_->is_allocated()) {
-        return false;
-    }
-    // Only retained views depend on their sources' allocation state; the chain ends at the root holder.
-    // Reinterpreted views keep reporting their own holder's state and expose the root via is_root_allocated().
-    for (const MeshTensorHolder* source = mesh_tensor_holder_->retained_owner_.get(); source != nullptr;
-         source = source->retained_owner_.get()) {
-        if (!source->is_allocated()) {
-            return false;
-        }
-    }
-    return true;
-}
+bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
 bool DeviceStorage::is_root_allocated() const { return get_root_mesh_tensor()->is_allocated(); }
 

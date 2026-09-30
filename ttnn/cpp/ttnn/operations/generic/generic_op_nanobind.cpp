@@ -45,14 +45,15 @@ void bind_generic_operation(nb::module_& mod) {
 
     // Overload for MeshProgramDescriptor (explicit mesh control)
     auto mesh_program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
-            &ttnn::generic_op),
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(&ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("mesh_program_descriptor"));
 
     // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
     auto program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(&ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
+            &ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
