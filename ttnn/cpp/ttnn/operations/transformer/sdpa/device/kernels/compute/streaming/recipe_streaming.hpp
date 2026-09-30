@@ -391,7 +391,29 @@ constexpr bool sdpa_perf_zones = true;
 constexpr bool sdpa_perf_zones = false;
 #endif
 
-template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride>
+#ifdef SDPA_PA
+#ifndef SDPA_PROTO_PA_TAU
+#define SDPA_PROTO_PA_TAU 20.0f
+#endif
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
+namespace ckernel::sfpu {
+// Reference max bias: m_ref = m + tau / scale, so exp(scale * (s - m_ref)) stays in the fast exp's range
+// (its INT16 grid saturates about 0.72 above zero) until a row max grows by more than tau.
+template <uint32_t scale_fp32>
+inline void calculate_sdpa_pa_bias() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    constexpr float bias = SDPA_PROTO_PA_TAU / __builtin_bit_cast(float, scale_fp32);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat m = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = m + bias;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+#endif
+
+template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride, uint32_t pa_scale_fp32 = 0>
 void reduce_c_row_group(
     uint32_t out_cb,
     uint32_t prev_cb,
@@ -465,6 +487,14 @@ void reduce_c_row_group(
 
     tile_regs_commit();
     tile_regs_wait();
+#ifdef SDPA_PA
+    // First K chunk only (later chunks return above with the carried reference).
+    for (uint32_t i = 0; i < group_size; i++) {
+        PACK((SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_pa_bias, (pa_scale_fp32), i, VectorMode::None)));
+    }
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
 #ifdef SDPA_RECIPE_FP32
     configure_single_tile_pack(out_cb);
 #endif
@@ -1457,7 +1487,7 @@ static void sdpa_inner_loop_step(
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
-            reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride>(
+            reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride, scale_fp32>(
                 cur.max,
                 prev.max,
                 cur_qk_index,
