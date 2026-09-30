@@ -3926,7 +3926,55 @@
  },
  "X.1": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 476.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:44:11"
+   }
+  ],
+  "last_run": "2026-09-30T17:44:11",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/X.1.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 1937.6,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 1104.22,
+   "device_ms_attn_collapse": 22.08,
+   "device_ms_attn_hc": 39.19,
+   "device_ms_attn_norm": 5.21,
+   "device_ms_attn_residual": 90.01,
+   "device_ms_chip0": 1730.66,
+   "device_ms_chip1": 1732.04,
+   "device_ms_chip2": 1730.4,
+   "device_ms_chip3": 1731.91,
+   "device_ms_chip4": 1730.42,
+   "device_ms_chip5": 1731.84,
+   "device_ms_chip6": 1730.42,
+   "device_ms_chip7": 1732.04,
+   "device_ms_experts": 256.05,
+   "device_ms_ffn_collapse": 22.08,
+   "device_ms_ffn_hc": 39.15,
+   "device_ms_ffn_norm": 10.09,
+   "device_ms_ffn_residual": 90.53,
+   "device_ms_mlp": 3.53,
+   "device_ms_moe_add": 2.83,
+   "device_ms_q_a": 12.83,
+   "device_ms_router": 12.48,
+   "device_ms_shared_expert": 24.81,
+   "device_ms_total": 1735.09,
+   "host_overhead_ms": 202.5,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9990691410845041,
+   "profiled_programs": 159824
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T17:36:15",
+  "status": "PASS"
  },
  "X.2": {
   "attempts": 0,
