@@ -145,15 +145,21 @@ public:
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
+    // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
+    // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
+    // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
+    // transfer_* twins instead, which note nothing: the path notes its exact access itself.
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
+        return transfer_noc_addr(page_id, offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_noc_addr(
         const ArrType page_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
@@ -161,6 +167,18 @@ public:
     FORCE_INLINE
     std::uint64_t get_shard_noc_addr(
         const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        tt_buf_rw::note_read_write<DSpec::binding_id>();
+        return transfer_shard_noc_addr(shard_id, offset, noc);
+    }
+
+    // get_noc_addr / get_shard_noc_addr without the note, for the library's transfer paths (see above).
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t page_id, const uint32_t offset, uint8_t noc) const {
+        return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
+    }
+
+    FORCE_INLINE
+    std::uint64_t transfer_shard_noc_addr(const uint32_t shard_id, const uint32_t offset, uint8_t noc) const {
         const auto bank_shard = shard_to_bank(shard_id);
         PageMapping page_mapping{
             .bank_id = bank_shard.bank_id,
@@ -183,6 +201,8 @@ public:
 
     // Returns the bank-relative base address (offset) used by this accessor.
     // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
+    // Not noted, unlike get_noc_addr: it must stay constexpr, and C++17 allows no asm there. A kernel that uses it for
+    // direct access to its local shard should hold a LocalTensorAccessor, which is noted.
     FORCE_INLINE
     constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
 
@@ -456,6 +476,22 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+
+    // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
+    // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
+    // notes the tensor as both read and written (api/dataflow/buf_rw_note.h). The library's own transfer paths use the
+    // transfer_* twins instead, which note nothing: the path notes its exact access itself.
+    // These hide InterleavedAddrGen's get_noc_addr, which raw kernels also use directly.
+    FORCE_INLINE
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        tt_buf_rw::note_read_write<BindingId>();
+        return transfer_noc_addr(id, offset, noc);
+    }
+
+    FORCE_INLINE
+    std::uint64_t transfer_noc_addr(const uint32_t id, const uint32_t offset, uint8_t noc) const {
+        return InterleavedAddrGen<IsDram>::get_noc_addr(id, offset, noc);
+    }
 
     // Locality APIs
     FORCE_INLINE
