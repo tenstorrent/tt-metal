@@ -3330,3 +3330,51 @@ Gotchas
 Re-run
     PYTHONPATH=$PWD BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     HY4_ATTN_MM=default ... (same command) for the old matmul configs
+
+## X.3 fix, attempt 1 (timeline_ok = 0)
+
+What
+- Every accuracy and perf metric passed (pcc_layer L00-L05 >= 0.99989, pcc_state_min 0.99996, prefill_ms_full 4906,
+  pos_chunk 5120, op_rows 829). Only `timeline_ok` failed: `device programs per chip {1: 1170, 2: 1172, 0: 1172, 3: 1170}
+  != op-mode counts {...: 1177}`, next to `Profiler DRAM buffers were full, markers were dropped! ... bufferEndIndex = 12000`.
+- Cause: the timeline run reads the device profiler once per chunk. Each program takes 12 words per RISC and the buffer
+  holds `DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000` programs (tt_metal/impl/profiler/profiler_state_manager.cpp).
+  One chunk of layers 0-5 is 1177 programs per chip (slice 420, multiply 107, addcmul 84, linear 74, ...), so cores
+  that run every program (worker 1,2) overflow and the single-core tail programs are lost.
+- Diagnostic (not the gate): the same test_profile command with `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000` passed
+  with an aligned timeline: device 461.4 ms = kernels 459.3 + gaps 2.0 (chip 2), host dispatch 131.2 ms, host wall
+  462.7 ms. Log: /tmp/hy4_x3_diag.log. results/ was not written.
+
+Decisions
+- No code change. No module or fork is at fault, and the only lever inside this step's allowed paths would be setting a
+  global profiler env var from `ttnn/ttnn/bringup/__init__.py` (it is imported by `import ttnn`). That hides harness
+  config in an op package, so I did not do it. Cutting the program count means changing model modules (tt/), which
+  this step may not touch, and would need about 180 fewer programs per chip anyway.
+- The fix belongs in the framework or the gate env: set `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT` (for example 3000)
+  before the mesh opens when the op profile is on, or drain the timeline at layer boundaries.
+- Gate not re-run: nothing changed, so it would fail the same way (1177 > 1000 is deterministic).
+
+Re-run (diagnostic)
+    PYTHONPATH=$PWD TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+
+## X.3 fix, attempt 2 (timeline_ok = 0)
+
+What
+- Same failure as attempt 1 (profiler buffer 1000 programs < 1177 per chunk). The overseer has since changed the X.3
+  gate in tasks.yaml (commit 93c2126d220, after this brief was written) to prefix the profile command with
+  `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`. No code change in this step.
+- Ran the current tasks.yaml gate. Ladder s56320 PASS; test_profile PASS: 829 op rows over 84 sections, timeline
+  device 460.1 ms = kernels 459.0 + gaps 1.0 (chip 1), host dispatch 95.7 ms, host wall 461.3 ms (no alignment
+  error); full prefill 4.90 s warm.
+- test_positions hung in my hand run: it ran with the precompile pass (my shell, no `--no-precompile`), whose collect
+  pass mutates the spec's target.seq, so the real pass picked positions up to 819200. Re-run with `--no-precompile`
+  (what core/gate.py adds for perf steps): PASS, positions 0 / 51200 / 102400 / 153600 / 204800 at 448.0 / 483.8 /
+  519.5 / 548.2 / 577.8 ms.
+
+Gotchas
+- The "Profiler DRAM buffers were full ... bufferEndIndex = 48000" warnings in test_profile come from the 11-chunk
+  full-prefill warm run (no profiler reads), before the op / timeline runs; the timeline itself aligns.
+- Run bring-up gates by hand with `--no-precompile` on every run_safe_pytest.sh call, as the orchestrator does.
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && PYTHONPATH=$PWD TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py && PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_positions.py
