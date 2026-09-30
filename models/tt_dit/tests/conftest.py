@@ -44,11 +44,14 @@ def diffvae_options(request):
     opt = request.config.option
     if opt.diffvae_replicated:
         return DiffVAEOptions()
-    return dataclasses.replace(
+    options = dataclasses.replace(
         DiffVAEOptions.production(slab_frames=opt.diffvae_slab_frames or None, tp_heads=not opt.diffvae_no_tp_heads),
         gna_stride=parse_stride(opt.diffvae_gna_stride),
-        stage5_fused_qkv=os.environ.get("DIFFVAE_S5_FUSED_QKV") == "1",
     )
+    # DIFFVAE_S5_FUSED_QKV=0 builds stage 5 with three projections (the fused one is production).
+    if (fused_qkv := os.environ.get("DIFFVAE_S5_FUSED_QKV")) is not None:
+        options = dataclasses.replace(options, stage5_fused_qkv=fused_qkv == "1")
+    return options
 
 
 @pytest.fixture

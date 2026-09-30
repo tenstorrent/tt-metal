@@ -136,6 +136,7 @@ class DiffVAEOptions:
             stages_sp_axis=1,
             stages_tp_axis=tp_axis,
             det=DetBlockOptions(fused_qkv=True, colpar_qkv=True, fused_rope=True, fused_swiglu=True),
+            stage5_fused_qkv=True,
             slab_frames=slab_frames,
             device_boundaries=True,
         )
