@@ -863,6 +863,7 @@ def test_gpt_oss_demo(
             # Decode forward — on-device sampling when available, host-side
             # greedy argmax otherwise (1×1 Blackhole, etc.)
             if on_device_sampling_supported:
+                reload_decode_inputs = iteration == 0 or not enable_decode_trace
                 out_tok, _ = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -870,6 +871,10 @@ def test_gpt_oss_demo(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=True,
+                    reset_sampling_state=iteration == 0,
                 )
             else:
                 # decode_forward returns (logits, log_probs) when sampling_params=None.
@@ -880,6 +885,10 @@ def test_gpt_oss_demo(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=None,
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
                 )
                 out_tok = torch.argmax(logits, dim=-1).view(-1)
 
