@@ -41,3 +41,10 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: ernie45_d_p O.1
 - Files: `tests/cases.py`
+
+### Tests: hy4_preview_d_p case
+- What: appended the random-input case for the call hy4_preview_d_p makes (2x2 mesh, dispatch groups of 2 chips
+  along axis 0, S 2560 per chip, H 6144, bf16 expert-output buffer, 256 experts top-8, 64 per chip). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: hy4_preview_d_p O.1
+- Files: `tests/cases.py`

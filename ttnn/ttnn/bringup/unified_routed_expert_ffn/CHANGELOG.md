@@ -45,3 +45,13 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: gemma4_a4b_d_p O.1
 - Files: `tests/cases.py`
+
+### Tests: hy4_preview_d_p case (ClampedSiluGlu)
+- What: appended the random-input case for the call hy4_preview_d_p makes (2x2 mesh, H 6144, I 2048, 64 experts per
+  chip, bfp8 weights, ClampedSiluGlu, high_precision, HiFi4 + fp32 dest). The reference gains the ClampedSiluGlu
+  activation (silu(min(gate, 10)) * clamp(up, -10, 10), `GLU` in tests/reference.py) and the test an optional
+  per-case `x_scale` (default 1, so the other cases keep their inputs) that widens x until the clamps are reached.
+  No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: hy4_preview_d_p O.1
+- Files: `tests/cases.py`, `tests/reference.py`, `tests/test_unified_routed_expert_ffn.py`

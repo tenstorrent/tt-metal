@@ -89,24 +89,25 @@ CASES = [
         "exact": True,
     },
     {
-        # GLM-5.3-Flash routed experts on a 2x2 mesh: cluster_axis 0 has 2 devices, so each mesh column is a dispatch
-        # group of 2 chips (histograms all_gathered over the rows, fabric on); column c holds experts 144c .. + 143.
-        "id": "glm53_flash_d_p-2x2-axis0-e288-epc72",
-        "model": "glm53_flash_d_p",
+        # Hy4 (preview) routed experts on a 2x2 mesh: cluster_axis 0 has 2 devices, so each mesh column is a dispatch
+        # group of 2 chips (histograms all_gathered over the rows, fabric on); column c holds experts 128c .. + 127.
+        # Same op arguments as the mimo_v2_6_d_p_2x2 case (same captured sig), recorded for this model.
+        "id": "hy4_preview_d_p-2x2-axis0-e256-epc64",
+        "model": "hy4_preview_d_p",
         "task": "O.1",
-        "sig": "97cbac374b",
+        "sig": "5ac677f17a",
         "mesh": [2, 2],
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
-        "hist_shape": [288],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
         "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
-        # A device's 2560 tokens x top-8 over its group's 144 experts (the others 0); any count is exact.
+        # A device's 2560 tokens x top-8 over its group's 128 experts (the others 0); any count is exact.
         "max_count": 2560,
         "local_experts_only": True,
         "cluster_axis": 0,
         "num_links": 1,
-        "experts_per_chip": 72,
+        "experts_per_chip": 64,
         "memory_config": "DRAM",
-        "seed": 0,
+        "seed": 1,
         "exact": True,
     },
 ]
