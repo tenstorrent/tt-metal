@@ -323,6 +323,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-30T06:15:16'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_q_a.py: 026a8b41ac79097b93711ad48df79ac20b9eec7de760b0ab4e428607c1f35f05
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.dense.04
   title: 'dense block with steps 1-4 on device (last: q_a)'
   step: implement
