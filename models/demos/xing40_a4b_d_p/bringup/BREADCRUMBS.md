@@ -116,3 +116,36 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate: pcc_q_a_L00 0.999998; vs CPU rel 0.00175 (limit 0.0066), ratio [0.99895, 1.00058]; vs golden rel 0.00215;
   second inputs (layer39, mixed, small, big) rel <= 0.00178.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_q_a.py`
+
+## C.dense.attention implement (run1, attempt 2 of the step; brief attempt 1)
+- Took attempt 1's wip (`runs/run1/wip_attention_attempt1`: attention.py, hooks.diff) into `tt/attention.py`
+  (`TtMlaAttention` / `build_attention`) and `bringup/hooks.py` (`_AttentionHostFn`, stateful: reloads the golden
+  prefix per call in component / swap tests, persists across chunks in the hybrid; `_HybridState` reads kv_latent
+  back from the device; `DEVICE_STEPS["dense"]` += attention). Dropped the all_gather + chunked SDPA fallback (owner:
+  ring_mla over axis 0 only).
+- Pipeline per chip (r, c): kv_a K-split linear fp32 -> all_reduce axis 1 -> ttnn.bringup.rms_norm (latent) + typecast,
+  rotary_embedding_indexed (k_rope, block-cyclic YaRN tables) -> concat -> update_padded_kv_cache (bf16 TILE cache
+  [max_seq/4, 576], block-cyclic, TP-replicated); q_b linear -> nlp_create_q_heads_split -> W_uk batched linear |
+  RoPE -> ring_mla (cluster_axis 0, Linear, head_dim_v 512, kv_actual_isl = start, logical_n = start + chunk) -> W_uv
+  -> nlp_concat_heads -> o_proj fp32 -> reduce_scatter axis 1. No host work in the forward.
+- L1: ring_mla at q32 / k512 overflows (2.15 MB of CBs; the cache is bf16, ttMLA's Kimi k640 is on bfp8). k256 fits.
+- Owner setting first (ttnn.transformer.ring_mla, HiFi4, fp32 dest off): pcc 0.999988, vs cpu rel 0.0048 (limit
+  0.0056), but the auto `big` check (inputs x2) failed: worst row 0.0537 > 0.045, at k128 / k256 / q64 alike. A device
+  probe (runs/run1/attention_probes/probe_001.py; CPU kernel model sim_dest_accum.py) split the error: q_abs / cache at bf16
+  rounding (rel 0.002 / 0.003), post-SDPA 0.0006, and ring_mla vs float32 on its own inputs rel 0.024, worst row 0.25
+  (latent space). Scores reach 93 there. A CPU model shows the excess is the 16-bit DEST accumulation of QK^T (bf16
+  running state adds ~0). So only fp32 DEST fixes it, and the source op refuses fp32 DEST for latent V.
+- Extended the sdpa fork (host only, no new argument): ring_mla (latent V) at fp32 DEST, which the source refuses,
+  now takes the streaming path, with its bf16 intermediate CBs (fork CHANGELOG). Rebuilt. New
+  `ttnn/ttnn/bringup/sdpa/tests/unit/test_ring_mla_fp32_dest.py` (7 passed; bf16 dest bit-identical to the source;
+  1.02-scaled output fails). Regression, option off: unit suite 35 passed, fork_source 210 tests / 0 regressions. The
+  model cases in tests/test_sdpa.py (1x4 / 2x2 meshes) cannot open on this 4x2 box (fabric router sync timeout).
+- Default is `XING_MLA_SDPA=fork` (ttnn.bringup.ring_mla, HiFi4 + fp32 dest). `XING_MLA_SDPA=source` is the owner's
+  06:35 bf16-dest setting, which fails the frozen test's big check. This departs from the owner's "fp32_dest_acc_en=False"
+  instruction: the owner should confirm, or relax the check.
+- The ring_mla gather scratch [max_seq, 576] bf16 (65 MB at 56k) is shared by every layer (per mesh and max_seq).
+- Gate: pcc_attention_L00 0.999993; vs cpu rel 0.0031 (limit 0.0056), worst row 0.0077; vs golden rel 0.0036;
+  chunk0 0.0030, layer39 0.0027, mixed 0.0018, small 0.0046, big 0.0081 / worst row 0.035 (limit 0.045).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py`
+  (`XING_MLA_SDPA=source` for the bf16-dest comparison); fork test: `scripts/run_safe_pytest.sh --run-all
+  ttnn/ttnn/bringup/sdpa/tests/unit/test_ring_mla_fp32_dest.py`
