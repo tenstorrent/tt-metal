@@ -1,6 +1,7 @@
 """GATE_PCC (PLAN 8.6) — parse_pcc + verdict routing (no hardware)."""
 
 import json
+from pathlib import Path
 
 from agent.loop_context import LoopContext
 from agent.pcc_runner import parse_pcc
@@ -27,17 +28,17 @@ class _FakeCtx:
 
 
 def _patch_run(monkeypatch, tmp_path, stdout, returncode):
-    import subprocess
-
-    from agent import gitio, pcc_runner
+    from agent import gitio, pcc_runner, probes
 
     monkeypatch.setattr(gitio, "repo_root", lambda p: tmp_path)
+    monkeypatch.setattr(probes, "wait_for_memory_headroom_before_device_work", lambda *a, **k: None)
 
-    class _R:
-        def __init__(self):
-            self.stdout, self.stderr, self.returncode = stdout, "", returncode
+    def _fake_execute(cmd, cwd, env, timeout_s, log_path, **kw):
+        # the supervised runner streams the child's output to log_path and returns its exit code
+        Path(log_path).write_text(stdout)
+        return returncode
 
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+    monkeypatch.setattr(probes, "_execute", _fake_execute)
     return pcc_runner.run_pcc(_FakeCtx(tmp_path))
 
 
@@ -138,3 +139,22 @@ def _ctx(tmp_path, code_fix=0, pcc_fix=0):
         json.dumps({"state": "GATE_PCC", "code_fix_attempts": code_fix, "pcc_fix_attempts": pcc_fix, "cost_usd": 0.0})
     )
     return LoopContext.from_run(run, index=[])
+
+
+def test_the_pcc_check_is_supervised(monkeypatch, tmp_path):
+    """A hung check is ended by the progress watch, not by a wall clock: Qwen-Image-Edit 2026-09-30
+    sat 7210 s twice on a device that went quiet 7 min in. A stall comes back as a crash with why."""
+    from agent import gitio, pcc_runner, probes
+
+    monkeypatch.setattr(gitio, "repo_root", lambda p: tmp_path)
+    monkeypatch.setattr(probes, "wait_for_memory_headroom_before_device_work", lambda *a, **k: None)
+    seen = {}
+
+    def _stalled(cmd, cwd, env, timeout_s, log_path, **kw):
+        seen.update(kw)
+        raise probes.TracyHangError("check_pcc made no forward progress for 600s")
+
+    monkeypatch.setattr(probes, "_execute", _stalled)
+    v = pcc_runner.run_pcc(_FakeCtx(tmp_path))
+    assert v["status"] == "crash" and "no forward progress" in v["error"]
+    assert seen.get("label") == "check_pcc" and "preexec_fn" in seen

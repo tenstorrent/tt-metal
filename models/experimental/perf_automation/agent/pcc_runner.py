@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import gitio, probes
@@ -201,20 +202,30 @@ def run_pcc(ctx) -> dict:
     probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
     # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
     argv = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", *probes.PYTEST_NO_TIMEOUT]
-    try:
-        r = probes.run_with_low_memory_fallback(
-            lambda: subprocess.run(
-                [*argv, test, "-sv"],
-                cwd=str(gitio.repo_root(ctx.model_root())),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=probes.adaptive_backstop(3600),
-                preexec_fn=probes.memory_cap_preexec_fn(),
-            ),
+    cmd = [*argv, test, "-sv"]
+    log = Path(tempfile.mkdtemp(prefix="pcc_run_")) / "run.log"
+
+    def _once():
+        # SUPERVISED LIKE EVERY OTHER DEVICE STEP. This was a plain subprocess.run with a wall-clock
+        # kill, so a hung check sat until adaptive_backstop ran out: Qwen-Image-Edit, 2026-09-30, the
+        # device went quiet 7 min in and the check was killed at 7210 s, then the retry did the same.
+        # probes._execute ends a step that makes no forward progress (ProgressWatch) and keeps the
+        # budget only as the ceiling behind it -- the same runner emit-e2e's G6 gate runs this test in.
+        rc = probes._execute(
+            cmd,
+            Path(gitio.repo_root(ctx.model_root())),
             env,
+            probes.adaptive_backstop(3600),
+            log,
+            preexec_fn=probes.memory_cap_preexec_fn(),
+            label="check_pcc",
         )
-    except Exception as exc:  # timeout, OS error, etc.
+        out = log.read_text(errors="ignore") if log.exists() else ""
+        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+
+    try:
+        r = probes.run_with_low_memory_fallback(_once, env)
+    except Exception as exc:  # a stall (TracyHangError), the ceiling, an OS error, etc.
         return {"status": "crash", "error": str(exc)}
     out = (r.stdout or "") + (r.stderr or "")
     return _verdict_from_output(out, threshold)

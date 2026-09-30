@@ -1578,6 +1578,8 @@ def _execute(
     timeout_s: int,
     log_path: Path,
     stall_timeout_s: int = 600,
+    preexec_fn=None,
+    label: str = "tracy run",
 ) -> int:
     """Run cmd with output streamed to log_path (live-tailable). Hang-proof:
     no pipes (a daemon child inheriting them cannot deadlock us), and the
@@ -1617,12 +1619,13 @@ def _execute(
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # own process group
+            preexec_fn=preexec_fn,  # e.g. memory_cap_preexec_fn(); runs in the child after the new session
         )
 
         def _kill_and_raise(reason: str):
             _kill_tree(proc.pid)
             proc.wait()
-            raise TracyHangError(f"tracy run {reason}; log: {log_path}") from None
+            raise TracyHangError(f"{label} {reason}; log: {log_path}") from None
 
         pgid = proc.pid
         start = time.monotonic()

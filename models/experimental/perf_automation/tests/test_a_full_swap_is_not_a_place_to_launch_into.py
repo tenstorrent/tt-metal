@@ -491,8 +491,10 @@ def test_check_pcc_calls_it():
 
     src = inspect.getsource(R.run_pcc)
     i = src.index("wait_for_memory_headroom_before_device_work(")
-    j = src.index("subprocess.run(")
-    assert j > i, "check_pcc's subprocess.run is not preceded by the memory gate"
+    # The launch is the supervised runner now (probes._execute), not a bare subprocess.run -- see
+    # test_the_pcc_check_is_supervised; the gate and the cap still come first and ride along.
+    j = src.index("probes._execute(")
+    assert j > i, "check_pcc's launch is not preceded by the memory gate"
     assert "run_with_low_memory_fallback(" in src, "check_pcc does not use the retry-with-fallback wrapper"
     assert "preexec_fn=probes.memory_cap_preexec_fn()" in src[j : j + 500], "check_pcc's launch carries no hard cap"
 
