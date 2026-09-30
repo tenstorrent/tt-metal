@@ -5,7 +5,9 @@
 swap order. The rendered files live in <model_dir>/tests/bringup/ and are frozen before any implementation exists.
 The test role may edit a rendered file (comparison mode, threshold, extra checks) before freezing, never after.
 A swap test gates every swapped step's own output (CHECKS = "steps", F49), so by default swap tests are frozen without
-a test-role review (spec agents.swap_review opts back in).
+a test-role review (spec agents.swap_review opts back in). A component test runs the built-in checks by output kind
+(CHECKS = "auto", F56); it is frozen without a review when its freeze sweep passes and agents.component_review does not
+name its block type.
 """
 
 from __future__ import annotations
@@ -33,11 +35,12 @@ STEP = {step!r}
 LAYER = {layer}
 COMPARE = {mode!r}  # None = PCC for float outputs, exact match for integer outputs
 THRESHOLD = {thr!r}  # None = spec thresholds.component (default 0.99)
+CHECKS = "auto"  # also the built-in checks by output kind and the second inputs (testing/component_checks.py)
 
 
 @mesh_parametrize
 def test_component(mesh_device):
-    assert run_component_test(S, STEP, LAYER, mesh_device, COMPARE, THRESHOLD)
+    assert run_component_test(S, STEP, LAYER, mesh_device, COMPARE, THRESHOLD, checks=CHECKS)
 '''
 )
 
