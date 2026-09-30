@@ -37,6 +37,15 @@ using namespace ckernel::packer;
  * tile lives in the MOP template (last_inner / last_outer) so it can
  * carry the Last=1 bit on the final tile.
  *
+ * For a full 32x32 tile (four faces of FACE_R_DIM rows) the end ops are
+ * not programmed. The packer's Z stride into DEST is FACE_R_DIM rows
+ * (set_packer_strides), so the face step of the tile's last PACR
+ * (ADDR_MOD_2, Z += 1) moves from face 3 of one Tile32x32 slot to face 0
+ * of the next, which is what the two end ops do by hand, and the pack
+ * thread issues 16 words per tile instead of 18. A tiny tile occupies a
+ * Tile32x32 slot in DEST but fewer than four faces of 16 rows, so the
+ * face step does not reach its next slot and the end ops stay.
+ *
  * Precondition: _llk_pack_init_ or _llk_pack_configure_addrmod_ +
  * set_packer_strides must have been called to establish the normal
  * pack ADDR_MOD_0/1/2 and strides. This function only replaces the MOP.
@@ -170,9 +179,18 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
 
     // END_OP0: advance W to next Tile32x32 DEST slot
     // END_OP1: reset Z for next tile's face traversal
-    tmp.set_end_ops(
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),          // ch0_w += 1
-        TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001)); // ch0_z = 0
+    // Both are needed only for tiles that do not fill their Tile32x32 slot. For a full 32x32 tile the face step of
+    // the tile's last PACR (ADDR_MOD_2 advances Z by one face of FACE_R_DIM DEST rows) already walks from face 3 of
+    // one slot into face 0 of the next, as the standard multi-tile pack MOP relies on, so the end ops would repeat
+    // what the address modifier did and cost two pack-thread words per tile: 18 + 9 / num_tiles words per tile
+    // against 16 + 9 / num_tiles without them.
+    const bool full_tile = (face_r_dim == FACE_R_DIM) && (num_faces == 4);
+    if (!full_tile)
+    {
+        tmp.set_end_ops(
+            TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),          // ch0_w += 1
+            TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001)); // ch0_z = 0
+    }
 
     tmp.program();
 }
