@@ -2589,7 +2589,22 @@
  },
  "S.moe.05": {
   "attempts": 0,
-  "status": "TODO"
+  "duration_s": 26.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:08:17"
+   }
+  ],
+  "last_run": "2026-09-30T15:08:17",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.05.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999891362600043
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:07:50",
+  "status": "PASS"
  },
  "S.moe.06": {
   "attempts": 0,
