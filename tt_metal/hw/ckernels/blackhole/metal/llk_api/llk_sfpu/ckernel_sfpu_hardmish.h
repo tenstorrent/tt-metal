@@ -30,7 +30,6 @@ inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
-#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat scale = x * 0.5f + 1.0f;
