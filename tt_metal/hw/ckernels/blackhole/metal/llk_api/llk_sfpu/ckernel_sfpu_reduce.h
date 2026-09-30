@@ -211,6 +211,20 @@ inline void perform_float_average() {
     TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
+/**
+ * @brief One add of the column half-reduce: dst = dst + src (SFPIADD for integer modes, SFPADD otherwise).
+ *        The same instruction the recorded tree reduce uses, issued inline so the column kernel can place
+ *        other work between the dependent adds.
+ */
+template <bool is_integer_mode>
+inline void half_reduce_add(std::uint32_t dst, std::uint32_t src) {
+    if constexpr (is_integer_mode) {
+        TT_SFPIADD(0, src, dst, 4);
+    } else {
+        TT_SFPADD(dst, p_sfpu::LCONST_1, src, dst, 0);
+    }
+}
+
 template <
     PoolType pool_type,
     InstrModLoadStore INSTRUCTION_MODE,
@@ -231,15 +245,30 @@ inline void perform_reduce_col_sum_avg() {
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
     // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
     // and halves the second reduction pass, saving 4 instructions per iteration.
+    //
+    // Scheduling: on Blackhole a result of the multiply-add unit (SFPADD, SFPMUL) that the very next
+    // instruction reads costs one stall cycle; a result read two instructions later costs nothing
+    // (SFPIADD results are available to the next instruction, so the integer path never stalls).
+    // The half-reduce below is a chain of three dependent adds followed by the store (and the AVG
+    // multiply), so the float path paid a stall on every one of them. LREG4-7 are free once the
+    // transpose has run, and the next column group needs its lower face loaded into exactly those
+    // registers, so those four loads are issued between the dependent instructions of the current
+    // group instead of at the start of the next one. Same instructions, same operand order, same
+    // results; only the issue order changes. The last group has no next lower face and keeps its stalls.
+    load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(LOWER_FACE_ADDRS[0], COLUMN_OFFSETS[0]);
+
     for (std::uint32_t i = 0; i < NUM_FACES; i++) {
         const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
-        const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
         const std::uint32_t column_offset = COLUMN_OFFSETS[i];
+        const bool has_next = (i + 1 < NUM_FACES);
+        const std::uint32_t next_lower_addr =
+            has_next ? LOWER_FACE_ADDRS[i + 1] + COLUMN_OFFSETS[i + 1] : 0;
 
         // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
         // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
         // across all 4 loaded LREGs (e.g., LREG0[i] = sum of row[i], row[i+4], row[i+8], row[i+12]).
-        load_face_data<INSTRUCTION_MODE, clear_high_bits>(upper_face_addr, lower_face_addr, column_offset);
+        // The lower face (LREG4-7) was loaded ahead of this group; only the upper face is loaded here.
+        load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0>(upper_face_addr, column_offset);
         lltt::replay(0, 6);
 
         // Step 2: Cross-face addition. Unlike the old approach where only position 0 of the
@@ -255,9 +284,23 @@ inline void perform_reduce_col_sum_avg() {
         // Step 3: Transpose to rearrange the 4 partial sums for final reduction
         TTI_SFPTRANSP(0, 0, 0, 0);
 
-        // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed).
-        // This sums the 4 partial sums into LREG0[0] = total column sum.
-        lltt::replay(6, 3);
+        // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline as
+        // LREG2 += LREG3, LREG1 += LREG2, LREG0 += LREG1 so that the next group's lower-face loads can
+        // sit between the dependent adds. This sums the 4 partial sums into LREG0[0] = total column sum.
+        half_reduce_add<is_integer_mode>(p_sfpu::LREG2, p_sfpu::LREG3);
+        if (has_next) {
+            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr);
+        }
+        half_reduce_add<is_integer_mode>(p_sfpu::LREG1, p_sfpu::LREG2);
+        if (has_next) {
+            load_and_clear_high_bits<clear_high_bits>(
+                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + ROWS_PER_LOAD);
+        }
+        half_reduce_add<is_integer_mode>(p_sfpu::LREG0, p_sfpu::LREG1);
+        if (has_next) {
+            load_and_clear_high_bits<clear_high_bits>(
+                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + 2 * ROWS_PER_LOAD);
+        }
 
         // Perform averaging if requested (different for int vs float)
         if constexpr (pool_type == PoolType::AVG) {
@@ -266,6 +309,10 @@ inline void perform_reduce_col_sum_avg() {
             } else {
                 perform_float_average();
             }
+        }
+        if (has_next) {
+            load_and_clear_high_bits<clear_high_bits>(
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, next_lower_addr + 3 * ROWS_PER_LOAD);
         }
         // Store the final column sum/average to the first row.
         // Mode 9 (SFPSTORE_MOD0_FMT_LO16) is only needed when the packer-visible OUTPUT is UInt16 in a
@@ -1168,14 +1215,14 @@ inline void init_reduce_sum_avg() {
         sfpi::vConstFloatPrgm0 = 0.03125f;
     }
 
-    // Record two replay buffers:
+    // Record one replay buffer:
     // Positions 0-5: Full tree reduce (both LREG groups, interleaved for latency hiding)
     //   - Used by column reduce (first pass) and row reduce
-    // Positions 6-8: Half tree reduce (LREG0-3 only)
-    //   - Used by optimized column reduce (second pass, after cross-face add + transpose)
+    // The column kernel's half tree reduce (LREG0-3 only, after the cross-face add and transpose) is issued
+    // inline by perform_reduce_col_sum_avg, which interleaves the next group's loads with its dependent adds.
 
     if constexpr (is_integer_mode) {
-        lltt::record(0, 9);
+        lltt::record(0, 6);
 
         // Full reduce (positions 0-5): interleaved upper/lower face summation
         TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
@@ -1184,13 +1231,8 @@ inline void init_reduce_sum_avg() {
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4);  // LREG5 = LREG5 + LREG6
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);  // LREG4 = LREG4 + LREG5
-
-        // Half reduce (positions 6-8): upper face only (LREG0-3)
-        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, 4);  // LREG1 = LREG1 + LREG2
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
     } else {
-        lltt::record(0, 9);
+        lltt::record(0, 6);
 
         // Full reduce (positions 0-5): interleaved to eliminate read-after-write dependencies
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
@@ -1199,11 +1241,6 @@ inline void init_reduce_sum_avg() {
         TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0);  // B2
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // B3
-
-        // Half reduce (positions 6-8): upper face only (LREG0-3), no NOPs needed on Blackhole
-        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
-        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // A2
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
     }
 }
 
