@@ -6,10 +6,24 @@
 pinned diffusers reference, per-conv/resnet parity, the ViT decoder, and the chunked
 roundtrip. Uses the real checkpoint's encoder tensors when present, random otherwise.
 
-Host stitching regression tests and the opt-in paired CPU benchmark are below.
-See host_stitch_performance.md for timing boundaries, results and limitations.
-Enable the benchmark with MINIMAX_H3_RUN_HOST_STITCH_BENCH=1 and select
-stitch_tiles_performance; it writes raw samples to JSON under pytest's tmp_path.
+Host stitching CPU measurements (2026-09-30, source base 7665eaca + this change):
+    AMD EPYC 9124, torch 2.11.0+cpu, 8 threads, seed 73, contiguous FP32,
+    4x7 grid at 1344x768; two independent invocations, each with 2 warmup
+    pairs and 10 measured pairs in alternating order. Median milliseconds:
+        frames  invocation  concatenation  preallocated  speedup
+        28      first       178.980        100.169       1.787x
+        28      repeat      225.622        158.421       1.424x
+        1       first        11.014         10.745       1.025x
+        1       repeat       11.705         12.049       0.971x
+    Timing includes allocation, blending and assembly; excludes tile creation
+    and device decode. All outputs matched bytewise; normal pytest collection
+    passed 28 correctness cases. TTNN native runtime 0dea474c was imported,
+    but these host tests request no device fixture and load no weights.
+    Host timing varies and small chunks can regress; no universal speedup
+    or current-main whole-generation improvement is claimed.
+Select stitch_tiles_bitwise for correctness. To reproduce timing, set
+MINIMAX_H3_RUN_HOST_STITCH_BENCH=1 and select stitch_tiles_performance;
+raw samples and metadata are written to JSON under pytest's tmp_path.
 """
 
 import json
