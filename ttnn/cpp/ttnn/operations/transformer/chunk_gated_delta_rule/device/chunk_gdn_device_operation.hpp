@@ -181,8 +181,9 @@ using ChunkGdnDeviceProgramConfig =
 // Fused: the geometry (NV receivers + NP producers per head, placement) comes from the program config,
 // with the calibrated cost model filling whatever it leaves free. Needs BH*(NV+NP) cores and a placement
 // that fits; validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing
-// this path (choose_fused_geometry(...).nv == 0 means no geometry fits). Mono needs BH cores and does
-// not accept flat q/k/v.
+// this path (choose_fused_geometry(...).nv == 0 means no geometry fits). Mono needs BH cores, does not
+// accept flat q/k/v, and computes the WY inverse with Horner only: wy_inverse=AUTO resolves to Horner there
+// and an explicit FORWARD_SUBSTITUTION TT_FATALs.
 std::vector<Tensor> chunk_gdn(
     const Tensor& q,
     const Tensor& k,
