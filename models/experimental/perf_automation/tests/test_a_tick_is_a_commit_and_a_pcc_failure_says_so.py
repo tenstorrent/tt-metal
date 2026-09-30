@@ -149,3 +149,27 @@ def test_the_table_prints_the_pcc_and_skips_commit_rows():
     assert '"1CQ \\u0394 vs current", "PCC", "result")' in src
     assert 'if not isinstance(a, dict) or a.get("commit_record"):' in src
     assert "res = _attempt_result(a, _i in _wins, attempts)" in src
+
+
+def test_two_wins_on_one_rung_name_their_own_commits(summary):
+    first, second = _row(-1681.7), _row(-11.1)
+    rows = [
+        first,
+        second,
+        {
+            "commit_record": True,
+            "commit": "aaaaaaaaaaa1",
+            "fullpipe_ms": first["fullpipe_ms"],
+            "op_signature": "Op",
+            "kernel_kind": "fold",
+        },
+        {
+            "commit_record": True,
+            "commit": "bbbbbbbbbbb2",
+            "fullpipe_ms": second["fullpipe_ms"],
+            "op_signature": "Op",
+            "kernel_kind": "fold",
+        },
+    ]
+    assert summary._banking_commit(first, rows)["commit"] == "aaaaaaaaaaa1"
+    assert summary._banking_commit(second, rows)["commit"] == "bbbbbbbbbbb2", "not the first commit on the rung"

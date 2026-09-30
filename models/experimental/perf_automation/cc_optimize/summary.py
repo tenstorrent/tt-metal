@@ -1030,12 +1030,15 @@ def _banking_commit(a, rows):
     _match = getattr(_m, "_op_match", None) if _m else None
     rung = str(a.get("kernel_kind") or "").strip().lower()
     sig = a.get("op_signature")
-    for b in rows or []:
-        if not isinstance(b, dict) or not b.get("commit_record"):
-            continue
-        if _banks_the_same_state(a, b) or (
-            callable(_match) and str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b)
-        ):
+    commits = [b for b in rows or [] if isinstance(b, dict) and b.get("commit_record")]
+    # THE SAME READING FIRST. Two wins on one op and rung are banked by two commits; op + rung alone
+    # would hand both the first commit's sha, so it is only the fallback for a commit that recorded no
+    # end-to-end reading of its own.
+    for b in commits:
+        if _banks_the_same_state(a, b):
+            return b
+    for b in commits:
+        if callable(_match) and str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b):
             return b
     return None
 
