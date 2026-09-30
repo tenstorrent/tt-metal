@@ -409,14 +409,23 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
 
     // has_history and return_state reach the reader only as defines: the reader must drop the
     // accessors of unbound tensors, which needs the preprocessor.
+    // P17_CONVOPT: QKV_CONV_OPT (bit mask of bit-exact variants; unset = the kernels' default, 0 = the previous
+    // kernels) is passed from the environment to the reader and compute kernels.
+    auto add_opt_define = [](m2::KernelSpec::CompilerOptions::Defines& defines) {
+        if (const char* value = std::getenv("QKV_CONV_OPT")) {
+            defines["QKV_CONV_OPT"] = value;
+        }
+    };
+    m2::KernelSpec::CompilerOptions::Defines reader_defines{
+        {"QKV_CONV_HAS_HISTORY", has_history ? "1" : "0"},
+        {"QKV_CONV_RETURN_STATE", return_state ? "1" : "0"},
+        {"QKV_CONV_STATE_INPLACE", attrs.conv_state_inplace ? "1" : "0"}};
+    add_opt_define(reader_defines);
+
     m2::KernelSpec reader{
         .unique_id = reader_kernel_name,
         .source = std::filesystem::path(reader_source),
-        .compiler_options =
-            {.defines =
-                 {{"QKV_CONV_HAS_HISTORY", has_history ? "1" : "0"},
-                  {"QKV_CONV_RETURN_STATE", return_state ? "1" : "0"},
-                  {"QKV_CONV_STATE_INPLACE", attrs.conv_state_inplace ? "1" : "0"}}},
+        .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
             {
                 m2::ProducerOf(x_in_dfb_name, "x_in"),
@@ -462,12 +471,14 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
     });
     const bool partials_in_dest = outputs_in_l1 && !cfg.fp32_dest_acc_en && !cfg.dst_full_sync_en;
 
+    m2::KernelSpec::CompilerOptions::Defines compute_defines{
+        {"QKV_CONV_PARTIALS_IN_DEST", partials_in_dest ? "1" : "0"}};
+    add_opt_define(compute_defines);
+
     m2::KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source = std::filesystem::path(compute_source),
-        .compiler_options =
-            {.defines = {{"QKV_CONV_PARTIALS_IN_DEST", partials_in_dest ? "1" : "0"}},
-             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::ConsumerOf(x_in_dfb_name, "x_in"),

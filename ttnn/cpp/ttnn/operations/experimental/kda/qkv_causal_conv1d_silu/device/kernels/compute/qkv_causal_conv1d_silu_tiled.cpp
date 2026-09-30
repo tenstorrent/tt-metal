@@ -31,6 +31,17 @@
 //   the output writes congest the NoC (the op gets slower than flow 0), and an fp32 dest would keep
 //   fp32 partials that flow 0 rounds to bf16.
 
+// P17_CONVOPT variant mask, set by the factory from the QKV_CONV_OPT environment variable (default 64 in
+// this kernel; QKV_CONV_OPT=0 restores the previous compute kernel). The bits of the mask are shared with the
+// reader (bits 3, 4). Bit-exact:
+//   bit 6 (64): partials-in-dest flow: one SiLU SFPU pass over the G dest tiles (G * 32 row-pair iterations of the
+//               same software pipelined row code) instead of one pass per face (4 G prologue/epilogue pairs per
+//               group). The rows are the same, so the results are the same bits.
+#ifndef QKV_CONV_OPT
+#define QKV_CONV_OPT 64
+#endif
+#define QKV_CONV_SILU_ONE_PASS ((QKV_CONV_OPT & 64) != 0)
+
 #if QKV_CONV_PARTIALS_IN_DEST
 
 #include "api/compute/bcast.h"
@@ -124,9 +135,14 @@ inline void qkv_conv_compute(uint32_t step_start, uint32_t step_count) {
         PACK(TTI_SEMWAIT(
             p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
         PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+#if QKV_CONV_SILU_ONE_PASS
+        // The G tiles are contiguous in dest (64 rows each), so one call walks all of their rows.
+        PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, false, calculate_silu, (false, 32 * G), 0, VectorMode::None));
+#else
         for (uint32_t i = 0; i < n; ++i) {
             silu_tile_pack(i);
         }
+#endif
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, dfb::out);
