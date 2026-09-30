@@ -39,3 +39,12 @@ Branch ttp/t41-... = t20 tip (1eadde3ce6c) + 63c8860f08e. Pushed.
 3. If W2 holds (no visible change): kernel work = band-aware chunk skip in ring_joint reader/compute (+ ring hop limit).
    If not: pick W from analyze.py and rerun job.sh <W>.
 4. Cleanup when done: blx03 ~/fasth3/t41 worktree, /var/tmp/fasth3/t41, ~/fasth3/out/t41.
+
+## Status 2026-09-30 20:47
+- Job 904 (t41 dense+dump) started 20:33 on blx03, compiled, ran S1 steps 1-7 (warm step ~1.41 s), then tray 1
+  (chips 8-15) left PCIe at ~20:37; broker killed 904 (-9). No dump, no mp4 (only ~/fasth3/out/t41/dense/run.log).
+  Nothing had reached S2 or our band/dump code yet: the drop hit the plain eager dense path.
+- Broker now holds the mesh degraded (8/32 off bus); power-cycle held off by its boot-loop guard. g15blx02 also
+  rebooted at 20:41, so the driver is gone. Not relaunched: second tray drop on blx03 in ~20 min, one during our job.
+- Next: when `tt-device-mcp status` on blx03 shows no HELD, resubmit once by hand:
+  `setsid nohup tmp/t41/drive.sh 2 > tmp/t41/drive.log 2>&1 &`, then continue "Next" above.
