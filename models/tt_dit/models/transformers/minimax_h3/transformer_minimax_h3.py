@@ -246,6 +246,17 @@ class MiniMaxH3Transformer3DModel(Module):
             out_dim=time_embed_dim,
             mesh_device=mesh_device,
         )
+        # HyperFlow interval conditioning: a second embedder over the same base `time_embedder`
+        # weights, seeded from them in `_prepare_torch_state` and carrying the endpoint adapter
+        # rather than the base one. `forward` blends `emb_t + gate * (emb_r - emb_t)`; a gate of 0
+        # (no HyperFlow adapter) leaves it unread, so the base path is unchanged.
+        self.endpoint_time_embedder = MiniMaxH3TimestepEmbedding(
+            in_channels=freq_dim,
+            hidden_dim=time_embed_hidden_dim,
+            out_dim=time_embed_dim,
+            mesh_device=mesh_device,
+        )
+        self.two_time_gate = 0.0
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
         # is replicated on SP and attention is local.
@@ -299,6 +310,14 @@ class MiniMaxH3Transformer3DModel(Module):
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
 
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # The endpoint embedder is a copy of `time_embedder`: the checkpoint carries only the base
+        # keys, so its parameters are seeded from them here. A HyperFlow adapter then folds its
+        # endpoint delta onto this copy at LoRA load; without one it stays an unread duplicate.
+        for key, value in list(state.items()):
+            if key.startswith("time_embedder."):
+                state[f"endpoint_time_embedder.{key[len('time_embedder.') :]}"] = value.clone()
+
     def prepare_static_sources(
         self,
         *,
@@ -343,6 +362,7 @@ class MiniMaxH3Transformer3DModel(Module):
         video_out_indices: ttnn.Tensor,
         audio_out_indices: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        endpoint_timestep: ttnn.Tensor | None = None,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
@@ -397,7 +417,14 @@ class MiniMaxH3Transformer3DModel(Module):
         hidden = ttnn.unsqueeze(hidden, 0)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+        emb = self.time_embedder(self.time_proj(timestep))
+        if endpoint_timestep is not None and self.two_time_gate != 0.0:
+            # HyperFlow interval conditioning: blend towards the step's endpoint embedding,
+            # `emb_t + gate * (emb_r - emb_t)`. Runs on the untraced per-slot temb, so it costs a few
+            # elementwise ops on a `[1, 1, num_slots, time_embed_dim]` tensor, not per row.
+            emb_r = self.endpoint_time_embedder(self.time_proj(endpoint_timestep))
+            emb = ttnn.add(emb, ttnn.multiply(ttnn.subtract(emb_r, emb), self.two_time_gate))
+        self._temb_state.update(emb, traced=traced)
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)

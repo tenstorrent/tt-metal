@@ -69,10 +69,17 @@ from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_positio
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
 from ...layers.audio_ops import weights_variant
+from ...lora.apply import apply_adapter
+from ...lora.promote import promote_to_lora
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.lora_targets_minimax_h3 import (
+    is_host_path,
+    minimax_h3_fusion_groups,
+    minimax_h3_host_paths,
+)
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -85,6 +92,7 @@ from ..events import DenoiseStep, PipelineEventCallback, event_section, null_cal
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
+from .hyperflow_minimax_h3 import MiniMaxH3HyperFlow
 from .packing import (
     MINIMAX_H3_ADALN_ROLES,
     MINIMAX_H3_AUDIO_CHANNELS,
@@ -428,6 +436,15 @@ class MiniMaxH3Pipeline:
         self.lora_path = None if lora_path is None else Path(lora_path)
         self.lora_strength = float(lora_strength)
         self._lora_handle = None
+        # Set when a HyperFlow adapter is loaded through the generic loader; read by the timing gates.
+        self._lora_report = None
+        # A HyperFlow adapter's sampling contract, parsed once off the file's header. `None` means a
+        # plain adapter (or none), which runs at the caller's step count.
+        self._hyperflow: MiniMaxH3HyperFlow | None = None
+        self._hyperflow_parsed = False
+        # The last generation's warm compute breakdown and padded packed length, for the gates.
+        self.last_timings: list[tuple[str, float]] = []
+        self.last_padded_len: int | None = None
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -456,6 +473,8 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
+        # HyperFlow interval endpoints, one per slot, mirroring `_tt_timestep`; unused off the contract.
+        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
@@ -1188,6 +1207,52 @@ class MiniMaxH3Pipeline:
     def _dit_weight_mode(self) -> str:
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
+    @property
+    def hyperflow(self) -> MiniMaxH3HyperFlow | None:
+        """The sampling contract this pipeline's adapter publishes, or None for a plain adapter.
+
+        Parsed once from the adapter file's safetensors header. A HyperFlow adapter fixes the sigma
+        grid -- so ``num_inference_steps`` is read off the file rather than the request -- and the
+        interval blend gate; both feed :meth:`_build_schedulers` and the denoise loop.
+        """
+        if not self._hyperflow_parsed:
+            self._hyperflow = None
+            if self.lora_path is not None:
+                from safetensors import safe_open
+
+                with safe_open(str(self.lora_path), framework="pt", device="cpu") as handle:
+                    metadata = dict(handle.metadata() or {})
+                self._hyperflow = MiniMaxH3HyperFlow.from_adapter_metadata(
+                    metadata, video_shift=self.video_shift, audio_shift=self.audio_shift
+                )
+                if self._hyperflow is not None:
+                    self._hyperflow.assert_supports_task(self.task)
+                    self._hyperflow.assert_supports_subfolder(self.transformer_subfolder)
+                    logger.info(
+                        f"adapter samples its own schedule: {self._hyperflow.num_forwards} forwards, "
+                        f"gate {self._hyperflow.gate:g} ({self._hyperflow.identity()})"
+                    )
+            self._hyperflow_parsed = True
+        return self._hyperflow
+
+    def _build_schedulers(self, num_inference_steps: int | None) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler, int]:
+        """Both modality schedulers plus the resolved step count.
+
+        A HyperFlow adapter samples a fixed grid, so its sigmas drive ``set_timesteps`` regardless of
+        the requested ``num_inference_steps`` -- the count is a fact about the adapter, and warmup and
+        serving must share it. A plain adapter (or none) runs at the requested count.
+        """
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        contract = self.hyperflow
+        if contract is not None:
+            scheduler.set_timesteps(sigmas=contract.modality_sigmas(self.video_shift))
+            audio_scheduler.set_timesteps(sigmas=contract.modality_sigmas(self.audio_shift))
+            return scheduler, audio_scheduler, scheduler.num_inference_steps
+        scheduler.set_timesteps(num_inference_steps)
+        audio_scheduler.set_timesteps(num_inference_steps)
+        return scheduler, audio_scheduler, num_inference_steps
+
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
         config["patch_size"] = tuple(config["patch_size"])
@@ -1215,12 +1280,31 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         if self.lora_path is not None and self._lora_handle is None:
-            self._lora_handle = load_h3_adapter_into(
-                self._transformer,
-                str(self.lora_path),
-                scale=self.lora_strength,
-                name=self.lora_path.name,
-            )
+            contract = self.hyperflow
+            if contract is not None:
+                # HyperFlow's adapter also carries AdaLN, norm and endpoint-embedder deltas that the
+                # Turbo loader does not map. The generic loader routes every entry through the model's
+                # own `_prepare_torch_state` and folds it on device -- `minimax_h3_host_paths` is empty
+                # here because this build holds all of them on device (no precomputed AdaLN).
+                promote_to_lora(self._transformer)
+                self._lora_report = apply_adapter(
+                    self._transformer,
+                    str(self.lora_path),
+                    groups=minimax_h3_fusion_groups(self._transformer),
+                    is_host=lambda path: is_host_path(path, minimax_h3_host_paths(self._transformer)),
+                    strength=self.lora_strength,
+                    name=self.lora_path.name,
+                )
+                self._transformer.two_time_gate = contract.gate
+                self._lora_handle = self._lora_report
+                logger.info(f"HyperFlow two-time gate {contract.gate:g}; {self._lora_report.summary()}")
+            else:
+                self._lora_handle = load_h3_adapter_into(
+                    self._transformer,
+                    str(self.lora_path),
+                    scale=self.lora_strength,
+                    name=self.lora_path.name,
+                )
         return self._transformer
 
     @property
@@ -1684,10 +1768,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
-        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler, num_inference_steps = self._build_schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -1817,10 +1898,7 @@ class MiniMaxH3Pipeline:
         with event_section(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
-        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler, num_inference_steps = self._build_schedulers(num_inference_steps)
 
         # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
@@ -1933,6 +2011,8 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
+        timings: list[tuple[str, float]] = []
+        t0 = time.time()
         with event_section(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
@@ -1945,16 +2025,22 @@ class MiniMaxH3Pipeline:
                 condition_spec=condition_spec,
                 on_event=on_event,
             )
+        timings.append(("Denoise", time.time() - t0))
 
+        t0 = time.time()
         with event_section(on_event, "vae"):
             video = self._decode_video(
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
+        timings.append(("VAE decode", time.time() - t0))
 
+        t0 = time.time()
         with event_section(on_event, "audio"):
             audio = self._decode_audio(
                 self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
+        timings.append(("Audio decode", time.time() - t0))
+        self.last_timings = timings
 
         yuv = self.vae_output_type == "yuv420"
         return MiniMaxH3Output(
@@ -2365,6 +2451,7 @@ class MiniMaxH3Pipeline:
         else:
             rung = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         self.last_seq_len = SeqLen(padded=rung, logical=layout.sequence_length)
+        self.last_padded_len = rung
         self._log(
             f"packed sequence {layout.sequence_length} -> bucket {rung}, "
             f"{rung // self.sp_factor} rows/device, {num_cond} condition rows"
@@ -2466,6 +2553,23 @@ class MiniMaxH3Pipeline:
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
 
+            endpoint_timestep = None
+            if transformer.two_time_gate != 0.0:
+                # HyperFlow interval conditioning: each target slot integrates towards its step
+                # endpoint r_i = 1 - sigma_{i+1}. Condition slots keep r == t (their `level_kwargs`
+                # value) so their blend term is zero -- they are pinned single-time.
+                endpoint_kwargs = dict(level_kwargs)
+                endpoint_kwargs["video_timestep"] = 1.0 - float(scheduler.sigmas[i + 1])
+                endpoint_kwargs["audio_timestep"] = 1.0 - float(audio_scheduler.sigmas[i + 1])
+                endpoint_levels = slot_levels(slot_roles, **endpoint_kwargs)
+                self._tt_endpoint_timestep.update(
+                    endpoint_levels.reshape(1, 1, -1, 1),
+                    traced=traced,
+                    dtype=ttnn.float32,
+                    device=self.mesh_device,
+                )
+                endpoint_timestep = self._tt_endpoint_timestep.value
+
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
@@ -2473,6 +2577,7 @@ class MiniMaxH3Pipeline:
                 video_out_indices=self._tt_video_out_idx.value,
                 audio_out_indices=self._tt_audio_out_idx.value,
                 timestep=self._tt_timestep.value,
+                endpoint_timestep=endpoint_timestep,
                 adaln_indices=state.adaln.value,
                 timestep_indices=state.tsi.value,
                 rope_cos=state.rope_cos.value,

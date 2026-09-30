@@ -1,0 +1,140 @@
+# MiniMax-H3 HyperFlow results
+
+Measured on Blackhole Galaxy (4x8, TP=4 axis 0 / SP=8 axis 1, ring fabric, 2 links) with the
+two-time adapter `minimax_h3_hyperflow_8step_v1.0.safetensors` (sha256 `9297f450...df447`,
+published at `videorebirth/hyperflow`).
+
+**Every row is 8 forwards.** The adapter publishes a fixed 9-point sigma grid; the pipeline reads
+the count off the file and refuses a caller-supplied `num_inference_steps`, so the schedule cannot
+silently fall back to the base model's 49.
+
+**Attention is dense.** `vsa_config` is opt-in and unset here, so these are dense-attention numbers
+-- as is the base-model reference below, which keeps the comparison like-for-like. The sparse (VSA)
+path is a separate axis and is not measured in this table.
+
+## Base model reference
+
+| | |
+|---|---|
+| t2va 5 s, 49 forwards, dense | **58.0 s** compute (measured, `bh-glx-110-d07u08`) |
+| t2va 5 s, 8 forwards, dense | **14.5 s** compute |
+| Speedup | **4.0x** |
+
+Independently corroborated on g03blx04, which measured 15.2 s for the same 8-forward point
+(denoise 9.2 s, 1149.6 ms/forward) against this table's 14.5 s -- two boxes within 5%.
+
+## Results
+
+### t2va
+
+| Clip | Frames | Canvas | Fwd | Padded | Encoder | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 11.3 | 3.9 | 1.1 | 16.8 | 3.25 | 37.38 | bh-glx-120-c02u14 |
+| 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | 23.1 | 7.3 | 1.3 | 32.1 | 3.17 | 36.94 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | 43.7 | 11.3 | 1.5 | 56.9 | 3.77 | 35.19 | bh-glx-120-b09u02 |
+
+### fl2va
+
+| Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.62 | 34.12 | bh-glx-120-b09u02 |
+| 10 s | 243 | 1344x768 | 8 | 77568 | 2.0 | 1.3 | 25.0 | 6.6 | 1.2 | 36.1 | 3.56 | 34.24 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 113152 | 1.9 | 1.5 | 47.4 | 9.6 | 1.5 | 61.9 | 4.10 | 34.74 | bh-glx-120-b09u02 |
+
+### ref2va
+
+Not measured.
+
+**Not measured:** ref2va 5 s, ref2va 10 s, ref2va 15 s.
+
+Timings are seconds of compute in the warm window: each point runs one full warmup generation at
+its shape first, and prepares plus artifact export are excluded. CLIP is prompt alignment,
+**recorded not gated** -- the calibrated bars elsewhere are set against the 49-forward base model.
+
+## Reading the scaling
+
+Denoise goes as roughly `O(N^1.65)` in padded sequence length (2.05x sequence -> 3.21x denoise;
+2.99x -> 6.22x). That is the expected shape for dense attention: quadratic in the attention term,
+linear in the projections and feed-forward. It is *not* a defect, and it is why the realtime factor
+degrades with clip length (2.8x at 5 s, 4.9x at 15 s) rather than holding flat.
+
+Consequences for where the remaining time goes:
+
+* **Denoise dominates and grows** -- 65 % of compute at 5 s, 79 % at 15 s.
+* **VAE decode scales about linearly with frames** (3.6 / 7.3 / 10.8 s for 124 / 243 / 362) and so
+  *shrinks* as a share of total, 25 % -> 15 %. Optimising it pays less the longer the clip.
+* **Keyframe encode is ~1.3 s**, so `fl2va` conditioning costs almost nothing beyond the longer
+  sequence it implies.
+
+## Provenance and caveats
+
+The `Node` column is not decoration: two hosts swept into one artifact directory, so each row names
+the box that produced it. `bh-glx-120-c06u08` threw a SIGBUS and lost its PCIe devices earlier in
+the session; the rows it contributed passed every gate in the test and are real measurements, but a
+reproduction on `bh-glx-120-b09u02` would settle them.
+
+g03blx04 is excluded entirely: it drops tray 1 (chips 8-15) under MiniMax-H3 load, reproduced six
+times across two different source trees, while non-H3 matmul at 29.9 TFLOP/s per chip runs 180 s
+clean. A controlled A/B on the pre-change tree ruled out this branch's commits as the cause.
+
+### Node variation is large, and it confounds the grid comparison
+
+Two grid configurations appear in this sweep: SDPA and the VSA pooled matmuls were clamped to an
+11x10 core grid for the earliest rows and run unclamped at the device's full 12x10 afterwards.
+(Matmuls were 11x10 throughout -- `get_matmul_core_grid` has always clamped them -- so the
+difference is confined to SDPA and the VSA stages.)
+
+**No clean measurement of that difference exists here**, because every clamped/unclamped pair also
+changes node:
+
+| point | clamped | unclamped |
+|---|---|---|
+| fl2va 10 s | 42.1 s (c06u08) | 36.1 s (b09u02) |
+| fl2va 15 s | 74.2 s (c06u08) | 61.9 s (b09u02) |
+| t2va 5 s | 14.5 s (b09u02) | 16.8 s (c02u14) |
+
+The first two make unclamping look 14-17 % faster; the third makes it 16 % slower. The consistent
+reading is not a grid effect at all but a **node effect** -- `b09u02` is simply faster than either
+`c06u08` or `c02u14` -- which is why the `Node` column belongs in the tables. Treat cross-node
+comparisons as carrying roughly 15 % of noise, and do not read a grid cost out of these numbers.
+
+### ref2va: why it was blocked, and the fix
+
+`ref2va` failed at program compile, before any device work, on every node tried:
+
+```
+Statically allocated circular buffers on core range [0-0 - 10-9]
+grow to 1647616 B which is beyond max L1 size of 1572864 B
+  references.py:257  encode_references
+  vae_minimax_h3.py:847  encode
+  conv_minimax_h3.py:359  forward
+```
+
+The conv is the video VAE encoder's ResNet `conv1`, fp32, blocking
+`C_in=64 C_out=128 T=1 H=16 W=2` -- 73 KB over a 1.5 MB budget. The cause is that the conv3d
+blocking tables are tuned at **one** temporal tap; three taps widen the input's T extent without
+changing the config, and the op sizes its circular buffers from both. Only `ref2va` reaches the
+three-tap encoder, which is why the other two modes never hit it.
+
+Halving `H_out_block` at more than one tap clears the compile (verified: zero overflow, the run
+proceeds into weight loading). The fix is scoped to the multi-tap encoder -- the decoder builds
+its convs from a different class, and single-tap callers keep their tuned blocking -- so `t2va`
+and `fl2va` timings are unaffected.
+
+This was **never specific to the HyperFlow sweep**: the pre-existing, calibrated
+`test_pipeline_ref2va_minimax_h3.py::test_ref2va_end_to_end` -- no adapter, no two-time schedule --
+failed with the byte-identical size. That gate records its own `padded_len` and per-stage timings,
+so `ref2va` ran on an earlier build; this is a regression that the tap-scoped cap works around
+rather than a mode that never worked. Ruled out by experiment, not inference: the core grid
+(forcing 12x10 produced the same byte count), the rail-cap commit (same failure reverted), and a
+missing blocking entry (the exact lookup hits).
+
+### The fl2va rows do not share a keyframe
+
+`fl2va` conditions on frame 0 of a `t2va` artifact, and the sweep picked that artifact with a glob
+loose enough to match `15s` as well as `5s`. The rows from `bh-glx-120-c06u08` were conditioned on
+the 5 s clip; anything run after the 15 s point completed was conditioned on the 15 s clip instead.
+
+Timings are unaffected -- the shapes are identical either way and keyframe encode is 1.3 s in both
+-- but the **CLIP column is not comparable across `fl2va` rows**, because the rows were conditioned
+on different content.

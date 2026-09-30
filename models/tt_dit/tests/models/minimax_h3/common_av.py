@@ -222,6 +222,13 @@ def _ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def is_artifact_writer() -> bool:
+    """Whether this process should write and verify artifacts. On a multi-host mesh every rank
+    holds the same output and `artifact_dir` sits on the shared export, so concurrent writers
+    race on the same files and a reader can decode a peer's half-written mp4."""
+    return not ttnn.using_distributed_env() or os.environ.get("TT_RUN_RANK", "0") == "0"
+
+
 def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
     import wave
 
@@ -478,6 +485,53 @@ def weights_dir(*required_subdirs: str) -> Path:
     return directory
 
 
+# `time_embedder.linear_{1,2}.weight`. A low-rank pair cannot express a bias delta, so the endpoint
+# embedder's biases come from the base checkpoint and only the two matrices are adapted.
+HYPERFLOW_ENDPOINT_TARGETS = 2
+
+
+def assert_hyperflow_applied(pipeline, *, num_forwards: int):
+    """Both halves of a two-time adapter, checked on a pipeline that has already generated once.
+
+    Shared by the gated and the yuv420 gates because none of it depends on the pixel layout, and a
+    yuv run that skipped these would be a timing number with nothing behind it. Each check catches a
+    silent failure -- the run completes and produces video either way:
+
+    * a contract that never parsed leaves the schedule at the base model's 49 forwards;
+    * the endpoint embedder targets `endpoint_time_embedder`, a copy of `time_embedder` the base
+      transformer builds only for this; a dropped pair means the blend ran against base weights;
+    * a zero gate leaves the blend a no-op, so the interval never reaches the modulation.
+
+    On-device build: every target is folded on device, so the report defers nothing to host.
+    """
+    contract = pipeline.hyperflow
+    assert contract is not None, "the pipeline resolved no sampling contract for this adapter"
+    assert (
+        contract.num_forwards == num_forwards
+    ), f"the contract publishes {contract.num_forwards} forwards, not {num_forwards}"
+
+    transformer = pipeline._transformer
+    assert transformer.two_time_gate == contract.gate, (
+        f"the transformer's two-time gate is {transformer.two_time_gate:g}, not the contract's "
+        f"{contract.gate:g}; the interval blend would not run"
+    )
+    assert contract.gate != 0.0, "the contract's gate is 0, so the two-time blend is a no-op"
+
+    report = pipeline._lora_report
+    assert report is not None, "the transformer was built without a HyperFlow adapter bound"
+    logger.info(f"device half: {report.summary()}")
+    assert report.bound, "no low-rank adapter was bound to the transformer"
+    assert not report.host, (
+        f"{len(report.host)} adapter entries were deferred to host, but this build folds every " "target on device"
+    )
+    endpoint_bound = [path for path in report.bound if "endpoint_time_embedder" in path]
+    assert len(endpoint_bound) == HYPERFLOW_ENDPOINT_TARGETS, (
+        f"the endpoint embedder bound {endpoint_bound}, not both of "
+        f"`endpoint_time_embedder.linear_{{1,2}}`; the rest would run against base weights"
+    )
+    logger.info(f"endpoint embedder: {endpoint_bound}")
+
+
 def artifact_dir(name: str) -> Path:
     """The gate's artifact directory `~/{name}`, created if absent."""
     directory = Path.home() / name
@@ -520,6 +574,34 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     #         f"the measured call ran at padded_len {measured}, which has no captured trace; " f"this number is not warm"
     #     )
     return output
+
+
+def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
+    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    shape = tuple(pipeline.mesh_device.shape)
+    logger.info(
+        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
+        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for row_label, seconds in rows:
+        logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
+    if expected_total_s is not None:
+        assert (
+            total < expected_total_s
+        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
+    return total
 
 
 def log_pipeline_perf(

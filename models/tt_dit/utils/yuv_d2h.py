@@ -11,6 +11,7 @@ d2h internals; reuses the shard-extraction primitives it already exposes.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -107,6 +108,7 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
+    timings: dict | None = None,
     reuse_out_buffer: bool = False,
     defer: bool = False,
 ) -> np.ndarray | Callable[[], np.ndarray]:
@@ -158,18 +160,27 @@ def _yuv_planar_d2h(
 
     # Three async reads; a deferred caller waits on a recorded event in the host half (so the next wave is enqueued while
     # this one drains), an inline caller synchronizes here.
+    mark = time.perf_counter()
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
     read_event = None
-    if defer:
+    # Mesh events touch every device in the view, including other hosts' (record_event ->
+    # "Cannot get device for remote device"), so a multi-host caller synchronizes here and only
+    # the host half stays deferred.
+    if defer and view is None:
         read_event = ttnn.record_event(mesh_device, 0)
     else:
         ttnn.synchronize_device(mesh_device)
+    if timings is not None:
+        timings["yuv_dma"] = timings.get("yuv_dma", 0.0) + (time.perf_counter() - mark)
+        mark = time.perf_counter()
 
     def _host_half():
         if read_event is not None:
             ttnn.event_synchronize(read_event)
+        # Timed from here so a deferred run measures its own work, not how long it waited.
+        mark = time.perf_counter()
         if view is not None:
             # --- Multi-host: extract local shards via host_buffer/get_shard ---
             def _extract_local(host_tensor):
@@ -229,6 +240,10 @@ def _yuv_planar_d2h(
             Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
             Cr_shards = _extract(host_Cr)
 
+        if timings is not None:
+            timings["yuv_extract"] = timings.get("yuv_extract", 0.0) + (time.perf_counter() - mark)
+            mark = time.perf_counter()
+
         # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
         # `planar_concat_cpp` copies non-contiguous shards one by one, slower than the torch scatter: hence the guard.
         use_cpp = (
@@ -256,6 +271,8 @@ def _yuv_planar_d2h(
                 out_H=out_H,
                 out_W=out_W,
             )
+            if timings is not None:
+                timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
             return assembled
 
         _warn_once_about_the_fallback()
@@ -271,7 +288,9 @@ def _yuv_planar_d2h(
         u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
         v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
 
-        reassemble_pool = pool if pool is not None else _get_default_reassemble_pool()
+        # A local alias, not a rebind: `pool` is the enclosing function's parameter, and assigning it
+        # here would make it local to this closure and unreadable on the test above.
+        reassemble_pool = _get_default_reassemble_pool() if pool is None else pool
 
         def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
             r0, c0 = r * h_per, c * w_per
@@ -296,6 +315,8 @@ def _yuv_planar_d2h(
         for f in futures:
             f.result()
 
+        if timings is not None:
+            timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
         return out
 
     if defer:
@@ -315,6 +336,7 @@ def fast_device_to_host_yuv(
     logical_h: int | None = None,
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
+    timings: dict | None = None,
     reuse_out_buffer: bool = False,
     defer: bool = False,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
@@ -363,6 +385,11 @@ def fast_device_to_host_yuv(
             per-channel weights and offsets.  Defaults to BT.601 limited range.
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
+        timings: Optional dict accumulating a ``yuv_convert`` / ``yuv_dma`` /
+            ``yuv_extract`` / ``yuv_scatter`` breakdown in seconds.  Separating
+            the on-device conversion from the transfer needs a
+            ``synchronize_device`` between them, which also serializes them, so
+            it is opt-in.
         debug: If ``True``, print diagnostic shape information.
         logical_h: Optional logical (un-padded) height of the output.  When
             the VAE pads ``H`` to a coarser size, pass the true logical height
@@ -485,6 +512,7 @@ def fast_device_to_host_yuv(
     ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
     # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+    mark = time.perf_counter()
     tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
     if debug:
         print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
@@ -502,6 +530,10 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
+    if timings is not None:
+        ttnn.synchronize_device(mesh_device)
+        timings["yuv_convert"] = timings.get("yuv_convert", 0.0) + (time.perf_counter() - mark)
+
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
@@ -517,6 +549,7 @@ def fast_device_to_host_yuv(
         out_W=new_W,
         view=d2h_view,
         pool=pool,
+        timings=timings,
         reuse_out_buffer=reuse_out_buffer,
         defer=defer,
     )
