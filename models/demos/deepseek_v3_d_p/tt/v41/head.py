@@ -127,8 +127,22 @@ class TtV41Head(LightweightModule):
             found |= {r: tile[r - first] for r in rows if first <= r < first + ttnn.TILE_SIZE}
         return torch.stack([found[r] for r in rows])
 
+    def scored_rows(self, logits: ttnn.Tensor, first: int, count: int) -> ttnn.Tensor:
+        """Rows ``first .. first + count`` of :meth:`forward`'s logits tile, the tile itself when all 32 are scored,
+        else row major ``[1, 1, count, vocab/tp]`` (consumes ``logits``). The device untilize is exact; the host
+        then reads ``count`` rows instead of 32 (generation scores one row: the 16.5 MB tile readback took 5-42 ms of
+        host time per request, one row about 0.5 ms)."""
+        if count == ttnn.TILE_SIZE:
+            return logits
+        rows = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(logits)
+        out = ttnn.slice(rows, [0, 0, first, 0], [1, 1, first + count, rows.shape[-1]])
+        ttnn.deallocate(rows)
+        return out
+
     def _tile_to_host(self, logits: ttnn.Tensor, sp_row: int) -> torch.Tensor:
-        """The fp32 logits ``[32, vocab]`` of mesh row ``sp_row``'s tile: its vocab shards concatenated."""
+        """The fp32 logits ``[rows, vocab]`` of mesh row ``sp_row``'s logits (a tile, or :meth:`scored_rows`): its
+        vocab shards concatenated."""
         shards = ttnn.get_device_tensors(logits)
         pieces = [ttnn.to_torch(shards[sp_row * self.tp + j]) for j in range(self.tp)]
         return torch.cat(pieces, dim=-1).reshape(-1, pieces[0].shape[-1] * self.tp).float()

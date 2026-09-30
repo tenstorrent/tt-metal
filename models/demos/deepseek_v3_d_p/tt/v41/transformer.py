@@ -277,8 +277,8 @@ class TtV41Transformer(LightweightModule):
     def _chunk_forward(
         self, state, host: _HostChunk, token_ids, engram_inputs, image_features, rope, first_scored, on_block
     ):
-        """One chunk on device -> its scored rows' device logits, [(logits, sp_row, first row of the tile, chunk rows
-        read from it)]. A text chunk without ``on_block`` makes no host transfers (the image merge uploads its
+        """One chunk on device -> its scored rows' device logits, [(logits, sp_row, chunk row of its first row, chunk
+        rows read from it)] (``TtV41Head.scored_rows``: a tile, or only the scored rows of a partly scored tile). A text chunk without ``on_block`` makes no host transfers (the image merge uploads its
         inputs)."""
         start, length = host.start, host.length
         h = self.embedding(token_ids)
@@ -309,7 +309,8 @@ class TtV41Transformer(LightweightModule):
                 logits, (sp_row, offset) = self.head(final, rows[0])
                 first = rows[0] - offset
                 tile = [r for r in rows if r < first + ttnn.TILE_SIZE]
-                scored.append((logits, sp_row, first, tile))
+                logits = self.head.scored_rows(logits, tile[0] - first, len(tile))
+                scored.append((logits, sp_row, tile[0], tile))
                 rows = rows[len(tile) :]
         return scored
 
