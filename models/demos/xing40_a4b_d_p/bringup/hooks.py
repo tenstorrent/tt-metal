@@ -416,8 +416,8 @@ class _HybridState:
 
 class HybridDeviceModel:
     """CPU reference model with the steps in DEVICE_STEPS swapped for device modules (host in / host out per step).
-    Hidden states (the 4 mHC streams, [S * 4, H] fp32 token-major) stay on the host. The all-device model is the
-    assemble step's."""
+    Hidden states (the 4 mHC streams, [S * 4, H] fp32 token-major) stay on the host. Selected with BRINGUP_HYBRID=1
+    (debugging); the default device model is XingDeviceModel."""
 
     def __init__(self, mesh, spec, layers, lm_head=True):
         import time
@@ -475,6 +475,122 @@ class HybridDeviceModel:
         pass
 
 
+def _chunks_for(spec, max_seq):
+    """Chunk lengths of the ladder rungs / target that run a sequence of ``max_seq`` (first = the default geometry)."""
+    runs = list(spec.get("ladder") or []) + [spec.get("target") or {}]
+    out = [r["chunk"] for r in runs if r.get("seq") == max_seq and "chunk" in r]
+    return list(dict.fromkeys(out))
+
+
+class _DeviceState:
+    """Per-layer state held by the device blocks (the MLA latent cache in each TtMlaAttention). Created outside the
+    forward: sets up every block's geometry for the chunk this sequence runs at and zeroes the caches."""
+
+    def __init__(self, model, max_seq):
+        self.blocks = model.blocks  # layer -> TtXingBlock
+        self.max_seq = max_seq
+        chunks = _chunks_for(model.spec, max_seq)
+        assert chunks, f"no ladder rung / target runs seq {max_seq}"
+        for c in reversed(chunks):  # the first listed ends up current
+            model.model.setup(c, max_seq)
+        for b in self.blocks.values():
+            b.load_state(None)
+
+    def load_prefix(self, layer, tensors, length):
+        self.blocks[layer].load_state(tensors["kv_latent"][:length])
+
+    def to_torch(self, layer, length):
+        return self.blocks[layer].state_torch(length)
+
+
+class XingDeviceModel:
+    """Ladder / profile adapter over tt/model.py:TtXingModel.
+
+    The residual (4 mHC streams, [1, 1, S/4, 4 x 1792] fp32 per chip: rows over axis 0, hidden columns over axis 1)
+    stays on the device from the embedding to the final norm. Each layer is TtXingBlock.__call__: run_block over the
+    reference block graph with the validated device modules (one profiler section per step). Host work per chunk:
+    the token ids in (embed) and the harness read-backs; the LM head runs on the host on the ladder's sampled rows."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.xing40_a4b_d_p.tt.model import TtXingModel
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.path = hf_path(spec)
+        self.model = TtXingModel(mesh, self.path, _max_rows(spec), _max_chunk(spec), layers=list(layers))
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = _loader(spec).get("lm_head.weight").float() if lm_head else None
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self, max_seq)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = self.model.embed.ids_to_device(tokens)
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        """Reference streams [S * 4, H] -> device [1, 1, S/4, 4 x 1792] fp32 (harness boundary)."""
+        from models.demos.xing40_a4b_d_p.tt.layout import streams_to_device
+
+        return streams_to_device(self.mesh, h, self.cfg.hidden_size)
+
+    def to_host(self, h):
+        """Streams -> [S * 4, H]; the final norm's [1, 1, S/4, 1792] column split -> [S, H]."""
+        from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_host, streams_to_host
+
+        if h.shape[-1] == self.cfg.hc_mult * self.cfg.hidden_size // self.mesh.shape[1]:
+            return streams_to_host(self.mesh, h, self.cfg.hidden_size)
+        return col_split_to_host(self.mesh, h)
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start)
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        return torch.nn.functional.linear(self.to_host(hidden).float()[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+    def perf_settings(self):
+        """Recorded in the profile: the mHC residual mix (XING_RESIDUAL_MIX), the ring_mla implementation
+        (XING_MLA_SDPA) and the routed-experts path (XING_EXPERTS_MODE)."""
+        import os
+
+        from models.demos.xing40_a4b_d_p.tt.attention import sdpa_impl
+        from models.demos.xing40_a4b_d_p.tt.residual import residual_mix_mode
+
+        return {
+            "residual_mix": residual_mix_mode(),
+            "mla_sdpa": sdpa_impl(),
+            "experts_mode": os.environ.get("XING_EXPERTS_MODE", "unified"),
+        }
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """The hybrid model (CPU reference with DEVICE_STEPS on the device) until the assemble step."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
+    device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return XingDeviceModel(mesh, spec, layers, lm_head=lm_head)
