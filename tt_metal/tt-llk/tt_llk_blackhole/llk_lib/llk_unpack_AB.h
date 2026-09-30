@@ -378,7 +378,10 @@ inline void _llk_unpack_AB_uninit_()
  * @param bcast_row_idx: Row index within source B tile for ROW broadcast
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
- *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
+ *       @ref _llk_unpack_AB_uninit_ after it to restore modified state. Run the init again after any other unpack
+ *       operation: the PerTile form steps its base address registers from the RISC-side mirror the init resets, so
+ *       a base address or scratch register another operation wrote in between would be stepped from silently (the
+ *       same sequence would also run that operation's MOP program, which every unpack init reprograms).
  * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 
