@@ -15,3 +15,10 @@ Next, once `ssh g14blx03 grep -q DRIVE16_DONE ~/fasth3/drive16.log`:
 3. Stills: ffmpeg -ss 3 -frames:v 1 per seed into ref_dv145/stills/.
 4. VBench (g15blx02 venv): `python -m models.tt_dit.tests.models.ltx.tools.ltx_eval batch --cand-dir <B> --out <B>/eval --vbench subject_consistency,background_consistency,motion_smoothness,imaging_quality,dynamic_degree --jobs 5` (detached; no ref exists yet, so this scores the refs themselves).
 5. Clean up: blx03 ~/fasth3/out/ltx25_1080p_6s/seeds5 mp4s after copy, blx03 worktree ~/fasth3/t16 once done.
+
+Attempt 4 (20:10): job 886 passed (900s budget, exit 0). Post done:
+- Refs: ~/fasth3/tt-metal/tt-project/baselines/ltx25_1080p_6s/ref_dv145/seed{0..4}.mp4 (1920x1088, 145f, 6.04s, with audio), meta.json, raw/run.log, stills/seed{0..4}.jpg (frame at 3s).
+- seed0 is byte-identical to the gen#1 replay (same md5), so replay is deterministic.
+- Per seed (replay): S1 2.2-2.3s, S2 2.5s, DiffVAE 11.5s, compute 17.0-17.2s, E2E wall 18.05-18.44s.
+- blx03 cleanup done: worktree ~/fasth3/t16 removed, seeds5 outputs removed, driver logs in ~/fasth3/logs.
+- VBench: detached, log ref_dv145/eval.log (ends VBENCH16_DONE), results ref_dv145/eval/summary.json.
