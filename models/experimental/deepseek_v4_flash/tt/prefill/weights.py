@@ -4,11 +4,11 @@
 """Checkpoint -> weight dicts for the prefill model.
 
 :func:`checkpoint_weights` returns the flat ``name -> lazy thunk`` dict
-:class:`~.model.DeepSeekV4PrefillModel` takes (``embed_tokens.weight``, ``layers.{i}.<layer keys>``,
+:class:`~..model.DeepSeekV4PrefillModel` takes (``embed_tokens.weight``, ``layers.{i}.<layer keys>``,
 ``hc_head.*``, ``norm.weight``, ``lm_head.weight``) and :func:`checkpoint_expert_provider` the per-layer
 routed-expert provider. Nothing is read until a thunk is called, so a populated tile cache skips the
 checkpoint entirely. The layer keys are the ones the decode model builds (``DeepSeekV4Model.
-_build_layer_weights``) minus what prefill does not read: a CSA layer's lightning-indexer tensors.
+_build_layer_weights``) plus a CSA layer's lightning-indexer tensors (read only with ``lightning_indexer=True``).
 """
 
 from typing import Callable
@@ -42,11 +42,23 @@ _COMPRESSOR_KEYS = (
 )
 
 
+_INDEXER_KEYS = (
+    "compressor.indexer.kv_proj.weight",
+    "compressor.indexer.gate_proj.weight",
+    "compressor.indexer.kv_norm.weight",
+    "compressor.indexer.position_bias",
+    "compressor.indexer.q_b_proj.weight",
+    "compressor.indexer.weights_proj.weight",
+)
+
+
 def layer_weights(loader: DeepseekV4WeightLoader, layer_idx: int, layer_type: str, is_hash: bool) -> dict:
     """Layer ``layer_idx``'s weights under the module-relative names the prefill layer takes."""
     keys = list(_ATTENTION_KEYS)
     if layer_type != "sliding_attention":
         keys += _COMPRESSOR_KEYS
+    if layer_type == "compressed_sparse_attention":
+        keys += _INDEXER_KEYS  # lazy thunks: only read when the prefill runs the lightning indexer
     weights: dict = {f"self_attn.{k}": _thunk(loader, f"layers.{layer_idx}.self_attn.{k}") for k in keys}
 
     weights["mlp.gate.weight"] = _thunk(loader, f"layers.{layer_idx}.mlp.gate.weight")

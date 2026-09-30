@@ -38,8 +38,14 @@ from ..common import _HIFI4, DeepSeekV4Module
 from ..decode.decoder_layer import _strip_prefix
 from ..decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize
-from .attention import ALIGNMENT, DeepSeekV4PrefillAttention, PrefillAttentionState
-from .hyperconnection import DeepSeekV4PrefillHyperConnection
+from .attention import (
+    ALIGNMENT,
+    DeepSeekV4PrefillAttention,
+    PrefillAttentionState,
+    PrefillStaticBuffers,
+    PrefillStaticStep,
+)
+from .hyperconnection import DeepSeekV4PrefillHyperConnection, wide_rms_norm
 from .moe import DeepSeekV4PrefillMoE
 
 
@@ -118,6 +124,7 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
         moe_weight_dtype: ttnn.DataType = ttnn.bfloat16,
         tp_size: int = 1,
         dense_csa: bool = False,
+        lightning_indexer: bool = False,
     ):
         """Build layer ``layer_idx``: attention, MoE, the two hyper-connections and the two ``[D]`` RMSNorms.
 
@@ -147,6 +154,7 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             tp_size=tp_size,
             dense_csa=dense_csa,
+            lightning_indexer=lightning_indexer,
         )
 
         mlp_weights = _strip_prefix(weights, "mlp")
@@ -190,7 +198,10 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
     def _norm(self, collapsed: ttnn.Tensor, gamma: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, T, 1, D]`` collapsed streams -> the RMSNormed sublayer input ``[1, 1, T, D]``."""
         rows = rows_from_tokens(collapsed)
-        return ttnn.rms_norm(rows, weight=gamma, epsilon=self.eps)
+        normed = wide_rms_norm(rows, self.eps)
+        out = ttnn.multiply(normed, gamma)
+        ttnn.deallocate(normed)
+        return out
 
     def _check_chunk(self, hidden_streams: ttnn.Tensor, state: PrefillAttentionState, token_ids) -> None:
         """Reject a chunk this version cannot process, before any device work."""
@@ -219,11 +230,31 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
         if state is None:
             state = self.new_state()
         self._check_chunk(hidden_streams, state, token_ids)
+        return self._block(hidden_streams, lambda normed: self.self_attn(normed, state), token_ids)
 
+    def forward_static(
+        self,
+        hidden_streams: ttnn.Tensor,
+        bufs: PrefillStaticBuffers,
+        step: PrefillStaticStep,
+        token_ids: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Trace-safe :meth:`forward` for traced prefill (see :class:`~..model.TracedPrefill`).
+
+        The attention state is the persistent ``bufs`` (updated in place) and its per-chunk inputs come
+        from ``step``; ``token_ids`` must already be a ``[1, T]`` uint32 ROW_MAJOR device tensor (hash layers).
+        Shapes are static, so nothing is validated against a running position. ``hidden_streams`` is left intact.
+        """
+        if self.is_hash and token_ids is None:
+            raise ValueError(f"layer {self.layer_idx} is hash-routed and needs the chunk's token ids")
+        return self._block(hidden_streams, lambda normed: self.self_attn.forward_static(normed, bufs, step), token_ids)
+
+    def _block(self, hidden_streams: ttnn.Tensor, attend, token_ids) -> ttnn.Tensor:
+        """The shared body: ``attend(normed [1, 1, T, D]) -> [1, 1, T, D]`` is the only part that differs."""
         post, comb, collapsed = self.attn_hc(hidden_streams)
         normed = self._norm(collapsed, self.input_layernorm_weight)
         ttnn.deallocate(collapsed)
-        attn_out = self.self_attn(normed, state)
+        attn_out = attend(normed)
         ttnn.deallocate(normed)
         streams = mix_streams(post, comb, attn_out, hidden_streams)
         for tensor in (post, comb, attn_out):

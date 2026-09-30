@@ -36,8 +36,11 @@ Supported shapes (v1):
 * CSA runs the *dense* degeneracy of the lightning indexer: while the layer has at most
   ``index_topk`` compressed entries (a prompt of at most ``index_topk * 4 = 2048`` tokens) top-k
   selects every causally valid entry, so the indexer's output is the plain causal block mask and
-  no indexer is needed. Past that the indexer + sparse SDPA are required and this module raises
-  :class:`NotImplementedError` instead of returning something wrong.
+  no indexer is needed. Past that the lightning indexer is required: with ``lightning_indexer=True`` the
+  indexer scores every (query, entry) pair (``indexer_score_dsa``), the top ``index_topk`` entries per query
+  are kept by threshold and folded into the additive SDPA mask (dense masked SDPA, no sparse kernel).
+  Eager :meth:`forward` and traced :meth:`forward_static` both do this; otherwise this module raises
+  :class:`NotImplementedError` (or, with ``dense_csa``, attends to every entry).
 * ``tp_size`` is 1 (one device / a 1x1 mesh) or the width of a 1xTP mesh (TP=4 in the model).
 
 Tensor parallelism (``tp_size > 1``) follows the decode block's split. The hidden chunk arrives
@@ -106,11 +109,76 @@ class PrefillAttentionState:
     # (position-bias-added) gate, slot-major.
     csa_prev_kv: Optional[ttnn.Tensor] = None
     csa_prev_gate: Optional[ttnn.Tensor] = None
+    # Lightning indexer (CSA with ``lightning_indexer=True``): ROW_MAJOR bf16 ``[1, 1, E, index_head_dim]`` index keys
+    # (normed + roped, one per compressed entry) and the indexer compressor's own Ca overlap (fp32, as above).
+    idx_keys: Optional[ttnn.Tensor] = None
+    idx_prev_kv: Optional[ttnn.Tensor] = None
+    idx_prev_gate: Optional[ttnn.Tensor] = None
 
     @property
     def num_entries(self) -> int:
         """Compressed entries emitted so far."""
         return 0 if self.compressed_kv is None else self.compressed_kv.shape[2]
+
+
+@dataclass
+class PrefillStaticBuffers:
+    """One layer's *persistent* attention state for traced prefill (see :class:`~..model.TracedPrefill`).
+
+    A trace replays a fixed op sequence over fixed buffers, so unlike :class:`PrefillAttentionState` (whose
+    ``compressed_kv`` grows by a concat per chunk) nothing here ever changes shape or address; every chunk
+    updates the buffers in place.
+
+    * ``tail``      -- ROW_MAJOR bf16 ``[1, 1, sliding_window, Dh]``: the last window of roped K=V rows.
+    * ``entries``   -- ROW_MAJOR bf16 ``[1, 1, E, Dh]`` (HCA / CSA): a FIFO of compressed entries *anchored at
+      its end*: after ``n`` entries have been emitted, entry ``w`` sits in row ``E - n + w`` (a chunk drops the
+      oldest rows and appends its own at the end). SDPA is invariant to the order of its keys, so the mask
+      only has to name the same rows (:meth:`DeepSeekV4PrefillAttention.mask_tables_host`).
+    * ``prev_kv`` / ``prev_gate`` -- CSA's overlap window, exactly as in :class:`PrefillAttentionState`.
+    * ``idx_keys`` / ``idx_prev_kv`` / ``idx_prev_gate`` -- the lightning indexer's keys (same FIFO layout as
+      ``entries``, width ``index_head_dim``) and its own overlap window, when the layer runs the indexer.
+
+    Every chunk is ``C`` tokens, a prompt's last one padded at its end, so after it ``tail`` and the overlap
+    windows describe the padding. The last chunk's rows they are picked from are kept instead, and the real
+    state is sliced out of them afterwards (:meth:`~..model.TracedPrefill._export_states`):
+
+    * ``window``    -- ROW_MAJOR bf16 ``[1, 1, sliding_window + C, Dh]``: ``[tail | chunk K=V]`` of the last chunk.
+    * ``ca_kv`` / ``ca_gate`` (CSA) and ``idx_ca_kv`` / ``idx_ca_gate`` (indexer) -- ROW_MAJOR fp32
+      ``[1, 1, C / rate, rate * width]``: every window's Ca slice of the last chunk (each row an overlap window).
+    """
+
+    tail: ttnn.Tensor
+    entries: Optional[ttnn.Tensor] = None
+    prev_kv: Optional[ttnn.Tensor] = None
+    prev_gate: Optional[ttnn.Tensor] = None
+    idx_keys: Optional[ttnn.Tensor] = None
+    idx_prev_kv: Optional[ttnn.Tensor] = None
+    idx_prev_gate: Optional[ttnn.Tensor] = None
+    window: Optional[ttnn.Tensor] = None
+    ca_kv: Optional[ttnn.Tensor] = None
+    ca_gate: Optional[ttnn.Tensor] = None
+    idx_ca_kv: Optional[ttnn.Tensor] = None
+    idx_ca_gate: Optional[ttnn.Tensor] = None
+
+
+@dataclass
+class PrefillStaticStep:
+    """The per-chunk inputs of a traced attention layer, computed inside the trace from the chunk's packet.
+
+    ``rope[kind]`` = ``(cos, sin)`` ``[1, 1, T, rope_dim]`` for the chunk's tokens, ``entry_rope[rate]`` the same
+    for the chunk's new compressed entries (positions ``start + w * rate``), ``masks[layer_type]`` the additive
+    mask ``[1, 1, T, sliding_window + T + cap]`` (see :meth:`DeepSeekV4PrefillAttention.mask_tables_host`) and
+    ``caps[layer_type]`` the number of FIFO rows (``cap``) that layer type's SDPA reads (0 for sliding layers).
+    """
+
+    rope: dict
+    entry_rope: dict
+    masks: dict
+    caps: dict
+    # Lightning indexer (CSA only): the causal cut ``[1, 1, T, cap]`` over the FIFO rows (the mask's FIFO columns),
+    # and a persistent zero key pad ``[1, 1, kv_len, index_head_dim]`` the trace fills with those rows before scoring.
+    index_cuts: Optional[dict] = None
+    index_pads: Optional[dict] = None
 
 
 def _rot_transformation_mat() -> torch.Tensor:
@@ -166,8 +234,15 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         tp_size: int = 1,
         dense_csa: bool = False,
+        lightning_indexer: bool = False,
     ):
         """Upload the layer's weights and constants to ``device``.
+
+        ``lightning_indexer`` runs the real lightning indexer on CSA layers (needs the ``compressor.indexer.*``
+        weights): past ``index_topk`` compressed entries each query attends to the top-``index_topk`` entries by
+        indexer score, exactly as the model does, so there is no length limit. Attention itself stays the dense
+        masked SDPA (the selection is folded into the additive mask). :meth:`forward` and the traced
+        :meth:`forward_static` both run it.
 
         ``dense_csa`` lets a CSA layer run past ``index_topk`` compressed entries *without* the lightning
         indexer: every causally visible compressed entry is attended to, instead of the indexer's top
@@ -224,6 +299,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             raise ValueError(f"compress rate {self.rate} must divide the chunk alignment {ALIGNMENT}")
         self.index_topk = config.index_topk
         self.dense_csa = dense_csa
+        self.use_indexer = bool(lightning_indexer) and self.is_csa
         # Sliding layers use the plain theta table, CSA / HCA the YaRN-scaled one they share
         # with their compressor.
         self.rope_kind = "main" if self.is_sliding else "compress"
@@ -304,6 +380,26 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
                 # bf16 [1,1,rate,Dh]: added to the window-reshaped gate [1, n_win, rate, Dh].
                 self.c_bias = self._to_device(bias.reshape(1, 1, self.rate, self.head_dim))
 
+        if self.use_indexer:
+            # Lightning indexer, replicated on every rank (all index heads on each): its selection row is the
+            # head-sum, so replicating avoids a collective at the price of redundant (cheap) compute.
+            self.index_heads = config.index_n_heads
+            self.index_head_dim = config.index_head_dim
+            if self.index_head_dim < self.rope_dim or self.index_head_dim % ttnn.TILE_SIZE:
+                raise ValueError(f"index_head_dim {self.index_head_dim} unsupported (rope_dim {self.rope_dim})")
+            self.i_q_b_proj = linear("compressor.indexer.q_b_proj")
+            self.i_weights_proj = linear("compressor.indexer.weights_proj", ttnn.bfloat16)
+            self.i_kv_proj = linear("compressor.indexer.kv_proj", ttnn.bfloat16)
+            self.i_gate_proj = linear("compressor.indexer.gate_proj", ttnn.bfloat16)
+            self.i_norm_weight = norm_gamma("compressor.indexer.kv_norm.weight")
+            i_bias = host("compressor.indexer.position_bias")
+            assert tuple(i_bias.shape) == (self.rate, 2 * self.index_head_dim), tuple(i_bias.shape)
+            self.i_bias_slots = [
+                self._to_device(i_bias[s].reshape(1, 1, 1, -1), dtype=ttnn.float32) for s in range(self.rate)
+            ]
+            # relu(q.k) * softmax_scale, weighted by weights_proj(x) * n_heads^-0.5, summed over heads.
+            self.index_scale = float(self.index_head_dim**-0.5 * self.index_heads**-0.5)
+
     # ------------------------------------------------------------------ #
     # small helpers
     # ------------------------------------------------------------------ #
@@ -358,17 +454,17 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         The leading nope channels pass through untouched. ``cos`` / ``sin`` are ``[1, 1, n, rope_dim]``
         (broadcast over heads); pass ``-sin`` to rotate the other way.
         """
-        heads, rows = x.shape[1], x.shape[2]
-        nope_dim = self.head_dim - self.rope_dim
+        heads, rows, width = x.shape[1], x.shape[2], x.shape[3]  # width: Dh, or index_head_dim for the indexer
+        nope_dim = width - self.rope_dim
         nope = ttnn.slice(x, [0, 0, 0, 0], [1, heads, rows, nope_dim])
-        rope = ttnn.slice(x, [0, 0, 0, nope_dim], [1, heads, rows, self.head_dim])
+        rope = ttnn.slice(x, [0, 0, 0, nope_dim], [1, heads, rows, width])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
 
     # ------------------------------------------------------------------ #
     # Q / K=V stems
     # ------------------------------------------------------------------ #
-    def _q_stem(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    def _q_stem(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, return_latent: bool = False):
         """``[1, 1, T, D]`` -> roped, per-head-normed queries ``[1, H_local, T, Dh]``.
 
         ``q_a`` and its norm run replicated; ``q_b`` is column-parallel, so under TP each rank ends up
@@ -376,7 +472,8 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         """
         q = self.q_a_proj(hidden)
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.eps)
-        q = self.q_b_proj(q)
+        latent = q  # the indexer's ``q_residual``
+        q = self.q_b_proj(latent)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q,
             num_heads=self.local_num_heads,
@@ -385,7 +482,8 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.eps)
-        return self._rope(q, cos, sin)
+        q = self._rope(q, cos, sin)
+        return (q, latent) if return_latent else q
 
     def _kv_stem(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, T, D]`` -> the roped single K=V head ``[1, 1, T, Dh]``."""
@@ -396,16 +494,27 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
     # compressors
     # ------------------------------------------------------------------ #
-    def _finish_entries(self, pooled: ttnn.Tensor, first_position: int) -> ttnn.Tensor:
+    def _finish_entries(
+        self,
+        pooled: ttnn.Tensor,
+        first_position: int = 0,
+        tables: Optional[tuple] = None,
+        norm_weight: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         """Norm + RoPE the pooled ``[1, 1, n_win, Dh]`` entries, returned ROW_MAJOR.
 
         Entry ``w`` is RoPE'd at the absolute position ``first_position + w * rate``: the position
-        of its window's first token, so entries stay valid across chunks.
+        of its window's first token, so entries stay valid across chunks. ``tables`` (traced prefill)
+        hands in those ``(cos, sin)`` as persistent device tensors instead of uploading them here.
         """
         n_win = pooled.shape[2]
-        pooled = ttnn.rms_norm(pooled, weight=self.c_norm_weight, epsilon=self.eps)
-        positions = first_position + torch.arange(n_win) * self.rate
-        cos, sin = self._rope_tables(positions)
+        pooled = ttnn.rms_norm(
+            pooled, weight=self.c_norm_weight if norm_weight is None else norm_weight, epsilon=self.eps
+        )
+        if tables is None:
+            positions = first_position + torch.arange(n_win) * self.rate
+            tables = self._rope_tables(positions)
+        cos, sin = tables
         pooled = self._rope(pooled, cos, sin)
         return ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -435,22 +544,27 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         return ttnn.typecast(x, ttnn.float32)
 
-    def _shift_windows(self, cur: ttnn.Tensor, prev_row: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _shift_windows(
+        self, cur: ttnn.Tensor, prev_row: ttnn.Tensor, rows_out: Optional[ttnn.Tensor] = None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Shift per-window rows down by one: row ``w`` becomes window ``w-1``'s, row 0 is ``prev_row``.
 
         ``cur`` is TILE ``[1, 1, n_win, W]`` and ``prev_row`` ROW_MAJOR ``[1, 1, 1, W]``. Returns the
-        shifted tensor (TILE) and ``cur``'s last row (ROW_MAJOR), the next chunk's ``prev_row``.
+        shifted tensor (TILE) and ``cur``'s last row (ROW_MAJOR), the next chunk's ``prev_row``. ``rows_out``
+        (traced prefill) also gets every row of ``cur``, ROW_MAJOR.
         """
         n_win, width = cur.shape[2], cur.shape[3]
         cur_rm = ttnn.to_layout(cur, ttnn.ROW_MAJOR_LAYOUT)
+        if rows_out is not None:
+            self._write_rows(cur_rm, rows_out, 0)
         head = ttnn.slice(cur_rm, [0, 0, 0, 0], [1, 1, n_win - 1, width])
         shifted = ttnn.to_layout(ttnn.concat([prev_row, head], dim=2), ttnn.TILE_LAYOUT)
         last = ttnn.slice(cur_rm, [0, 0, n_win - 1, 0], [1, 1, n_win, width])
         return shifted, last
 
-    def _initial_csa_overlap(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _initial_csa_overlap(self, head_dim: Optional[int] = None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """The "previous window" of a prompt's first CSA window: zero kv and a gate that weighs 0."""
-        width = self.rate * self.head_dim
+        width = self.rate * (head_dim or self.head_dim)
         kv = ttnn.from_torch(
             torch.zeros(1, 1, 1, width),
             dtype=ttnn.float32,
@@ -467,8 +581,16 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         )
         return kv, gate
 
-    def _pool_csa(self, hidden: ttnn.Tensor, state: PrefillAttentionState) -> ttnn.Tensor:
+    def _pool_csa(
+        self,
+        hidden: ttnn.Tensor,
+        state: PrefillAttentionState,
+        indexer: bool = False,
+        rows_out: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+    ) -> ttnn.Tensor:
         """CSA's overlapping pooling: ``[1, 1, T, D]`` -> ``[1, 1, T/rate, Dh]``; updates the overlap state.
+
+        ``rows_out`` = ``(kv, gate)`` (traced prefill) also gets every window's Ca slice (see ``_shift_windows``).
 
         Every token projects to ``2*Dh`` = ``Ca | Cb``. Entry ``w`` is the softmax-gated combination
         over ``2*rate`` slots: window ``w-1``'s Ca slice (``rate`` slots) then window ``w``'s Cb
@@ -476,27 +598,40 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         split. The 8-way softmax is written out elementwise in fp32 (max, exp, sum, divide) over
         ``[n_win, Dh]`` slot tensors instead of reshaping to a 4-row window axis.
         """
-        rate, dh = self.rate, self.head_dim
+        rate = self.rate
+        if indexer:  # the indexer's own compressor: same scheme at index_head_dim, its own weights and overlap
+            dh = self.index_head_dim
+            kv_proj, gate_proj, bias_slots = self.i_kv_proj, self.i_gate_proj, self.i_bias_slots
+        else:
+            dh = self.head_dim
+            kv_proj, gate_proj, bias_slots = self.c_kv_proj, self.c_gate_proj, self.c_bias_slots
         wd = 2 * dh
         n_win = hidden.shape[2] // rate
 
-        kv = self._window_view(self.c_kv_proj(hidden), n_win, rate * wd)
-        gate = self._window_view(self.c_gate_proj(hidden), n_win, rate * wd)
+        kv = self._window_view(kv_proj(hidden), n_win, rate * wd)
+        gate = self._window_view(gate_proj(hidden), n_win, rate * wd)
 
         def slot(x: ttnn.Tensor, s: int, lo: int, hi: int) -> ttnn.Tensor:
             return ttnn.slice(x, [0, 0, 0, s * wd + lo], [1, 1, n_win, s * wd + hi])
 
         # Position bias joins the gate before the Ca / Cb split (and before the overlap is saved).
-        gate_slots = [ttnn.add(slot(gate, s, 0, wd), self.c_bias_slots[s]) for s in range(rate)]
+        gate_slots = [ttnn.add(slot(gate, s, 0, wd), bias_slots[s]) for s in range(rate)]
 
         # This chunk's Ca slice, all slots side by side [1, 1, n_win, rate * Dh].
         ca_kv = ttnn.concat([slot(kv, s, 0, dh) for s in range(rate)], dim=-1)
         ca_gate = ttnn.concat([ttnn.slice(gate_slots[s], [0, 0, 0, 0], [1, 1, n_win, dh]) for s in range(rate)], dim=-1)
 
-        if state.csa_prev_kv is None:
-            state.csa_prev_kv, state.csa_prev_gate = self._initial_csa_overlap()
-        prev_kv, state.csa_prev_kv = self._shift_windows(ca_kv, state.csa_prev_kv)
-        prev_gate, state.csa_prev_gate = self._shift_windows(ca_gate, state.csa_prev_gate)
+        kv_out, gate_out = rows_out or (None, None)
+        if indexer:
+            if state.idx_prev_kv is None:
+                state.idx_prev_kv, state.idx_prev_gate = self._initial_csa_overlap(dh)
+            prev_kv, state.idx_prev_kv = self._shift_windows(ca_kv, state.idx_prev_kv, kv_out)
+            prev_gate, state.idx_prev_gate = self._shift_windows(ca_gate, state.idx_prev_gate, gate_out)
+        else:
+            if state.csa_prev_kv is None:
+                state.csa_prev_kv, state.csa_prev_gate = self._initial_csa_overlap()
+            prev_kv, state.csa_prev_kv = self._shift_windows(ca_kv, state.csa_prev_kv, kv_out)
+            prev_gate, state.csa_prev_gate = self._shift_windows(ca_gate, state.csa_prev_gate, gate_out)
 
         logits, values = [], []
         for j in range(rate):  # window w-1's Ca slots
@@ -528,6 +663,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             return None
         pooled = self._pool_csa(hidden, state) if self.is_csa else self._pool_hca(hidden)
         entries = self._finish_entries(pooled, state.seq_len)
+        if self.use_indexer:
+            keys = self._finish_entries(
+                self._pool_csa(hidden, state, indexer=True), state.seq_len, norm_weight=self.i_norm_weight
+            )
+            state.idx_keys = keys if state.idx_keys is None else ttnn.concat([state.idx_keys, keys], dim=2)
         state.compressed_kv = (
             entries if state.compressed_kv is None else ttnn.concat([state.compressed_kv, entries], dim=2)
         )
@@ -536,7 +676,14 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
     # attention
     # ------------------------------------------------------------------ #
-    def _mask(self, num_tokens: int, start: int, num_entries: int, padded_keys: int) -> ttnn.Tensor:
+    def _mask(
+        self,
+        num_tokens: int,
+        start: int,
+        num_entries: int,
+        padded_keys: int,
+        entry_sel: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         """Additive mask ``[1, 1, T, padded_keys]`` over the key layout ``[tail | chunk | entries | pad]``.
 
         * Window part (``sliding_window + T`` columns; column ``k`` is the token at absolute position
@@ -547,6 +694,9 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
           window is fully in the query's past). For CSA this is exactly the indexer's output while
           there are no more than ``index_topk`` entries.
         * Padding columns are masked.
+
+        ``entry_sel`` (lightning indexer) is a device ``[1, 1, T, num_entries]`` additive TILE mask that replaces
+        the entry part: 0 on each query's top-``index_topk`` causally visible entries, -inf elsewhere.
         """
         sw = self.sliding_window
         query = torch.arange(num_tokens).view(-1, 1)
@@ -554,11 +704,86 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         window = (key <= query + sw) & (key > query) & (key + (start - sw) >= 0)
         mask = torch.full((num_tokens, padded_keys), float("-inf"))
         mask[:, : sw + num_tokens].masked_fill_(window, 0.0)
+        if entry_sel is not None:
+            window_cols = sw + num_tokens
+            parts = [self._to_device(mask[:, :window_cols].reshape(1, 1, num_tokens, window_cols)), entry_sel]
+            pad = padded_keys - window_cols - num_entries
+            if pad:
+                parts.append(self._to_device(torch.full((1, 1, num_tokens, pad), float("-inf"))))
+            return ttnn.concat(parts, dim=3)
         if num_entries:
             entry = torch.arange(num_entries).view(1, -1)
             visible = ((start + torch.arange(num_tokens) + 1) // self.rate).view(-1, 1)
             mask[:, sw + num_tokens : sw + num_tokens + num_entries].masked_fill_(entry < visible, 0.0)
         return self._to_device(mask.reshape(1, 1, num_tokens, padded_keys))
+
+    # ------------------------------------------------------------------ #
+    # lightning indexer (CSA)
+    # ------------------------------------------------------------------ #
+    def _select_entries(
+        self,
+        latent: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        state: PrefillAttentionState,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """The indexer's selection for this chunk: an additive TILE mask ``[1, 1, T, E]`` over all ``E`` entries so far.
+
+        Score ``s(t, w) = sum_h relu(q_{t,h} . k_w) * softmax_scale * (weights_proj(x_t)_h * n_heads^-0.5)`` with
+        ``q = rope(q_b_proj(q_residual))`` and ``k`` the indexer keys (:meth:`_compress`); entry ``w`` is causally
+        visible to token ``t`` iff ``w < (t + 1) // rate``. The mask is 0 on the ``index_topk`` best visible entries of
+        each query (selected by threshold: everything scoring at least the k-th best, so no scatter is needed) and
+        -inf elsewhere; a query with fewer than ``index_topk`` visible entries keeps all of them.
+
+        ``state.idx_keys`` must already hold this chunk's keys, so ``E = (seq_len + T) // rate`` (``state.seq_len``
+        is the chunk's start).
+        """
+        num_tokens, start = hidden.shape[2], state.seq_len
+        num_entries = state.idx_keys.shape[2]
+        heads, dim = self.index_heads, self.index_head_dim
+
+        q = self.i_q_b_proj(latent)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        q = self._rope(q, cos, sin)  # [1, Hi, T, Di]
+        weights = ttnn.multiply(self.i_weights_proj(hidden), self.index_scale)  # [1, 1, T, Hi]
+
+        # ``indexer_score_dsa`` applies token causality (key t visible to query s iff t <= chunk_start + s), which is
+        # the wrong relation for compressed entries. Point ``chunk_start`` past every real entry so all of them are
+        # visible, score ``T`` phantom (zero) key rows past them that we never read, and cut causally ourselves.
+        tile = ttnn.TILE_SIZE
+        entry_tiles = -(-num_entries // tile) * tile
+        kv_len = -(-(entry_tiles + num_tokens) // 64) * 64
+        keys = self.idx_keys_padded(state, kv_len)
+        logits = ttnn.experimental.indexer_score_dsa(
+            q,
+            keys,
+            weights,
+            chunk_start_idx=entry_tiles,
+            kv_len=kv_len,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+            seq_shard_axes=[0] if self.tp_size > 1 else [],  # 1xTP mesh: the SP axis has extent 1 -> no offset
+        )  # [1, 1, T, kv_len] bf16 ROW_MAJOR, columns [0, kv_len) written
+        scores = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, num_tokens, num_entries])
+        scores = ttnn.to_layout(scores, ttnn.TILE_LAYOUT)
+
+        entry = torch.arange(num_entries).view(1, -1)
+        visible = ((start + torch.arange(num_tokens) + 1) // self.rate).view(-1, 1)
+        cut = self._to_device(torch.where(entry < visible, 0.0, float("-inf")).reshape(1, 1, num_tokens, num_entries))
+        scores = ttnn.add(scores, cut)
+
+        k = min(self.index_topk, num_entries)
+        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
+        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+
+    def idx_keys_padded(self, state: PrefillAttentionState, rows: int) -> ttnn.Tensor:
+        """The index keys as a TILE tensor ``[1, 1, rows, Di]``, zero rows appended up to ``rows``."""
+        keys = state.idx_keys
+        if rows > keys.shape[2]:
+            keys = ttnn.concat([keys, self._zeros_rm(rows - keys.shape[2], self.index_head_dim)], dim=2)
+        return ttnn.to_layout(keys, ttnn.TILE_LAYOUT)
 
     def _attend(
         self,
@@ -568,8 +793,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         state: PrefillAttentionState,
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
+        entry_sel: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """SDPA of ``q`` over ``[tail | chunk | entries | pad]``, then undo V's RoPE. Rolls the KV tail."""
+        """SDPA of ``q`` over ``[tail | chunk | entries | pad]``, then undo V's RoPE. Rolls the KV tail.
+
+        ``entry_sel`` is the lightning indexer's selection mask (see :meth:`_mask`)."""
         num_tokens = q.shape[2]
         sw = self.sliding_window
 
@@ -591,7 +819,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         kv_all = ttnn.concat(parts, dim=2) if len(parts) > 1 else window
         kv_all = ttnn.to_layout(kv_all, ttnn.TILE_LAYOUT)
 
-        mask = self._mask(num_tokens, state.seq_len, num_entries, padded_keys)
+        mask = self._mask(num_tokens, state.seq_len, num_entries, padded_keys, entry_sel)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
             kv_all,
@@ -654,7 +882,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             raise ValueError(f"chunk length {num_tokens} must be a positive multiple of {ALIGNMENT}")
         if state.seq_len % ALIGNMENT:
             raise ValueError(f"chunk start {state.seq_len} must be a multiple of {ALIGNMENT}")
-        if self.is_csa and not self.dense_csa:
+        if self.is_csa and not self.dense_csa and not self.use_indexer:
             entries = (state.seq_len + num_tokens) // self.rate
             if entries > self.index_topk:
                 raise NotImplementedError(
@@ -681,11 +909,304 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         start = state.seq_len
 
         cos, sin = self._rope_tables(start + torch.arange(num_tokens))
-        q = self._q_stem(hidden, cos, sin)
+        q, latent = self._q_stem(hidden, cos, sin, return_latent=True)
         kv = self._kv_stem(hidden, cos, sin)
         entries = self._compress(hidden, state)
-        attn = self._attend(q, kv, entries, state, cos, sin)
+        entry_sel = None
+        if self.use_indexer and entries.shape[2] > self.index_topk:
+            # Below index_topk entries top-k selects every visible entry (the plain causal mask); past it, select.
+            entry_sel = self._select_entries(latent, hidden, state, cos, sin)
+        attn = self._attend(q, kv, entries, state, cos, sin, entry_sel)
         out = self._o_proj(attn)
 
         state.seq_len += num_tokens
         return out
+
+    # ------------------------------------------------------------------ #
+    # traced prefill: static buffers, host-side per-chunk inputs, in-place forward
+    # ------------------------------------------------------------------ #
+    def new_static_buffers(self, chunk_size: int, entry_capacity: int = 0) -> PrefillStaticBuffers:
+        """Persistent zeroed state for :meth:`forward_static` over ``chunk_size``-token chunks; ``entry_capacity``
+        rows of compressed FIFO.
+
+        Allocated once, before any trace exists (allocating on a device that holds a trace is unsafe).
+        """
+        bufs = PrefillStaticBuffers(
+            tail=self._zeros_rm(self.sliding_window), window=self._zeros_rm(self.sliding_window + chunk_size)
+        )
+        if not self.is_sliding:
+            if entry_capacity <= 0 or entry_capacity % ALIGNMENT:
+                raise ValueError(f"entry_capacity {entry_capacity} must be a positive multiple of {ALIGNMENT}")
+            bufs.entries = self._zeros_rm(entry_capacity)
+            if self.is_csa:
+                n_win = chunk_size // self.rate
+                bufs.prev_kv, bufs.prev_gate = self._initial_csa_overlap()
+                bufs.ca_kv, bufs.ca_gate = (self._zeros_fp32_rm(n_win, self.rate * self.head_dim) for _ in range(2))
+                if self.use_indexer:
+                    width = self.rate * self.index_head_dim
+                    bufs.idx_keys = self._zeros_rm(entry_capacity, self.index_head_dim)
+                    bufs.idx_prev_kv, bufs.idx_prev_gate = self._initial_csa_overlap(self.index_head_dim)
+                    bufs.idx_ca_kv, bufs.idx_ca_gate = (self._zeros_fp32_rm(n_win, width) for _ in range(2))
+        return bufs
+
+    def _zeros_fp32_rm(self, rows: int, width: int) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            torch.zeros(1, 1, rows, width),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=self._replicate,
+        )
+
+    def host_tensor(self, t: torch.Tensor, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
+        """``t`` as a *host* ttnn tensor (replicated over the ranks) that :func:`ttnn.copy_host_to_device_tensor`
+        can write into a persistent device tensor of the same dtype / layout / shape."""
+        return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=self._replicate)
+
+    def mask_tables_host(self, num_tokens: int, cap: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(static [T, K], threshold [K])`` fp32 with ``K = sliding_window + T + cap``: the traced chunk mask's constants.
+
+        A traced chunk's additive mask is made on device from its start position (a multiple of ``ALIGNMENT``)
+        as ``static + (threshold > start) * NEG``. Key layout ``[tail | chunk | FIFO rows]``:
+
+        * Window part (``sliding_window + T`` columns; column ``k`` is the token at absolute position
+          ``start - sliding_window + k``): query ``i`` sees ``i < k <= i + sliding_window`` (``static``), and
+          never a position before 0, i.e. column ``k`` is cut while ``sliding_window - k > start``.
+        * FIFO part: the last ``cap`` rows of the compressed buffer, in which the ``E = (start + T) // rate``
+          entries emitted after this chunk occupy the last ``E`` rows, entry ``w`` at row ``c = cap - E + w``;
+          query ``i`` sees entry ``w`` iff ``w < (start + i + 1) // rate``. With ``start`` a multiple of ``rate``
+          that is ``c - cap + T // rate < (i + 1) // rate`` (``static``), and row ``c`` holds an entry at all iff
+          ``c >= cap - E``, i.e. it is cut while ``(cap - c) * rate - T > start``.
+
+        The thresholds are integers far below ``2**24``, so the fp32 compare on device is exact. The same columns,
+        sliced out of the mask, are the lightning indexer's causal cut over the FIFO rows.
+        """
+        sw = self.sliding_window
+        window_cols = sw + num_tokens
+        query = torch.arange(num_tokens).view(-1, 1)
+        key = torch.arange(window_cols).view(1, -1)
+        static = torch.full((num_tokens, window_cols + cap), float("-inf"))
+        static[:, :window_cols].masked_fill_((key <= query + sw) & (key > query), 0.0)
+        threshold = torch.empty(window_cols + cap)
+        threshold[:window_cols] = sw - torch.arange(window_cols)
+        if cap:
+            row = torch.arange(cap).view(1, -1)
+            visible = ((torch.arange(num_tokens) + 1) // self.rate).view(-1, 1)
+            static[:, window_cols:].masked_fill_(row - cap + num_tokens // self.rate < visible, 0.0)
+            threshold[window_cols:] = (cap - torch.arange(cap)) * self.rate - num_tokens
+        return static, threshold
+
+    def reset_static(self, bufs: PrefillStaticBuffers) -> None:
+        """Rewind ``bufs`` to the start of a prompt with plain host->device writes (no allocation)."""
+        if not hasattr(self, "_static_reset_host"):
+            self._static_reset_host = {}
+        host = self._static_reset_host
+
+        def zeros(key: str, shape: tuple, dtype: ttnn.DataType, fill: float = 0.0) -> ttnn.Tensor:
+            # The entry FIFOs are sized to the prepared prompt, so a later prompt of another length (a new
+            # traced plan on this same layer) needs its own host tensor.
+            if host.get(key, (None, None))[0] != shape:
+                host[key] = (shape, self.host_tensor(torch.full(shape, fill), dtype, ttnn.ROW_MAJOR_LAYOUT))
+            return host[key][1]
+
+        ttnn.copy_host_to_device_tensor(zeros("tail", tuple(bufs.tail.shape), ttnn.bfloat16), bufs.tail)
+        if bufs.entries is not None:
+            ttnn.copy_host_to_device_tensor(zeros("entries", tuple(bufs.entries.shape), ttnn.bfloat16), bufs.entries)
+        if bufs.prev_kv is not None:
+            shape = tuple(bufs.prev_kv.shape)
+            ttnn.copy_host_to_device_tensor(zeros("prev_kv", shape, ttnn.float32), bufs.prev_kv)
+            ttnn.copy_host_to_device_tensor(zeros("prev_gate", shape, ttnn.float32, _NO_WINDOW_GATE), bufs.prev_gate)
+        if bufs.idx_keys is not None:
+            ttnn.copy_host_to_device_tensor(zeros("idx_keys", tuple(bufs.idx_keys.shape), ttnn.bfloat16), bufs.idx_keys)
+            shape = tuple(bufs.idx_prev_kv.shape)
+            ttnn.copy_host_to_device_tensor(zeros("idx_prev_kv", shape, ttnn.float32), bufs.idx_prev_kv)
+            ttnn.copy_host_to_device_tensor(
+                zeros("idx_prev_gate", shape, ttnn.float32, _NO_WINDOW_GATE), bufs.idx_prev_gate
+            )
+
+    @staticmethod
+    def _write_rows(src: ttnn.Tensor, dst: ttnn.Tensor, first_row: int) -> None:
+        """Write ROW_MAJOR ``src`` ``[1, 1, n, W]`` into rows ``[first_row, first_row + n)`` of ``dst``, in place."""
+        n, width = src.shape[2], src.shape[3]
+        ttnn.experimental.slice_write(src, dst, [0, 0, first_row, 0], [1, 1, first_row + n, width], [1, 1, 1, 1])
+
+    def _fifo_append(self, buf: ttnn.Tensor, new: ttnn.Tensor, cap: int) -> ttnn.Tensor:
+        """Append ``new`` ``[1, 1, n, W]`` to the end-anchored FIFO ``buf`` and return the ``cap`` rows just written."""
+        n, width = new.shape[2], new.shape[3]
+        total = buf.shape[2]
+        if cap < n or cap > total:
+            raise ValueError(f"layer {self.layer_idx}: cap {cap} must be in [{n}, {total}]")
+        visible = new
+        if cap > n:  # drop the oldest ``n`` rows of the read window, append the new entries
+            old = ttnn.slice(buf, [0, 0, total - cap + n, 0], [1, 1, total, width])
+            visible = ttnn.concat([old, new], dim=2)
+            ttnn.deallocate(old)
+            ttnn.deallocate(new)
+        self._write_rows(visible, buf, total - cap)
+        return visible
+
+    def _compress_static(
+        self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep
+    ) -> Optional[ttnn.Tensor]:
+        """:meth:`_compress` over the persistent FIFO: returns the ``cap`` rows SDPA reads (ROW_MAJOR)."""
+        if self.is_sliding:
+            return None
+        shim = PrefillAttentionState(csa_prev_kv=bufs.prev_kv, csa_prev_gate=bufs.prev_gate)
+        if self.is_csa:
+            pooled = self._pool_csa(hidden, shim, rows_out=(bufs.ca_kv, bufs.ca_gate))
+        else:
+            pooled = self._pool_hca(hidden)
+        new = self._finish_entries(pooled, tables=step.entry_rope[self.rate])
+        visible = self._fifo_append(bufs.entries, new, step.caps[self.layer_type])
+        if self.is_csa:
+            self._write_rows(shim.csa_prev_kv, bufs.prev_kv, 0)
+            self._write_rows(shim.csa_prev_gate, bufs.prev_gate, 0)
+            ttnn.deallocate(shim.csa_prev_kv)
+            ttnn.deallocate(shim.csa_prev_gate)
+        return visible
+
+    def _index_keys_static(self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep) -> None:
+        """Append this chunk's lightning-indexer keys to ``bufs.idx_keys`` (same FIFO order as the entries)."""
+        shim = PrefillAttentionState(idx_prev_kv=bufs.idx_prev_kv, idx_prev_gate=bufs.idx_prev_gate)
+        pooled = self._pool_csa(hidden, shim, indexer=True, rows_out=(bufs.idx_ca_kv, bufs.idx_ca_gate))
+        new = self._finish_entries(pooled, tables=step.entry_rope[self.rate], norm_weight=self.i_norm_weight)
+        visible = self._fifo_append(bufs.idx_keys, new, step.caps[self.layer_type])
+        ttnn.deallocate(visible)
+        self._write_rows(shim.idx_prev_kv, bufs.idx_prev_kv, 0)
+        self._write_rows(shim.idx_prev_gate, bufs.idx_prev_gate, 0)
+        ttnn.deallocate(shim.idx_prev_kv)
+        ttnn.deallocate(shim.idx_prev_gate)
+
+    def _select_static(
+        self,
+        latent: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        bufs: PrefillStaticBuffers,
+        step: PrefillStaticStep,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Trace-safe :meth:`_select_entries`: additive TILE mask ``[1, 1, T, cap]`` over the FIFO rows.
+
+        The key pad and the causal cut are persistent (``step``); ``cap`` and ``T`` are fixed for the trace, so
+        ``topk``'s ``k`` is too. A query with fewer than ``k`` visible entries keeps all of them, because the
+        k-th score is then ``-inf`` and the causal cut is added back afterwards.
+        """
+        cap = step.caps[self.layer_type]
+        num_tokens = hidden.shape[2]
+        dim = self.index_head_dim
+        q = self.i_q_b_proj(latent)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            num_heads=self.index_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q = self._rope(q, cos, sin)
+        weights = ttnn.multiply(self.i_weights_proj(hidden), self.index_scale)
+
+        total = bufs.idx_keys.shape[2]
+        keys_rm = ttnn.slice(bufs.idx_keys, [0, 0, total - cap, 0], [1, 1, total, dim])
+        pad = step.index_pads[self.layer_type]
+        self._write_rows(keys_rm, pad, 0)
+        kv_len = pad.shape[2]
+        keys = ttnn.to_layout(pad, ttnn.TILE_LAYOUT)
+        logits = ttnn.experimental.indexer_score_dsa(
+            q,
+            keys,
+            weights,
+            chunk_start_idx=cap,
+            kv_len=kv_len,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+            seq_shard_axes=[0] if self.tp_size > 1 else [],
+        )
+        scores = ttnn.to_layout(ttnn.slice(logits, [0, 0, 0, 0], [1, 1, num_tokens, cap]), ttnn.TILE_LAYOUT)
+        cut = step.index_cuts[self.layer_type]
+        scores = ttnn.add(scores, cut)
+        k = min(self.index_topk, cap)
+        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
+        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+
+    def _attend_static(
+        self,
+        q: ttnn.Tensor,
+        kv: ttnn.Tensor,
+        visible: Optional[ttnn.Tensor],
+        bufs: PrefillStaticBuffers,
+        step: PrefillStaticStep,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        entry_sel: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """:meth:`_attend` with the tail rolled in place and the mask supplied by ``step``.
+
+        ``entry_sel`` ``[1, 1, T, cap]`` (the lightning indexer) is added onto the mask's entry columns.
+        """
+        num_tokens = q.shape[2]
+        sw = self.sliding_window
+        chunk_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
+        window = ttnn.concat([bufs.tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
+        ttnn.deallocate(chunk_rm)
+        self._write_rows(window, bufs.window, 0)
+        new_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
+        self._write_rows(new_tail, bufs.tail, 0)
+        ttnn.deallocate(new_tail)
+
+        if visible is None:
+            kv_all = window
+        else:
+            kv_all = ttnn.concat([window, visible], dim=2)
+            ttnn.deallocate(window)
+            ttnn.deallocate(visible)
+        if kv_all.shape[2] % _SDPA_CHUNK:
+            raise ValueError(f"traced SDPA keys ({kv_all.shape[2]}) must be a multiple of {_SDPA_CHUNK}")
+        kv_all = ttnn.to_layout(kv_all, ttnn.TILE_LAYOUT)
+
+        mask = step.masks[self.layer_type]
+        if entry_sel is not None:
+            window_cols = sw + num_tokens
+            window = ttnn.slice(mask, [0, 0, 0, 0], [1, 1, num_tokens, window_cols])
+            entries = ttnn.add(
+                ttnn.slice(mask, [0, 0, 0, window_cols], [1, 1, num_tokens, window_cols + entry_sel.shape[3]]),
+                entry_sel,
+            )
+            mask = ttnn.concat([window, entries], dim=-1)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            kv_all,
+            kv_all,
+            attn_mask=mask,
+            is_causal=False,
+            scale=self.scaling,
+            attention_sink=self.sinks,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=_SDPA_CHUNK,
+                k_chunk_size=_SDPA_CHUNK,
+                exp_approx_mode=False,
+            ),
+        )
+        ttnn.deallocate(kv_all)
+        return self._rope(attn, cos, ttnn.neg(sin))
+
+    def forward_static(self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep) -> ttnn.Tensor:
+        """Trace-safe :meth:`forward`: no host traffic, no growing tensors.
+
+        Everything that depends on the chunk's position (RoPE tables, mask, the entries' RoPE) comes from
+        ``step``; the state lives in ``bufs`` and is updated in place. ``hidden`` ``[1, 1, T, D]`` -> ``[1, 1, T, D]``.
+        """
+        if hidden.shape[2] % ALIGNMENT:
+            raise ValueError(f"chunk length {hidden.shape[2]} must be a multiple of {ALIGNMENT}")
+        cos, sin = step.rope[self.rope_kind]
+        stemmed = self._q_stem(hidden, cos, sin, return_latent=self.use_indexer)
+        q, latent = stemmed if self.use_indexer else (stemmed, None)
+        kv = self._kv_stem(hidden, cos, sin)
+        visible = self._compress_static(hidden, bufs, step)
+        entry_sel = None
+        if self.use_indexer:
+            self._index_keys_static(hidden, bufs, step)
+            entry_sel = self._select_static(latent, hidden, bufs, step, cos, sin)
+        attn = self._attend_static(q, kv, visible, bufs, step, cos, sin, entry_sel)
+        return self._o_proj(attn)

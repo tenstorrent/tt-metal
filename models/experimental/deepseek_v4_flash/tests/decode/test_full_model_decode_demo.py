@@ -131,6 +131,8 @@ def _construct_model(
     system_config=None,
     loader=None,
     config=None,
+    num_stages=None,
+    submeshes=None,
 ):
     """Build ``DeepSeekV4Model`` + ``lm_head`` and attach the prefetcher session.
 
@@ -161,6 +163,8 @@ def _construct_model(
         use_submeshes=True,
         system_config=system_config,
         tp_size=tp_size,
+        num_stages=num_stages,
+        submeshes=submeshes,
     )
     lm_head = Linear(
         _w(loader, "lm_head.weight"),
@@ -183,10 +187,10 @@ def _construct_model(
     return model, lm_head, loader, config
 
 
-def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int) -> None:
+def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int, num_stages: int = 2) -> None:
     """The TP / pipeline layout both decode demos pin."""
     assert model.tp_size == tp_size
-    assert model.num_submeshes == 2
+    assert model.num_submeshes == num_stages
     assert model.pipeline_devices == model.num_submeshes * tp_size
     assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
