@@ -62,12 +62,14 @@ def test_rvv_column_math(device):
     scratch = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem)
     rt = ttnn.RuntimeArgs()
     rt[0][0] = [scratch.buffer_address(), int(np.float32(scale).view(np.uint32))]
+    config = ttnn.ComputeConfigDescriptor()
+    config.enable_trisc2_rvv = True
     kernel = ttnn.KernelDescriptor(
         kernel_source=KERNEL,
         core_ranges=core,
         compile_time_args=[],
         runtime_args=rt,
-        config=ttnn.ComputeConfigDescriptor(enable_trisc2_rvv=True),
+        config=config,
     )
     ttnn.generic_op([scratch], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[]))
     out = ttnn.to_torch(scratch).numpy().reshape(-1).view(np.uint8)
