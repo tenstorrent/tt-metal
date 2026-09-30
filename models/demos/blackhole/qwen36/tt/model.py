@@ -16,6 +16,12 @@ from tqdm import tqdm
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.gdn.gated_deltanet import (
+    fla_fidelity_name,
+    fla_scan_fid_len_max,
+    fla_scan_fidelities_up_to,
+    fla_scan_fidelity_for_len,
+)
 from models.demos.blackhole.qwen36.tt.layer import (
     Qwen36DecoderLayer,
     decode_norm_sharded,
@@ -214,6 +220,15 @@ class Qwen36Model:
         self._chunked_trace_id = None
         self._chunked_trace_output = None
         self._chunked_chunk_size = None
+        self._chunked_trace_prepared = False  # the chunk trace was captured in the prepared order (M3/M5 follow)
+        # QWEN36_FLA_SCAN_FID_BY_LEN (tt/gdn/gated_deltanet.py; single device): the fused FLA scan fidelity follows
+        # each request's prompt length (scan HiFi2 up to 65536 tokens, HiFi3 above; prep HiFi4).
+        # None = flag off or never prepared.
+        self._fla_warm_fids = None  # the scan fidelities whose prefill programs prepare compiled
+        self._chunked_trace_fla_fid = None  # the scan fidelity baked into the parked chunk trace
+        self._fla_hold = False  # True during prepare: the warm-ups pin the fidelity (per-request choice off)
+        # (prompt_len, scan fidelity name, chunk trace re-captured, "<prep>/<scan>") of the last request
+        self.fla_last_request = None
         # M2 (tp_common M2_FLAG_DEFAULTS), fixed per prepare in _prepare_prefill_trace_chunked_setup so the
         # warm-up forward, the captured trace and prefill_traced_chunked agree. False = current path.
         self._m2_nowhere = False  # NOWHERE: the traced chunk has no vision-splice where (text-only model)
@@ -223,6 +238,10 @@ class Qwen36Model:
         # (fused_conv_state, conv_hist) tensor pairs it bakes in. None = eager repack (current path).
         self._m3_repack_trace_id = None
         self._m3_repack_pairs = None
+        # P18_PRELUDE (QWEN36_PRELUDE_TRACE): the captured per-request GDN state reset + chunk-0 RoPE trace.
+        self._pt_trace_id = None
+        self._pt_refs = None
+        self._pt_host_cache = {}  # chunk start -> (chunk_start_idx host tensor, last-pos host tensor)
         # M4 (tp_common M4_FLAG_DEFAULTS), fixed per prepare with M2 LASTROW. False / None = current path.
         self._m4_r4a = False  # R4A: tile-aligned [T-32:T] block slices for the last layer's one-row reads
         self._m4_r4b = False  # R4B: the last layer's SDPA = decode SDPA for row chunk_size - 1
@@ -575,7 +594,12 @@ class Qwen36Model:
         prepare_decode_inputs_host, decode, GDN reset / save / restore), so the repack runs on CQ 0 before
         any of them; _forward_decode asserts that nothing is pending."""
         if self._m2_repack_pending:
-            self._gdn_refresh_conv_hist()  # clears _m2_repack_pending
+            if os.environ.get("QWEN36_REPACK_AFTER_TTFT") == "1" and self._m3_repack_trace_id is not None:
+                # REPACK_AFTER_TTFT: replay the captured repack trace here (first decode step) instead of
+                # in the TTFT window; same ops, same buffers as the eager repack (clears _m2_repack_pending).
+                self._m3_replay_repack_trace()
+            else:
+                self._gdn_refresh_conv_hist()  # clears _m2_repack_pending
 
     def _m3_alloc_zero_biases(self, mesh_device):
         """M3 ZB (QWEN36_M3_ZB=1, single device; tp_common M3 table): allocate the zero bias of each enabled
@@ -680,6 +704,115 @@ class Qwen36Model:
             self._m3_repack_trace_id = None
             self._m3_repack_pairs = None
 
+    # ---- QWEN36_PRELUDE_TRACE (P18_PRELUDE) ---------------------------------------------------------------------
+    # The host work before the chunk-0 replay (54 eager state-reset copies, 4 RoPE ops) becomes one trace:
+    # per GDN layer copy(zero recurrent -> recurrent_state) and copy(zero conv -> fused_conv_state), then the chunk-0
+    # cos/sin slice of the persistent RoPE table copied into the baked _chunk_cos_buf/_chunk_sin_buf. conv_hist is
+    # NOT reset in the trace: the repack after the last chunk (gather variant: one embedding per layer over the whole
+    # [1, 1, 2048, 32] output, padded rows written as zero) and the masked-bucket tail rebuild it fully before any
+    # decode read; the prefill chunk trace never reads it.
+
+    def _pt_live(self):
+        """[(dn, recurrent_state, fused_conv_state)] of every GDN layer, or None when the trace does not apply."""
+        if self.num_devices > 1 or self._dn_zero_recurrent is None:
+            return None
+        dns = [l.attention for l in self.layers if not l.is_full_attention]
+        if not dns or any(dn.recurrent_state is None or dn.fused_conv_state is None for dn in dns):
+            return None
+        if not self.rope.rope_device_table_enabled() or self._chunk_cos_buf is None:
+            return None
+        return [(dn, dn.recurrent_state, dn.fused_conv_state) for dn in dns]
+
+    def _pt_refs_now(self):
+        live = self._pt_live()
+        if live is None:
+            return None
+        return (
+            self._dn_zero_recurrent,
+            self._dn_zero_conv,
+            self._chunk_cos_buf,
+            self._chunk_sin_buf,
+            self.rope.cos_device,
+            self.rope.sin_device,
+            tuple(x for _, r, c in live for x in (r, c)),
+        )
+
+    def _pt_body(self, chunk_size):
+        for dn, rec, conv in self._pt_live():
+            ttnn.copy(self._dn_zero_recurrent, rec)
+            ttnn.copy(self._dn_zero_conv, conv)
+        cos_slice, sin_slice = self.rope.get_prefill_rot_mats_table_slice(0, chunk_size)
+        ttnn.copy(cos_slice, self._chunk_cos_buf)
+        ttnn.copy(sin_slice, self._chunk_sin_buf)
+        ttnn.deallocate(cos_slice)
+        ttnn.deallocate(sin_slice)
+
+    def _pt_capture_trace(self, device):
+        """Capture the prelude trace (after the chunk / repack / tail traces). Eager warm-up first; the warm-up and
+        the capture must add no program-cache entry (a compile after a trace is parked is unsafe). The eager
+        warm-up is the reset + chunk-0 RoPE the next request would run anyway (state is zero at prepare end)."""
+        live = self._pt_live()
+        if live is None or self.rope._req_cos is not None:
+            logger.warning(
+                "[P18] PRELUDE_TRACE: not applicable (TP, no GDN state, or RoPE table off); eager prelude kept"
+            )
+            return
+        chunk_size = self._chunked_chunk_size
+        n0 = device.num_program_cache_entries()
+        self._pt_body(chunk_size)
+        ttnn.synchronize_device(device)
+        n1 = device.num_program_cache_entries()
+        refs = self._pt_refs_now()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._pt_body(chunk_size)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        n2 = device.num_program_cache_entries()
+        refs2 = self._pt_refs_now()
+        same = all(
+            (a is b) if not isinstance(a, tuple) else all(x is y for x, y in zip(a, b)) for a, b in zip(refs, refs2)
+        )
+        if n2 != n1 or not same:
+            ttnn.release_trace(device, trace_id)
+            raise RuntimeError(
+                f"P18 PRELUDE_TRACE: program cache entries {n0} -> {n1} (warm-up) -> {n2} (capture), buffers "
+                f"unchanged={same}: capture compiled or rebound state after the chunk trace was parked"
+            )
+        self._pt_trace_id = trace_id
+        self._pt_refs = refs
+        self._pt_chunk_size = chunk_size
+        logger.info(
+            f"[P18] PRELUDE_TRACE: captured reset of {len(live)} GDN layers (recurrent + conv, no conv_hist) + "
+            f"chunk-0 RoPE; program cache entries {n0} -> {n1} (warm-up) -> {n2} (capture)"
+        )
+
+    def _pt_replay_ok(self, chunk_size):
+        """True when the prelude trace can serve this request (same baked buffers, text-only RoPE)."""
+        if self._pt_trace_id is None or self.rope._req_cos is not None or chunk_size != self._pt_chunk_size:
+            return False
+        now = self._pt_refs_now()
+        if now is None:
+            return False
+        return all(
+            (a is b) if not isinstance(a, tuple) else (len(a) == len(b) and all(x is y for x, y in zip(a, b)))
+            for a, b in zip(self._pt_refs, now)
+        )
+
+    def _pt_replay(self):
+        """Enqueue the prelude trace (CQ 0, non-blocking) plus the host-only part of the reset."""
+        self._m2_flush_pending_repack()  # same op order as _reset_gdn_state_for_new_sequence
+        ttnn.execute_trace(self.device, self._pt_trace_id, cq_id=0, blocking=False)
+        for l in self.layers:
+            if not l.is_full_attention and l.attention.split_conv_state is not None:
+                for buf in l.attention.split_conv_state:
+                    ttnn.deallocate(buf)
+                l.attention.split_conv_state = None
+
+    def _pt_release_trace(self, device=None):
+        if self._pt_trace_id is not None:
+            ttnn.release_trace(device if device is not None else self.device, self._pt_trace_id)
+            self._pt_trace_id = None
+            self._pt_refs = None
+
     def _m5_tail_trace_refs(self):
         """M5 TAIL_TRACE: the tensors whose buffer addresses the tail trace bakes in: the chunk-trace output it
         reads, its persistent output, the final-norm weight and the LM-head weights of every mode (only the active
@@ -755,14 +888,15 @@ class Qwen36Model:
         )
         ttnn.execute_trace(self.device, self._m5_tail_trace_id, cq_id=0, blocking=False)
 
-    def _m5_release_tail_trace(self, device=None):
+    def _m5_release_tail_trace(self, device=None, keep_output=False):
         """M5 TAIL_TRACE: release the tail trace and free the persistent output (re-prepare, free_kv_caches).
-        No-op when none."""
+        keep_output=True (FLA BY_LEN re-capture) keeps the persistent output, which was allocated in prepare
+        before the decode trace was primed. No-op when none."""
         if self._m5_tail_trace_id is not None:
             ttnn.release_trace(device if device is not None else self.device, self._m5_tail_trace_id)
             self._m5_tail_trace_id = None
             self._m5_tail_refs = None
-        if self._m5_tail_out is not None:
+        if self._m5_tail_out is not None and not keep_output:
             ttnn.deallocate(self._m5_tail_out)
             self._m5_tail_out = None
 
@@ -1414,6 +1548,8 @@ class Qwen36Model:
 
     def prefill(self, token_ids, vision_tokens=None):
         B, T = token_ids.shape
+        # QWEN36_FLA_SCAN_FID_BY_LEN: eager path (no trace replayed), the fidelity of this length. No-op when off.
+        self._fla_select_for_request(T, replays_chunk_trace=False, strict=False)
 
         # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text) before any cos/sin seam.
         self._build_request_rope(token_ids, vision_tokens)
@@ -1449,6 +1585,8 @@ class Qwen36Model:
         DeltaNet uses larger chunk_size (256 vs 64) to limit Neumann-series error
         (4096 tokens -> 16 sub-chunks, PCC >0.98). page_table enables paged prefill."""
         B, T = token_ids.shape
+        # QWEN36_FLA_SCAN_FID_BY_LEN: eager path (no trace replayed), the fidelity of this length. No-op when off.
+        self._fla_select_for_request(T, replays_chunk_trace=False, strict=False)
         self.reset_state(batch_size=B)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
@@ -1776,6 +1914,12 @@ class Qwen36Model:
         else:
             self._prepare_prefill_trace_chunked_setup(device, page_table, chunk_size, warmup_masked_buckets)
 
+        self._capture_chunk_traces(device, prepared)
+
+    def _capture_chunk_traces(self, device, prepared):
+        """The capture part of capture_prefill_trace_chunked (single device): the chunk trace, then (prepared
+        order) the M3 repack trace and the M5 tail trace. Also run by _fla_recapture_chunk_traces
+        (QWEN36_FLA_SCAN_FID_BY_LEN) when a request needs the other FLA scan fidelity."""
         # Capture trace.
         # M2 NOWHERE was fixed at prepare for a text-only model; a vision tower attached since then would
         # need the where, which the warm-up did not compile.
@@ -1793,6 +1937,8 @@ class Qwen36Model:
             self._chunk_page_table_buf,
         )
         ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        self._chunked_trace_prepared = bool(prepared)
+        self._chunked_trace_fla_fid = self._fla_current_fid()  # QWEN36_FLA_SCAN_FID_BY_LEN (None when off)
         if prepared:
             # ACKNOWLEDGED CORRUPTIBLE (trace-allocation tracker): in the prepared order the decode
             # trace is already parked, so this trace output lands in memory the decode replay may
@@ -1812,6 +1958,98 @@ class Qwen36Model:
             # M5 TAIL_TRACE: the exact-multiple tail (final norm + LM head [+ argmax]) gets its own trace, captured
             # now, after an eager warm-up; its persistent output was allocated in prepare.
             self._m5_capture_tail_trace(device)
+        if prepared and os.environ.get("QWEN36_PRELUDE_TRACE", "0") == "1":
+            self._pt_capture_trace(device)
+
+    # ---- QWEN36_FLA_SCAN_FID_BY_LEN (P11_FLALEN; tt/gdn/gated_deltanet.py) -------------------------------------
+    # The fused FLA op's fidelity follows each request's prompt length: scan HiFi2 up to 65536 tokens, scan HiFi3
+    # above, prep HiFi4 in both; a choice is named by its scan fidelity (gdn/gated_deltanet.py pairs the prep).
+    # The fidelities are hashed ChunkGdnFusedProgramConfig fields, so both programs coexist in the program cache.
+    #   prepare: compiles the prefill programs (T = chunk_size chunk + masked buckets) of every fidelity a prompt
+    #     of up to max_prompt_len tokens can use, before the decode trace is primed; the chunk trace is then
+    #     captured with the fidelity of the longest prompt (fla_scan_fidelity_for_len(max_prompt_len)).
+    #   per request (prefill_traced_chunked / prefill_masked_bucket at chunk_start 0): the GDN layers take the
+    #     request's fidelity (eager masked bucket / tail); when the request replays the chunk trace and the trace
+    #     holds the other fidelity, the chunk trace (and the M3 / M5 traces that bake its buffers) is re-captured
+    #     first. The re-capture compiles nothing (checked); a fidelity prepare did not compile raises instead.
+    # Flag off (code default): every helper below is a no-op and nothing changes.
+
+    def _fla_gdn_layers(self):
+        """The GDN layers whose fused FLA config takes a per-request scan fidelity (single device only)."""
+        if self.num_devices > 1:
+            return []
+        return [
+            l.attention
+            for l in self.layers
+            if not l.is_full_attention and hasattr(l.attention, "set_fla_scan_fidelity")
+        ]
+
+    def _fla_set_scan_fidelity(self, scan_fid):
+        for dn in self._fla_gdn_layers():
+            dn.set_fla_scan_fidelity(scan_fid)
+
+    def _fla_current_fid(self):
+        dns = self._fla_gdn_layers()
+        return dns[0].fla_scan_fid if dns else None
+
+    def _fla_select_for_request(self, prompt_len, replays_chunk_trace, strict=True):
+        """Give the GDN layers the FLA scan fidelity of a prompt_len-token request and, when it replays the chunk
+        trace (replays_chunk_trace) and the parked trace holds the other fidelity, re-capture the chunk trace.
+        strict (the traced entry points): a fidelity prepare did not compile raises (a compile now would put a
+        kernel binary in parked-trace memory). No-op when QWEN36_FLA_SCAN_FID_BY_LEN is off, during prepare, and
+        on TP."""
+        want = fla_scan_fidelity_for_len(prompt_len)
+        if want is None or self._fla_hold or not self._fla_gdn_layers():
+            return
+        if strict and self._fla_warm_fids is not None and want not in self._fla_warm_fids:
+            raise RuntimeError(
+                f"QWEN36_FLA_SCAN_FID_BY_LEN: a {prompt_len}-token prompt needs FLA scan fidelity {want}, but prepare "
+                f"compiled only {self._fla_warm_fids} (its max_prompt_len is shorter than this prompt). Call "
+                f"prepare_prefill_trace_chunked with max_prompt_len >= {prompt_len} first."
+            )
+        self._fla_set_scan_fidelity(want)
+        recaptured = False
+        if replays_chunk_trace and self._chunked_trace_id is not None and self._chunked_trace_fla_fid != want:
+            self._fla_recapture_chunk_traces()
+            recaptured = True
+        self.fla_last_request = (int(prompt_len), want.name, recaptured, fla_fidelity_name(want))
+
+    def _fla_recapture_chunk_traces(self):
+        """Re-capture the parked chunk trace, and the M3 repack / M5 tail traces that bake its buffers, with the GDN
+        layers' current FLA scan fidelity. Runs at the start of a request, before its GDN reset, so the order is
+        the same as the first capture: every persistent buffer (chunk inputs, GDN state, conv_hist, the M5 output)
+        is kept, the decode trace stays parked, and only the chunk-trace output is allocated again (acknowledged
+        corruptible, as at the first capture). Every program was compiled in prepare: a compile here raises."""
+        device = self.device
+        self._m2_flush_pending_repack()  # M2 REPACK_LATE: the previous request's repack runs first (old op order)
+        n0 = device.num_program_cache_entries()
+        old_fid = self._chunked_trace_fla_fid
+        ttnn.release_trace(device, self._chunked_trace_id)
+        self._chunked_trace_id = None
+        self._m3_release_repack_trace(device)
+        self._pt_release_trace(device)
+        self._m5_release_tail_trace(device, keep_output=True)
+        if self._chunked_trace_output is not None:
+            ttnn.deallocate(self._chunked_trace_output)
+            self._chunked_trace_output = None
+        self._capture_chunk_traces(device, self._chunked_trace_prepared)
+        if not self._chunked_trace_prepared:
+            # One-call order: the decode trace may be parked by now, as in the prepared order (see there).
+            from ttnn.tools.trace_allocation_tracker import acknowledge_corruptible
+
+            acknowledge_corruptible(self._chunked_trace_output)
+        n1 = device.num_program_cache_entries()
+        if n1 != n0:
+            raise RuntimeError(
+                f"QWEN36_FLA_SCAN_FID_BY_LEN: re-capturing the chunk trace ({old_fid} -> {self._chunked_trace_fla_fid}) "
+                f"compiled {n1 - n0} programs; prepare must compile both fidelities (max_prompt_len above the "
+                f"threshold) before the decode trace is primed"
+            )
+        logger.info(
+            f"[FLA] BY_LEN: chunk trace re-captured with FLA prep/scan {fla_fidelity_name(self._chunked_trace_fla_fid)} "
+            f"(was {fla_fidelity_name(old_fid)}); "
+            f"program cache entries {n0} -> {n1}: 0 new compiles"
+        )
 
     def prepare_prefill_trace_chunked(
         self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, max_prompt_len=None
@@ -1935,7 +2173,63 @@ class Qwen36Model:
     def _prepare_prefill_trace_chunked_setup(
         self, device, page_table, chunk_size, warmup_masked_buckets, request_warm_len=0
     ):
-        """Setup + compile warmups of capture_prefill_trace_chunked (single device), no capture."""
+        """Setup + compile warmups of capture_prefill_trace_chunked (single device), no capture.
+
+        QWEN36_FLA_SCAN_FID_BY_LEN (see _fla_select_for_request): the warm-ups run with the FLA scan fidelity of
+        the longest prompt this process serves (request_warm_len, else the page table's coverage), the fidelity
+        the chunk trace is then captured with; when shorter prompts need the other fidelity, its FLA programs (the
+        chunk forward and the masked buckets) are compiled here as well, before the decode trace is primed."""
+        fla_fids, fla_init, serve_len = [], None, request_warm_len
+        if fla_scan_fidelity_for_len(1) is not None and self._fla_gdn_layers():
+            serve_len = request_warm_len or int(page_table.shape[1]) * get_block_size(self._paged_kv_caches)
+            fla_fids = fla_scan_fidelities_up_to(serve_len)
+            fla_init = fla_scan_fidelity_for_len(serve_len)
+        self._fla_warm_fids = None
+        self._fla_hold = bool(fla_fids)
+        try:
+            if fla_init is not None:
+                self._fla_set_scan_fidelity(fla_init)
+            self._prepare_prefill_trace_chunked_setup_body(
+                device, page_table, chunk_size, warmup_masked_buckets, request_warm_len=request_warm_len
+            )
+            for fid in fla_fids:
+                if fid != fla_init:
+                    self._fla_warm_scan_fidelity(device, page_table, fid, warmup_masked_buckets)
+            if fla_init is not None:
+                self._fla_set_scan_fidelity(fla_init)
+                self._fla_warm_fids = list(fla_fids)
+                logger.info(
+                    f"[FLA] BY_LEN: prepare (longest prompt {serve_len}; HiFi2 up to {fla_scan_fid_len_max()} tokens) "
+                    f"compiled FLA prep/scan fidelities {[fla_fidelity_name(f) for f in fla_fids]}; the chunk trace "
+                    f"takes {fla_fidelity_name(fla_init)}"
+                )
+        finally:
+            self._fla_hold = False
+
+    def _fla_warm_scan_fidelity(self, device, page_table, scan_fid, warmup_masked_buckets):
+        """QWEN36_FLA_SCAN_FID_BY_LEN (prepare only, no trace parked yet): compile the FLA programs of scan_fid that
+        a request can reach -- the T = chunk_size chunk forward (trace capture) and the masked buckets (short
+        prompts, long-prompt tails). Every other program of these forwards is a cache hit. The dummy forwards dirty
+        the GDN state / KV; the capture and every request reset them."""
+        self._fla_set_scan_fidelity(scan_fid)
+        self._reset_dn_state_inplace()
+        out = self._forward_prefill_chunk(
+            self._chunk_token_buf,
+            self._chunk_cos_buf,
+            self._chunk_sin_buf,
+            self._chunk_start_idx_tensor,
+            self._chunk_full_page_table_buf,
+            self._chunk_page_table_buf,
+        )
+        ttnn.deallocate(out)
+        ttnn.synchronize_device(device)
+        if warmup_masked_buckets:
+            self.warmup_prefill_masked_buckets(page_table)
+
+    def _prepare_prefill_trace_chunked_setup_body(
+        self, device, page_table, chunk_size, warmup_masked_buckets, request_warm_len=0
+    ):
+        """The body of _prepare_prefill_trace_chunked_setup (every warm-up at the GDN layers' current FLA config)."""
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
@@ -1946,6 +2240,7 @@ class Qwen36Model:
             ttnn.release_trace(device, self._chunked_trace_id)
             self._chunked_trace_id = None
         self._m3_release_repack_trace(device)  # M3 REPACK_TRACE (no-op when none is captured)
+        self._pt_release_trace(device)  # P18_PRELUDE (no-op when none)
         self._m5_release_tail_trace(device)  # M5 TAIL_TRACE: trace + persistent output (no-op when none)
 
         self._chunked_chunk_size = chunk_size
@@ -2020,17 +2315,27 @@ class Qwen36Model:
             page_table[:, :blocks_per_chunk].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         # TP handoff: add ReplicateTensorToMesh for cos/sin (parity with tt/rope.py).
+        # P7_ROPE (QWEN36_ROPE_L1, default "0"): the persistent per-chunk cos/sin buffers are tiny
+        # ([1, chunk_size, rope_head_dim] bf16, e.g. 2048x64 = 256 KiB) and every FA layer's RoPE call
+        # for the chunk reads the SAME values, so placing them in L1 (interleaved) instead of the
+        # default DRAM interleaved turns every one of those reads into an L1 read. Allocated here
+        # (before trace capture) and only ever refreshed in place (ttnn.copy /
+        # copy_host_to_device_tensor into the same buffer), so the L1 placement holds for both
+        # chunks across every trace replay. "1" opts in; default "0" is byte-identical to before.
+        _rope_l1_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_ROPE_L1", "0") == "1" else None
         self._chunk_cos_buf = ttnn.from_torch(
             self.rope.cos_cpu[:chunk_size].unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=_rope_l1_mc,
         )
         self._chunk_sin_buf = ttnn.from_torch(
             self.rope.sin_cpu[:chunk_size].unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=_rope_l1_mc,
         )
 
         # Bind GDN to persistent external state; enable in-place carry across replays.
@@ -3127,6 +3432,9 @@ class Qwen36Model:
         assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
 
         if chunk_start == 0:
+            # QWEN36_FLA_SCAN_FID_BY_LEN: a new sequence takes the FLA scan fidelity of its length (a long prompt's
+            # tail, chunk_start > 0, keeps the one prefill_traced_chunked chose). No-op when the flag is off.
+            self._fla_select_for_request(actual_len, replays_chunk_trace=False)
             # chunk_start==0: new sequence, re-zero GDN. chunk_start>0: tail, keep carried state.
             self._reset_gdn_state_for_new_sequence()
             # Stage the per-request RoPE for this segment (M-RoPE for multimodal, 1D for text).
@@ -3312,6 +3620,10 @@ class Qwen36Model:
         assert (
             num_full == 0 or self.num_devices > 1 or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
+        # QWEN36_FLA_SCAN_FID_BY_LEN: the FLA scan fidelity of this prompt length; re-captures the chunk trace first
+        # when it holds the other fidelity (before any per-request staging, as after the first capture). No-op
+        # when the flag is off.
+        self._fla_select_for_request(actual_len, replays_chunk_trace=num_full > 0)
 
         # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
         # The chunk-replay loops + the masked tail then slice this sequence-indexed table by chunk
@@ -3374,7 +3686,12 @@ class Qwen36Model:
             "set QWEN36_M2_NOWHERE=0 or call init_vision_model() before prepare/capture"
         )
         # Re-zero GDN once; carries across replays + masked tail (chunk_start>0 skips reset).
-        self._reset_gdn_state_for_new_sequence()
+        _pt_used = self._pt_replay_ok(chunk_size)
+        if _pt_used:
+            # P18_PRELUDE: one trace = state reset (no conv_hist) + chunk-0 RoPE cos/sin.
+            self._pt_replay()
+        else:
+            self._reset_gdn_state_for_new_sequence()
         # Pad/clip page_table to captured buffer width (vLLM may differ). Trailing blocks unused.
         buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
         if page_table.shape[1] < buf_blocks:
@@ -3400,17 +3717,26 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(tok_host, self._chunk_token_buf)
 
-            csi_host = ttnn.from_torch(
-                torch.tensor([cs], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            # P18_PRELUDE: these two host tensors depend only on the chunk start, so they are built once per
+            # chunk start and reused (same bytes as building them per request).
+            _hc = self._pt_host_cache.get((cs, chunk_size))
+            if _hc is None:
+                _hc = (
+                    ttnn.from_torch(
+                        torch.tensor([cs], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                    ),
+                    ttnn.from_torch(
+                        torch.tensor([cs + chunk_size - 1], dtype=torch.int32),
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    ),
+                )
+                if _pt_used:
+                    self._pt_host_cache[(cs, chunk_size)] = _hc
+            csi_host, lp_host = _hc
             ttnn.copy_host_to_device_tensor(csi_host, self._chunk_start_idx_tensor)
             if self._m4_r4b:
                 # M4 R4B: absolute position of this chunk's last row = the decode-SDPA cur_pos of the last layer.
-                lp_host = ttnn.from_torch(
-                    torch.tensor([cs + chunk_size - 1], dtype=torch.int32),
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
                 ttnn.copy_host_to_device_tensor(lp_host, self._chunk_last_pos_tensor)
                 self._m4_last_pos_host = cs + chunk_size - 1
 
@@ -3431,7 +3757,9 @@ class Qwen36Model:
             # straight into _chunk_cos_buf/_chunk_sin_buf -- device-to-device, no host round trip.
             # M-RoPE requests (self.rope._req_cos staged) or the flag off keep the original host
             # compute (prefill_cos_sin_torch) + upload (copy_host_to_device_tensor) path.
-            if self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
+            if _pt_used and c == 0:
+                pass  # chunk-0 cos/sin were written by the prelude trace
+            elif self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
                 cos_slice, sin_slice = self.rope.get_prefill_rot_mats_table_slice(cs, chunk_size)
                 ttnn.copy(cos_slice, self._chunk_cos_buf)
                 ttnn.copy(sin_slice, self._chunk_sin_buf)
@@ -3486,7 +3814,12 @@ class Qwen36Model:
             if tpc.m2_enabled("REPACK_LATE"):
                 self._m2_repack_pending = True
             elif self._m3_repack_trace_id is not None:
-                self._m3_replay_repack_trace()
+                if os.environ.get("QWEN36_REPACK_AFTER_TTFT") == "1":
+                    # Defer the repack-trace replay out of TTFT: _m2_flush_pending_repack replays it before
+                    # the first GDN-state user (switch_mode / decode / reset / save / restore).
+                    self._m2_repack_pending = True
+                else:
+                    self._m3_replay_repack_trace()
             else:
                 self._gdn_refresh_conv_hist()
             # M5 TAIL_TRACE: replay the tail trace (final norm + LM head [+ argmax] into the persistent output)
@@ -3779,6 +4112,10 @@ class Qwen36Model:
             return
         if variant == "batched":
             _df.repack_conv_hist_batched([(dn.fused_conv_state, dn.ensure_conv_hist()) for dn in live], live[0].cfg)
+        elif variant == "gather":
+            _df.repack_conv_hist_gather(
+                [(dn.fused_conv_state, dn.ensure_conv_hist()) for dn in live], live[0].cfg, self.device
+            )
         else:
             for dn in live:
                 _df.repack_conv_hist(dn.fused_conv_state, dn.ensure_conv_hist(), dn.cfg)
@@ -3877,10 +4214,13 @@ class Qwen36Model:
         if self._deltanet_external_states is None:
             return
         self._m3_release_repack_trace()  # M3 REPACK_TRACE: it bakes the GDN conv-state buffers freed below
+        self._pt_release_trace()  # P18_PRELUDE: it bakes the GDN state buffers freed below
         self._m5_release_tail_trace()  # M5 TAIL_TRACE: it reads the chunk-trace output (released below)
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
+        self._chunked_trace_fla_fid = None  # QWEN36_FLA_SCAN_FID_BY_LEN: nothing parked, nothing prepared
+        self._fla_warm_fids = None
         for rec, conv in self._deltanet_external_states:
             ttnn.deallocate(rec)
             ttnn.deallocate(conv)

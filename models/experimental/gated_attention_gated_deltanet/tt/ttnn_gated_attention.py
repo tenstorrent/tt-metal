@@ -56,6 +56,22 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+def _rope_partial_inplace_enabled():
+    """QWEN36_ROPE_PARTIAL_INPLACE (code default 0): partial RoPE as one in-place rotary_embedding_hf call."""
+    return _os.environ.get("QWEN36_ROPE_PARTIAL_INPLACE", "0") == "1"
+
+
+def _rope_partial_inplace_ok(x, rotary_dim):
+    # In-place op: interleaved TILE input, prefill (>1 row), rotary_dim multiple of 64 and < head dim.
+    return (
+        _rope_partial_inplace_enabled()
+        and x.shape[-2] > 1
+        and rotary_dim % 64 == 0
+        and rotary_dim < x.shape[-1]
+        and not x.is_sharded()
+    )
+
+
 def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
     """Apply RoPE to query and key tensors using the fused ttnn.experimental.rotary_embedding_hf op.
 
@@ -75,6 +91,13 @@ def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
 
     rotary_dim = cos.shape[-1]
     head_dim = q.shape[-1]
+
+    if _rope_partial_inplace_ok(q, rotary_dim) and _rope_partial_inplace_ok(k, rotary_dim):
+        # One in-place op per tensor: rotates dims [0, rotary_dim), leaves the rest untouched (bit-exact vs below).
+        # Flag-gated (QWEN36_ROPE_PARTIAL_INPLACE, default off) and tested before the out-of-place partial path.
+        ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        return q, k
 
     if rotary_dim == head_dim or (_rope_partial_ok(q, rotary_dim) and _rope_partial_ok(k, rotary_dim)):
         q_embed = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, memory_config=memory_config)
@@ -112,6 +135,9 @@ def apply_rotary_pos_emb_fused_one(x, cos, sin, memory_config=None):
         cos = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
         sin = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
     rotary_dim = cos.shape[-1]
+    if _rope_partial_inplace_ok(x, rotary_dim):
+        ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, rotary_dim=rotary_dim)
+        return x
     if rotary_dim == x.shape[-1] or _rope_partial_ok(x, rotary_dim):
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, memory_config=memory_config)
     x_rot = x[..., :rotary_dim]
@@ -558,6 +584,7 @@ def gated_attention_forward_ttnn(
     # QWEN36_ATTN_FUSED_QKV env override (default on). Falls back to the F3 two-matmul
     # (q_deint + kv_packed) path when qkv_fused_weight is None or the override is "0".
     _fused_qkv = qkv_fused_weight is not None and _os.environ.get("QWEN36_ATTN_FUSED_QKV", "1") != "0"
+    _gate_sig_fused = False
     if prefill_last_row_only:
         assert (
             B == 1
@@ -611,6 +638,7 @@ def gated_attention_forward_ttnn(
                 qkv_fused_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, qkv_fused_weight),
             )  # [B, T, H*Dh + 2*Hkv*Dh]
         else:
@@ -619,6 +647,7 @@ def gated_attention_forward_ttnn(
                 q_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, q_deint_weight),
             )  # [B, T, H*Dh]
             kv = ttnn.linear(
@@ -626,6 +655,7 @@ def gated_attention_forward_ttnn(
                 kv_packed_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, kv_packed_weight),
             )  # [B, T, 2*Hkv*Dh]
         if prefill_last_row_only:
@@ -637,22 +667,54 @@ def gated_attention_forward_ttnn(
                 ttnn.deallocate(_hs_blk)
             else:
                 _hs_last = ttnn.to_layout(hidden_states[:, T - 1 : T, :], ttnn.TILE_LAYOUT)
+            if (
+                _hs_last.dtype != ttnn.bfloat16
+            ):  # QWEN36_ACT_BF8_NORM=1: n is bfloat8_b, the 1-row gate matmul reads bf16
+                _hs_bf = ttnn.typecast(_hs_last, ttnn.bfloat16)
+                ttnn.deallocate(_hs_last)
+                _hs_last = _hs_bf
             gate = ttnn.linear(
                 _hs_last,
                 gate_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc_row(_hs_last, gate_deint_weight),
             )  # [1, 1, H*Dh]
             ttnn.deallocate(_hs_last)
         else:
+            _gate_pc = _pc(hidden_states, gate_deint_weight)
+            # P14_FAGATE2 B2 (QWEN36_FA_GATE_FAST=1, code default 0): fuse SIGMOID into the T>1 prefill gate matmul's
+            # 2D mcast program config (bf16 sigmoid arm: needs fp32 dest acc off); the multiply below then has no
+            # activation. Bit-identical to the SFPU-activation multiply. Never used for the 1-row LASTROW gate.
+            if (
+                T > 1
+                and _os.environ.get("QWEN36_FA_GATE_FAST", "0") == "1"
+                and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0"
+                and _gate_pc is not None
+                and not getattr(ckc, "fp32_dest_acc_en", True)
+            ):
+                _gate_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=_gate_pc.compute_with_storage_grid_size,
+                    in0_block_w=_gate_pc.in0_block_w,
+                    out_subblock_h=_gate_pc.out_subblock_h,
+                    out_subblock_w=_gate_pc.out_subblock_w,
+                    out_block_h=_gate_pc.out_block_h,
+                    out_block_w=_gate_pc.out_block_w,
+                    per_core_M=_gate_pc.per_core_M,
+                    per_core_N=_gate_pc.per_core_N,
+                    transpose_mcast=_gate_pc.transpose_mcast,
+                    fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+                    fuse_batch=_gate_pc.fuse_batch,
+                )
+                _gate_sig_fused = True
             gate = ttnn.linear(
                 hidden_states,
                 gate_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
-                program_config=_pc(hidden_states, gate_deint_weight),
-                **({"dtype": ttnn.bfloat8_b} if _fa_tiny else {}),
+                dtype=ttnn.bfloat8_b if _fa_tiny else ttnn.bfloat16,
+                program_config=_gate_pc,
             )  # [B, T, H*Dh] flat, used as-is later
         if _fused_qkv:
             qkv4 = ttnn.reshape(qkv, [B, 1, T, num_attention_heads * head_dim + 2 * num_key_value_heads * head_dim])
@@ -848,6 +910,7 @@ def gated_attention_forward_ttnn(
     # KV cache handling
     _use_sdpa_decode = False
     _paged_sdpa_done = False
+    _sdpa_cat_out = False
     if paged_kv_cache_key is not None and page_table is not None and T > 1 and chunk_page_table is not None:
         # Paged prefill: fill K/V into paged cache, then chunked SDPA.
         # Q/K/V stay bfloat16 by default — no typecast. Production models (Qwen3_VL) typecast to
@@ -926,6 +989,14 @@ def gated_attention_forward_ttnn(
             # program config is fixed (_get_flexible_sdpa_program_config), so a single captured
             # trace replays for every chunk position (chunk-outer per-chunk prefill). The device
             # chunk start must be a multiple of flexible_sdpa_q_chunk() (no host check in the op).
+            # QWEN36_SDPA_CONCAT_OUT=1 (code default 0): the SDPA writes [B, 1, T, H*D] (heads concatenated)
+            # directly, so the concatenate_heads op below is skipped (P15; bit-exact layout change).
+            _sdpa_cat_out = (
+                T > 1
+                and use_optimized_concat
+                and not prefill_last_row_only
+                and _os.environ.get("QWEN36_SDPA_CONCAT_OUT", "0") == "1"
+            )
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 _q_for_sdpa,
                 paged_kv_cache_key,
@@ -938,6 +1009,7 @@ def gated_attention_forward_ttnn(
                     device, bf8_kv=paged_kv_cache_key.dtype == ttnn.bfloat8_b
                 ),
                 compute_kernel_config=_get_prefill_sdpa_compute_kernel_config(),
+                **({"concat_heads_output": True} if _sdpa_cat_out else {}),
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -1186,6 +1258,7 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(query_states)
 
     _row_heads_concat_done = False
+    _sdpa_cat_out_done = _sdpa_cat_out
     if _r4b:
         # M4 R4B: the decode SDPA output [1, B=1, H, D] flattens (H, D) row-major = the head concat of row
         # T - 1 (one reshape, as decode_concat_reshape) -> [1, 1, H*D].
@@ -1214,6 +1287,8 @@ def gated_attention_forward_ttnn(
         # Paged decode, B == T == 1: the SDPA output is [1, 1, H, D]; its row-major flatten of
         # (H, D) is the head concat, so one reshape replaces transpose + concatenate_heads.
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
+    elif _sdpa_cat_out_done:
+        attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])  # [B, 1, T, H*D] -> [B, T, H*D]
     elif use_optimized_concat:
         # head_split: (tile row, head) work units, so short sequences use the whole grid (bit-exact).
         attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc, head_split=True)
@@ -1226,30 +1301,44 @@ def gated_attention_forward_ttnn(
     # there) always takes the legacy two-op path unchanged. QWEN36_ATTN_GATE_FUSED=0 restores the
     # legacy two-op path at any T.
     if T > 1 and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0":
-        # The fused b-activation multiply is inaccurate for mixed a/b dtypes (bf8 x bf16: PCC ~0.66
-        # standalone). QWEN36_ATTN_KV_BF8=1 makes the SDPA output (attn_output) bf8 while the gate is bf16:
-        # QWEN36_ATTN_GATE_CAST (default "1") typecasts the gate to attn_output's dtype first. No-op when the
-        # dtypes already match.
-        if attn_output.dtype != gate.dtype and _os.environ.get("QWEN36_ATTN_GATE_CAST", "1") != "0":
-            _gate_c = ttnn.typecast(gate, dtype=attn_output.dtype, memory_config=_prefill_mc)
-            ttnn.deallocate(gate)
-            gate = _gate_c
-        attn_output = ttnn.multiply(
-            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
-        )
+        if _gate_sig_fused:  # P14_FAGATE2 B2: sigmoid already applied inside the gate matmul
+            attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)
+        else:
+            # The fused b-activation multiply is inaccurate for mixed a/b dtypes (bf8 x bf16: PCC ~0.66
+            # standalone). QWEN36_ATTN_KV_BF8=1 makes the SDPA output (attn_output) bf8 while the gate is bf16:
+            # QWEN36_ATTN_GATE_CAST (default "1") typecasts the gate to attn_output's dtype first. No-op when the
+            # dtypes already match.
+            if attn_output.dtype != gate.dtype and _os.environ.get("QWEN36_ATTN_GATE_CAST", "1") != "0":
+                _gate_c = ttnn.typecast(gate, dtype=attn_output.dtype, memory_config=_prefill_mc)
+                ttnn.deallocate(gate)
+                gate = _gate_c
+            attn_output = ttnn.multiply(
+                attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
+            )
     else:
         gate = ttnn.sigmoid(gate, memory_config=_prefill_mc)
         attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)
     ttnn.deallocate(gate)
 
     # Output projection (M2 LASTROW: 1 row -> the decode program config, never the M = T one)
+    _o_mc = memory_config
+    if T == 2048 and not prefill_last_row_only:
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc_hs
+
+        if _tpc_hs.resid_hs_active():
+            _o_mc = _tpc_hs.resid_hs_mc()  # P11 RESID_HS: b written HEIGHT_SHARDED (shard k on norm core k)
     attn_output = ttnn.linear(
         attn_output,
         o_proj_weight,
         compute_kernel_config=ckc,
-        memory_config=memory_config,
-        program_config=(
-            _pc_row(attn_output, o_proj_weight) if prefill_last_row_only else _pc(attn_output, o_proj_weight)
+        memory_config=_o_mc,
+        program_config=_pc_row(attn_output, o_proj_weight)
+        if prefill_last_row_only
+        else _pc(attn_output, o_proj_weight),
+        **(
+            {"dtype": ttnn.bfloat8_b}
+            if (T > 1 and not prefill_last_row_only and _os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1")
+            else {}
         ),
     )
 

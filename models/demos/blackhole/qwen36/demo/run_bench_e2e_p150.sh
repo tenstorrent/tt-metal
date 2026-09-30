@@ -73,8 +73,9 @@
 # QWEN36_GDN_DECODE_FUSED and QWEN36_GDN_CONV_REPACK also survive the reset (T8 fused GDN decode):
 #   QWEN36_GDN_DECODE_FUSED  2 (default; user decision 2026-09-25) = fused gdn_decode_step op with FP32
 #                            GDN state; 0 = the composite GDN decode (pre-T8 path).
-#   QWEN36_GDN_CONV_REPACK   batched (runner default since MG3 2026-09-26) | perlayer (code default)
-#                            (conv-history repack, fused decode only; bit-exact).
+#   QWEN36_GDN_CONV_REPACK   gather (runner default since P6_INT1C item 3) | batched | perlayer (code
+#                            default) (conv-history repack, fused decode only; bit-exact). gather = one
+#                            shared index table + one ttnn.embedding per layer (P3_SMALL/item_D.patch).
 # QWEN36_GDN_CONV_KDA_TILED also survives the reset (INT-3 tiled KDA conv):
 #   1 (default) = the KDA conv reads the TILE in-proj output and TILE conv state directly and returns
 #   new_state (no untilize/zeros/slice/tilize glue); 0 = the ROW_MAJOR KDA path. Bit-identical results.
@@ -119,6 +120,25 @@
 #   gamma (RMSNorm weight) lives in L1 interleaved instead of DRAM (placement only, bit-exact; standalone
 #   P2_NORM measurement: -1.3 us/call of 92 calls). Runner default 1 since 2026-09-28 (differs from the
 #   code default 0); A/B e.g. QWEN36_N_GAMMA_L1=0 bash run_bench_e2e_p150.sh.
+# The R5 item flag QWEN36_R5_GLU also survives the reset (tt/tp_common.py R5_FLAG_DEFAULTS; unset = code default 0
+#   = the current path; values 0|1|2; single device, T == 2048 prefill chunks with bfloat8_b gate/up; 2 = in0_block_w 16 + glu_last_block + glu_sfpu_on_pack variant, runner default since P10_INT1H; needle 47/50 vs 48, within noise): 1 = the fused-SwiGLU
+#   gate/up matmul runs as the 2D-mcast ttnn.matmul with the fused SwiGLU epilogue (needs the C++ fuse_swiglu config
+#   field) instead of minimal_matmul(fuse_swiglu=True); numerics change. Runner default 1 since 2026-09-28 (differs
+#   from the code default 0; gated: PCC 0.99905-0.99937 top-1 equal, needle 48/50, G0 coherence OK); A/B e.g.
+#   QWEN36_R5_GLU=0 bash run_bench_e2e_p150.sh.
+# The MM item flag QWEN36_MM_BW16 also survives the reset (tt/tp_common.py MM_FLAG_DEFAULTS; unset = code default 0
+#   = the current path; values 0|1; single device, T == 2048 prefill chunks): 1 = in0_block_w 16 instead of 8 for
+#   MLP down (M1 S2), GDN z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj
+#   (P3_MMSWEEP shapes); excludes GDN q|k|v in-proj (M1 S3, bw16 overflows a kernel-config limit there). Numerics
+#   change (PCC ~0.99995, not bit-exact). Runner default 1 since 2026-09-28 (differs from the code default 0);
+#   A/B e.g. QWEN36_MM_BW16=0 bash run_bench_e2e_p150.sh.
+# The SGRN item flag QWEN36_SGRN_VARIANT also survives the reset (tt/tp_common.py sgrn_kernel_variant();
+#   only takes effect with QWEN36_C2_SGRN=1): kernel_variant passed to sigmoid_gated_rms_norm. 0 = legacy
+#   7-pass kernel (bit-exact with the pre-P6_INT1C op); 1-3 = fused kernel (bit-exact with each other);
+#   4 = fused kernel with an exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact);
+#   5 = fused gated RMSNorm compute kernel (P9_SGRN2; numerics differ slightly from 4).
+#   Runner default 5 since P9_INT1G (4 since P6_INT1C; code default unset -> the op's own default, 4); A/B e.g.
+#   QWEN36_SGRN_VARIANT=0 bash run_bench_e2e_p150.sh.
 # QWEN36_GDN_PCFG also survives the reset (PR #57440 port: program_config of the fused FLA prefill op,
 #   parsed in tt/gdn/gated_deltanet.py; it replaces the removed QWEN_GDN_NP/_NV/_PLACEMENT C++ knobs):
 #   nv1np5 (runner default, C1 2026-09-26; kept by MG3) = NV=1 NP=5 row-local (with QWEN36_GDN_WYINV=horner:
@@ -129,6 +149,29 @@
 #   sfpu (runner default since MG3 2026-09-26) = pinned ttnn.ChunkGdnWyInverse.SFPU (numerics change vs horner);
 #   horner (runner default C1 2026-09-26 .. MG3) = ttnn.ChunkGdnWyInverse.HORNER, the pre-#57445 numerics;
 #   auto (code default when unset) = wy_inverse not passed (op default AUTO = SFPU on Blackhole at chunk 32). A/B e.g. QWEN36_GDN_PCFG=nv2np4 QWEN36_GDN_WYINV=sfpu bash run_bench_e2e_p150.sh.
+# QWEN36_GDN_GATE_FUSE also survives the reset (P7_INT1D / P5_GATING, models/experimental/gated_attention_gated_deltanet:
+#   fuses the GDN beta sigmoid+scale and the a+dt_bias+softplus into single BinaryNg ops, same math, bit-exact;
+#   distinct from the pre-existing QWEN36_GDN_GATE_FUSED, which fuses the output-gate multiply): 1 (runner default
+#   since P7_INT1D) = fused chain; 0 (code default) = separate ops.
+# QWEN36_ROPE_L1 also survives the reset (P7_INT1D / P7_ROPE, tt/model.py: the persistent per-chunk RoPE cos/sin
+#   buffers go in L1 interleaved instead of DRAM interleaved; bit-exact): 1 (runner default since P7_INT1D) = L1;
+#   0 (code default) = DRAM.
+# QWEN36_GDN_STATE_INPLACE also survives the reset (P9_INT1F / P7_STATECOPY, tt/gdn/decode.py: on the traced chunked
+#   prefill the fused FLA op and the KDA conv op write the recurrent / conv state straight into the persistent buffers
+#   instead of a new tensor plus a copy; bit-exact): 1 (runner default since P9_INT1F) = in place; 0 (code default) = copy.
+# QWEN36_FLA_SCAN_FID also survives the reset (R10B hook, chunk_gdn_fused_program_factory.cpp: math-fidelity
+#   override for the fused FLA scan/receiver compute kernel only): HiFi3 (runner default since P7_INT1D item B2;
+#   +/-2% vs f64, inside the coherence gate, -1.7 ms/4k vs HiFi4) | HiFi4 | HiFi2 | LoFi; unset (code default) =
+#   HiFi4 exactly (today's fixed behaviour). QWEN36_FLA_PREP_FID is the same hook for the prep/producer kernel;
+#   the runner leaves it unset (no pin) -- the P4_FLARCV producer path is already bit-exact at HiFi4.
+# QWEN36_FLA_SCAN_FID_BY_LEN also survives the reset (P11_FLALEN, tt/gdn/gated_deltanet.py + tt/model.py: the FLA
+#   fidelity follows each request's prompt length -- scan HiFi2 up to 65536 tokens, scan HiFi3 above, prep HiFi4 in
+#   both -- through the hashed ChunkGdnFusedProgramConfig.scan_math_fidelity / prep_math_fidelity fields;
+#   prepare compiles both when max_prompt_len > 65536 and the chunk trace is re-captured when a request needs the
+#   other one): 1 (runner default since P11_FLALEN) = by length; 0 (code default) = the fixed QWEN36_FLA_SCAN_FID
+#   above. With 1 the runner does NOT export QWEN36_FLA_SCAN_FID (the env var overrides the field); an explicit
+#   QWEN36_FLA_SCAN_FID=<fid> with 1 still pins every request's scan to <fid> (experiments; the runner prints a
+#   NOTE). QWEN36_FLA_PREP_FID is never exported by the runner (an explicit one overrides the prep field the same way).
 # Non-QWEN overrides (not touched by the reset): BENCH_GDN_FLAT_GB (default 1) -> QWEN_GDN_FLAT_GB;
 #   BENCH_TRACE_GUARD (default 1) -> QWEN36_TRACE_GUARD + TT_METAL_TRACE_ALLOC_TRACKING=1.
 #
@@ -159,8 +202,10 @@ echo "== branch: $(git rev-parse --abbrev-ref HEAD) commit: $(git rev-parse HEAD
 
 # ---------------------------------------------------------------------------------------------
 # 1. Unset EVERY QWEN* var already in the shell, so nothing is inherited from a previous session.
-# (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* item flags, QWEN36_GDN_DECODE_FUSED,
-#  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, the QWEN36_I4_*
+# (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* / QWEN36_R5_* / QWEN36_MM_* / QWEN36_SGRN_* item flags, QWEN36_GDN_DECODE_FUSED,
+#  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, QWEN36_GDN_GATE_FUSE,
+#  QWEN36_GDN_GATES_OP,
+#  QWEN36_ROPE_L1, QWEN36_ACT_BF8_RESID, QWEN36_ACT_BF8_NORM, QWEN36_RESID_HS, QWEN36_GDN_STATE_INPLACE, QWEN36_FLA_SCAN_FID, QWEN36_FLA_SCAN_FID_BY_LEN, the QWEN36_I4_*
 #  flags, QWEN36_LAYER_RESID_L1 and QWEN36_LAYER_L1_MAX_T are read first and re-exported in section 3.)
 # ---------------------------------------------------------------------------------------------
 ONDEV_ARGMAX="${QWEN36_ONDEV_ARGMAX:-1}"
@@ -300,6 +345,42 @@ for item in $N_ITEMS; do
   esac
   N_VALS[$item]="$val"
 done
+R5_ITEMS="GLU"
+declare -A R5_DEFAULTS=([GLU]=2)  # runner default 2 since P10_INT1H (accepted: needle 47/50 vs 48, within noise; 1 = previous config) (tp_common.R5_FLAG_DEFAULTS code default 0)
+declare -A R5_VALS
+for item in $R5_ITEMS; do
+  var="QWEN36_R5_$item"
+  val="${!var:-${R5_DEFAULTS[$item]}}"
+  case "$val" in
+    0|1|2) ;;
+    *) echo "ERROR: $var must be 0, 1 or 2 (got '$val')" >&2; exit 1 ;;
+  esac
+  R5_VALS[$item]="$val"
+done
+MM_ITEMS="BW16"
+declare -A MM_DEFAULTS=([BW16]=1)  # runner default 1 since 2026-09-28 (tp_common.MM_FLAG_DEFAULTS code default 0)
+declare -A MM_VALS
+for item in $MM_ITEMS; do
+  var="QWEN36_MM_$item"
+  val="${!var:-${MM_DEFAULTS[$item]}}"
+  case "$val" in
+    0|1) ;;
+    *) echo "ERROR: $var must be 0 or 1 (got '$val')" >&2; exit 1 ;;
+  esac
+  MM_VALS[$item]="$val"
+done
+SGRN_ITEMS="VARIANT"
+declare -A SGRN_DEFAULTS=([VARIANT]=5)  # runner default 5 since P9_INT1G (fused gated RMSNorm variant 5); 4 = P6_INT1C fused kernel with exp_21f sigmoid (op default)
+declare -A SGRN_VALS
+for item in $SGRN_ITEMS; do
+  var="QWEN36_SGRN_$item"
+  val="${!var:-${SGRN_DEFAULTS[$item]}}"
+  case "$val" in
+    0|1|2|3|4|5) ;;
+    *) echo "ERROR: $var must be 0, 1, 2, 3, 4 or 5 (got '$val')" >&2; exit 1 ;;
+  esac
+  SGRN_VALS[$item]="$val"
+done
 LAYER_RESID_L1="${QWEN36_LAYER_RESID_L1:-1}"  # C3 runner default 1 (code default 0: tt/layer.py, tt/model.py)
 case "$LAYER_RESID_L1" in
   0|1) ;;
@@ -315,10 +396,10 @@ case "$GDN_DECODE_FUSED" in
   0|2) ;;
   *) echo "ERROR: QWEN36_GDN_DECODE_FUSED must be 0 or 2 (got '$GDN_DECODE_FUSED')" >&2; exit 1 ;;
 esac
-GDN_CONV_REPACK="${QWEN36_GDN_CONV_REPACK:-batched}"  # runner default batched since MG3 2026-09-26 (code default: perlayer)
+GDN_CONV_REPACK="${QWEN36_GDN_CONV_REPACK:-gather}"  # runner default gather since P6_INT1C (item 3; code default: perlayer)
 case "$GDN_CONV_REPACK" in
-  perlayer|batched) ;;
-  *) echo "ERROR: QWEN36_GDN_CONV_REPACK must be perlayer or batched (got '$GDN_CONV_REPACK')" >&2; exit 1 ;;
+  perlayer|batched|gather) ;;
+  *) echo "ERROR: QWEN36_GDN_CONV_REPACK must be perlayer, batched or gather (got '$GDN_CONV_REPACK')" >&2; exit 1 ;;
 esac
 GDN_CONV_KDA_TILED="${QWEN36_GDN_CONV_KDA_TILED:-1}"
 case "$GDN_CONV_KDA_TILED" in
@@ -334,6 +415,85 @@ GDN_WYINV="${QWEN36_GDN_WYINV:-sfpu}"  # runner default sfpu since MG3 2026-09-2
 case "$GDN_WYINV" in
   auto|horner|sfpu) ;;
   *) echo "ERROR: QWEN36_GDN_WYINV must be auto, horner or sfpu (got '$GDN_WYINV')" >&2; exit 1 ;;
+esac
+GDN_GATE_FUSE="${QWEN36_GDN_GATE_FUSE:-1}"  # runner default 1 since P7_INT1D (P5_GATING; code default: 0)
+case "$GDN_GATE_FUSE" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_GDN_GATE_FUSE must be 0 or 1 (got '$GDN_GATE_FUSE')" >&2; exit 1 ;;
+esac
+REPACK_AFTER_TTFT="${QWEN36_REPACK_AFTER_TTFT:-1}"  # P23_REPACK/INT2j: runner default 1 (code default 0); 1 = replay the M3 repack trace at the first decode step, not in TTFT (code default 0)
+case "$REPACK_AFTER_TTFT" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_REPACK_AFTER_TTFT must be 0 or 1 (got '$REPACK_AFTER_TTFT')" >&2; exit 1 ;;
+esac
+GDN_GATES_OP="${QWEN36_GDN_GATES_OP:-1}"  # P10_GDNGATE: runner default 1 (code default: 0); 1 = one fused gdn_gates op for beta/g
+case "$GDN_GATES_OP" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_GDN_GATES_OP must be 0 or 1 (got '$GDN_GATES_OP')" >&2; exit 1 ;;
+esac
+ROPE_L1="${QWEN36_ROPE_L1:-1}"  # runner default 1 since P7_INT1D (P7_ROPE; code default: 0)
+case "$ROPE_L1" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_ROPE_L1 must be 0 or 1 (got '$ROPE_L1')" >&2; exit 1 ;;
+esac
+FA_GATE_FAST="${QWEN36_FA_GATE_FAST:-1}"  # P14_FAGATE2: FA prefill gate: SIGMOID fused into the gate matmul (B2) (runner default 1; code default: 0)
+case "$FA_GATE_FAST" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_FA_GATE_FAST must be 0 or 1 (got '$FA_GATE_FAST')" >&2; exit 1 ;;
+esac
+SDPA_CONCAT_OUT="${QWEN36_SDPA_CONCAT_OUT:-1}"  # P15: chunked SDPA writes [B,1,T,H*D] directly, no concatenate_heads (runner default 1; code default: 0)
+case "$SDPA_CONCAT_OUT" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_SDPA_CONCAT_OUT must be 0 or 1 (got '$SDPA_CONCAT_OUT')" >&2; exit 1 ;;
+esac
+ROPE_PARTIAL_INPLACE="${QWEN36_ROPE_PARTIAL_INPLACE:-1}"  # P10_ROPE: in-place partial RoPE op (runner default 1; code default: 0)
+case "$ROPE_PARTIAL_INPLACE" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_ROPE_PARTIAL_INPLACE must be 0 or 1 (got '$ROPE_PARTIAL_INPLACE')" >&2; exit 1 ;;
+esac
+# P6_BF8ACT opt-in activation-dtype flags (default 0; read here, re-exported after the QWEN reset below).
+#   QWEN36_ACT_BF8_RESID=1: bfloat8_b output for the prefill o-proj / MLP down matmuls (G3, F3, M2).
+#   QWEN36_ACT_BF8_NORM=1:  bfloat8_b fused add+RMSNorm / layer-0 norm output n at T == 2048 (residual h stays bf16).
+ACT_BF8_RESID="${QWEN36_ACT_BF8_RESID:-1}"
+case "$ACT_BF8_RESID" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_ACT_BF8_RESID must be 0 or 1 (got '$ACT_BF8_RESID')" >&2; exit 1 ;;
+esac
+ACT_BF8_NORM="${QWEN36_ACT_BF8_NORM:-1}"
+case "$ACT_BF8_NORM" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_ACT_BF8_NORM must be 0 or 1 (got '$ACT_BF8_NORM')" >&2; exit 1 ;;
+esac
+# P11_SHARDRES_B: QWEN36_RESID_HS=1 keeps the T == 2048 prefill residual stream h and the o-proj / down-proj outputs
+# HEIGHT_SHARDED in L1 on the 64 fused add+RMSNorm cores (bit-exact; needs the P11_SHARDRES_A C++). Runner default 0 (code default: 0).
+RESID_HS="${QWEN36_RESID_HS:-1}"
+case "$RESID_HS" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_RESID_HS must be 0 or 1 (got '$RESID_HS')" >&2; exit 1 ;;
+esac
+STATE_INPLACE="${QWEN36_GDN_STATE_INPLACE:-1}"  # runner default 1 since P9_INT1F (P7_STATECOPY; code default: 0)
+case "$STATE_INPLACE" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_GDN_STATE_INPLACE must be 0 or 1 (got '$STATE_INPLACE')" >&2; exit 1 ;;
+esac
+FLA_SCAN_FID_BY_LEN="${QWEN36_FLA_SCAN_FID_BY_LEN:-1}"  # runner default 1 since P11_FLALEN (code default: 0)
+case "$FLA_SCAN_FID_BY_LEN" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_FLA_SCAN_FID_BY_LEN must be 0 or 1 (got '$FLA_SCAN_FID_BY_LEN')" >&2; exit 1 ;;
+esac
+# QWEN36_FLA_SCAN_FID: with BY_LEN=0 the runner default HiFi3 (since P7_INT1D item B2; code default: unset -> HiFi4).
+# With BY_LEN=1 it stays unset unless the caller set it (then it overrides the by-length field for every request).
+if [ "$FLA_SCAN_FID_BY_LEN" = "1" ]; then
+  FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-}"
+  if [ -n "$FLA_SCAN_FID" ]; then
+    echo "NOTE: QWEN36_FLA_SCAN_FID=$FLA_SCAN_FID is set explicitly: it overrides QWEN36_FLA_SCAN_FID_BY_LEN=1 (every request runs the FLA scan at $FLA_SCAN_FID)" >&2
+  fi
+else
+  FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-HiFi3}"
+fi
+case "$FLA_SCAN_FID" in
+  ""|HiFi4|HiFi3|HiFi2|LoFi) ;;
+  *) echo "ERROR: QWEN36_FLA_SCAN_FID must be HiFi4, HiFi3, HiFi2 or LoFi (got '$FLA_SCAN_FID')" >&2; exit 1 ;;
 esac
 I4_SDPA_Q64="${QWEN36_I4_SDPA_Q64:-1}"  # = ttnn_gated_attention.I4_SDPA_Q64_DEFAULT
 case "$I4_SDPA_Q64" in
@@ -357,9 +517,16 @@ for item in $I3_ITEMS; do
   esac
   I3_VALS[$item]="$val"
 done
+# P18_PRELUDE: QWEN36_PRELUDE_TRACE (runner default 1; code default 0) survives the reset below.
+PRELUDE_TRACE="${QWEN36_PRELUDE_TRACE:-1}"
+case "$PRELUDE_TRACE" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_PRELUDE_TRACE must be 0 or 1 (got '$PRELUDE_TRACE')" >&2; exit 1 ;;
+esac
 while IFS='=' read -r name _; do
   [ -n "$name" ] && unset "$name"
 done < <(env | grep -E '^QWEN' || true)
+export QWEN36_PRELUDE_TRACE="$PRELUDE_TRACE"
 
 # ---------------------------------------------------------------------------------------------
 # 2. Core env.
@@ -420,6 +587,12 @@ export QWEN36_GDN_CONV_TILED_SPLIT=0
 export QWEN36_GDN_DECODE_FUSED="$GDN_DECODE_FUSED"
 export QWEN36_GDN_FUSED_PREFILL=1
 export QWEN36_GDN_GATE_CLIP=0
+export QWEN36_GDN_GATE_FUSE="$GDN_GATE_FUSE"
+export QWEN36_GDN_GATES_OP="$GDN_GATES_OP"
+export QWEN36_REPACK_AFTER_TTFT="$REPACK_AFTER_TTFT"
+export QWEN36_ACT_BF8_RESID="$ACT_BF8_RESID"
+export QWEN36_ACT_BF8_NORM="$ACT_BF8_NORM"
+export QWEN36_RESID_HS="$RESID_HS"
 export QWEN36_GDN_GATE_FUSED=1
 export QWEN36_GDN_GB_LAYOUT=0
 export QWEN36_GDN_L1_MAX_T=0
@@ -485,11 +658,30 @@ for item in $N_ITEMS; do
   export "QWEN36_N_$item=${N_VALS[$item]}"
   N_SUMMARY="$N_SUMMARY QWEN36_N_$item=${N_VALS[$item]}"
 done
+R5_SUMMARY=""
+for item in $R5_ITEMS; do
+  export "QWEN36_R5_$item=${R5_VALS[$item]}"
+  R5_SUMMARY="$R5_SUMMARY QWEN36_R5_$item=${R5_VALS[$item]}"
+done
+MM_SUMMARY=""
+for item in $MM_ITEMS; do
+  export "QWEN36_MM_$item=${MM_VALS[$item]}"
+  MM_SUMMARY="$MM_SUMMARY QWEN36_MM_$item=${MM_VALS[$item]}"
+done
+SGRN_SUMMARY=""
+for item in $SGRN_ITEMS; do
+  export "QWEN36_SGRN_$item=${SGRN_VALS[$item]}"
+  SGRN_SUMMARY="$SGRN_SUMMARY QWEN36_SGRN_$item=${SGRN_VALS[$item]}"
+done
 I3_SUMMARY=""
 for item in $I3_ITEMS; do
   export "QWEN36_I3_$item=${I3_VALS[$item]}"
   I3_SUMMARY="$I3_SUMMARY QWEN36_I3_$item=${I3_VALS[$item]}"
 done
+export QWEN36_FLA_SCAN_FID_BY_LEN="$FLA_SCAN_FID_BY_LEN"
+if [ -n "$FLA_SCAN_FID" ]; then
+  export QWEN36_FLA_SCAN_FID="$FLA_SCAN_FID"
+fi  # else left unset (BY_LEN=1 default): the env var would override the by-length field
 export QWEN36_I4_SDPA_EXP_COMPAT="$I4_SDPA_EXP_COMPAT"
 export QWEN36_I4_SDPA_Q64="$I4_SDPA_Q64"
 export QWEN36_LAYER_L1_MAX_T="$LAYER_L1_MAX_T"
@@ -511,6 +703,11 @@ export QWEN36_PREFILL_PROGCFG_OVERRIDES=1
 export QWEN36_PREFIX_WRITE_ITERS=100
 export QWEN36_PREFIX_WRITE_WIDTH=1
 export QWEN36_ROPE_DEVICE_TABLE=1
+export QWEN36_ROPE_L1="$ROPE_L1"
+export QWEN36_FA_GATE_FAST="$FA_GATE_FAST"
+export QWEN36_SDPA_CONCAT_OUT="$SDPA_CONCAT_OUT"
+export QWEN36_ROPE_PARTIAL_INPLACE="$ROPE_PARTIAL_INPLACE"
+export QWEN36_GDN_STATE_INPLACE="$STATE_INPLACE"
 export QWEN36_ROPE_LEGACY=0
 
 export QWEN9B_MLP_DOWN_AUTO=0
@@ -637,7 +834,7 @@ else
   OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
-echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
+echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_REPACK_AFTER_TTFT=$QWEN36_REPACK_AFTER_TTFT QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_GDN_GATES_OP=$QWEN36_GDN_GATES_OP QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_FA_GATE_FAST=$QWEN36_FA_GATE_FAST QWEN36_SDPA_CONCAT_OUT=$QWEN36_SDPA_CONCAT_OUT QWEN36_ROPE_PARTIAL_INPLACE=$QWEN36_ROPE_PARTIAL_INPLACE QWEN36_ACT_BF8_RESID=$QWEN36_ACT_BF8_RESID QWEN36_ACT_BF8_NORM=$QWEN36_ACT_BF8_NORM QWEN36_RESID_HS=$QWEN36_RESID_HS QWEN36_GDN_STATE_INPLACE=$QWEN36_GDN_STATE_INPLACE QWEN36_FLA_SCAN_FID=${QWEN36_FLA_SCAN_FID:-<unset>} QWEN36_FLA_SCAN_FID_BY_LEN=$QWEN36_FLA_SCAN_FID_BY_LEN QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT QWEN36_PRELUDE_TRACE=$QWEN36_PRELUDE_TRACE -> $OUT =="
 
 RUN_LOG="${OUT%.json}.log"
 set +e

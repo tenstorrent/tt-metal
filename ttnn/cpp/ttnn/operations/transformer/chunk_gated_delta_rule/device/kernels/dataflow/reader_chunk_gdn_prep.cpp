@@ -102,81 +102,11 @@ void kernel_main() {
         cb.push_back(n);
     };
 
-    // constants (once)
-#if defined(GDN_CONST_GEN)
-    // GDN_CONST_GEN (fused factory, chunk_size 32): build eye/tril/ones and the three quadrant masks in L1 with local
-    // stores instead of every producer reading the same 1-tile DRAM tensors (a 64-reader hot spot on 4 banks at kernel
-    // start). Same fp32 values, same tile (face) layout, so bit-exact with the DRAM read. Ct == 1 only.
-    static_assert(Ct == 1, "GDN_CONST_GEN builds single 32x32 tiles");
-    {
-        // Zero the eye/tril/mask tiles with the NoC zero-fill (a local DMA from MEM_ZEROS), store one all-ones
-        // face, the tril face-0 triangle and the eye diagonals (424 stores), then replicate the all-ones face and
-        // the triangle with local 1 KB L1->L1 NoC copies.
-        CircularBuffer ce(cb_eye), ctl(cb_tril), co(cb_ones), cm(cb_mask);
-        ce.reserve_back(1);
-        ctl.reserve_back(1);
-        co.reserve_back(1);
-        cm.reserve_back(3);
-        noc.async_write_zeros(ce, tb_f, {.offset_bytes = 0});
-        noc.async_write_zeros(ctl, tb_f, {.offset_bytes = 0});
-        for (uint32_t t = 0; t < 3; t++) {
-            noc.async_write_zeros(cm, tb_f, {.offset_bytes = t * tb_f});
-        }
-        noc.async_read_barrier();
-        constexpr uint32_t ONE = 0x3f800000u;  // 1.0f
-        constexpr uint32_t FACE = 256 * 4;     // bytes per fp32 16x16 face
-        const uint32_t ae = ce.get_write_ptr(), at = ctl.get_write_ptr(), ao = co.get_write_ptr(),
-                       am = cm.get_write_ptr();
-        auto l1 = [](uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); };
-        volatile tt_l1_ptr uint32_t* pe = l1(ae);
-        volatile tt_l1_ptr uint32_t* pt = l1(at);
-        volatile tt_l1_ptr uint32_t* po = l1(ao);
-        for (uint32_t i = 0; i < 256; i++) {
-            po[i] = ONE;  // ones: face 0
-        }
-        for (uint32_t r = 0; r < 16; r++) {
-            pe[r * 16 + r] = ONE;        // eye: face 0 diagonal
-            pe[768 + r * 16 + r] = ONE;  // eye: face 3 diagonal
-            for (uint32_t c = 0; c <= r; c++) {
-                pt[r * 16 + c] = ONE;  // tril: face 0 lower triangle incl. diagonal
-            }
-        }
-        // make the stores visible to the NoC before the local copies read them
-        (void)po[255];
-        (void)pt[255];
-        const uint64_t ones_face = get_noc_addr(my_x[noc_index], my_y[noc_index], ao);
-        const uint64_t tri_face = get_noc_addr(my_x[noc_index], my_y[noc_index], at);
-        noc_async_read(ones_face, ao + 1 * FACE, FACE);  // ones faces 1..3
-        noc_async_read(ones_face, ao + 2 * FACE, FACE);
-        noc_async_read(ones_face, ao + 3 * FACE, FACE);
-        noc_async_read(ones_face, am + 0 * tb_f + 0 * FACE, FACE);  // mask tile 0 (Qtl): face 0
-        noc_async_read(ones_face, am + 1 * tb_f + 3 * FACE, FACE);  // mask tile 1 (Qbr): face 3
-        noc_async_read(ones_face, am + 2 * tb_f + 2 * FACE, FACE);  // mask tile 2 (Q10, rows>=16, cols<16): face 2
-        noc_async_read(ones_face, at + 2 * FACE, FACE);             // tril: face 2 is all below the diagonal
-        noc_async_read(tri_face, at + 3 * FACE, FACE);              // tril: face 3 == face 0 triangle
-        noc_async_read_barrier();
-        ce.push_back(1);
-        ctl.push_back(1);
-        co.push_back(1);
-        cm.push_back(3);
-    }
-#else
-    read_into(eye_acc, cb_eye, 0, cc, tb_f);
-    read_into(tril_acc, cb_tril, 0, cc, tb_f);
-    read_into(ones_acc, cb_ones, 0, cc, tb_f);
-    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
-#endif
-    if constexpr (GB_FLAT) {
-        // Selector tile hv (page hv of the single-tile-row [1,1,32,32*HV] tensor) -> cb_mask tile 3.
-        const uint32_t hv = (wi_start / NC) % HV;
-        read_into(sel_acc, cb_mask, hv, 1, tb_f);
-    }
-
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
     // cb_v in the SAME row-major order the head-major read produces (CB idx rt*Vt+ct) — so the
     // compute sees byte-identical tiles regardless of source layout. Requires pad==0 (T=NC*Ct*32).
-    auto read_v_flat = [&](uint32_t hc) {
+    auto read_v_flat = [&](uint32_t hc, bool wait) {
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
         const uint32_t hv = bh % HV;
@@ -191,14 +121,16 @@ void kernel_main() {
                 noc.async_read(v_acc, cbv, tb_v, {.page_id = page}, {.offset_bytes = (rt * Vt + ct) * tb_v});
             }
         }
-        noc.async_read_barrier();
-        cbv.push_back(cv);
+        if (wait) {
+            noc.async_read_barrier();
+            cbv.push_back(cv);
+        }
     };
 
     // Flat-q/k token-major read: work-item is value-head hv; its key-head is hk = hv / G (GQA group
     // size G = HV/Hk). Fetch [Ct,Kt] for (hk, chunk c) from the flat [B,T,Hk*K] grid (row stride Hk*Kt,
     // col offset hk*Kt), packed row-major into `cb` — identical layout to the head-major read.
-    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc, bool wait) {
         const uint32_t G = HV / Hk;
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
@@ -215,8 +147,10 @@ void kernel_main() {
                 noc.async_read(acc, cb, tb_io, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_io});
             }
         }
-        noc.async_read_barrier();
-        cb.push_back(ck);
+        if (wait) {
+            noc.async_read_barrier();
+            cb.push_back(ck);
+        }
     };
 
     // gb_flat (Option B) raw read: fetch Ct tiles of the model's native [B,T,HV] g/beta tensor at
@@ -224,7 +158,7 @@ void kernel_main() {
     // one tile wide). Every head sharing this (batch, chunk) reads the IDENTICAL Ct pages (no head
     // index in the addressing at all) — the per-head selection happens in compute via the
     // selector in cb_mask tile 3. Mirrors read_v_flat's page-range technique, minus the head offset.
-    auto read_gb_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+    auto read_gb_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc, bool wait) {
         const uint32_t bh = hc / NC;
         const uint32_t c = hc % NC;
         const uint32_t b = bh / HV;
@@ -235,27 +169,131 @@ void kernel_main() {
             const uint32_t page = batch_base + c * Ct + rt;
             noc.async_read(acc, cb, tb_f, {.page_id = page}, {.offset_bytes = rt * tb_f});
         }
-        noc.async_read_barrier();
-        cb.push_back(Ct);
+        if (wait) {
+            noc.async_read_barrier();
+            cb.push_back(Ct);
+        }
     };
 
-    for (uint32_t i = 0; i < wi_count; i++) {
+    // P15 C1 (GDN_COLD_PREFETCH): issue item 0's five input reads BEFORE the constant synthesis and wait for them with
+    // the constants' own read barriers, so the DRAM latency overlaps the constant build. Production flat layout only.
+    constexpr bool kColdPrefetch =
+#ifdef GDN_COLD_PREFETCH
+        (Ct == 1) && QK_FLAT && V_FLAT && GB_FLAT;
+#else
+        false;
+#endif
+    const bool prefetched = kColdPrefetch && (wi_count > 0);
+    if constexpr (kColdPrefetch) {
+        if (prefetched) {
+            const uint32_t hc0 = wi_start;
+            read_qk_flat(q_acc, cb_q, hc0, false);
+            read_qk_flat(k_acc, cb_k, hc0, false);
+            read_v_flat(hc0, false);
+            read_gb_flat(g_acc, cb_g, hc0, false);
+            read_gb_flat(b_acc, cb_beta, hc0, false);
+        }
+    }
+
+    // constants (once)
+    if constexpr (Ct == 1) {
+        // P3_FLAPREP: at chunk 32 every constant is a fixed 0/1 fp32 pattern (the host builds exactly these:
+        // build_fused_const_tiles / make_head_selectors), so build them in L1 instead of reading them from DRAM:
+        // every producer core read the same few DRAM pages here (~23 us per call at BH=16, NP=5). RISC-V stores
+        // are slow (~6 cycles), so only ~560 words are stored: one face of ones is replicated by local NoC
+        // copies, and the zero words come from the MEM_ZEROS loopback.
+        constexpr uint32_t kOne = 0x3F800000u;  // 1.0f
+        constexpr uint32_t kTileBytes = 4096;   // fp32 32x32 = 4 faces of 16x16
+        constexpr uint32_t kFaceBytes = 1024;
+        constexpr uint32_t n_mask = GB_FLAT ? 4 : 3;
+        CircularBuffer c_eye(cb_eye), c_tril(cb_tril), c_ones(cb_ones), c_mask(cb_mask);
+        c_eye.reserve_back(1);
+        c_tril.reserve_back(1);
+        c_ones.reserve_back(1);
+        c_mask.reserve_back(n_mask);
+        const uint32_t eye_l1 = c_eye.get_write_ptr();
+        const uint32_t tril_l1 = c_tril.get_write_ptr();
+        const uint32_t ones_l1 = c_ones.get_write_ptr();
+        const uint32_t mask_l1 = c_mask.get_write_ptr();
+        noc.async_write_zeros(c_eye, kTileBytes);
+        noc.async_write_zeros(c_tril, kTileBytes);
+        noc.async_write_zeros(c_mask, n_mask * kTileBytes);
+        volatile tt_l1_ptr uint32_t* ones = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_l1);
+        for (uint32_t i = 0; i < kFaceBytes / 4; i++) {
+            ones[i] = kOne;  // face 0 of the ones tile, while the zero-fill runs
+        }
+        (void)ones[kFaceBytes / 4 - 1];  // read back: the stores have landed before the NoC reads the face
+        noc.async_read_barrier();        // zero-fill done before any copy or store into the zeroed tiles
+        // Replicate the ones face: ones faces 1-3, tril face 2, Qtl face 0, Qbr face 3, Q10 (bottom-left) face 2.
+        const uint64_t ones_face = get_noc_addr(ones_l1);
+        noc_async_read(ones_face, ones_l1 + 1 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, ones_l1 + 2 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, ones_l1 + 3 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, tril_l1 + 2 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, mask_l1 + 0 * kTileBytes + 0 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, mask_l1 + 1 * kTileBytes + 3 * kFaceBytes, kFaceBytes);
+        noc_async_read(ones_face, mask_l1 + 2 * kTileBytes + 2 * kFaceBytes, kFaceBytes);
+        // Stores into words no copy touches: the lower triangles of tril faces 0 and 3, the eye diagonal
+        // (faces 0 and 3), the head selector (mask tile 3).
+        volatile tt_l1_ptr uint32_t* tril = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril_l1);
+        volatile tt_l1_ptr uint32_t* eye = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye_l1);
+        for (uint32_t r = 0; r < 16; r++) {
+            for (uint32_t c = 0; c <= r; c++) {
+                tril[r * 16 + c] = kOne;
+                tril[768 + r * 16 + c] = kOne;
+            }
+            eye[r * 17] = kOne;
+            eye[768 + r * 17] = kOne;
+        }
+        if constexpr (GB_FLAT) {
+            // Head selector: one-hot at (row hv, col 0) — make_head_selectors' tile hv (face 0 or 2).
+            const uint32_t hv = (wi_start / NC) % HV;
+            volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1 + 3 * kTileBytes);
+            sel[((hv >> 4) << 9) + ((hv & 15) << 4)] = kOne;
+        }
+        noc.async_read_barrier();
+        c_eye.push_back(1);
+        c_tril.push_back(1);
+        c_ones.push_back(1);
+        c_mask.push_back(n_mask);
+        if constexpr (kColdPrefetch) {
+            if (prefetched) {  // the barrier above also covered item 0's input reads
+                CircularBuffer(cb_q).push_back(ck);
+                CircularBuffer(cb_k).push_back(ck);
+                CircularBuffer(cb_v).push_back(cv);
+                CircularBuffer(cb_g).push_back(Ct);
+                CircularBuffer(cb_beta).push_back(Ct);
+            }
+        }
+    } else {
+        read_into(eye_acc, cb_eye, 0, cc, tb_f);
+        read_into(tril_acc, cb_tril, 0, cc, tb_f);
+        read_into(ones_acc, cb_ones, 0, cc, tb_f);
+        read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+        if constexpr (GB_FLAT) {
+            // Selector tile hv (page hv of the single-tile-row [1,1,32,32*HV] tensor) -> cb_mask tile 3.
+            const uint32_t hv = (wi_start / NC) % HV;
+            read_into(sel_acc, cb_mask, hv, 1, tb_f);
+        }
+    }
+
+    for (uint32_t i = prefetched ? 1 : 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
-            read_qk_flat(q_acc, cb_q, hc);
-            read_qk_flat(k_acc, cb_k, hc);
+            read_qk_flat(q_acc, cb_q, hc, true);
+            read_qk_flat(k_acc, cb_k, hc, true);
         } else {
             read_into(q_acc, cb_q, hc * ck, ck, tb_io);
             read_into(k_acc, cb_k, hc * ck, ck, tb_io);
         }
         if constexpr (V_FLAT) {
-            read_v_flat(hc);
+            read_v_flat(hc, true);
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_v);
         }
         if constexpr (GB_FLAT) {
-            read_gb_flat(g_acc, cb_g, hc);
-            read_gb_flat(b_acc, cb_beta, hc);
+            read_gb_flat(g_acc, cb_g, hc, true);
+            read_gb_flat(b_acc, cb_beta, hc, true);
         } else {
             read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
             read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);

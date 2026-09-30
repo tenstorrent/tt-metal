@@ -231,22 +231,27 @@ def _m1_applies(item, M, grid):
 
 def m1_prefill_2d_progcfg(item, M, K, N, grid):
     """M1 item S2 / S3 / S4: the H V2_bw8 2D-mcast program config (see the table above), or None to
-    keep the current call (flag off, fp32 dest on, grid not 13x10, M != 2048, or another (K, N))."""
+    keep the current call (flag off, fp32 dest on, grid not 13x10, M != 2048, or another (K, N)).
+
+    MM BW16 (plan_0928 P3_MMSWEEP / P5_INT1B): with QWEN36_MM_BW16=1, S2 and S4 get in0_block_w 16
+    instead of 8 (measured faster, PCC ~0.99995, not bit-exact). S3 (GDN q|k|v in-proj) is excluded:
+    bw16 there overflows a kernel-config limit (TT_THROW), confirmed by P3_MMSWEEP."""
     if not _m1_applies(item, M, grid):
         return None
     k, n, per_core_N, sub_w = _M1_SHAPES[item]
     if (int(K), int(N)) != (k, n):
         return None
+    bw = 16 if (item != "S3" and mm_enabled("BW16")) else 8
     if item not in _M1_LOGGED:
         _M1_LOGGED.add(item)
         print(
-            f"[M1] QWEN36_M1_{item}=1 active: M={M} K={K} N={N} 2D mcast 13x10 bw8 pcM7 pcN{per_core_N} "
+            f"[M1] QWEN36_M1_{item}=1 active: M={M} K={K} N={N} 2D mcast 13x10 bw{bw} pcM7 pcN{per_core_N} "
             f"sb1x{sub_w} fuse_batch=True",
             flush=True,
         )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(13, 10),
-        in0_block_w=8,
+        in0_block_w=bw,
         out_subblock_h=1,
         out_subblock_w=sub_w,
         per_core_M=7,
@@ -570,6 +575,16 @@ def c2_sgrn_gab_dram():
     return os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and not r3_enabled("SGRN_GAB_L1")
 
 
+def sgrn_kernel_variant():
+    """P6_INT1C item 2 (fused gated RMSNorm, sgrn_fast_vs_r3.patch): the sigmoid_gated_rms_norm op's
+    kernel_variant (0 = legacy 7-pass kernel; 1-3 = fused kernel variants, bit-exact with each other;
+    4 = fused kernel with an exp_21f sigmoid, within 1 bf16 ulp of 0 for >99.9% of values, not
+    bit-exact). Env QWEN36_SGRN_VARIANT: when set, returns int(value); unset -> None (the op's own
+    default, kernel_variant=4). Runner default since P6_INT1C: 4."""
+    v = os.environ.get("QWEN36_SGRN_VARIANT")
+    return int(v) if v is not None else None
+
+
 # --- R3 L1 placement flags (2026-09-26; analysis_50ms/R3_fla_cb_spec.md sec 4 items 5-7) --------------
 # They need the Ct == 1 ChunkGdnFused CB shrink (R3 op patch: producer CB region ends at 480,256 B instead of
 # 1,217,536 B); without it these L1 tensors clash with the fused FLA op's static CBs. Each flag applies only to
@@ -724,6 +739,154 @@ def n_value(item):
 def n_enabled(item):
     """True if the N item is enabled: env QWEN36_N_<item> != "0"."""
     return n_value(item) != "0"
+
+
+# --- R5 flags (2026-09-28; single device prefill; plan_0928 P3_GLU / P4_GLU_INT) ------------------------
+# Each item has its own env flag QWEN36_R5_<ITEM>; "0" (default) keeps the current code path exactly.
+#   GLU  The fused-SwiGLU gate/up matmul of a T == 2048 prefill chunk (tt/mlp.py forward) runs as the 2D-mcast
+#        ttnn.matmul with the fused SwiGLU epilogue -- MatmulMultiCoreReuseMultiCastProgramConfig(fuse_swiglu=True),
+#        13x10, in0_block_w 4, per_core_M 7, per_core_N 30, subblock 1x6 -- instead of minimal_matmul(fuse_swiglu=True).
+#        Same tile-pair interleaved [gate|up] weight (no new weight cache) and the same output placement. Applies
+#        only to that swept shape: x [1, 2048, 2048] bf16 interleaved, weight [2048, 12288] bfloat8_b
+#        (QWEN36_F_MLP_GU_BF8=1), 13x10 grid, fp32 dest accumulation off; every other call keeps minimal_matmul.
+#        Needs the C++ fuse_swiglu program-config field (plan_0928/P3_GLU/glu.patch). Numerics change (K block 4
+#        vs 8: not bit-exact vs minimal_matmul; P3_GLU unit test PCC 0.99977 vs fp32, same as minimal_matmul).
+R5_FLAG_DEFAULTS = {"GLU": "0"}
+R5_GLU_T = 2048  # the swept chunk size (M = 64 tiles over 10 core rows at per_core_M 7)
+
+
+def act_bf8_resid():
+    """QWEN36_ACT_BF8_RESID=1 (default 0): prefill (T > 1) o-proj / down-proj outputs (G3, F3, M2) in bfloat8_b."""
+    return os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1"
+
+
+def act_bf8_norm():
+    """QWEN36_ACT_BF8_NORM=1 (default 0): prefill (T == M5_ADDNORM_T) norm outputs n (fused add+norm, layer-0 norm) in
+    bfloat8_b; the residual h stays bf16 and every matmul reading n sets its output dtype explicitly."""
+    return os.environ.get("QWEN36_ACT_BF8_NORM", "0") == "1"
+
+
+# P11 RESID_HS (QWEN36_RESID_HS=1, code default 0): at T == M5_ADDNORM_T prefill chunks the residual stream h and the
+# o-proj / down-proj outputs b are HEIGHT_SHARDED L1 on the 64 cores the fused add+RMSNorm uses (shard [32, 2048], shard k on
+# the core of tile row k = first 64 cores of the 13x10 grid, row-major); the fused add+norm then runs local to each shard.
+# layer.py turns the "active" state on around a layer forward that takes the M5 path; the matmul sites (G3, F3, M2) read it.
+RESID_HS_T = 2048
+_RESID_HS_STATE = {"active": False, "mc": None}
+
+
+def resid_hs_flag():
+    return os.environ.get("QWEN36_RESID_HS", "0") == "1"
+
+
+def resid_hs_set_active(on):
+    _RESID_HS_STATE["active"] = bool(on)
+
+
+def resid_hs_active():
+    return _RESID_HS_STATE["active"]
+
+
+def resid_hs_mc(width=2048):
+    """HEIGHT_SHARDED L1 memory config, shard [32, width] over the first 64 cores of the 13x10 grid (row-major)."""
+    mc = _RESID_HS_STATE["mc"]
+    if mc is None or mc[0] != width:
+        grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 3)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(11, 4)),
+            }
+        )
+        cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [32, width], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        mc = _RESID_HS_STATE["mc"] = (width, cfg)
+    return mc[1]
+
+
+def r5_value(item):
+    """Raw value of the R5 item flag (a key of R5_FLAG_DEFAULTS): env QWEN36_R5_<item>."""
+    return os.environ.get("QWEN36_R5_" + item, R5_FLAG_DEFAULTS[item])
+
+
+def r5_enabled(item):
+    """True if the R5 item is enabled: env QWEN36_R5_<item> != "0"."""
+    return r5_value(item) != "0"
+
+
+def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
+    """R5 GLU: the fused-SwiGLU 2D-mcast program config for this gate/up call, or None (flag off / shape, dtype,
+    grid or compute config outside the swept case) to keep the minimal_matmul fused-SwiGLU path."""
+    glu = r5_value("GLU")
+    if glu not in ("1", "2") or grid is None or (int(grid.x), int(grid.y)) != (13, 10):
+        return None
+    xs, ws = list(x.shape), list(w_gate_up.shape)
+    if len(xs) < 2 or xs[-2:] != [R5_GLU_T, 2048] or any(d != 1 for d in xs[:-2]):
+        return None
+    if ws[-2:] != [2048, 12288] or any(d != 1 for d in ws[:-2]) or w_gate_up.dtype != ttnn.bfloat8_b:
+        return None
+    if x.dtype != (ttnn.bfloat8_b if act_bf8_norm() else ttnn.bfloat16) and x.dtype != ttnn.bfloat16:
+        return None
+    if x.memory_config().is_sharded():
+        return None
+    if getattr(compute_kernel_config, "fp32_dest_acc_en", True):
+        return None
+    if glu == "2":
+        # GLU=2 (plan_0928 P9_GLU2/P10_INT1H): in0_block_w 16, out block 7x6, SwiGLU applied in the last K block
+        # on DEST with the SFPU on the PACK thread (needs the C++ glu_last_block / glu_sfpu_on_pack fields).
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(13, 10),
+            in0_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=6,
+            out_block_h=7,
+            out_block_w=6,
+            per_core_M=7,
+            per_core_N=30,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+            fuse_swiglu=True,
+            glu_last_block=True,
+            glu_sfpu_on_pack=True,
+        )
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(13, 10),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        per_core_M=7,
+        per_core_N=30,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+        fuse_swiglu=True,
+    )
+
+
+# --- MM flags (2026-09-28; single device prefill; plan_0928 P3_MMSWEEP / P5_INT1B) ---------------------
+# Each item has its own env flag QWEN36_MM_<ITEM>; "0" (default) keeps the current code path exactly.
+#   BW16  For exactly four T == 2048 prefill 2D-mcast matmul shape families (P3_MMSWEEP), in0_block_w
+#         becomes 16 instead of 8 (per_core_M/N and the output subblock unchanged): M1 S2 (MLP down,
+#         K6144 N2048) and M1 S4 (GDN z|a|0|b|0 in-proj, K2048 N2112) via m1_prefill_2d_progcfg; the
+#         o-proj family (FA o_proj, GDN o_proj; K2048 N2048) and the FA q|k|v fused proj (K2048 N3072)
+#         via _pick_prefill_progcfg's _MM_BW16_OVERRIDES table. Measured (P3_MMSWEEP): MLP down
+#         113.0->108.7 us, GDN z|a|b 49.5->47.5, o-proj 45.2->43.1, FA qkv 64.2->61.9 (PCC ~0.99995 in
+#         each case: fewer bf16 L1-acc roundings in the K loop, not bit-exact). Deliberately excludes
+#         M1 S3 (GDN q|k|v in-proj, K2048 N6144): bw16 there overflows a kernel-config limit (TT_THROW
+#         in program.cpp), confirmed by P3_MMSWEEP.
+MM_FLAG_DEFAULTS = {"BW16": "0"}
+
+
+def mm_value(item):
+    """Raw value of the MM item flag (a key of MM_FLAG_DEFAULTS): env QWEN36_MM_<item>."""
+    return os.environ.get("QWEN36_MM_" + item, MM_FLAG_DEFAULTS[item])
+
+
+def mm_enabled(item):
+    """True if the MM item is enabled: env QWEN36_MM_<item> != "0"."""
+    return mm_value(item) != "0"
 
 
 # --- I-3 integration flags (2026-09-25; single device, single-user decode; plan_0925 task I-3) ------
@@ -1336,6 +1499,16 @@ _PREFILL_PROGCFG_OVERRIDES = {
     (2048, 2048, 8224): dict(in0_block_w=8, out_subblock_h=1, out_subblock_w=4, per_core_M=7, per_core_N=20),
 }
 
+# MM BW16 (2026-09-28; plan_0928 P3_MMSWEEP / P5_INT1B), env QWEN36_MM_BW16 (tp_common.mm_enabled):
+# in0_block_w 16 instead of the rule's 8 for the o-proj family (FA o_proj, GDN o_proj) and the FA
+# q|k|v fused proj, same per_core_M / per_core_N / out_subblock_w as the bw8 config the rule already
+# picks for these two shapes. Keyed by (m, k, n), applied only on the swept 13x10 grid, same as
+# _PREFILL_PROGCFG_OVERRIDES. Not bit-exact (PCC ~0.99995: fewer bf16 L1-acc roundings in the K loop).
+_MM_BW16_OVERRIDES = {
+    (2048, 2048, 2048): dict(in0_block_w=16, out_subblock_h=1, out_subblock_w=5, per_core_M=7, per_core_N=5),
+    (2048, 2048, 3072): dict(in0_block_w=16, out_subblock_h=1, out_subblock_w=8, per_core_M=7, per_core_N=8),
+}
+
 
 @functools.lru_cache(maxsize=None)
 def _pick_prefill_progcfg(m, k, n, in0_tile_b, in1_tile_b, fp32_acc, gx, gy, budget, sub_area=4):
@@ -1359,6 +1532,17 @@ def _pick_prefill_progcfg(m, k, n, in0_tile_b, in1_tile_b, fp32_acc, gx, gy, bud
                 override["per_core_N"],
                 override["out_subblock_w"],
             )
+        if mm_enabled("BW16"):
+            bw16_ov = _MM_BW16_OVERRIDES.get((m, k, n))
+            if bw16_ov is not None:
+                return _mk_2d_progcfg(
+                    gx,
+                    gy,
+                    bw16_ov["in0_block_w"],
+                    bw16_ov["per_core_M"],
+                    bw16_ov["per_core_N"],
+                    bw16_ov["out_subblock_w"],
+                )
     Mt, Kt, Nt = math.ceil(m / TILE_SIZE), math.ceil(k / TILE_SIZE), math.ceil(n / TILE_SIZE)
     if Nt < 8:
         return None

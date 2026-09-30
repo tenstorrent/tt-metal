@@ -132,6 +132,9 @@ def chunk_gated_delta_rule_fused_adapter(
     # op's AUTO (the SFPU solve on Blackhole at chunk 32, Horner elsewhere).
     qk_prenormed=False,  # q/k already L2-normalized per head (q * K^-0.5), e.g. by the KDA conv's fused_qk_l2_norm
     decay_sfpu=False,  # the op's SFPU decay chain (chunk 32, fused path only; changes bits, not the math)
+    final_state_out=None,  # QWEN36_GDN_STATE_INPLACE (gdn/decode.py): the persistent fp32 [B,Nv,Dk,Dv]
+    # state buffer; the op writes the final state straight into it (final_state_output) and returns it.
+    # None = the op allocates a new final-state tensor (current path, call unchanged).
 ):
     global _logged_path
     if not _logged_path:
@@ -238,6 +241,7 @@ def chunk_gated_delta_rule_fused_adapter(
         **_r3_o_kw,
         **({"qk_prenormed": True} if qk_prenormed else {}),
         **({"decay_sfpu": True} if decay_sfpu else {}),
+        **({"final_state_output": final_state_out} if final_state_out is not None else {}),
     )
 
     if return_o_bh:

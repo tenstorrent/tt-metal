@@ -37,7 +37,11 @@ QkvCausalConv1dSiluResult qkv_causal_conv1d_silu_binding(
     const std::optional<QkvCausalConv1dSiluProgramConfig>& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    bool return_conv_state) {
+    bool return_conv_state,
+    const std::optional<ttnn::Tensor>& conv_state_output) {
+    TT_FATAL(
+        return_conv_state || !conv_state_output.has_value(),
+        "qkv_causal_conv1d_silu: conv_state_output needs return_conv_state=True (it is the new_state output)");
     if (return_conv_state) {
         return ttnn::experimental::kda::qkv_causal_conv1d_silu_with_conv_state(
             input,
@@ -51,7 +55,8 @@ QkvCausalConv1dSiluResult qkv_causal_conv1d_silu_binding(
             v_width,
             program_config,
             memory_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            conv_state_output);
     }
     return ttnn::experimental::kda::qkv_causal_conv1d_silu(
         input,
@@ -78,7 +83,8 @@ nb::dict tiled_program_plan_binding(
     const std::optional<uint32_t>& channel_chunk_size,
     bool has_history,
     bool return_conv_state,
-    uint32_t tile_size) {
+    uint32_t tile_size,
+    bool conv_state_inplace) {
     namespace prim = ttnn::experimental::prim;
     const uint32_t chunk = channel_chunk_size.value_or(
         prim::qkv_causal_conv1d_silu_tiled::default_channel_chunk_size(q_width, k_width, v_width));
@@ -91,7 +97,8 @@ nb::dict tiled_program_plan_binding(
         chunk,
         has_history,
         return_conv_state,
-        tile_size);
+        tile_size,
+        conv_state_inplace);
 
     nb::list dataflow_buffers;
     for (const auto& buffer : plan.dataflow_buffers) {
@@ -113,6 +120,8 @@ nb::dict tiled_program_plan_binding(
     scratchpad["zeros_bytes"] = plan.scratch_zeros_bytes;
     scratchpad["state_offset"] = plan.scratch_state_offset;
     scratchpad["state_bytes"] = plan.scratch_state_bytes;
+    scratchpad["stage_offset"] = plan.scratch_stage_offset;
+    scratchpad["stage_bytes"] = plan.scratch_stage_bytes;
 
     nb::list cores;
     nb::list step_start;
@@ -137,6 +146,7 @@ nb::dict tiled_program_plan_binding(
     result["num_steps"] = plan.num_steps;
     result["has_history"] = plan.has_history;
     result["return_conv_state"] = plan.return_conv_state;
+    result["conv_state_inplace"] = plan.conv_state_inplace;
     result["tile_size"] = plan.tile_size;
     result["dataflow_buffers"] = dataflow_buffers;
     result["scratchpad"] = scratchpad;
@@ -235,6 +245,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 Compute-kernel configuration.
             return_conv_state (bool, optional): TILE input only. When True, the op
                 also returns ``new_state``. Defaults to False.
+            conv_state_output (ttnn.Tensor, optional): With ``return_conv_state=True``
+                only: a pre-allocated ``new_state`` (interleaved TILE BFLOAT16
+                ``[1, 3, Q+K+V]``, DRAM or L1). The op writes ``new_state`` into it,
+                allocates none, and returns it. It may be ``history`` itself: an
+                in-place conv-state update (for a persistent traced state buffer).
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
@@ -247,8 +262,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         Note:
             ``T``, ``Q``, ``K``, and ``V`` must be positive and tile-aligned.
-            All inputs must be allocated on the same device. Inputs, including
-            ``history``, are not modified; ``new_state`` is always a new tensor.
+            All inputs must be allocated on the same device. Inputs are not
+            modified, except ``history`` when it is also ``conv_state_output``;
+            ``new_state`` is a new tensor unless ``conv_state_output`` is given.
         )doc",
         &qkv_causal_conv1d_silu_binding,
         nb::arg("input").noconvert(),
@@ -264,7 +280,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("return_conv_state") = false);
+        nb::arg("return_conv_state") = false,
+        nb::arg("conv_state_output") = nb::none());
 
     mod.def(
         "qkv_causal_conv1d_silu_tiled_program_plan",
@@ -288,6 +305,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             return_conv_state (bool, optional): Whether new_state is written.
                 Defaults to False.
             tile_size (int, optional): Bytes per tile. Defaults to 2048 (BFLOAT16).
+            conv_state_inplace (bool, optional): Whether new_state is written in
+                place into history (adds the reader's stage region). Defaults to False.
 
         Returns:
             dict: Plan fields (``block_tiles``, ``dataflow_buffers``,
@@ -305,6 +324,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("channel_chunk_size") = nb::none(),
         nb::arg("has_history") = true,
         nb::arg("return_conv_state") = false,
-        nb::arg("tile_size") = 2048u);
+        nb::arg("tile_size") = 2048u,
+        nb::arg("conv_state_inplace") = false);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

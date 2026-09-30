@@ -583,6 +583,7 @@ def gated_deltanet_forward_ttnn(
     # a/b slices go to L1 for the lean pre-scan (see _prescan_lean).
     _sgrn_p300 = False
     _p300_ab_l1 = False
+    _gg_gab = None  # P10_GDNGATE: gab kept alive for ttnn.experimental.gdn_gates (None = flag off / not applicable)
 
     def _pc(x_in, w_in):
         if T == 1 and decode_progcfg_fn is not None:
@@ -746,6 +747,18 @@ def gated_deltanet_forward_ttnn(
                     compute_kernel_config=ckc,
                     memory_config=mc if (mc is not None or not _m1_x_l1) else ttnn.DRAM_MEMORY_CONFIG,
                 )
+            # P10_GDNGATE (QWEN36_GDN_GATES_OP, code default 0): fused beta/g op, only in the M1 S4 gab branch
+            # (gab L1/DRAM [g | a | 0 | b | 0]) of an unmasked-or-masked chunk prefill on the fused FLA path.
+            _gg_gab = None
+            _gg_op = (
+                os.environ.get("QWEN36_GDN_GATES_OP", "0") != "0"
+                and _m1_gab_pc is not None
+                and A_neg_precomputed is not None
+                and chunk_delta_fn is not None
+                and mode == "chunk"
+                and T > 1
+                and _gab_pad
+            )
             # C2 SGRN (QWEN36_C2_SGRN=1; tp_common C2 table): only where M1 S4 applies (unmasked chunk,
             # T == 2048) on the fused FLA path with the fused SILU gate. gab (z = columns
             # 0..mega_g_dim-1) is then read in place by sigmoid_gated_rms_norm after ChunkGdnFused: no
@@ -808,23 +821,30 @@ def gated_deltanet_forward_ttnn(
                     _c2_gab = gab
                 else:
                     gate_raw = ttnn.slice(gab, [0, 0, 0], [_gs[0], _gs[1], mega_g_dim], memory_config=_dram)
-                # P300 L1-gab path: the a/b slices go to L1 (read by the lean pre-scan below).
-                _p300_ab_l1 = _p300_gab_l1 and _m1_gab_pc is None
-                _ab_mc = ttnn.L1_MEMORY_CONFIG if _p300_ab_l1 else _dram
-                a_raw = ttnn.slice(
-                    gab,
-                    [0, 0, prefill_gab_a_off],
-                    [_gs[0], _gs[1], prefill_gab_a_off + mega_a_dim],
-                    memory_config=_ab_mc,
-                )
-                b_raw = ttnn.slice(
-                    gab,
-                    [0, 0, prefill_gab_b_off],
-                    [_gs[0], _gs[1], prefill_gab_b_off + mega_b_dim],
-                    memory_config=_ab_mc,
-                )
-                if not _c2_sgrn:
-                    ttnn.deallocate(gab)
+                if _gg_op:
+                    # P10_GDNGATE: a/b are read in place from gab by ttnn.experimental.gdn_gates (no slices);
+                    # gab stays alive until that op (freed there unless SGRN owns it).
+                    _gg_gab = gab
+                    a_raw = None
+                    b_raw = None
+                else:
+                    # P300 L1-gab path: the a/b slices go to L1 (read by the lean pre-scan below).
+                    _p300_ab_l1 = _p300_gab_l1 and _m1_gab_pc is None
+                    _ab_mc = ttnn.L1_MEMORY_CONFIG if _p300_ab_l1 else _dram
+                    a_raw = ttnn.slice(
+                        gab,
+                        [0, 0, prefill_gab_a_off],
+                        [_gs[0], _gs[1], prefill_gab_a_off + mega_a_dim],
+                        memory_config=_ab_mc,
+                    )
+                    b_raw = ttnn.slice(
+                        gab,
+                        [0, 0, prefill_gab_b_off],
+                        [_gs[0], _gs[1], prefill_gab_b_off + mega_b_dim],
+                        memory_config=_ab_mc,
+                    )
+                    if not _c2_sgrn:
+                        ttnn.deallocate(gab)
             else:
                 # gab is laid out g|a|b (columns mega_qkv_dim..end of the original mega weight); g_dim
                 # is a tile-width multiple so this begin lands on a tile boundary (tile-native, no
@@ -1179,6 +1199,7 @@ def gated_deltanet_forward_ttnn(
     # Lean pre-scan (P300 L1-gab path: fused chunk prefill, unmasked, T in tpc.R3_T_SET): beta = sigmoid(b)
     # written straight to an fp32 tensor (the fused op's dtype; its internal typecast is then skipped),
     # softplus fused into the dt_bias add as a post-activation, and g cast to fp32 here (6 ops instead of 8).
+    # Takes precedence over P5_GATING (QWEN36_GDN_GATE_FUSE) below.
     _prescan_lean = (
         _p300_ab_l1
         and _mega_extracted
@@ -1191,73 +1212,142 @@ def gated_deltanet_forward_ttnn(
         and mc_small is not None
         and os.environ.get("QWEN36_GDN_GB_LAYOUT", "0") == "0"
     )
-    if _prescan_lean:
-        a = a_raw
-        beta = ttnn.allocate_tensor_on_device(
-            ttnn.TensorSpec(list(b_raw.shape), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=mc_small.buffer_type),
-            b_raw.device(),
+
+    # P5_GATING (QWEN36_GDN_GATE_FUSE=1, default off): cut this chain's op count with existing
+    # ttnn fused-activation / output-dtype kwargs, same math:
+    #   - beta: BinaryNg ttnn.multiply(b_raw, scale, input_tensor_a_activations=[SIGMOID], dtype=...)
+    #     runs sigmoid(b_raw) then the *2.0 (allow_neg_eigval) or *1.0 scale in ONE device op
+    #     (folds in the old `if allow_neg_eigval: beta = multiply(beta, 2.0)` step unconditionally,
+    #     so it always costs one multiply, not a no-op skip -- verified bit-exact below either way),
+    #     with the output dtype set straight to FLOAT32 when the fused-chunk path needs it.
+    #   - sp: BinaryNg ttnn.add(a, dt_bias, activations=[softplus_param]) runs the add and the
+    #     softplus in ONE op via the SAME UnaryOpType.SOFTPLUS -> softplus_tile() LLK path that
+    #     ttnn.softplus itself uses (see unary_op_utils.cpp add_activation_defines /
+    #     string_to_unary_with_param): this keeps the x < -5 accuracy fix, it is not a different
+    #     implementation.
+    #   - g: the existing ttnn.multiply(A_neg, sp) just gets dtype=FLOAT32 added when needed.
+    # Where fp32 output isn't needed (QWEN36_GDN_GB_LAYOUT=0, or off the fused-chunk path), dtype
+    # is left None (default bf16), matching today's dtype exactly.
+    # The old code's typecast block below (~1190) already guards on `beta.dtype != ttnn.float32`
+    # / `g.dtype != ttnn.float32`, so when this path already produced FLOAT32 those typecasts are
+    # skipped automatically -- no separate edit needed there.
+    _gf_enabled = os.environ.get("QWEN36_GDN_GATE_FUSE", "0") != "0"
+    _gf_need_fp32 = (
+        _gf_enabled
+        and _use_chunk_fn
+        and mode == "chunk"
+        and T > 1
+        and os.environ.get("QWEN36_GDN_GB_LAYOUT", "0") != "0"
+    )
+    _gf_dtype = ttnn.float32 if _gf_need_fp32 else None
+    _gf_beta_out_mc = mc if _gf_need_fp32 else mc_small
+    _gf_beta_scale = 2.0 if allow_neg_eigval else 1.0
+    _gf_softplus_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # matches ttnn.softplus defaults
+
+    def _gf_beta_from_b_raw(braw):
+        return ttnn.multiply(
+            braw,
+            _gf_beta_scale,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+            dtype=_gf_dtype,
+            memory_config=_gf_beta_out_mc,
         )
-        ttnn.sigmoid(b_raw, memory_config=mc_small, output_tensor=beta)
-    elif _mega_extracted:
-        a = a_raw
-        beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
-    elif ab_proj_weight is not None:
-        ab = ttnn.linear(
-            hidden_states,
-            ab_proj_weight,
-            memory_config=mc,
-            compute_kernel_config=ckc,
-            program_config=_pc(hidden_states, ab_proj_weight),
+
+    # P10_GDNGATE (QWEN36_GDN_GATES_OP=1, code default 0): ONE op (ttnn.experimental.gdn_gates) makes beta and g
+    # in fp32 straight from the a and b columns of gab, bit-identical to the chain below (bf16 sigmoid / add +
+    # softplus / multiply, then the fp32 widening the FLA op does itself). Only where the M1 S4 gab branch above
+    # kept gab alive (_gg_gab) and the fused FLA op consumes beta/g.
+    if _gg_gab is not None:
+        beta, g = ttnn.experimental.gdn_gates(
+            _gg_gab,
+            dt_bias,
+            A_neg_precomputed,
+            a_col_offset=prefill_gab_a_off,
+            b_col_offset=prefill_gab_b_off,
+            num_heads=mega_a_dim,
+            beta_scale=2.0 if allow_neg_eigval else 1.0,
+            memory_config=mc_small,
         )
-        num_v = num_v_heads if num_v_heads is not None else num_heads
-        a = ab[:, :, :num_v]
-        a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
-        b_raw = ab[:, :, num_v:]
-        b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(ab)
-        beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+        if not _c2_sgrn:
+            ttnn.deallocate(_gg_gab)
+        _gg_gab = None
     else:
-        beta = ttnn.sigmoid(
-            ttnn.linear(
+        if _prescan_lean:
+            a = a_raw
+            beta = ttnn.allocate_tensor_on_device(
+                ttnn.TensorSpec(list(b_raw.shape), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=mc_small.buffer_type),
+                b_raw.device(),
+            )
+            ttnn.sigmoid(b_raw, memory_config=mc_small, output_tensor=beta)
+        elif _mega_extracted:
+            a = a_raw
+            if _gf_enabled:
+                beta = _gf_beta_from_b_raw(b_raw)
+            else:
+                beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+        elif ab_proj_weight is not None:
+            ab = ttnn.linear(
+                hidden_states,
+                ab_proj_weight,
+                memory_config=mc,
+                compute_kernel_config=ckc,
+                program_config=_pc(hidden_states, ab_proj_weight),
+            )
+            num_v = num_v_heads if num_v_heads is not None else num_heads
+            a = ab[:, :, :num_v]
+            a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
+            b_raw = ab[:, :, num_v:]
+            b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(ab)
+            if _gf_enabled:
+                beta = _gf_beta_from_b_raw(b_raw)
+            else:
+                beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+        else:
+            b_raw = ttnn.linear(
                 hidden_states,
                 b_proj_weight,
                 memory_config=mc,
                 compute_kernel_config=ckc,
                 program_config=_pc(hidden_states, b_proj_weight),
-            ),
-            memory_config=mc_small,
-        )
-        a = ttnn.linear(
-            hidden_states,
-            a_proj_weight,
-            memory_config=mc,
-            compute_kernel_config=ckc,
-            program_config=_pc(hidden_states, a_proj_weight),
-        )
-    if allow_neg_eigval:
-        beta = ttnn.multiply(beta, 2.0, memory_config=mc_small)
-    if _prescan_lean:
-        sp = ttnn.add(
-            a,
-            dt_bias,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
-            memory_config=mc_small,
-        )
-        _g16 = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
-        ttnn.deallocate(sp)
-        g = ttnn.typecast(_g16, ttnn.float32, memory_config=mc_small)
-        ttnn.deallocate(_g16)
-    else:
-        a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
-        sp = ttnn.softplus(a_biased, memory_config=mc_small)
-    if _prescan_lean:
-        pass
-    elif A_neg_precomputed is not None:
-        g = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
-    else:
-        A = ttnn.exp(A_log, memory_config=mc_small)
-        A_neg = ttnn.neg(A, memory_config=mc_small)
-        g = ttnn.multiply(A_neg, sp, memory_config=mc_small)
+            )
+            if _gf_enabled:
+                beta = _gf_beta_from_b_raw(b_raw)
+            else:
+                beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+            a = ttnn.linear(
+                hidden_states,
+                a_proj_weight,
+                memory_config=mc,
+                compute_kernel_config=ckc,
+                program_config=_pc(hidden_states, a_proj_weight),
+            )
+        if allow_neg_eigval and not _gf_enabled:
+            beta = ttnn.multiply(beta, 2.0, memory_config=mc_small)
+        if _prescan_lean:
+            sp = ttnn.add(
+                a,
+                dt_bias,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+                memory_config=mc_small,
+            )
+            _g16 = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
+            ttnn.deallocate(sp)
+            g = ttnn.typecast(_g16, ttnn.float32, memory_config=mc_small)
+            ttnn.deallocate(_g16)
+        else:
+            if _gf_enabled:
+                sp = ttnn.add(a, dt_bias, activations=[_gf_softplus_param], memory_config=mc_small)
+            else:
+                a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
+                sp = ttnn.softplus(a_biased, memory_config=mc_small)
+            _gf_g_out_mc = mc if _gf_need_fp32 else mc_small
+            if A_neg_precomputed is not None:
+                g = ttnn.multiply(A_neg_precomputed, sp, dtype=_gf_dtype, memory_config=_gf_g_out_mc)
+            else:
+                A = ttnn.exp(A_log, memory_config=mc_small)
+                A_neg = ttnn.neg(A, memory_config=mc_small)
+                g = ttnn.multiply(A_neg, sp, dtype=_gf_dtype, memory_config=_gf_g_out_mc)
 
     # Gated delta rule: chunk prefill (fp32 seq kernel) vs decode (optimized T=1) vs recurrent fallback
     if mode == "chunk" and T > 1:
@@ -1394,6 +1484,7 @@ def gated_deltanet_forward_ttnn(
             output_dtype=ttnn.bfloat16,
             gate_activation="silu",
             gate_col_offset_tiles=0,
+            kernel_variant=tpc.sgrn_kernel_variant(),
         )
         ttnn.deallocate(_c2_gab)
         _c2_gab = None
@@ -1475,9 +1566,10 @@ def gated_deltanet_forward_ttnn(
     o = ttnn.linear(
         o,
         o_proj_weight,
-        memory_config=mc_outproj,
+        memory_config=(tpc.resid_hs_mc() if (tpc.resid_hs_active() and T == tpc.RESID_HS_T) else mc_outproj),
         compute_kernel_config=ckc,
         program_config=_pc(o, o_proj_weight),
+        **({"dtype": ttnn.bfloat8_b} if (T > 1 and os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1") else {}),
     )
 
     return o, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv_state

@@ -162,7 +162,11 @@ void py_module(nb::module_& mod) {
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
            bool fuse_batch,
-           std::optional<CoreRangeSet> allowed_worker_cores) {
+           std::optional<CoreRangeSet> allowed_worker_cores,
+           bool fuse_swiglu,
+           bool glu_last_block,
+           bool glu_sfpu_on_pack,
+           bool in0_single_buffer) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -178,7 +182,11 @@ void py_module(nb::module_& mod) {
                 transpose_mcast,
                 std::move(fused_activation),
                 fuse_batch,
-                std::move(allowed_worker_cores)};
+                std::move(allowed_worker_cores),
+                fuse_swiglu,
+                glu_last_block,
+                glu_sfpu_on_pack,
+                in0_single_buffer};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -192,7 +200,11 @@ void py_module(nb::module_& mod) {
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fuse_batch").noconvert() = true,
-        nb::arg("allowed_worker_cores") = nb::none());
+        nb::arg("allowed_worker_cores") = nb::none(),
+        nb::arg("fuse_swiglu").noconvert() = false,
+        nb::arg("glu_last_block").noconvert() = false,
+        nb::arg("glu_sfpu_on_pack").noconvert() = false,
+        nb::arg("in0_single_buffer").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -306,12 +318,37 @@ void py_module(nb::module_& mod) {
         When set, overrides ``compute_with_storage_grid_size`` for determining the active
         compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "fuse_swiglu", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_swiglu, R"doc(
+        Whether to fuse a SwiGLU epilogue into the matmul. Defaults to false.
+
+        When true, input_tensor_b must hold tile-pair interleaved [gate | up] columns: weight
+        tile column 2p is gate tile p and column 2p+1 is up tile p (see prepare_for_fused_swiglu).
+        The output is silu(a @ gate) * (a @ up), with half the width of input_tensor_b.
+        Requires even per_core_N, out_block_w and out_subblock_w, a weight width that is a
+        multiple of 64, interleaved inputs and output, bfloat16 output, 32x32 tiles, no bias,
+        no fused activation, no transpose, and fp32_dest_acc_en=False.
+    )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "glu_last_block", &MatmulMultiCoreReuseMultiCastProgramConfig::glu_last_block, R"doc(
+        With fuse_swiglu: apply the SwiGLU epilogue on DEST inside the last K block (plain reload path) instead of a
+        separate pass over the partials. Defaults to false.
+    )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "glu_sfpu_on_pack", &MatmulMultiCoreReuseMultiCastProgramConfig::glu_sfpu_on_pack, R"doc(
+        With fuse_swiglu: issue the SwiGLU SFPU work (silu + multiply) from the PACK thread. Defaults to false.
+    )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "in0_single_buffer", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_single_buffer, R"doc(
+        Size the in0 CB for one K block instead of two (saves L1; the in0 multicast can stall). Defaults to false.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, "
+                "allowed_worker_cores={}{}{}{}{})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -324,7 +361,12 @@ void py_module(nb::module_& mod) {
                 config.fused_activation,
                 config.fuse_batch,
                 config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
-                                                        : "None");
+                                                        : "None",
+                // Printed only when set, so the repr of every existing config is unchanged.
+                config.fuse_swiglu ? ", fuse_swiglu=True" : "",
+                config.glu_last_block ? ", glu_last_block=True" : "",
+                config.glu_sfpu_on_pack ? ", glu_sfpu_on_pack=True" : "",
+                config.in0_single_buffer ? ", in0_single_buffer=True" : "");
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =

@@ -55,7 +55,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& masks,
     const std::optional<ttnn::Tensor>& sel,
     bool qk_prenormed,
-    bool decay_sfpu) {
+    bool decay_sfpu,
+    const std::optional<ttnn::Tensor>& final_state_output) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -78,7 +79,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         masks,
         sel,
         qk_prenormed,
-        decay_sfpu);
+        decay_sfpu,
+        final_state_output);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -164,6 +166,18 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
 std::string py_bool(bool b) { return b ? "True" : "False"; }
 std::string py_opt(const std::optional<uint32_t>& v) { return v.has_value() ? std::to_string(*v) : "None"; }
 std::string py_opt(const std::optional<bool>& v) { return v.has_value() ? py_bool(*v) : "None"; }
+std::string py_opt(const std::optional<tt::tt_metal::MathFidelity>& v) {
+    if (!v.has_value()) {
+        return "None";
+    }
+    switch (*v) {
+        case tt::tt_metal::MathFidelity::LoFi: return "MathFidelity.LoFi";
+        case tt::tt_metal::MathFidelity::HiFi2: return "MathFidelity.HiFi2";
+        case tt::tt_metal::MathFidelity::HiFi3: return "MathFidelity.HiFi3";
+        case tt::tt_metal::MathFidelity::HiFi4: return "MathFidelity.HiFi4";
+        default: return "MathFidelity.Invalid";
+    }
+}
 
 }  // namespace
 
@@ -263,7 +277,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 2*NV < grid.y, ...); otherwise row_local decides. Bit-exact with every other core map.
             qk_fp32_double_buffer (bool): default False. Double-buffer the producers' fp32 q/k CBs
                 (qk_prenormed with FLOAT32 q/k only; no effect otherwise): +32 KB of producer CB region
-                at K = 128, hides the fp32 q/k read on producer-bound geometries. Bit-exact.)doc")
+                at K = 128, hides the fp32 q/k read on producer-bound geometries. Bit-exact.
+            prep_math_fidelity (ttnn.MathFidelity, optional): math fidelity of the producer (prep)
+                compute kernel. None: the op's compute_kernel_config fidelity (HiFi4).
+            scan_math_fidelity (ttnn.MathFidelity, optional): math fidelity of the receiver (scan)
+                compute kernel. None: the op's compute_kernel_config fidelity (HiFi4).
+                Unlike the other fields, the two fidelities change the arithmetic. Both are hashed, so a
+                change compiles a new program. The experiment env vars QWEN36_FLA_PREP_FID /
+                QWEN36_FLA_SCAN_FID, when set, take precedence over these fields.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -273,7 +294,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 bool,
                 bool,
                 bool,
-                bool>(),
+                bool,
+                std::optional<tt::tt_metal::MathFidelity>,
+                std::optional<tt::tt_metal::MathFidelity>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
@@ -282,7 +305,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("unicast") = true,
             nb::arg("posted") = false,
             nb::arg("split_layout") = false,
-            nb::arg("qk_fp32_double_buffer") = false)
+            nb::arg("qk_fp32_double_buffer") = false,
+            nb::arg("prep_math_fidelity") = nb::none(),
+            nb::arg("scan_math_fidelity") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
@@ -291,10 +316,13 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
         .def_rw("split_layout", &ChunkGdnFusedProgramConfig::split_layout)
         .def_rw("qk_fp32_double_buffer", &ChunkGdnFusedProgramConfig::qk_fp32_double_buffer)
+        .def_rw("prep_math_fidelity", &ChunkGdnFusedProgramConfig::prep_math_fidelity)
+        .def_rw("scan_math_fidelity", &ChunkGdnFusedProgramConfig::scan_math_fidelity)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={}, split_layout={}, qk_fp32_double_buffer={})",
+                "unicast={}, posted={}, split_layout={}, qk_fp32_double_buffer={}, prep_math_fidelity={}, "
+                "scan_math_fidelity={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
@@ -302,7 +330,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_bool(c.unicast),
                 py_bool(c.posted),
                 py_bool(c.split_layout),
-                py_bool(c.qk_fp32_double_buffer));
+                py_bool(c.qk_fp32_double_buffer),
+                py_opt(c.prep_math_fidelity),
+                py_opt(c.scan_math_fidelity));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -415,11 +445,17 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 exponentials, the decay mask and dl*I) in two fp32 SFPU passes instead of ~13 single-tile
                 FPU ops: faster and more accurate (fp32 instead of tf32 operands), so it changes bits.
                 Fused path and chunk_size 32 only.
+            final_state_output (ttnn.Tensor, optional): a pre-allocated final-state tensor, FLOAT32
+                TILE interleaved, [B, HV, K, V] or [B*HV, K, V], any buffer type. The kernel writes the
+                final state straight into it (no new state tensor is allocated) and the op returns it
+                as final_state. It may be the initial_state tensor itself (in-place state update, for
+                a persistent traced state buffer). Needs output_final_state=True; fused and phased
+                paths only (mono rejects it).
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
                 o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-                final_state [B, HV, K, V] (if output_final_state).
+                final_state [B, HV, K, V] (if output_final_state; final_state_output itself when given).
         )doc";
 
     ttnn::bind_function<"chunk_gated_delta_rule", "ttnn.transformer.">(
@@ -448,7 +484,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("masks") = nb::none(),
         nb::arg("sel") = nb::none(),
         nb::arg("qk_prenormed") = false,
-        nb::arg("decay_sfpu") = false);
+        nb::arg("decay_sfpu") = false,
+        nb::arg("final_state_output") = nb::none());
 
     const auto* prep_doc =
         R"doc(

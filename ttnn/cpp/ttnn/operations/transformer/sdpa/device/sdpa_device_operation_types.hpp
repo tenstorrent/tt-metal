@@ -32,6 +32,9 @@ struct SDPAParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+    // Chunked SDPA only: write the output as [B, 1, S, NQH*DH] (heads concatenated along the last dim, the layout
+    // of nlp_concat_heads on the [B, NQH, S, DH] result) instead of [B, NQH, S, DH]. Layout change only.
+    bool concat_heads_output = false;
 };
 
 struct SDPAInputs {

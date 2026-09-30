@@ -202,7 +202,8 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN36_GDN_CONV_T3_MAX": ("0", "cap on the conv kernel's T3 tiling dimension; 0=no cap"),
     "QWEN36_GDN_CONV_REPACK": (
         "perlayer",
-        "fused GDN decode only: conv-history repack after prefill, perlayer (8 ops/layer) or batched",
+        "fused GDN decode only: conv-history repack after prefill, perlayer (8 ops/layer), batched, or "
+        "gather (one shared index table + one ttnn.embedding per layer; P6_INT1C item 3)",
     ),
     "QWEN36_GDN_CONV_TILED_SPLIT": ("0", "split the conv1d input into tiles; 1=enable"),
     "QWEN36_GDN_CONV_XIN_L1_MAX_T": (
@@ -371,6 +372,111 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "0",
         "F: single device, MLP gate/up weights (decode w1/w3 + prefill packed w_gate_up) bfloat8_b (numerics change, "
         "new weight-cache files); 0=bfloat4_b",
+    ),
+    # R5 item flags (tt/tp_common.py R5_FLAG_DEFAULTS; read via tp_common.r5_value); 0 = current path.
+    "QWEN36_R5_GLU": (
+        "0",
+        "R5: single device, T == 2048 prefill chunks with bfloat8_b gate/up: fused-SwiGLU gate/up as the 2D-mcast "
+        "ttnn.matmul fuse_swiglu epilogue (needs the C++ config field; numerics change); 0=minimal_matmul fuse_swiglu; 1=in0_block_w 4 config; 2=in0_block_w 16 + glu_last_block + glu_sfpu_on_pack",
+    ),
+    # MM item flags (tt/tp_common.py MM_FLAG_DEFAULTS; read via tp_common.mm_value); 0 = current path.
+    "QWEN36_MM_BW16": (
+        "0",
+        "MM: single device, T == 2048 prefill chunks: in0_block_w 16 (instead of 8) for MLP down (M1 S2), GDN "
+        "z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj (numerics change, "
+        "PCC ~0.99995); excludes GDN q|k|v in-proj (M1 S3); 0=in0_block_w 8 for all of them",
+    ),
+    "QWEN36_ACT_BF8_RESID": (
+        "1",
+        "P6_BF8ACT: 1 = bfloat8_b output for the T>1 prefill o-proj / MLP down matmuls (G3, F3, M2); 0 = bf16 (no change)",
+    ),
+    "QWEN36_ACT_BF8_NORM": (
+        "1",
+        "P6_BF8ACT: 1 = bfloat8_b fused add+RMSNorm / layer-0 norm output n at T == 2048 (residual h stays bf16); 0 = bf16 (no change)",
+    ),
+    "QWEN36_RESID_HS": (
+        "1",
+        "P11_SHARDRES_B: 1 = T == 2048 prefill residual stream h and the o-proj / down-proj outputs (G3, F3, M2) HEIGHT_SHARDED L1 "
+        "[32, 2048] on the 64 fused add+RMSNorm cores (bit-exact); 0 = interleaved (no change)",
+    ),
+    # SGRN item flag (tt/tp_common.py sgrn_kernel_variant(); only with QWEN36_C2_SGRN=1); unset = op default 4.
+    "QWEN36_SGRN_VARIANT": (
+        "5",
+        "P6_INT1C item 2 (runner default 5 since P9_INT1G): kernel_variant passed to sigmoid_gated_rms_norm. 0=legacy 7-pass kernel (bit-exact "
+        "with the pre-P6_INT1C op); 1-3=fused kernel (bit-exact with each other); 4=fused kernel with an "
+        "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); 5=fused gated RMSNorm compute kernel (P9_SGRN2); unset=op default (4)",
+    ),
+    # P7_INT1D item flags (merged into r3 2026-09-28).
+    "QWEN36_REPACK_AFTER_TTFT": (
+        "1",
+        "P23_REPACK: 1 = replay the M3 conv-history repack trace at the first decode step (after the first-token "
+        "readback) instead of inside TTFT; needs M3 REPACK_TRACE; same ops/buffers. run_bench_e2e_p150.sh pins it "
+        "(runner default 1 since INT2j; code default 0)",
+    ),
+    "QWEN36_GDN_GATE_FUSE": (
+        "0",
+        "P7_INT1D (P5_GATING): fuse the GDN beta sigmoid+scale and the a+dt_bias+softplus into single BinaryNg "
+        "ops (same math, bit-exact; distinct from the pre-existing QWEN36_GDN_GATE_FUSED, which fuses the "
+        "output-gate multiply). run_bench_e2e_p150.sh pins it (runner default 1); 0=separate ops",
+    ),
+    "QWEN36_GDN_GATES_OP": (
+        "1",
+        "P10_GDNGATE: one ttnn.experimental.gdn_gates op makes the GDN beta and g (fp32) straight from the a/b columns "
+        "of gab at T>1 prefill (M1 S4 gab branch, fused FLA path), replacing the 2 slices + sigmoid-mul + add-softplus "
+        "+ mul (+ the FLA op's 2 typecasts); bit-identical to the chain. Runner default 1; 0=slice/eltwise chain",
+    ),
+    "QWEN36_PRELUDE_TRACE": (
+        "1",
+        "P18_PRELUDE: the per-request GDN state reset (recurrent + conv state copies of every GDN layer; the "
+        "conv_hist copies are dropped, the repack overwrites conv_hist) and the chunk-0 RoPE slice/copy are "
+        "captured into one trace at prepare and replayed at request start (bit-exact). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=trace, 0=eager ops",
+    ),
+    "QWEN36_ROPE_L1": (
+        "0",
+        "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
+        "DRAM interleaved (bit-exact). run_bench_e2e_p150.sh pins it (runner default 1); 0=DRAM",
+    ),
+    "QWEN36_FA_GATE_FAST": (
+        "1",
+        "P14_FAGATE2 B2: FA prefill (T>1) gate: SIGMOID fused into the gate matmul program config, then a plain "
+        "multiply (bit-identical). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=fused",
+    ),
+    "QWEN36_SDPA_CONCAT_OUT": (
+        "1",
+        "P15: the flexible chunked SDPA writes the head-concatenated [B,1,T,H*D] output directly "
+        "(concat_heads_output=True) and the concatenate_heads op is skipped at T>1 prefill (bit-exact layout change). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=direct concat write",
+    ),
+    "QWEN36_ROPE_PARTIAL_INPLACE": (
+        "1",
+        "P10_ROPE: prefill partial RoPE (rotary 64 of head 256) as ONE in-place ttnn.experimental.rotary_embedding_hf "
+        "call per tensor (rotary_dim=64) instead of slice+rope+slice+concat (bit-exact). run_bench_e2e_p150.sh pins "
+        "it (runner default 1); 1=in-place op",
+    ),
+    "QWEN36_GDN_STATE_INPLACE": (
+        "0",
+        "P9_INT1F (P7_STATECOPY): on the traced chunked prefill the fused FLA op and the KDA conv op write the "
+        "recurrent / conv state straight into the persistent buffers (bit-exact). run_bench_e2e_p150.sh pins it "
+        "(runner default 1); 0=new tensor plus copy",
+    ),
+    "QWEN36_FLA_SCAN_FID": (
+        "<unset>",
+        "R10B experiment hook (chunk_gdn_fused_program_factory.cpp): math-fidelity override for the fused FLA "
+        "scan/receiver compute kernel only; HiFi4|HiFi3|HiFi2|LoFi, unset=HiFi4 (today's fixed behaviour). "
+        "run_bench_e2e_p150.sh pins it only with QWEN36_FLA_SCAN_FID_BY_LEN=0 (then runner default HiFi3 since "
+        "P7_INT1D item B2: +/-2% vs f64, -1.7 ms/4k vs HiFi4); with BY_LEN=1 (runner default) it stays unset, "
+        "because a set env var overrides the by-length choice. QWEN36_FLA_PREP_FID is the same hook for the "
+        "prep/producer kernel; the runner leaves it unset (no pin)",
+    ),
+    "QWEN36_FLA_SCAN_FID_BY_LEN": (
+        "0",
+        "P11_FLALEN (tt/gdn/gated_deltanet.py + tt/model.py): the fused FLA fidelity follows each request's "
+        "prompt length, scan HiFi2 up to 65536 tokens and scan HiFi3 above (prep HiFi4 in both), through the "
+        "hashed ChunkGdnFusedProgramConfig.scan_math_fidelity / prep_math_fidelity; prepare compiles both when "
+        "max_prompt_len > 65536 and the chunk trace is re-captured when a request needs the other one. "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 0=the fixed QWEN36_FLA_SCAN_FID",
     ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (
@@ -975,6 +1081,12 @@ def main():
     # F item flags, effective raw values (QWEN36_F_<item>, default in tp_common.F_FLAG_DEFAULTS).
     f_flags = {item: _tp_common.f_value(item) for item in _tp_common.F_FLAG_DEFAULTS}
     print(f"  f_flags (effective): {f_flags}")
+    # R5 item flags, effective raw values (QWEN36_R5_<item>, default in tp_common.R5_FLAG_DEFAULTS).
+    r5_flags = {item: _tp_common.r5_value(item) for item in _tp_common.R5_FLAG_DEFAULTS}
+    print(f"  r5_flags (effective): {r5_flags}")
+    # MM item flags, effective raw values (QWEN36_MM_<item>, default in tp_common.MM_FLAG_DEFAULTS).
+    mm_flags = {item: _tp_common.mm_value(item) for item in _tp_common.MM_FLAG_DEFAULTS}
+    print(f"  mm_flags (effective): {mm_flags}")
 
     # --demo-prompt ignores --isl for prompt content (it's always the demo's 2642-token traced_4k
     # prompt) but still needs a KV-cache budget big enough to hold it -- size against
@@ -1245,6 +1357,8 @@ def main():
                 "i4_flags": i4_flags,
                 "i3_flags": i3_flags,
                 "f_flags": f_flags,
+                "r5_flags": r5_flags,
+                "mm_flags": mm_flags,
                 "trace_guard": trace_guard,
                 "gdn_decode_fused": gdn_decode_fused,
                 "gdn_decode_fused_layers": gdn_fused_layers,

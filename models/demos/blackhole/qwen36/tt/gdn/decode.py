@@ -28,6 +28,18 @@ def _gdn_wy_inverse_kwargs():
     raise ValueError(f"QWEN36_GDN_WYINV={name!r}: expected auto, horner or sfpu")
 
 
+def _gdn_state_inplace_enabled():
+    """QWEN36_GDN_STATE_INPLACE (default "0"): on the traced chunked prefill (gdn._chunk_inplace_state), the
+    fused FLA op and the tiled KDA conv op write the final recurrent state / new conv state straight into
+    the persistent state buffers (final_state_output / conv_state_output), which removes the two per-layer
+    ttnn.copy write-backs below. "0" = the current path (fresh state tensors + copy), unchanged."""
+    return os.environ.get("QWEN36_GDN_STATE_INPLACE", "0") == "1"
+
+
+def _same_buffer(a, b):
+    return a is not None and b is not None and a.buffer_address() == b.buffer_address()
+
+
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
     """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
     'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
@@ -67,6 +79,16 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
     # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32, chunk_size=128).
     seq_masks = w.chunk_seq_masks_long
 
+    # QWEN36_GDN_STATE_INPLACE: the ops write the state into the persistent buffers (traced chunked prefill
+    # only). The recurrent buffer must be fp32 (the fused FLA op's state dtype); else that write-back stays.
+    _state_inplace = mode == "chunk" and gdn._chunk_inplace_state and _gdn_state_inplace_enabled()
+    _rec_out = (
+        gdn.recurrent_state
+        if _state_inplace and gdn.recurrent_state is not None and gdn.recurrent_state.dtype == ttnn.float32
+        else None
+    )
+    _conv_out = gdn.fused_conv_state if _state_inplace else None
+
     chunk_delta_fn = None
     if mode == "chunk" and os.environ.get("QWEN36_GDN_FUSED_PREFILL", "1") != "0":
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_adapter
@@ -81,7 +103,12 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             # decay_sfpu on the P300 SP dies with a pinned fused geometry (gated_deltanet.py _fused_sp_die).
             **({"qk_prenormed": True} if getattr(gdn, "_conv_qk_prenormed", False) else {}),
             **({"decay_sfpu": True} if getattr(gdn, "_fused_sp_die", False) else {}),
+            **({"final_state_out": _rec_out} if _rec_out is not None else {}),
         )
+
+    native_conv1d_fn = getattr(gdn, "_native_conv1d_fn", None) if mode == "chunk" else None
+    if _conv_out is not None and getattr(native_conv1d_fn, "accepts_conv_state_out", False):
+        native_conv1d_fn = functools.partial(native_conv1d_fn, conv_state_out=_conv_out)
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
         hidden_states=x,
@@ -142,7 +169,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         chunk_delta_fn=chunk_delta_fn,
         prefill_progcfg_fn=getattr(gdn, "_prefill_progcfg_fn", None),
         decode_progcfg_fn=getattr(gdn, "_decode_progcfg_fn", None),
-        native_conv1d_fn=getattr(gdn, "_native_conv1d_fn", None) if mode == "chunk" else None,
+        native_conv1d_fn=native_conv1d_fn,
         # I-1 P5 (QWEN36_I1_P5): prefill-only tile-padded [g|a|0|b|0] weight (None = off).
         **(
             dict(
@@ -182,16 +209,20 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         # Per-chunk traced-prefill replay: write state into the persistent external
         # buffers in place so it carries across execute_trace() calls. gdn.recurrent_state
         # and gdn.fused_conv_state keep pointing at the same (baked) buffer addresses.
-        if new_state is not None:  # (None: an SP post_scan hook already wrote gdn.recurrent_state)
+        # (new_state None: an SP post_scan hook already wrote gdn.recurrent_state.)
+        # QWEN36_GDN_STATE_INPLACE: an op that wrote straight into the persistent buffer returned that
+        # buffer itself -> no copy, and no deallocate (it is the persistent state).
+        if new_state is not None and not (_state_inplace and _same_buffer(new_state, gdn.recurrent_state)):
             if list(new_state.shape) != list(gdn.recurrent_state.shape):
                 new_state = ttnn.reshape(new_state, list(gdn.recurrent_state.shape))
             ttnn.copy(new_state, gdn.recurrent_state)
             ttnn.deallocate(new_state)
         if new_fused_conv is not None and not isinstance(new_fused_conv, list):
-            if new_fused_conv.layout != ttnn.TILE_LAYOUT:
-                new_fused_conv = ttnn.to_layout(new_fused_conv, ttnn.TILE_LAYOUT)
-            ttnn.copy(new_fused_conv, gdn.fused_conv_state)
-            ttnn.deallocate(new_fused_conv)
+            if not (_state_inplace and _same_buffer(new_fused_conv, gdn.fused_conv_state)):
+                if new_fused_conv.layout != ttnn.TILE_LAYOUT:
+                    new_fused_conv = ttnn.to_layout(new_fused_conv, ttnn.TILE_LAYOUT)
+                ttnn.copy(new_fused_conv, gdn.fused_conv_state)
+                ttnn.deallocate(new_fused_conv)
         return output
 
     if (

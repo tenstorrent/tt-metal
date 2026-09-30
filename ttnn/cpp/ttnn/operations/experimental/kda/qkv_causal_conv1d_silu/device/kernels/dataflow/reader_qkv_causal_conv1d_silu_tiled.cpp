@@ -34,6 +34,16 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+// P17_CONVOPT variant mask, set by the factory from the QKV_CONV_OPT environment variable (default 24 = both
+// bits on; QKV_CONV_OPT=0 restores the previous reader). All variants are bit-exact:
+//   bit 3 (8):  the tap reads take 544 B per tap tile (face 0 + row 0 of face 1) instead of 1024 B (faces 0 and 1).
+//               The ROW broadcast of the weights reads only row 0 of face 0 and of face 1.
+//   bit 4 (16): the tap reads are the first reads of the prologue (before the zero fills, halo and input reads),
+//               so the many-cores-read-few-tap-pages DRAM burst starts as early as possible.
+#ifndef QKV_CONV_OPT
+#define QKV_CONV_OPT 24
+#endif
+
 // tt-1xx only. The scratch zero fills (noc.async_write_zeros) are NoC loopback reads from
 // MEM_ZEROS_BASE on Wormhole/Blackhole, so they carry the current read transaction id and the
 // trid_setup barrier waits for them. On tt-2xx (Quasar) async_write_zeros is an iDMA transaction
@@ -125,6 +135,15 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
 #if QKV_CONV_RETURN_STATE
     const uint32_t state = scratch_base + state_offset;
 #endif
+#if QKV_CONV_RETURN_STATE && QKV_CONV_STATE_INPLACE
+    // In-place new_state (new_state is the history buffer; see the factory header). The core that
+    // reads the history tiles of a column block (the owner of the block's step mt = 0) also writes
+    // that block's new_state, after the history read has landed. No other core reads those history
+    // tiles, so no write can overtake a read. Rows 28-31 of the block's input tiles at tile-row Mt-1
+    // are read into `stage` (laid out like the halo) together with the halo; the host places stage
+    // right after the state tile.
+    const uint32_t stage = state + tile_bytes;
+#endif
     // Local NoC copies target this core.
     const uint64_t self_noc = get_noc_addr(my_x[noc_id], my_y[noc_id], 0, noc_id);
 
@@ -169,6 +188,23 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
             halo_right = halo + halo_half_bytes + face_row_bytes;
             halo_stride = halo_tile_bytes;
         } else {
+#if QKV_CONV_RETURN_STATE && QKV_CONV_STATE_INPLACE
+            // Rows 28-31 of tile-row Mt-1 for this block's in-place new_state (P row 29 at +32). The
+            // previous unit start's new_state writes read `stage`: they must have left L1 first.
+            noc_async_writes_flushed(noc_id);
+            {
+                const uint32_t last_page = (Mt - 1) * Ct + ct0;
+                for (uint32_t i = 0; i < B; ++i) {
+                    const uint32_t st = stage + i * halo_tile_bytes;
+                    noc_async_read(input.get_noc_addr(last_page + i, f2_row12, noc_id), st, halo_half_bytes, noc_id);
+                    noc_async_read(
+                        input.get_noc_addr(last_page + i, f3_row12, noc_id),
+                        st + halo_half_bytes,
+                        halo_half_bytes,
+                        noc_id);
+                }
+            }
+#endif
 #if QKV_CONV_HAS_HISTORY
             // Rows 0-3 of the history tile; history row 0 (= P row 29) is at +0.
             for (uint32_t i = 0; i < B; ++i) {
@@ -200,10 +236,15 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
             const uint32_t page = ct0 + i;
             const uint32_t w0 = w + i * tile_bytes;
             constexpr uint32_t tap_stride = B * tile_bytes;
-            noc_async_read(tap0.get_noc_addr(page, 0, noc_id), w0, tap_faces_bytes, noc_id);
-            noc_async_read(tap1.get_noc_addr(page, 0, noc_id), w0 + tap_stride, tap_faces_bytes, noc_id);
-            noc_async_read(tap2.get_noc_addr(page, 0, noc_id), w0 + 2 * tap_stride, tap_faces_bytes, noc_id);
-            noc_async_read(tap3.get_noc_addr(page, 0, noc_id), w0 + 3 * tap_stride, tap_faces_bytes, noc_id);
+#if (QKV_CONV_OPT & 8)
+            constexpr uint32_t tap_read_bytes = face_bytes + face_row_bytes;
+#else
+            constexpr uint32_t tap_read_bytes = tap_faces_bytes;
+#endif
+            noc_async_read(tap0.get_noc_addr(page, 0, noc_id), w0, tap_read_bytes, noc_id);
+            noc_async_read(tap1.get_noc_addr(page, 0, noc_id), w0 + tap_stride, tap_read_bytes, noc_id);
+            noc_async_read(tap2.get_noc_addr(page, 0, noc_id), w0 + 2 * tap_stride, tap_read_bytes, noc_id);
+            noc_async_read(tap3.get_noc_addr(page, 0, noc_id), w0 + 3 * tap_stride, tap_read_bytes, noc_id);
         }
     };
 
@@ -212,6 +253,9 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
     // The zero fills need no write_zeros_l1_barrier(): on tt-1xx they are loopback NoC reads tagged
     // with trid_setup (set just below), and the trid_setup barrier of the first step waits for them
     // before any shift copy reads the zeros region or any new_state write reads the state tile.
+#if (QKV_CONV_OPT & 16)
+    issue_unit_taps(step_start);
+#endif
     noc_async_read_set_trid(trid_setup, noc_id);
     noc.async_write_zeros(scratch, state_offset - zeros_offset, {.offset_bytes = scratch_skew + zeros_offset});
 #if QKV_CONV_RETURN_STATE
@@ -227,7 +271,9 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
             chunk = next_x_chunk(chunk);
         }
     }
+#if !(QKV_CONV_OPT & 16)
     issue_unit_taps(step_start);
+#endif
 
     uint32_t x_cur = x_ring_base;
     uint32_t x_prev = x_ring_base;
@@ -290,7 +336,26 @@ TT_KERNEL void reader(uint32_t step_start, uint32_t step_count) {
             weights.push_back(tap_count * B);
         }
 
-#if QKV_CONV_RETURN_STATE
+#if QKV_CONV_RETURN_STATE && QKV_CONV_STATE_INPLACE
+        if (mt == 0) {
+            // In-place new_state tile ct0 + i (see `stage`): this unit start's trid_setup barrier has
+            // landed the history halo (read by this core only) and the stage rows. Same bytes as the
+            // mt = Mt-1 write below: rows 0-2 = input tile (Mt-1, ct0+i) rows 29-31, rows 3-31 = zeros.
+            constexpr uint32_t rows3 = 3 * face_row_bytes;
+            constexpr uint32_t rest = face_bytes - rows3;
+            for (uint32_t i = 0; i < B; ++i) {
+                const uint32_t st = stage + i * halo_tile_bytes;
+                const uint64_t page = new_state.get_noc_addr(ct0 + i, 0, noc_id);
+                noc_async_write(st + face_row_bytes, page, rows3, noc_id);
+                noc_async_write(st + halo_half_bytes + face_row_bytes, page + face_bytes, rows3, noc_id);
+                noc_async_write(state + rows3, page + rows3, rest, noc_id);
+                noc_async_write(state + face_bytes + rows3, page + face_bytes + rows3, rest, noc_id);
+                noc_async_write(state + 2 * face_bytes, page + 2 * face_bytes, 2 * face_bytes, noc_id);
+            }
+            // No flush here: the next stage refill (issue_unit_halo) flushes first, and the kernel's
+            // final write barrier covers the last unit.
+        }
+#elif QKV_CONV_RETURN_STATE
         if (mt == Mt - 1) {
             // new_state tile ct0 + i: rows 0-2 = X_i rows 29-31, rows 3-31 = zeros from the state tile.
             // The five writes cover disjoint bytes of the page, so their order does not matter.

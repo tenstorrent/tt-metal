@@ -338,6 +338,10 @@ static ttnn::Tensor bound_matmul(
     ttnn::Shape result_shape = (bias.has_value()) ? utilities::compute_matmul_with_bias_output_shape(
                                                         matmul_shape, bias.value().logical_shape())
                                                   : matmul_shape;
+    if (is_fuse_swiglu(attributes.program_config)) {
+        // The fused SwiGLU epilogue emits silu(gate) * up: half the weight width.
+        result_shape[-1] /= 2;
+    }
 
     if (optional_output_tensor.has_value()) {
         const auto& desired_shape = optional_output_tensor->logical_shape();

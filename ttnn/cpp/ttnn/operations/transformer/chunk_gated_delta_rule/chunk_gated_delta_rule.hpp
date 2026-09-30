@@ -48,6 +48,12 @@ namespace ttnn::transformer {
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
  * token<->head permute round-trip on both sides.
+ *
+ * final_state_output: an optional pre-allocated final-state tensor (fp32 TILE, interleaved,
+ * [B, HV, K, V] or [B*HV, K, V]). When given, the kernel writes the final state straight into it
+ * (no new state tensor is allocated) and the op returns this tensor as final_state. It may be the
+ * initial_state tensor itself (in-place state update): each scan core reads its own state slice
+ * before it writes the same slice. Requires output_final_state; fused and phased paths only.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -83,6 +89,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // decay_sfpu: the producer's per-chunk decay chain (decay, exp(decay), exp(g_sum - decay), the decay mask L and
     // dl*I) runs as two fp32 SFPU passes in DST instead of ~13 single-tile FPU ops: faster, and more accurate (fp32
     // SFPU arithmetic instead of tf32 FPU operands), so it changes bits. Fused path and chunk_size 32 only.
-    bool decay_sfpu = false);
+    bool decay_sfpu = false,
+    const std::optional<ttnn::Tensor>& final_state_output = std::nullopt);
 
 }  // namespace ttnn::transformer

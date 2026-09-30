@@ -168,7 +168,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& masks,
     const std::optional<ttnn::Tensor>& sel,
     bool qk_prenormed,
-    bool decay_sfpu) {
+    bool decay_sfpu,
+    const std::optional<ttnn::Tensor>& final_state_output) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
 
     // gb_flat (Option B): enabled iff the caller passes `sel` (the one-hot head selector). g/beta
@@ -371,6 +372,39 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         "chunk_gated_delta_rule: qk_prenormed / decay_sfpu need the fused path (ChunkGdnFusedProgramConfig, or None "
         "when "
         "the cost model picks fused)");
+
+    // Optional pre-allocated final state (see the header). The prim binds its buffer as the final-state
+    // output and allocates none. A [B,HV,K,V] tensor is viewed as [BH,K,V]: K and V are tile-aligned, so
+    // the fold (B,HV) -> BH is metadata-only and the view shares the caller's buffer (same as s0 above).
+    std::optional<ttnn::Tensor> fs_out;
+    if (final_state_output.has_value()) {
+        const ttnn::Tensor& t = *final_state_output;
+        TT_FATAL(output_final_state, "chunk_gated_delta_rule: final_state_output requires output_final_state=True");
+        TT_FATAL(!is_mono, "chunk_gated_delta_rule: final_state_output needs the fused or phased path, not mono");
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr,
+            "chunk_gated_delta_rule: final_state_output must be an allocated device tensor");
+        TT_FATAL(t.device() == dev, "chunk_gated_delta_rule: final_state_output must be on the device of q");
+        TT_FATAL(
+            t.dtype() == DataType::FLOAT32,
+            "chunk_gated_delta_rule: final_state_output must be FLOAT32, got {}",
+            t.dtype());
+        TT_FATAL(t.layout() == Layout::TILE, "chunk_gated_delta_rule: final_state_output must be TILE layout");
+        TT_FATAL(!t.memory_config().is_sharded(), "chunk_gated_delta_rule: final_state_output must be interleaved");
+        const auto& fs = t.logical_shape();
+        const bool bhkv = fs.rank() == 4 && fs[0] == B && fs[1] == HV && fs[2] == K && fs[3] == V;
+        const bool bh_kv = fs.rank() == 3 && fs[0] == BH && fs[1] == K && fs[2] == V;
+        TT_FATAL(
+            bhkv || bh_kv,
+            "chunk_gated_delta_rule: final_state_output must be [B,HV,K,V] = [{},{},{},{}] or [B*HV,K,V], got {}",
+            B,
+            HV,
+            K,
+            V,
+            fs);
+        fs_out = bh_kv ? t : ttnn::reshape(t, ttnn::Shape({BH, K, V}));
+    }
+
     if (const auto* fused_cfg = std::get_if<ChunkGdnFusedProgramConfig>(&cfg)) {
         // Same preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS
         // provides — zeros built above when the caller passed none), same outputs scan produces;
@@ -401,7 +435,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             gb_flat,
             sel_c,
             qk_prenormed,
-            decay_sfpu);
+            decay_sfpu,
+            fs_out);
         o_c = fused[0];
         final_state = fused[1];
     } else if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {
@@ -443,7 +478,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             out_mem,
             kernel_cfg,
             phased_cfg->use_mcast,
-            phased_cfg->scan_serial);
+            phased_cfg->scan_serial,
+            fs_out);
         o_c = scan[0];
         final_state = scan[1];
         // DEBUG: QWEN_GDN_DUMP=<idx> routes prep[idx] out through the o path (idx 2 = q_decay,
@@ -460,7 +496,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     }
 
     std::optional<ttnn::Tensor> final_opt;
-    if (output_final_state) {
+    if (final_state_output.has_value()) {
+        final_opt = *final_state_output;  // the kernel wrote the state into the caller's buffer
+    } else if (output_final_state) {
         final_opt = ttnn::reshape(final_state, ttnn::Shape({B, HV, K, V}));
     }
 

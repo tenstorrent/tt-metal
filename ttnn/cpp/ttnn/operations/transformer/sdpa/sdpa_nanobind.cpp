@@ -273,7 +273,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
+    bool concat_heads_output) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -285,7 +286,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             memory_config,
             program_config,
             compute_kernel_config,
-            paged_cache_geometry);
+            paged_cache_geometry,
+            concat_heads_output);
+    }
+    if (concat_heads_output) {
+        throw std::runtime_error("concat_heads_output is only supported with chunk_start_idx_tensor (flexible path)");
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -547,7 +552,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("paged_cache_geometry").noconvert() = nb::none());
+        nb::arg("paged_cache_geometry").noconvert() = nb::none(),
+        nb::arg("concat_heads_output") = false);
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two

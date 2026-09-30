@@ -82,6 +82,12 @@ struct ChunkGdnFusedParams {
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_phased.hpp): the op's
     // wy_inverse resolved by gdn_tinv_resolve at attrs construction (hashed), exactly as the phased prep prim.
     uint32_t tinv = 0;
+    // Math fidelity of the producer (prep) and receiver (scan) compute kernels, resolved by
+    // gdn_resolve_fidelity at attrs construction (hashed): env var QWEN36_FLA_PREP_FID /
+    // QWEN36_FLA_SCAN_FID > ChunkGdnFusedProgramConfig::prep_math_fidelity / scan_math_fidelity >
+    // compute_kernel_config (HiFi4).
+    tt::tt_metal::MathFidelity prep_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity scan_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -111,6 +117,10 @@ struct ChunkGdnFusedInputs {
     // gb_flat one-hot head selector [1,1,32,32*HV] fp32 TILE; absent unless params.gb_flat.
     std::optional<Tensor> sel;
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    // Pre-allocated final-state output [BH, K, V] fp32 TILE interleaved (the op's final_state_output),
+    // or absent (a new tensor is allocated). May share its buffer with initial_state: receiver (h, v)
+    // reads its s0 slice once, before it writes the same slice of the final state.
+    std::optional<Tensor> final_state_out;
 };
 
 struct ChunkGdnFusedProgramFactory {
@@ -201,6 +211,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool gb_flat = false,
     const std::optional<Tensor>& sel = std::nullopt,
     bool qk_prenormed = false,
-    bool decay_sfpu = false);
+    bool decay_sfpu = false,
+    const std::optional<Tensor>& final_state_out = std::nullopt);
 
 }  // namespace ttnn::prim

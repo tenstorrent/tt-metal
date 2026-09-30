@@ -39,6 +39,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
 
 // TILE input only. Also returns new_state = TILE [1,3,Q+K+V] with rows 0-2 = x[T-3..T-1] and
 // zero padding rows. new_state is always DRAM interleaved (memory_config applies to q/k/v only).
+// conv_state_output: optional pre-allocated new_state (TILE bf16 interleaved [1,3,Q+K+V]); the op
+// writes into it, allocates none, and returns it as new_state. It may be `history` itself
+// (in-place conv-state update for a persistent traced state buffer).
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_with_conv_state(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& history,
@@ -51,6 +54,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     uint32_t v_width,
     const std::optional<QkvCausalConv1dSiluProgramConfig>& program_config = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& conv_state_output = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

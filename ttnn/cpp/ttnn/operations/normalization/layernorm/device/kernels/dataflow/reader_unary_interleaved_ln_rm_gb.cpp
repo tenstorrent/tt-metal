@@ -46,7 +46,9 @@ void kernel_main() {
     constexpr auto blk = get_arg(args::block_size);  // needed for correctness of softmax/LN kernels
     constexpr auto W = get_arg(args::W);
 
+#ifndef HS_ALIAS
     const auto src_a = TensorAccessor(tensor::src);
+#endif
 
     // Byte offsets within a tile scale with the datum size (2B for bf16, 4B for fp32):
     //   row_bytes      = one tile-width row  = TILE_WIDTH (32) datums
@@ -68,7 +70,7 @@ void kernel_main() {
     const uint32_t beta_half_row_bytes = tt::constants::FACE_WIDTH * beta_datum_bytes;
     const auto addrb = TensorAccessor(tensor::beta);
 #endif
-#ifdef FUSE_PRE_ADD
+#if defined(FUSE_PRE_ADD) && !defined(HS_ALIAS)
     const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
     const auto src_b = TensorAccessor(tensor::src_b);
 #endif
@@ -101,6 +103,14 @@ void kernel_main() {
     uint32_t offs = 0;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifdef HS_ALIAS
+        // a and b sit in this core's own HEIGHT_SHARDED shards (one tile row per core, NCHt == 1) and
+        // dfb_in0 / dfb_in1 are borrowed from them: nothing to copy, only publish the tiles.
+        dfb_in0.reserve_back(static_cast<uint16_t>(Wt));
+        dfb_in0.push_back(static_cast<uint16_t>(Wt));
+        dfb_in1.reserve_back(static_cast<uint16_t>(Wt));
+        dfb_in1.push_back(static_cast<uint16_t>(Wt));
+#else
         for (auto block : generic::blocks(Wt, blk)) {
             dfb_in0.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             uint32_t idx = 0;
@@ -142,6 +152,7 @@ void kernel_main() {
 #endif
 #endif
         }  // wt loop
+#endif  // HS_ALIAS
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {

@@ -18,6 +18,9 @@ void kernel_main() {
 
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
+    // Tiles written per row and page stride between rows (stride > Wt in partial mode: skip untouched tiles).
+    constexpr uint32_t Wt = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
+    constexpr uint32_t Wt_out = get_compile_time_arg_val(dst_args.next_compile_time_args_offset() + 1);
 
     const uint32_t output_tile_bytes = get_tile_size(output_cb_id);
     const auto s = TensorAccessor(dst_args, dst_addr, output_tile_bytes);
@@ -36,6 +39,9 @@ void kernel_main() {
         noc.async_write_barrier();
         cb_output.pop_front(1);
         output_curr_id++;
+        if ((i + 1) % Wt == 0) {
+            output_curr_id += Wt_out - Wt;
+        }
     }
 #endif
 }

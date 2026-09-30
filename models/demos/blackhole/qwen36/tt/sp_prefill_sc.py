@@ -48,6 +48,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
+from models.demos.blackhole.qwen36.tt.gdn.decode import _same_buffer
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.sp_lmhead_shard import SPLMHeadShard, lmhead_shard_enabled
@@ -571,12 +572,15 @@ class SPPrefillSC:
                 # decode.py), then send it; None tells decode.py the write is done.
                 fired.append("post_scan")
                 rec = dn.recurrent_state
-                if new_state.dtype != rec.dtype:
-                    new_state = ttnn.typecast(new_state, rec.dtype)
-                if list(new_state.shape) != list(rec.shape):
-                    new_state = ttnn.reshape(new_state, list(rec.shape))
-                ttnn.copy(new_state, rec)
-                ttnn.deallocate(new_state)
+                # QWEN36_GDN_STATE_INPLACE: the op may have written the persistent state itself and returned that
+                # buffer -> no copy and no deallocate (new_state IS rec).
+                if not _same_buffer(new_state, rec):
+                    if new_state.dtype != rec.dtype:
+                        new_state = ttnn.typecast(new_state, rec.dtype)
+                    if list(new_state.shape) != list(rec.shape):
+                        new_state = ttnn.reshape(new_state, list(rec.shape))
+                    ttnn.copy(new_state, rec)
+                    ttnn.deallocate(new_state)
                 self._send_rec(d, li, rec, send_op, send_sock)
                 return None
 

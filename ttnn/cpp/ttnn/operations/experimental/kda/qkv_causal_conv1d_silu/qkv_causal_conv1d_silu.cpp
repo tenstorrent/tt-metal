@@ -21,7 +21,8 @@ std::vector<ttnn::Tensor> run_qkv_causal_conv1d_silu(
     const std::optional<QkvCausalConv1dSiluProgramConfig>& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    bool return_conv_state) {
+    bool return_conv_state,
+    const std::optional<ttnn::Tensor>& conv_state_output = std::nullopt) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
         "qkv_causal_conv1d_silu: input must be an allocated device tensor");
@@ -60,7 +61,8 @@ std::vector<ttnn::Tensor> run_qkv_causal_conv1d_silu(
         return_conv_state,
         output_memory_config,
         kernel_config,
-        fused_qk_l2_norm);
+        fused_qk_l2_norm,
+        conv_state_output);
 }
 
 }  // namespace
@@ -107,7 +109,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     uint32_t v_width,
     const std::optional<QkvCausalConv1dSiluProgramConfig>& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& conv_state_output) {
     auto outputs = run_qkv_causal_conv1d_silu(
         input,
         history,
@@ -121,7 +124,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
         program_config,
         memory_config,
         compute_kernel_config,
-        /*return_conv_state=*/true);
+        /*return_conv_state=*/true,
+        conv_state_output);
     return {outputs[0], outputs[1], outputs[2], outputs[3]};
 }
 

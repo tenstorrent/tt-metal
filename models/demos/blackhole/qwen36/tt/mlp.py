@@ -456,17 +456,31 @@ class Qwen36MLP:
                             or tpc.prefill_minimal_matmul_config(T, x.shape[-1], w.w_gate_up.shape[-1], self._mm_grid)
                         )
                     )
-                hidden = ttnn.experimental.minimal_matmul(
-                    x,
-                    w.w_gate_up,
-                    fuse_swiglu=True,
-                    config=cfg,
-                    compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                    # P300 A: SwiGLU on the pack thread (in the K-loop tail, not a separate epilogue pass) with the
-                    # approximate sigmoid. Not bit-exact. Other configs keep the epilogue SwiGLU.
-                    **({"swiglu_pack": True, "swiglu_approx": True} if p300 is not None else {}),
-                )
+                # R5 GLU (QWEN36_R5_GLU=1, tp_common; T == 2048 chunks, bf8 weight): the 2D-mcast matmul with the
+                # fused SwiGLU epilogue on the same pair-interleaved weight and output placement. None -> the
+                # minimal_matmul call below, unchanged (every other shape, and the flag off).
+                r5_pc = tpc.r5_glu_progcfg(x, w.w_gate_up, self._mm_grid, self.compute_kernel_config)
+                if r5_pc is not None:
+                    hidden = ttnn.matmul(
+                        x,
+                        w.w_gate_up,
+                        program_config=r5_pc,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=ttnn.bfloat16,
+                    )
+                else:
+                    hidden = ttnn.experimental.minimal_matmul(
+                        x,
+                        w.w_gate_up,
+                        fuse_swiglu=True,
+                        config=cfg,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                        # P300 A: SwiGLU on the pack thread (in the K-loop tail, not a separate epilogue pass) with the
+                        # approximate sigmoid. Not bit-exact. Other configs keep the epilogue SwiGLU.
+                        **({"swiglu_pack": True, "swiglu_approx": True} if p300 is not None else {}),
+                    )
             else:
                 w1_out = self._prefill_matmul(x, w.w1, T, "QWEN9B_MLP_UP_AUTO", activation="silu")
                 w3_out = self._prefill_matmul(x, w.w3, T, "QWEN9B_MLP_UP_AUTO")
@@ -528,6 +542,9 @@ class Qwen36MLP:
                 if self._mm_grid is not None and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
                 else None
             )
+            _down_mc = ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG
+            if m1_pc is not None and T == tpc.RESID_HS_T and tpc.resid_hs_active():
+                _down_mc = tpc.resid_hs_mc()  # P11 RESID_HS: b written HEIGHT_SHARDED (shard k on norm core k)
             # P300 B (QWEN36_P300_MM=1, 11x10 grid, T == 1024; tp_common P300 table): 2D-mcast ttnn.linear
             # 11x10 bw16 pcM4 pcN6 1x6 instead of minimal_matmul(config=None). Swept with in0 (the SwiGLU
             # output) and the output both L1 (l1_out_ab); same weight w2 [K, N] as minimal_matmul. The grid
@@ -568,8 +585,8 @@ class Qwen36MLP:
                     bias=self._m3_zero_bias,
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
+                    memory_config=_down_mc,
+                    dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif m1_pc is not None:
                 assert not tpc.m3_enabled("ZB"), (
@@ -581,8 +598,8 @@ class Qwen36MLP:
                     w.w2,
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
+                    memory_config=_down_mc,
+                    dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif i2_pc is not None:
                 output = ttnn.linear(

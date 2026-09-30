@@ -1440,6 +1440,88 @@ void validate_matmul_batched_dram_sharded_config(
         input_tensor_b.memory_config().memory_layout());
 }
 
+// Mcast2D fused SwiGLU epilogue (fuse_swiglu): the output is silu(gate) * up of tile-pair interleaved
+// [gate | up] weight columns, half the weight width. Only the interleaved, bias-free, bf16-output path is
+// implemented. Even per_core_N / out_block_w / out_subblock_w keep every core, block and subblock boundary on
+// an even weight tile, so a (gate, up) pair never straddles one.
+void validate_matmul_mcast2d_glu(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& optional_bias,
+    const MatmulParams& attributes,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& program_config) {
+    if (!program_config.fuse_swiglu) {
+        TT_FATAL(
+            !program_config.glu_last_block && !program_config.glu_sfpu_on_pack,
+            "{}: glu_last_block / glu_sfpu_on_pack need fuse_swiglu",
+            ttsl::get_type_name(program_config));
+        return;
+    }
+    const auto config_name = ttsl::get_type_name(program_config);
+    TT_FATAL(
+        program_config.per_core_N % 2 == 0 && program_config.out_block_w % 2 == 0 &&
+            program_config.out_subblock_w % 2 == 0,
+        "{}: fuse_swiglu requires even per_core_N ({}), out_block_w ({}) and out_subblock_w ({})",
+        config_name,
+        program_config.per_core_N,
+        program_config.out_block_w,
+        program_config.out_subblock_w);
+    const auto Nt = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+    const auto b_width = input_tensor_b.logical_shape()[-1];
+    TT_FATAL(
+        Nt % 2 == 0 && b_width % (2 * in1_tile.get_width()) == 0,
+        "{}: fuse_swiglu requires the weight width ({}) to be a multiple of 2 tiles",
+        config_name,
+        b_width);
+    TT_FATAL(input_tensor_b.logical_shape().rank() >= 2, "{}: fuse_swiglu requires a rank >= 2 weight", config_name);
+    TT_FATAL(!optional_bias.has_value(), "{}: fuse_swiglu does not support bias", config_name);
+    TT_FATAL(
+        !program_config.fused_activation.has_value() && !attributes.user_fused_activation.has_value(),
+        "{}: fuse_swiglu does not support a fused activation",
+        config_name);
+    TT_FATAL(!attributes.untilize_out, "{}: fuse_swiglu does not support untilize_out", config_name);
+    TT_FATAL(!program_config.transpose_mcast, "{}: fuse_swiglu does not support transpose_mcast", config_name);
+    TT_FATAL(
+        !attributes.transpose_a && !attributes.transpose_b,
+        "{}: fuse_swiglu does not support transpose_a / transpose_b",
+        config_name);
+    TT_FATAL(
+        (!input_tensor_a.memory_config().is_sharded() || operations::matmul::utilities::is_remote_hs_l1_in0(
+                                                             input_tensor_a.memory_config(),
+                                                             program_config.per_core_M,
+                                                             input_tensor_a.tensor_spec().tile().get_height())) &&
+            !input_tensor_b.memory_config().is_sharded(),
+        "{}: fuse_swiglu requires interleaved input tensors (in0 may be remote HEIGHT_SHARDED L1)",
+        config_name);
+    TT_FATAL(
+        attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "{}: fuse_swiglu requires an interleaved output, got: {}",
+        config_name,
+        attributes.output_mem_config.memory_layout());
+    TT_FATAL(
+        attributes.output_dtype.has_value() && attributes.output_dtype.value() == DataType::BFLOAT16,
+        "{}: fuse_swiglu requires a bfloat16 output",
+        config_name);
+    const bool out_tile_ok =
+        !attributes.output_tile.has_value() || (attributes.output_tile->get_tile_shape()[0] == TILE_HEIGHT &&
+                                                attributes.output_tile->get_tile_shape()[1] == TILE_WIDTH);
+    TT_FATAL(
+        in0_tile.get_height() == TILE_HEIGHT && in0_tile.get_width() == TILE_WIDTH &&
+            in1_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == TILE_WIDTH && out_tile_ok,
+        "{}: fuse_swiglu requires 32x32 tiles",
+        config_name);
+    TT_FATAL(
+        attributes.compute_kernel_config.has_value(),
+        "{}: compute_kernel_config must be populated for fuse_swiglu",
+        config_name);
+    const bool fp32_dest_acc_en = std::get<2>(
+        get_compute_kernel_config_args(input_tensor_a.device()->arch(), attributes.compute_kernel_config.value()));
+    TT_FATAL(!fp32_dest_acc_en, "{}: fuse_swiglu does not support fp32_dest_acc_en", config_name);
+}
+
 // Mcast2D config: block-sharded 2D multicast. Validates that sharded input A, input B,
 // and the output have layouts, grids, and orientations consistent with a 2D multicast.
 void validate_matmul_mcast2d_config(
@@ -1456,7 +1538,15 @@ void validate_matmul_mcast2d_config(
     const tt::tt_metal::CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     check_tensor_in_grid(input_tensor_a, device_grid);
     check_tensor_in_grid(input_tensor_b, device_grid);
-    if (input_tensor_a.memory_config().is_sharded()) {
+    // SHARDRES_A: remote HEIGHT_SHARDED L1 in0 is read through TensorAccessor like interleaved.
+    const bool in0_remote_hs = operations::matmul::utilities::is_remote_hs_l1_in0(
+        input_tensor_a.memory_config(), program_config.per_core_M, in0_tile.get_height());
+    if (in0_remote_hs) {
+        TT_FATAL(program_config.fuse_batch, "{}: Batch fusion is required when input A is sharded", config_name);
+        TT_FATAL(
+            !program_config.transpose_mcast, "{}: remote HEIGHT_SHARDED in0 needs transpose_mcast=false", config_name);
+    }
+    if (input_tensor_a.memory_config().is_sharded() && !in0_remote_hs) {
         TT_FATAL(program_config.fuse_batch, "{}: Batch fusion is required when input A is sharded", config_name);
         auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
         const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
@@ -1630,8 +1720,10 @@ void validate_matmul_mcast2d_config(
     }
 
     if (attributes.output_mem_config.is_sharded()) {
+        // SHARDRES_A: HEIGHT_SHARDED L1 output is written through TensorAccessor like interleaved.
         TT_FATAL(
-            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                operations::matmul::utilities::is_remote_hs_l1_out(attributes.output_mem_config),
             "{}: Output memory layout must be BLOCK_SHARDED, got: {}",
             config_name,
             attributes.output_mem_config.memory_layout());
@@ -2358,6 +2450,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                validate_matmul_mcast2d_glu(
+                    input_tensor_a,
+                    input_tensor_b,
+                    optional_bias,
+                    attributes,
+                    b_shape_padded,
+                    in0_tile,
+                    in1_tile,
+                    program_config);
                 validate_matmul_mcast2d_config(
                     input_tensor_a,
                     input_tensor_b,
@@ -2424,8 +2525,12 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const auto& input_tensor_b = input_tensors.at(1);
 
     // Use the compute_matmul_output_shape function to get the output shape
-    const auto output_shape = operations::matmul::utilities::compute_matmul_output_shape(
+    auto output_shape = operations::matmul::utilities::compute_matmul_output_shape(
         input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+    if (operations::matmul::is_fuse_swiglu(attributes.program_config)) {
+        // The fused SwiGLU epilogue emits silu(gate) * up: half the weight width.
+        output_shape[-1] /= 2;
+    }
 
     const auto& a_shape_padded =
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_a, attributes.transpose_a);
@@ -2607,6 +2712,16 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         per_core_N,
                         tile_width_ratio);
 
+                    if (operations::matmul::utilities::is_remote_hs_l1_out(attributes.output_mem_config) &&
+                        attributes.output_mem_config.shard_spec().has_value()) {
+                        // SHARDRES_A: user-supplied HEIGHT_SHARDED L1 output, written through TensorAccessor.
+                        return {tt::tt_metal::TensorSpec(
+                            output_shape,
+                            tt::tt_metal::TensorLayout(
+                                attributes.output_dtype.value(),
+                                tt::tt_metal::PageConfig(output_layout, output_tile),
+                                attributes.output_mem_config))};
+                    }
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's
@@ -2797,6 +2912,9 @@ MatmulDeviceOperation::create_op_performance_model(
     int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
+    if (operations::matmul::is_fuse_swiglu(operation_attributes.program_config)) {
+        num_mul_adds *= 2;  // the matmul computes the full [gate | up] width; the output holds half of it
+    }
 
     MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
 

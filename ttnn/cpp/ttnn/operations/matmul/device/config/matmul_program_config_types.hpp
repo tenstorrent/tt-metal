@@ -35,6 +35,19 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Fused SwiGLU epilogue (opt-in). in1 holds tile-pair interleaved [gate | up] columns (weight tile 2p = gate
+    // tile p, tile 2p+1 = up tile p, as from prepare_for_fused_swiglu). The output is silu(gate) * up, so its
+    // width is half the weight width. Last member so the struct stays a positional aggregate.
+    bool fuse_swiglu = false;
+    // Fused SwiGLU variants (opt-in, need fuse_swiglu). glu_last_block: apply silu(gate) * up on DEST inside the
+    // last K block (the plain reload path) and pack half the tiles, instead of a separate pass over the partials.
+    // glu_sfpu_on_pack: issue the SwiGLU SFPU work from the PACK thread (with glu_last_block it then overlaps the
+    // MATH thread's next subblock). Env TT_MATMUL_GLU_SFPU_ON_PACK=1 also sets it.
+    bool glu_last_block = false;
+    bool glu_sfpu_on_pack = false;
+    // in0 CB holds one K block instead of two (saves out_block_h * in0_block_w in0 tiles of L1 per core; the in0
+    // multicast of block k+1 then waits for compute to release block k). Opt-in.
+    bool in0_single_buffer = false;
 };
 
 // 1D mcast matmul program config.
@@ -98,6 +111,15 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+
+// True when the config is the 2D multicast config with the fused SwiGLU epilogue enabled.
+inline bool is_fuse_swiglu(const std::optional<MatmulProgramConfig>& config) {
+    if (!config.has_value()) {
+        return false;
+    }
+    const auto* mcast2d = std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&config.value());
+    return mcast2d != nullptr && mcast2d->fuse_swiglu;
+}
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is

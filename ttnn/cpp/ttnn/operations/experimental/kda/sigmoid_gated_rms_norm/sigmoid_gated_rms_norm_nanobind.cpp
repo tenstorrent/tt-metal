@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -54,6 +55,17 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
                 uses the SFPU SiLU, which is the same non-approximate SFPU sigmoid
                 as ``"sigmoid"`` followed by one multiply by the gate value.
             gate_col_offset_tiles (int): First gate tile column to read. Defaults to 0.
+            kernel_variant (int, optional): Compute-kernel variant. ``0`` is the
+                legacy seven-pass kernel. ``1``-``4`` are the fused kernel, which runs
+                one head x 32-row unit in three kinds of DEST pass (sum of squares,
+                inverse RMS, output) with a software pipeline across units: ``1``
+                library SFPU sigmoid/silu and multiply on the MATH thread; ``2`` one
+                fused SFPU pass for the gate (same result as ``1``); ``3`` the SFPU
+                work on the PACK thread (same result as ``1``); ``4`` = ``3`` with an
+                ``exp_21f`` exponential in the sigmoid (not bit-exact with ``1``-``3``,
+                within 1 bf16 ulp of ``0`` for > 99.9% of values); ``5`` = ``3`` with the
+                P5 sigmoid (degree-2 2^x, reciprocal + one Newton step; opt-in, not
+                bit-exact). Defaults to ``None`` = ``4``.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -73,7 +85,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
         nb::arg("gate_activation") = std::string("sigmoid"),
-        nb::arg("gate_col_offset_tiles") = 0u);
+        nb::arg("gate_col_offset_tiles") = 0u,
+        nb::arg("kernel_variant") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

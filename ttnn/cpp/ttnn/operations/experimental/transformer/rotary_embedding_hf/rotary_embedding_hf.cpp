@@ -14,7 +14,8 @@ ttnn::Tensor rotary_embedding_hf(
     const ttnn::Tensor& sin,
     bool is_decode_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t rotary_dim);
 
 }  // namespace ttnn::prim
 
@@ -26,7 +27,8 @@ Tensor rotary_embedding_hf(
     const Tensor& sin_cache,
     const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> rotary_dim) {
     // Device-only op: kernel config needs arch() and the primitive enqueues on device.
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -46,8 +48,15 @@ Tensor rotary_embedding_hf(
     auto kernel_config = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
+    // rotary_dim (partial, in-place mode): 0 = off (regular out-of-place op).
+    if (rotary_dim.has_value()) {
+        TT_FATAL(
+            !is_decode_mode,
+            "rotary_embedding_hf: rotary_dim (partial in-place RoPE) is not supported in decode mode.");
+        output_mem_config = input_tensor.memory_config();  // in place: output is the input buffer
+    }
     return ttnn::prim::rotary_embedding_hf(
-        input_tensor, cos_cache, sin_cache, is_decode_mode, output_mem_config, kernel_config);
+        input_tensor, cos_cache, sin_cache, is_decode_mode, output_mem_config, kernel_config, rotary_dim.value_or(0));
 }
 
 }  // namespace ttnn::experimental

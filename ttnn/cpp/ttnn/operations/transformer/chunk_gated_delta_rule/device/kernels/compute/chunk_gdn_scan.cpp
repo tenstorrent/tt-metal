@@ -56,6 +56,15 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_kd, cb_vbeta, cb_out);
 
+    // GDN_SCAN_PIPE_O (fused receivers only, set by the fused factory): chunk c-1's o runs inside chunk c's
+    // step (scan_step_c1<..., true>), so chunk c-1's q_decay / intra / v_new / state stay one step longer;
+    // chunk NC-1's o runs after the loop. Bit-identical to the unpipelined order (same blocks, same operands).
+#if defined(GDN_SCAN_PIPE_O)
+    constexpr bool kPipeO = (Ct == 1 && Vt <= 4);
+#else
+    constexpr bool kPipeO = false;
+#endif
+    uint32_t last_S = cb_S;
     for (uint32_t c = 0; c < NC; c++) {
         // State uses three single-producer CBs:
         //   cb_S      : reader-produced initial state, consumed only by chunk 0.
@@ -81,7 +90,17 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
-            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            if constexpr (kPipeO) {
+                scan_step_c1<Kt, Vt, true>(CBS, cur_S, dst, last_S, c > 0);
+            } else {
+                scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            }
+        }
+        last_S = cur_S;
+    }
+    if constexpr (kPipeO) {
+        if (NC > 0) {
+            scan_o_c1<Kt, Vt>(CBS, last_S);  // chunk NC-1's o
         }
     }
 }

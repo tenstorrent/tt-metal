@@ -34,6 +34,30 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
+#ifdef NORM_E_REUSE
+// Dest-reuse multiply with the CB operand row-broadcast: DST[dst] = DST[dst] * row0(cb tile). The public
+// mul_reuse_dest_* wrappers fix the broadcast to NONE; the BH LLKs take ROW (unpack A with acc_to_dest,
+// math with ROW + DEST_TO_SRCA).
+ALWI void mul_bcast_rows_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb, call_line);
+    UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, icb)));
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::ROW,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb, icb, false /* acc_to_dest */)));
+}
+ALWI void mul_bcast_rows_reuse_dest_tiles(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::ROW,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb, icb, dst_tile_index, true /* clear_fp32_dst_acc */)));
+}
+#endif
+
 void kernel_main() {
     const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
@@ -75,7 +99,7 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
 #endif
-#ifdef RESIDUAL_OUT
+#if defined(RESIDUAL_OUT) && !defined(RESID_HS_ALIAS)
     // h = a + b for the writer. Same format as dfb_x (the host sets XMM to h's dtype).
     constexpr auto dfb_h_out_id = dfb::h_out;
     DataflowBuffer dfb_h_out(dfb_h_out_id);
@@ -205,7 +229,7 @@ void kernel_main() {
             dfb_inb.pop_front(block.full_block_size());
 
             dfb_x.reserve_back(block.full_block_size());
-#ifdef RESIDUAL_OUT
+#if defined(RESIDUAL_OUT) && !defined(RESID_HS_ALIAS)
             dfb_h_out.reserve_back(block.full_block_size());
 #endif
 
@@ -213,7 +237,7 @@ void kernel_main() {
             for (auto i : block.local()) {
                 pack_tile(i, dfb_x_id);
             }
-#ifdef RESIDUAL_OUT
+#if defined(RESIDUAL_OUT) && !defined(RESID_HS_ALIAS)
             // Same packer format as dfb_x, so no pack reconfig between the two copies of the sum.
             for (auto i : block.local()) {
                 pack_tile(i, dfb_h_out_id);
@@ -222,7 +246,7 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_x.push_back(block.full_block_size());  // push the sum into the same buffer
-#ifdef RESIDUAL_OUT
+#if defined(RESIDUAL_OUT) && !defined(RESID_HS_ALIAS)
             dfb_h_out.push_back(block.full_block_size());
 #endif
         }
@@ -282,6 +306,24 @@ void kernel_main() {
          * compute temp = xmm*xmm = (x-E[x])^2
          */
         mul_init(dfb_xmm_id, dfb_xmm_id);
+#ifdef NORM_SQ_ACC
+        // NORMOPT N3 (HS residual case): the FPU multiply adds into DST, so all Wt squares land in ONE
+        // DST tile (sum over the row's tiles); one pack, and the reduce below sees one tile.
+        tile_regs_acquire();
+        for (auto block : generic::blocks(Wt, block_size)) {
+            dfb_xmm.wait_front(block.start() + block.full_block_size());
+            for (auto i : block.local()) {
+                const auto global_i = block.to_global(i);
+                mul_tiles(dfb_xmm_id, dfb_xmm_id, global_i, global_i, dst0);
+            }
+        }
+        tile_regs_commit();
+        dfb_xmm2.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(dst0, dfb_xmm2_id);
+        tile_regs_release();
+        dfb_xmm2.push_back(1);
+#else
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
             dfb_xmm.wait_front(static_cast<uint16_t>(block.start() + block.size()));
@@ -305,14 +347,21 @@ void kernel_main() {
 
             dfb_xmm2.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
+#endif  // NORM_SQ_ACC
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #endif
 
         // Var[x]
+#ifdef NORM_SQ_ACC
+        numeric::
+            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+                dfb_xmm2, dfb_scaler, dfb_ex2, W, 1, 1, tile_width);
+#else
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
                 dfb_xmm2, dfb_scaler, dfb_ex2, W, Wt, block_size, tile_width);
+#endif
 
         // Var[x] + eps
         dfb_ex2.wait_front(1);
@@ -338,6 +387,77 @@ void kernel_main() {
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         dfb_ex2pe.wait_front(1);
+#ifdef NORM_E_REUSE
+        // NORMOPT N2b (HS residual case, gamma, no beta, no activation): x * r * gamma in one pass. The
+        // column-broadcast product stays in DST and is multiplied by gamma in place (dest reuse, gamma
+        // row-broadcast), then packed once to the output. No fp32 fusion round trip, no pack reconfig.
+        dfb_gamma.wait_front(Wt);
+        reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
+        pack_reconfig_data_format(dfb_out_id);
+        for (auto block : generic::blocks(Wt, block_size)) {
+            dfb_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+            tile_regs_acquire();
+            mul_bcast_cols_init(dfb_xmm_id, dfb_ex2pe_id);
+            for (auto i : block.local()) {
+                mul_tiles_bcast_cols(dfb_xmm_id, dfb_ex2pe_id, block.to_global(i), 0, i);
+            }
+            reconfig_data_format_srcb(dfb_ex2pe_id, dfb_gamma_id);
+            mul_bcast_rows_reuse_dest_init(dfb_gamma_id);
+            for (auto i : block.local()) {
+                mul_bcast_rows_reuse_dest_tiles(dfb_gamma_id, block.to_global(i), i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, dfb_out_id);
+            }
+            tile_regs_release();
+            dfb_out.push_back(static_cast<uint16_t>(block.full_block_size()));
+            reconfig_data_format_srcb(dfb_gamma_id, dfb_ex2pe_id);
+        }
+#elif defined(NORM_E_SPLIT)
+        // NORMOPT N2a (HS residual case, gamma, no beta, no activation): the normalized row goes to the
+        // fusion buffer for all blocks first (fusion holds the whole row, aliased on xmm2's dead SRAM),
+        // then gamma is applied to all blocks. Same tiles, same order of operations as the per-block
+        // path, but the format reconfigs happen twice per row instead of five times per block.
+        reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
+        pack_reconfig_data_format(dfb_fusion_id);
+        mul_bcast_cols_init(dfb_xmm_id, dfb_ex2pe_id);
+        for (auto block : generic::blocks(Wt, block_size)) {
+            dfb_fusion.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+            tile_regs_acquire();
+            for (auto i : block.local()) {
+                mul_tiles_bcast_cols(dfb_xmm_id, dfb_ex2pe_id, block.to_global(i), 0, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, dfb_fusion_id);
+            }
+            tile_regs_release();
+            dfb_fusion.push_back(static_cast<uint16_t>(block.full_block_size()));
+        }
+        reconfig_data_format(dfb_fusion_id, dfb_gamma_id);
+        pack_reconfig_data_format(dfb_out_id);
+        mul_bcast_rows_init(dfb_fusion_id, dfb_gamma_id);
+        dfb_gamma.wait_front(Wt);
+        for (auto block : generic::blocks(Wt, block_size)) {
+            dfb_fusion.wait_front(static_cast<uint16_t>(block.full_block_size()));
+            tile_regs_acquire();
+            for (auto i : block.local()) {
+                mul_tiles_bcast_rows(dfb_fusion_id, dfb_gamma_id, i, block.to_global(i), i);
+            }
+            tile_regs_commit();
+            dfb_fusion.pop_front(static_cast<uint16_t>(block.full_block_size()));
+            dfb_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, dfb_out_id);
+            }
+            tile_regs_release();
+            dfb_out.push_back(static_cast<uint16_t>(block.full_block_size()));
+        }
+#else
         for (auto block : generic::blocks(Wt, block_size)) {
             reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
 #if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
@@ -474,6 +594,7 @@ void kernel_main() {
             }
 #endif
         }
+#endif  // NORM_E_REUSE / NORM_E_SPLIT
         dfb_ex2pe.pop_front(1);
         dfb_xmm.pop_front(static_cast<uint16_t>(total_buffer_size));
 

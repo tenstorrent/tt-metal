@@ -54,6 +54,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -394,11 +395,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_reader.core_ranges = prod_up_set;
     prep_reader.compile_time_args = prep_reader_ct;
     prep_reader.config = ReaderConfigDescriptor{};
-    if (Ct == 1) {
-        // Chunk 32: the producers build eye/tril/ones/masks in L1 instead of all reading the same 1-tile DRAM
-        // tensors at kernel start (same constants, bit-exact; the phased prep still reads the tensors).
-        prep_reader.defines = {{"GDN_CONST_GEN", "1"}};
-    }
+    // P15 C1: item-0 input reads issued before the constants (production flat layout only; compiled out otherwise).
+    prep_reader.defines.emplace_back("GDN_COLD_PREFETCH", "1");
     prep_reader.runtime_args.reserve(P);
 
     KernelDescriptor prep_compute;
@@ -406,7 +404,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     prep_compute.core_ranges = prod_set;
     prep_compute.compile_time_args = prep_compute_ct;
-    prep_compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    // The producer (prep) and receiver (scan) compute kernels run at their own math fidelity, resolved
+    // into the hashed attributes (chunk_gdn_fused: env var QWEN36_FLA_PREP_FID / QWEN36_FLA_SCAN_FID >
+    // ChunkGdnFusedProgramConfig::prep_math_fidelity / scan_math_fidelity > HiFi4, today's default).
+    const tt::tt_metal::ComputeConfigDescriptor prep_compute_cfg =
+        gdn_compute_config(attrs.compute_kernel_config, attrs.prep_fidelity);
+    prep_compute.config = prep_compute_cfg;
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
     prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
     if (attrs.tinv == static_cast<uint32_t>(GdnTinv::SFPU_FP32)) {
@@ -460,8 +463,22 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     scan_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     scan_compute.core_ranges = rcv_set;
     scan_compute.compile_time_args = ct_scan;
-    scan_compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    // P4_FLARCV: with a hand-off depth >= 2, fused receivers compute chunk c-1's o inside chunk c's step
+    // (chunk_gdn_scan.cpp): holding chunk c-1's q_decay/intra one step longer still leaves the receiver
+    // reader room to reserve chunk c+1 once c-1 is popped. At depth 1 (and on the phased scan, whose CBs
+    // are single-buffered) the reader's reserve for chunk c would wait on that pop forever: no pipelining.
+    if (kHandoffNbuf >= 2) {
+        scan_compute.defines = {{"GDN_SCAN_PIPE_O", "1"}};
+    }
+    const tt::tt_metal::ComputeConfigDescriptor scan_compute_cfg =
+        gdn_compute_config(attrs.compute_kernel_config, attrs.scan_fidelity);
+    scan_compute.config = scan_compute_cfg;
     scan_compute.runtime_args.reserve(R);
+    log_info(
+        tt::LogOp,
+        "chunk_gdn_fused: prep_fidelity={} scan_fidelity={}",
+        prep_compute_cfg.math_fidelity,
+        scan_compute_cfg.math_fidelity);
 
     KernelDescriptor scan_writer;
     scan_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_scan.cpp";

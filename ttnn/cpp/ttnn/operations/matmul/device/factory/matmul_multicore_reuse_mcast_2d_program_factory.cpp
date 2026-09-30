@@ -6,6 +6,8 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -78,7 +80,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    bool fuse_swiglu = false,
+    bool glu_last_block = false,
+    bool glu_sfpu_on_pack = false,
+    bool in0_single_buffer = false) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -101,7 +107,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // The fused SwiGLU epilogue reads the partials like the bias pass does, so it follows the same rule.
+    // glu_last_block applies the SwiGLU on DEST in the last K block, i.e. the plain (bias-free) reload path.
+    const bool glu_pass = fuse_swiglu && !glu_last_block;
+    bool packer_l1_acc_en =
+        packer_l1_acc && (((bias_mesh.has_value() || glu_pass) && num_blocks > 1) || (num_blocks > 2));
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -115,7 +125,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in0_remote_hs = ttnn::operations::matmul::utilities::is_remote_hs_l1_in0(
+        in0_tensor.memory_config(), per_core_M, in0_tile.get_height());
+    const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !in0_remote_hs;
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
     const bool in1_is_width_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool in1_is_height_sharded = in1_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -151,7 +163,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B * num_blocks > 1) {
+    if (B * num_blocks > 1 && !in0_single_buffer) {  // in0_single_buffer (opt-in): one K block of in0 in L1
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
@@ -167,6 +179,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     if (output_is_sharded) {
         out_CB_tiles = out_shard_tiles;
+    }
+    // Fused SwiGLU: every (gate, up) tile pair of the partials becomes one output tile. The output tensor is
+    // N / 2 tiles wide, and each output block and subblock is half as wide as its partials block. Validation
+    // rejects a sharded output for fuse_swiglu.
+    const uint32_t out_w_div = fuse_swiglu ? 2 : 1;
+    const uint32_t out_N = N / out_w_div;
+    if (fuse_swiglu) {
+        out_CB_tiles = out_block_tiles / out_w_div;
     }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
@@ -494,19 +514,19 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        // out tensor args (out_N / out_w_div: halved widths with fuse_swiglu, else N / 1)
+        (std::uint32_t)1,                             // out_tensor_stride_w
+        (std::uint32_t)out_N,                         // out_tensor_stride_h
+        (std::uint32_t)(out_subblock_w / out_w_div),  // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * out_N,        // out_tensor_next_subblock_stride_h
+        (std::uint32_t)(out_block_w / out_w_div),     // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * out_N,           // out_tensor_next_h_dim_block_stride
         // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        (std::uint32_t)(out_subblock_w / out_w_div),                   // out_subblock_w
+        (std::uint32_t)out_subblock_h,                                 // out_subblock_h
+        (std::uint32_t)(out_subblock_w / out_w_div * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)M * out_N  // MtNt
     };
     if (bias_mesh.has_value()) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
@@ -565,19 +585,19 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (std::uint32_t)B,  // batch
 
         // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        // out tensor args (out_N / out_w_div: halved widths with fuse_swiglu, else N / 1)
+        (std::uint32_t)1,                             // out_tensor_stride_w
+        (std::uint32_t)out_N,                         // out_tensor_stride_h
+        (std::uint32_t)(out_subblock_w / out_w_div),  // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * out_N,        // out_tensor_next_subblock_stride_h
+        (std::uint32_t)(out_block_w / out_w_div),     // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * out_N,           // out_tensor_next_h_dim_block_stride
         // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        (std::uint32_t)(out_subblock_w / out_w_div),                   // out_subblock_w
+        (std::uint32_t)out_subblock_h,                                 // out_subblock_h
+        (std::uint32_t)(out_subblock_w / out_w_div * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)M * out_N  // MtNt
     };
     if (bias_mesh.has_value()) {
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
@@ -609,8 +629,40 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
+    if (fuse_swiglu) {
+        mm_kernel_defines["FUSE_GLU"] = "1";
+        if (glu_last_block) {
+            mm_kernel_defines["GLU_LAST_BLOCK"] = "1";
+        }
+        // SwiGLU SFPU work (silu + multiply) on the PACK thread instead of the MATH thread: config field
+        // glu_sfpu_on_pack, or the dev env knob (read at program build, so fixed for a cached program).
+        const char* glu_sfpu_on_pack_env = std::getenv("TT_MATMUL_GLU_SFPU_ON_PACK");
+        if (glu_sfpu_on_pack || (glu_sfpu_on_pack_env != nullptr && std::string(glu_sfpu_on_pack_env) == "1")) {
+            mm_kernel_defines["GLU_SFPU_ON_PACK"] = "1";
+            // One-pass fused silu(g) * u on the pack thread; env TT_MATMUL_GLU_FUSED_SFPU=0 keeps the two-pass path.
+            const char* glu_fused_env = std::getenv("TT_MATMUL_GLU_FUSED_SFPU");
+            if (glu_fused_env == nullptr || std::string(glu_fused_env) != "0") {
+                mm_kernel_defines["GLU_FUSED_SFPU"] = "1";
+            }
+            // INT2k: SiLU sequence variant inside the fused SFPU function; unset = 1 (no Newton step).
+            // 0 = old IMPL 3 path with Newton step; other values are experimental variants.
+            const char* glu_silu_variant_env = std::getenv("TT_MATMUL_GLU_SILU_VARIANT");
+            if (glu_silu_variant_env != nullptr && glu_silu_variant_env[0] != '\0') {
+                mm_kernel_defines["GLU_SILU_VARIANT"] = glu_silu_variant_env;
+            } else {
+                mm_kernel_defines["GLU_SILU_VARIANT"] = "1";
+            }
+        }
+    }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    {
+        // Experiment P22: one-MOP math matmul for rt=1 LoFi; default ON (INT2i); env TT_MM_MATH_ONE_MOP=0 disables.
+        const char* mm_one_mop_env = std::getenv("TT_MM_MATH_ONE_MOP");
+        if (mm_one_mop_env == nullptr || std::string(mm_one_mop_env) != "0") {
+            mm_kernel_defines["MM_MATH_ONE_MOP"] = "1";
+        }
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
@@ -647,6 +699,28 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+
+    // One-block in1 lookahead across out blocks along N (sender-writer and receiver-writer kernels).
+    // Env TT_MM_IN1_LOOKAHEAD=0 disables it; like TT_MATMUL_GLU_SFPU_ON_PACK it is read at program build,
+    // so it is fixed for a cached program (set it before the first matmul of the process).
+    {
+        const char* in1_lookahead_env = std::getenv("TT_MM_IN1_LOOKAHEAD");
+        const bool in1_lookahead_disabled = in1_lookahead_env != nullptr && std::string(in1_lookahead_env) == "0";
+        // No global circular buffer exists in this factory; fused ops (all-gather) take the legacy path.
+        // The lookahead lets compute start the next out block before the writer drained the previous one. That is
+        // only safe when the out and interm0 CBs are separate; a shared buffer would be overwritten by partials
+        // (found with test_matmul_2d_multiple_output_blocks_per_core). Same condition as the CB setup below.
+        const bool separate_out_interm0_cbs = do_not_inplace_interm0_out_CB ||
+                                              (interm0_data_format != output_data_format) ||
+                                              (untilize_out && ((out_block_w / out_subblock_w) > 1)) ||
+                                              (fuse_swiglu && (out_num_blocks_x * out_num_blocks_y * B > 1));
+        if (!in1_lookahead_disabled && !in1_is_sharded && !in0_is_sharded && !output_is_sharded && !fuse_op &&
+            separate_out_interm0_cbs && in1_num_blocks_x > 1) {
+            mm_kernel_in1_sender_writer_defines["MM_IN1_LOOKAHEAD"] = "1";
+            mm_kernel_in1_receiver_writer_defines["MM_IN1_LOOKAHEAD"] = "1";
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["MM_IN1_LOOKAHEAD"] = "1";
+        }
     }
 
     // Intermediate CB read
@@ -1028,8 +1102,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     }
 
     // CB 4 and CB 5: output and intermediate
+    // Fused SwiGLU packs subblock s of the half-width output into out tiles that the partials view of the shared
+    // buffer has already consumed, so in-place is safe while each core has exactly one output block. With more
+    // blocks per core the out and partials FIFO pointers drift apart, so use separate CBs then.
+    const bool glu_multi_block = fuse_swiglu && (out_num_blocks_x * out_num_blocks_y * B > 1);
     if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
-        (untilize_out && (in1_num_subblocks > 1))) {
+        (untilize_out && (in1_num_subblocks > 1)) || glu_multi_block) {
         // Separate output and intermediate CBs
         // output
         {
@@ -1069,7 +1147,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     } else {
         // share buffer
         CBDescriptor cb_desc;
-        cb_desc.total_size = out_CB_size;
+        // Fused SwiGLU: the output block is half the partials block, so the shared buffer is sized by the partials.
+        cb_desc.total_size = fuse_swiglu ? interm0_CB_size : out_CB_size;
         cb_desc.core_ranges = CoreRangeSet({all_cores});
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_4,
@@ -1156,6 +1235,18 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
+    // WRITER view of the output: with fuse_swiglu every width is half the partials width (all even, by
+    // validation). The READER padding (last_out_block_w) stays in weight tiles. Identity when out_w_div == 1.
+    const uint32_t wr_out_subblock_w = out_subblock_w / out_w_div;
+    const uint32_t wr_last_subblock_of_last_block_w = last_subblock_of_last_block_w / out_w_div;
+    if (fuse_swiglu) {
+        last_block_padded_subblock_tiles_addr_skip =
+            output_single_tile_size * (wr_out_subblock_w - wr_last_subblock_of_last_block_w);
+        last_block_padded_block_tiles_w_skip =
+            (wr_out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+        last_block_padded_block_tiles_h_skip = (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) *
+                                               (out_block_w / out_w_div * out_subblock_h);
+    }
 
     if (in0_block_sharded) {
         if (in0_noc == tt::tt_metal::NOC::NOC_1) {
@@ -1311,7 +1402,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     // WRITER
                     // out tensor args
                     (std::uint32_t)out_tensor.address(),
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    ((std::uint32_t)in1_idx * (per_core_N / out_w_div)) +
+                        (in0_idx * per_core_M * out_N)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
@@ -1324,7 +1416,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(0);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                    mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
+                    mm_in1_sender_writer_args.push_back(wr_last_subblock_of_last_block_w);
                     mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_sender_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else {
@@ -1337,7 +1429,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(0);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_sender_writer_args.push_back(out_subblock_w);
+                    mm_in1_sender_writer_args.push_back(wr_out_subblock_w);
                     mm_in1_sender_writer_args.push_back(0);
                     mm_in1_sender_writer_args.push_back(0);
                 }
@@ -1454,8 +1546,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),                                // out_tensor_addr
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    (std::uint32_t)out_tensor.address(),  // out_tensor_addr
+                    ((std::uint32_t)in1_idx * (per_core_N / out_w_div)) +
+                        (in0_idx * per_core_M * out_N)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -1466,7 +1559,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
+                    mm_in1_receiver_writer_args.push_back(wr_last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else if (in0_idx == in0_end_idx) {  // bottom cores except bottom-right when no transpose_mcast
@@ -1477,7 +1570,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(wr_out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 } else if (in1_idx == in1_end_idx) {  // right cores except bottom when no transpose_mcast
@@ -1488,7 +1581,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
+                    mm_in1_receiver_writer_args.push_back(wr_last_subblock_of_last_block_w);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
                     mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
                 } else {
@@ -1499,7 +1592,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_w);
+                    mm_in1_receiver_writer_args.push_back(wr_out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 }
@@ -2150,6 +2243,13 @@ create_program_mcast_in0_in1(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    {
+        // Experiment P22: one-MOP math matmul for rt=1 LoFi; default ON (INT2i); env TT_MM_MATH_ONE_MOP=0 disables.
+        const char* mm_one_mop_env = std::getenv("TT_MM_MATH_ONE_MOP");
+        if (mm_one_mop_env == nullptr || std::string(mm_one_mop_env) != "0") {
+            mm_kernel_defines["MM_MATH_ONE_MOP"] = "1";
+        }
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
@@ -3162,6 +3262,11 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
 
     auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
+    TT_FATAL(
+        !program_config.fuse_swiglu && !program_config.in0_single_buffer,
+        "fuse_swiglu / in0_single_buffer are implemented only in the descriptor path "
+        "(MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor), not in the legacy / CCL-fused 2D mcast "
+        "builder");
 
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
@@ -3525,7 +3630,11 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        program_config.fuse_swiglu,
+        program_config.glu_last_block,
+        program_config.glu_sfpu_on_pack,
+        program_config.in0_single_buffer);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
