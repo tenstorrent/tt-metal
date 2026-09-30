@@ -955,9 +955,16 @@ def cmd_optimize(args) -> int:
         # published 141.8 tok/s/u against a true ~71, making the model read as twice as close to the
         # wall as it is -- the input to can_stop. Clearing the coverage and knob caches did not touch
         # it: it lives in the persistent ledger.
+        # THE ENGINE'S OWN PACKAGE ON THE PATH, FOR EVERY RUN. run.py reaches its `agent` siblings as
+        # `from agent import ...` (e.g. _dr -> device_recovery, whose own relative imports mean it cannot
+        # be loaded by bare path). This insert lived inside the --fresh branch below, so a RESUMED run
+        # (--persist without --fresh) died at _stamp_run_id with "No module named 'agent'" and the
+        # supervisor restarted it into the same failure (Qwen-Image-Edit, 2026-09-30 22:18).
+        _engine_root = str(Path(run_root) / "models" / "experimental" / "perf_automation")
+        if _engine_root not in sys.path:
+            sys.path.insert(0, _engine_root)
         if getattr(args, "fresh", False):
             try:
-                sys.path.insert(0, str(Path(run_root) / "models" / "experimental" / "perf_automation"))
                 from agent.fresh_start import describe as _fresh_describe, wipe as _fresh_wipe
 
                 _sd = os.environ.get("PERF_MCP_STATE_DIR") or tempfile.gettempdir()
