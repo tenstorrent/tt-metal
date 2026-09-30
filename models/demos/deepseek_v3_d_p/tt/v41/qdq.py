@@ -48,7 +48,7 @@ scale, the output -- is exact in bf16, so packing to bf16 never rounds):
 Checked on device against the reference for every finite normal bf16 value (tests/v41/test_qdq.py), with one
 exception: :func:`fp4_ue8m0_qdq` groups whose amax is below ``FP4_UE8M0_MIN_AMAX`` (2^-115, ~2.4e-35) are not
 reproduced -- their scale is within 2^-117 of the fp32 normal floor, where the device results differ (observed,
-cause not isolated; far below any activation). bf16 subnormal inputs are flushed to zero by the device (the reference
+cause not isolated; far below any activation; accepted by the user 2026-09-30, bead 8y7.9.4). bf16 subnormal inputs are flushed to zero by the device (the reference
 keeps them); that changes a result only inside the same tiny-amax FP4 groups. Non-finite inputs are outside the
 contract. Zeros are compared by value (signed zeros are not distinguished).
 """

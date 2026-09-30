@@ -125,6 +125,9 @@ inline void calculate_qdq_scale() {
         if constexpr (FORMAT == 0) {
             s = qdq_pow2_scale<8, 0x600000, (-22 + 127) << 23>(amax);
         } else if constexpr (FORMAT == 1) {
+            // Known deviation (accepted, 8y7.9.4): groups with amax < 2^-115 (FP4_UE8M0_MIN_AMAX in qdq.py) do not
+            // match the reference; the scale is then near the fp32 normal floor. Cause not isolated. Real index
+            // keys/queries have group amax >= 0.25. Suspect this path first if tiny-value mismatches appear.
             s = qdq_pow2_scale<2, 0x400000, (-126 + 127) << 23>(amax);
         } else {
             // e4m3_satfinite(max(amax, 6 * 2^-9) / 6), from the estimate amax * fp32(1/6)
