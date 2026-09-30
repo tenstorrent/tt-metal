@@ -1137,7 +1137,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #ifdef SDPA_PA
             reconfig_data_format_srca(cur_out_cb);
 #endif
+#if defined(SDPA_PA) && (SDPA_PA_DBG & 4)
+            copy_tile_to_dst_init_short(cur_out_cb);
+#else
             recipe_output_scale_init(cur_out_cb, scratch_cb);
+#endif
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
             CircularBuffer(cur_out_cb).wait_front(head_dim_t_ * sdpa_out_stride);
@@ -1149,7 +1153,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < cur_batch; ++j) {
+#if defined(SDPA_PA) && (SDPA_PA_DBG & 4)
+                    copy_tile(cur_out_cb, base + j, j);  // debug: unnormalized numerator
+#else
                     recipe_output_scale_tile(cur_out_cb, scratch_cb, base + j, 0, j);
+#endif
                 }
                 tile_regs_commit();
                 tile_regs_wait();
