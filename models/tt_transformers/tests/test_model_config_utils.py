@@ -211,3 +211,38 @@ def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
 
     for tensor_group in (TensorGroup.WQKV, TensorGroup.WO, TensorGroup.FF1_FF3, TensorGroup.FF2):
         assert args.get_dram_sharded_matmul_num_workers(tensor_group, 14336) == 1
+
+
+@pytest.mark.parametrize(
+    "device_name,model_name,seq_len,expected_override",
+    [
+        ("N150", "Llama-3.1-8B", 480, None),
+        ("N150", "Llama-3.1-8B", 512, 4),
+        ("N150", "Llama-3.1-8B", 1024, 4),
+        ("N150", "Llama-3.1-8B", 2048, 4),
+        ("N150", "Llama-3.2-3B", 512, None),
+        ("P150", "Llama-3.1-8B", 512, None),
+        ("T3K", "Llama-3.1-8B", 512, None),
+    ],
+)
+def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, expected_override):
+    args = _llama_model_args(device_name)
+    args.model_name = model_name
+    args.dim = 4096
+    args.hidden_dim = 14336
+    args.cluster_shape = (1, 1)
+    args.prefill_len_cutoff = 512
+    args.dram_shard_grid_width = 8
+    args.is_galaxy = False
+    args.mlp1_3_grid = lambda seq_len: (8, 8)
+    overrides = []
+
+    def matmul_config(**kwargs):
+        overrides.append(kwargs["in0_block_w"])
+        return ModelArgs.matmul_config(args, **kwargs)
+
+    args.matmul_config = matmul_config
+    config = args.get_mlp_ff1_3_prg_config(Mode.PREFILL, seq_len)
+    assert overrides == [expected_override]
+    assert config.in0_block_w == (4 if expected_override else 8)
+    assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0

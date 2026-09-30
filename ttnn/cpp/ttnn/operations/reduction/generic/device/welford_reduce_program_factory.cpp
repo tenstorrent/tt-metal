@@ -157,7 +157,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     const auto is_std = plan.is_std;
     const auto post_mul_scaler_bits = plan.post_mul_scaler_bits;
 
-    tt_metal::distributed::MeshDevice& device = input.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = input.device();
 
     // Work division:
     // - W-reduce: Work is split by rows of the tile grid (NC * Ht work units).

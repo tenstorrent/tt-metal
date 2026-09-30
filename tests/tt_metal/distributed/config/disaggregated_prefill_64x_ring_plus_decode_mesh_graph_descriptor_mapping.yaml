@@ -1,0 +1,9 @@
+# Sub-context id -> mesh graph descriptor for the disaggregated-prefill heterogeneous placement test.
+# Subcontext 0 = the 64x M0(4x2) closed prefill ring; subcontext 1 = the isolated Decode4x32(32x4) torus.
+# generate_rank_bindings loads both MGDs and runs ONE merged master solve (65 meshes co-placed), then
+# splits the result into per-subcontext rank bindings -- so this 2-MGD packaging preserves the same joint
+# het placement as the single combined disaggregated_prefill_64x_4x2_ring_loop.textproto.
+# Paths are relative to TT_METAL_HOME (repo root); the loader also resolves them next to this file.
+subcontext_id_to_mesh_graph_descriptor:
+  0: tests/tt_metal/tt_fabric/custom_mesh_descriptors/prefill_64x_4x2_ring_only.textproto
+  1: tests/tt_metal/tt_fabric/custom_mesh_descriptors/decode_4x32_only.textproto

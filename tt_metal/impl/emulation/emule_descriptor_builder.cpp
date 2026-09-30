@@ -11,12 +11,14 @@
 
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 #include <type_traits>
 
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -164,6 +166,13 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+    std::string quasar_arch_include;
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_arch_variant().empty()) {
+        quasar_arch_include =
+            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_arch_variant();
+    }
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -210,6 +219,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            if (!quasar_arch_include.empty()) {
+                kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
+            }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {
                 const auto cfg = k.config();
@@ -253,17 +265,26 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();
-            k.process_dataflow_buffer_binding_handles(
-                [&kd](const std::string& name, uint16_t id, bool is_relay, uint8_t pipe) {
-                    kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
-                });
+            k.process_dataflow_buffer_binding_handles([&kd](
+                                                          const std::string& name,
+                                                          uint16_t id,
+                                                          bool is_relay,
+                                                          uint8_t pipe,
+                                                          const std::optional<LLKMetadata>&) {
+                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+            });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
                     kd.bindings.sem.push_back(
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
             k.process_tensor_binding_handles(
-                [&kd](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt) {
+                [&kd](
+                    const std::string& name,
+                    uint32_t cta_off,
+                    uint32_t addr_crta_off,
+                    uint32_t num_rt,
+                    const LLKMetadata&) {
                     // Emule doesn't yet model per-binding runtime CRTA words; the downstream
                     // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
                     // dynamic-shape case here (the sole binding reader) rather than in a consumer.
@@ -279,7 +300,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
                 });
             k.process_scratchpad_binding_handles(
-                [&kd](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+                [&kd](
+                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
                     kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
                 });
             for (const auto& r : k.core_range_set().ranges()) {

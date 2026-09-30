@@ -192,7 +192,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
 
     const auto input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto input_unit_size = input.element_size();
-    const auto output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    auto output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto output_unit_size = output.element_size();
 
     const auto& input_shape = input.padded_shape();
@@ -205,7 +205,15 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.device();
+
+    // The argmax output (and the intermediate index DFB) is raw 4-byte index storage. Quasar validates
+    // DFB data formats against the arch and rejects UInt32 (it supports Int32 / RawUInt32), so map the
+    // index DFB format to the byte-identical RawUInt32 there. The output *tensor* dtype is unchanged
+    // (still UINT32) -- this only affects the DFB's declared data format, not the bytes written/read.
+    if (device.arch() == tt::ARCH::QUASAR && output_dfb_data_format == tt::DataFormat::UInt32) {
+        output_dfb_data_format = tt::DataFormat::RawUInt32;
+    }
 
     const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 

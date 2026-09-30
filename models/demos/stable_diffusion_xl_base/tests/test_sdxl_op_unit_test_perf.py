@@ -172,7 +172,10 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 68875  # Measured: ~68.9μs for GroupNorm SDXL block sharded
+    # #55698 (2026-09-25) migrated the GroupNorm kernels to eltwise_chain and set 68875 from its own measurement;
+    # #56292, three hours later, removed the legacy rsqrt from the sharded kernel (modern routine, fewer SFPU
+    # instructions per pass). Thirteen single-kernel readings since then span 67332-68004 ns, mean 67712.
+    expected_duration_ns = 67750
 
     # Log the performance result
     print(

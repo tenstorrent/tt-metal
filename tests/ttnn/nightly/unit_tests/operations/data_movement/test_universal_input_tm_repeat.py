@@ -1248,3 +1248,81 @@ def test_repeat_specless_sharded_output_grid_shrinks_block(device):
     expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
     assert_with_pcc(x.repeat(reps).float(), ttnn.to_torch(result).float(), 0.9999)
+
+
+def test_repeat_specless_rm_width_shard_l1_alignment_retry(device):
+    """RM WIDTH_SHARDED specless: (1,1,64,128)×[1,1,1,2] → tensor_w=256, 64c×div_up gives 8B page;
+    shrink_shard_for_rm_page_alignment picks nc=32 (shard_w=8, page=16B). Pins (nc, shard_shape)."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < 32:
+        pytest.skip("Retry-path test needs >=32 compute cores")
+    shape = (1, 1, 64, 128)
+    reps = [1, 1, 1, 2]
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.repeat(ttnn_in, reps, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    ), f"Retry must not fall back to INTERLEAVED; got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert ss.grid.num_cores() == 32, f"Expected 32 populated cores after retry, got {ss.grid.num_cores()}"
+    assert tuple(ss.shape) == (64, 8), f"Expected shard shape (64, 8) after retry, got {tuple(ss.shape)}"
+    assert_equal(x.repeat(reps), ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT)))
+
+
+def test_repeat_specless_rm_height_shard_direct_path(device):
+    """RM HEIGHT_SHARDED specless: shard_w=tensor_w=32 (page=64B) hits direct RM synth, no retry."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < 64:
+        pytest.skip("Height-shard test needs >=64 compute cores")
+    shape = (1, 1, 32, 32)
+    reps = [1, 1, 2, 1]
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.repeat(ttnn_in, reps, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    ), f"HEIGHT specless must not fall back to INTERLEAVED; got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert ss.grid.num_cores() == 64, f"Expected 64 populated cores, got {ss.grid.num_cores()}"
+    assert tuple(ss.shape) == (1, 32), f"Expected shard shape (1, 32), got {tuple(ss.shape)}"
+    assert_equal(x.repeat(reps), ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT)))
+
+
+def test_repeat_specless_rm_block_shard_tile_fallback(device):
+    """RM BLOCK_SHARDED specless: div_up(224, grid.x) is L1-misaligned on common WH/BH grids, so the
+    Strict shrink rejects and the tile-inflated fallback re-synthesizes shard=(32,32) on 7x7."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 7:
+        pytest.skip("Block tile-fallback test needs >=7x7 compute cores")
+    tw = 224
+    shard_w_direct = -(-tw // compute_grid.x)
+    if (shard_w_direct * 2) % 16 == 0 and tw % shard_w_direct == 0:
+        pytest.skip(f"Direct RM path succeeds on grid.x={compute_grid.x}; fallback not exercised")
+    shape = (1, 1, 224, 112)
+    reps = [1, 1, 1, 2]
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    result = ttnn.repeat(ttnn_in, reps, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    ), f"Tile fallback must produce BLOCK_SHARDED, got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert tuple(ss.shape) == (32, 32), f"Expected tile-inflated shard (32, 32), got {tuple(ss.shape)}"
+    assert ss.grid.num_cores() == 49, f"Expected 7x7 = 49 cores, got {ss.grid.num_cores()}"
+    assert_equal(x.repeat(reps), ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT)))
