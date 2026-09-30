@@ -293,11 +293,15 @@ def m1_gdn_norm_l1(T, grid):
 #       Output unchanged (L1 via QWEN36_ATTN_L1_MAX_T). 49.8 -> 48.6 us.
 #   D3  attention o_proj / attention gate / GDN o_proj (K 2048, N 2048): bw16 pcM4 pcN6 1x6 instead of the
 #       picker's bw8. Each call keeps its output placement. 33.4 -> 30.9 us (in0 L1, out L1).
+#   QWEN36_P300_SB13=1 (default "0"): out_subblock (1, 3) (in0_block_w 16 kept) for three signatures -- the GDN
+#       out-proj (D3, K 2048 N 2048, bf16 in0 AND bf16 out: the picker caller passes out_dtype; the attention gate /
+#       o_proj keep 1x6), z|a|0|b|0 (D1, N 2112) and attention q|k|v (D2, N 3072). Same K blocking, so bit-exact vs
+#       the 1x6 / 2x3 subblocks (the standalone sweep: bench_mm_sweep2 "b_bw16_sb1x3", -0.6 / -1.2 / -2.8 % per call).
 # Every 2D-mcast kind: MatmulMultiCoreReuseMultiCastProgramConfig(grid (11, 10), transpose_mcast False,
 # fused_activation None, fuse_batch True), per_core_M 4 (8 of the 10 rows), output dtype bf16. D2 / D3 are
 # returned by make_prefill_progcfg_fn's picker (every call site that asks it for these shapes); A, B, C, D1
 # are applied at their call sites. None of them is bit-identical to the current call (K blocking changes).
-P300_FLAG_DEFAULTS = {"MM": "0", "MM_C_L1": "1", "MM_D1_L1": "1"}
+P300_FLAG_DEFAULTS = {"MM": "0", "MM_C_L1": "1", "MM_D1_L1": "1", "SB13": "0"}
 _P300_GRID = (11, 10)
 _P300_M = 1024
 # kind -> (K, N, allowed weight dtypes)
@@ -378,7 +382,7 @@ def _grid_xy(device_or_grid):
     return int(gx), int(gy)
 
 
-def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=None):
+def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=None, out_dtype=None):
     """P300 item `kind` (A, B, C, D1, D2, D3; see the table above): (config, memory_config) or None to keep the
     current call.
 
@@ -386,6 +390,7 @@ def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=No
     weight's [K, N] (A: N = the packed [gate|up] width). in1_dtype: the weight dtype, checked if given.
     ckc / fp32_acc: the call's compute kernel config (fp32_dest_acc_en / packer_l1_acc read off it) or just
     its fp32 dest flag; unset -> the module-level QWEN36_PREFILL_MM_* values (prefill_matmul_ckc()).
+    out_dtype: the call's output dtype, only read by QWEN36_P300_SB13 for D3 (applies when it is bf16).
     config: ttnn.MinimalMatmulConfig (A) or ttnn.MatmulMultiCoreReuseMultiCastProgramConfig (others).
     memory_config: the swept output placement (A, B: L1; C: L1, or DRAM with QWEN36_P300_MM_C_L1=0; D1: L1,
     or None with QWEN36_P300_MM_D1_L1=0) or None = keep the call's own output placement (D2, D3)."""
@@ -421,6 +426,8 @@ def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=No
     else:
         bw, pcm, pcn, sh, sw = _P300_MCAST[kind]
         _, pcm, sh = _p300_m_layout(M, _P300_GRID[1], sh)
+        if p300_enabled("SB13") and (kind in ("D1", "D2") or (kind == "D3" and out_dtype == ttnn.bfloat16)):
+            bw, sh, sw = 16, 1, 3  # QWEN36_P300_SB13: same bw16 K blocking, 1x3 subblock (pcN 6 / 9 divisible by 3)
         cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=_P300_GRID,
             in0_block_w=bw,
@@ -1639,11 +1646,13 @@ def make_prefill_progcfg_fn(device):
     grid = device.compute_with_storage_grid_size()
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
 
-    def fn(m, k, n, in0_dtype, in1_dtype, fp32_acc=True):
+    def fn(m, k, n, in0_dtype, in1_dtype, fp32_acc=True, out_dtype=None):
         # P300 D2 / D3 (QWEN36_P300_MM=1, 11x10 grid, m == 1024; see the P300 table): swept 2D mcast config.
         p300_kind = _P300_PICKER_KINDS.get((int(k), int(n)))
         if p300_kind is not None and in0_dtype == ttnn.bfloat16:
-            p300 = p300_prefill_mm(p300_kind, grid, m, k, n, in1_dtype=in1_dtype, fp32_acc=fp32_acc)
+            p300 = p300_prefill_mm(
+                p300_kind, grid, m, k, n, in1_dtype=in1_dtype, fp32_acc=fp32_acc, out_dtype=out_dtype
+            )
             if p300 is not None:
                 return p300[0]
         sub_area = 8 if (not fp32_acc and i2_enabled("PICKER")) else 4

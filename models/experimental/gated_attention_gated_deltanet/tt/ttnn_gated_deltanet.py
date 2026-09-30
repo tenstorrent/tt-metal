@@ -585,13 +585,21 @@ def gated_deltanet_forward_ttnn(
     _p300_ab_l1 = False
     _gg_gab = None  # P10_GDNGATE: gab kept alive for ttnn.experimental.gdn_gates (None = flag off / not applicable)
 
-    def _pc(x_in, w_in):
+    def _pc(x_in, w_in, out_dtype=None):
         if T == 1 and decode_progcfg_fn is not None:
             return decode_progcfg_fn(x_in.shape[-1], w_in.shape[-1])
         if prefill_progcfg_fn is None or mode != "chunk":
             return None
         return prefill_progcfg_fn(
-            T, x_in.shape[-1], w_in.shape[-1], x_in.dtype, w_in.dtype, getattr(ckc, "fp32_dest_acc_en", True)
+            T,
+            x_in.shape[-1],
+            w_in.shape[-1],
+            x_in.dtype,
+            w_in.dtype,
+            getattr(ckc, "fp32_dest_acc_en", True),
+            # out_dtype (QWEN36_P300_SB13 only): forwarded just when the flag is on, so other progcfg callables
+            # (tests, other pickers) never see the kwarg by default.
+            **({"out_dtype": out_dtype} if (out_dtype is not None and tpc.p300_enabled("SB13")) else {}),
         )
 
     # Mega-fused: one matmul for QKV+a+b+g (decode needs conv state; prefill needs fused taps)
@@ -1570,7 +1578,13 @@ def gated_deltanet_forward_ttnn(
         o_proj_weight,
         memory_config=(tpc.resid_hs_mc() if (tpc.resid_hs_active() and T == tpc.RESID_HS_T) else mc_outproj),
         compute_kernel_config=ckc,
-        program_config=_pc(o, o_proj_weight),
+        program_config=_pc(
+            o,
+            o_proj_weight,
+            out_dtype=(
+                ttnn.bfloat8_b if (T > 1 and os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1") else ttnn.bfloat16
+            ),
+        ),
         **({"dtype": ttnn.bfloat8_b} if (T > 1 and os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1") else {}),
     )
 
