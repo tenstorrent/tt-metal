@@ -158,11 +158,12 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 // RISC-side mirror of the unpacker registers that the SrcDvalid::PerTile form of _llk_unpack_AB_ programs through the
 // instruction stream: the base address register of each unpacker in each config context (16-byte words) and the two
 // strides in SCRATCH_SEC0 (unpacker 0, operand A) and SCRATCH_SEC1 (unpacker 1, operand B) that its CFGSHIFTMASK steps
-// add. UNPACK_AB_UNKNOWN marks a register another operation may have written: the PerTile init forgets every entry and
+// add. UNPACK_AB_UNKNOWN marks a base register another operation may have written and a stride of 0 an unknown scratch
+// register (a call never steps by 0: an unchanged address issues nothing): the PerTile init forgets every entry and
 // the first call after it writes the registers in full.
 constexpr std::uint32_t UNPACK_AB_UNKNOWN = 0xFFFFFFFF;
 static std::uint32_t unpack_AB_base[2][2] = {{UNPACK_AB_UNKNOWN, UNPACK_AB_UNKNOWN}, {UNPACK_AB_UNKNOWN, UNPACK_AB_UNKNOWN}}; // [context][unpacker]
-static std::uint32_t unpack_AB_stride[2]  = {UNPACK_AB_UNKNOWN, UNPACK_AB_UNKNOWN};                                        // [unpacker]
+static std::uint32_t unpack_AB_stride[2]  = {0, 0};                                                                        // [unpacker]
 
 /**
  * @brief Forget the unpacker registers the PerTile form of @ref _llk_unpack_AB_ tracks.
@@ -173,7 +174,7 @@ inline void unpack_AB_forget_registers()
     {
         unpack_AB_base[c][0] = UNPACK_AB_UNKNOWN;
         unpack_AB_base[c][1] = UNPACK_AB_UNKNOWN;
-        unpack_AB_stride[c]  = UNPACK_AB_UNKNOWN;
+        unpack_AB_stride[c]  = 0;
     }
 }
 
