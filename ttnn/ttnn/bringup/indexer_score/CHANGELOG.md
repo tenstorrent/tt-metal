@@ -48,3 +48,23 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   namespace reference.
 - Needed by: hy4_preview_d_p C.dense_full.indexer
 - Files: device/ring_indexer_score_dsa_program_factory.cpp
+
+### Value repr for IndexerScoreProgramConfig
+- What: `IndexerScoreProgramConfig.__repr__` returns
+  `IndexerScoreProgramConfig(q_chunk_size=.., k_chunk_size=.., head_group_size=..)` (was the default
+  `<... object at 0x...>`). No op change.
+- Why: the fork-call capture (models/demos/common/bringup/testing/fork_capture.py) records non-tensor arguments by
+  str(), so every captured ring_indexer_score_dsa call had a new signature on every run and no test case could match
+  it. With this repr (and a value repr for the global semaphore handle, set in ttnn/ttnn/bringup/__init__.py) the
+  model's three per-layer calls collapse to one stable signature.
+- Needed by: hy4_preview_d_p O.1
+- Files: indexer_score_nanobind.cpp
+
+### Tests: fork test suite with a first model case
+- What: `tests/` model-case suite (cases.py, reference.py, test_indexer_score.py) with a random-input case for the
+  ring_indexer_score_dsa call hy4_preview_d_p makes (2x2 mesh, SP 2 x TP 2, 4-chip striped block-cyclic key cache,
+  q 1280 rows x 32 heads x 128, T 56320, chunk start 51200, HiFi4 + fp32 DEST, q 64 x k 32) (bringup-fork-tests
+  skill). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: hy4_preview_d_p O.1
+- Files: `tests/cases.py`, `tests/reference.py`, `tests/test_indexer_score.py`

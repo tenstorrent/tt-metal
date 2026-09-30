@@ -4,7 +4,10 @@
 
 #include "indexer_score_nanobind.hpp"
 
+#include <string>
+
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -22,7 +25,14 @@ void bind_indexer_score(nb::module_& mod) {
             nb::arg("head_group_size") = 1)
         .def_rw("q_chunk_size", &IndexerScoreProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &IndexerScoreProgramConfig::k_chunk_size)
-        .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size);
+        .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size)
+        // Value repr (bring-up fork change): the fork-call capture records non-tensor arguments by str(), so the
+        // default "<... object at 0x...>" made every captured call signature differ from run to run.
+        .def("__repr__", [](const IndexerScoreProgramConfig& c) {
+            return "IndexerScoreProgramConfig(q_chunk_size=" + std::to_string(c.q_chunk_size) +
+                   ", k_chunk_size=" + std::to_string(c.k_chunk_size) +
+                   ", head_group_size=" + std::to_string(c.head_group_size) + ")";
+        });
 
     ttnn::bind_function<"indexer_score_dsa", "ttnn.bringup.">(
         mod,
