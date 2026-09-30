@@ -25,8 +25,11 @@ namespace sfpu
 //
 // L stays in L1: the RISC reads each strict-lower entry and splats it across the 32 lanes with SFPLOADI, so L is
 // never staged in DEST or rounded. RHS is DEST tile dst_in; X is left in DEST tile dst_out in standard tile layout.
-// The unit diagonal is implicit and never read. Blackhole only: the SFPMAD accumulation chain relies on the
-// Blackhole scoreboard.
+// The unit diagonal is implicit and never read. Blackhole only: the stream carries no SFPNOPs. SFPLOAD and
+// SFPLOADI results are ready the next cycle, so a splat may follow the X load and the first SFPMAD may follow the
+// last splat directly (the adjacency the sfpi compiler itself emits), and the SFPMAD -> SFPMAD/SFPSTORE/SFPTRANSP
+// dependences of the 2-cycle SFPMAD result are stalled by the Blackhole scoreboard (none of those consumers is in
+// the Blackhole errata set that needs an explicit NOP).
 //
 // DEST addressing (32-bit accumulation): a 32x32 tile is 64 DEST rows of 16 datums, faces f0..f3 at rows 0, 16, 32,
 // 48. One SFPLOAD/SFPSTORE moves a 4-row x 8-column block; the four blocks of tile rows 4g..4g+3 sit at
@@ -140,7 +143,8 @@ inline void _triangle_solve_load_l_(const std::uint32_t bits)
  * @brief Rank-1 update of the live row group (LREG0..3) from one solved column: LREG r -= L[row0 + r][col] * X[col].
  *
  * X[col] is loaded once into LREG4; the four L entries sit one face row (16 elements) apart in L1 and their reads issue in the
- * shadow of the SFPU instructions.
+ * shadow of the SFPU instructions. No SFPNOP separates the SFPLOAD from the splats or the first SFPMAD: both loads have
+ * 1-cycle results.
  *
  * @tparam L_FORMAT: Format of the L tile, values = <Float32/Float16_b>
  * @tparam L_NEGATED: L's strict-lower entries are supplied negated
@@ -153,15 +157,7 @@ inline void _triangle_solve_apply_prev_col_(volatile tt_l1_ptr _triangle_solve_l
     const std::uint32_t b0 = l_col[0 * TRIANGLE_SOLVE_FACE_DIM];
     TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, x_addr);
     const std::uint32_t b1 = l_col[1 * TRIANGLE_SOLVE_FACE_DIM];
-    // SFPLOAD and SFPLOADI are both load-class instructions and must not issue in adjacent slots; the SFPLOADIs that
-    // follow then also cover the SFPLOAD -> SFPMAD load-use of LREG4.
-    TTI_SFPNOP;
     _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b0);
-    if constexpr (L_FORMAT == DataFormat::Float16_b)
-    {
-        // bf16 splats with one immediate instead of two: pad so the SFPLOAD -> SFPMAD distance stays that of the fp32 stream.
-        TTI_SFPNOP;
-    }
     const std::uint32_t b2 = l_col[2 * TRIANGLE_SOLVE_FACE_DIM];
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     _triangle_solve_load_l_<L_FORMAT, L_NEGATED>(b1);
