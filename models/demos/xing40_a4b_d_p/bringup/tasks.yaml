@@ -537,6 +537,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 0
+  frozen:
+    at: '2026-09-30T14:20:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_07_ffn_hc.py: 98e514d0b912e4e54c5aabb1c6c7c77685f8c2991bae3da5248d1f87fc67a52e
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.dense.ffn_collapse
   title: dense ffn_collapse (op) on device, layer 0
   step: implement
