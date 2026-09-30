@@ -62,10 +62,21 @@ class TtChronosTraceRunner:
         set_cache_misses_allowed = getattr(self.device, "set_program_cache_misses_allowed", None)
         if set_cache_misses_allowed is not None:
             set_cache_misses_allowed(False)
+        trace_id = None
         try:
-            self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
-            self._trace_output = self.model.forward_device(self.inputs)
-            ttnn.end_trace_capture(self.device, self._trace_id, cq_id=self.cq_id)
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
+            try:
+                self._trace_output = self.model.forward_device(self.inputs)
+            finally:
+                # Always end capture, even on failure, so the CQ leaves bypass mode
+                # and the trace gets registered before we try to release it.
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=self.cq_id)
+            self._trace_id = trace_id
+        except Exception:
+            if trace_id is not None:
+                ttnn.release_trace(self.device, trace_id)
+            self._trace_output = None
+            raise
         finally:
             if set_cache_misses_allowed is not None:
                 set_cache_misses_allowed(True)
