@@ -24,9 +24,11 @@ import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    _PRESETS_BH,
     MiniMaxH3Pipeline,
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
+    validate_bucket_ladder,
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
@@ -115,6 +117,19 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
     monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
     with expect_error(ValueError, "MINIMAX_H3_AUDIO_T_FACTOR"):
         _requested_audio_t_factor(None)
+
+
+# Pure (no-device) coverage for the per-mesh bucket ladders.
+@pytest.mark.parametrize("task", ["t2va", "ref2va"])
+def test_preset_bucket_ladder_is_aligned(task):
+    preset = _PRESETS_BH[(4, 8)]
+    validate_bucket_ladder(preset["bucket_ladder"][task], 8 * ttnn.TILE_SIZE)
+    assert preset["bucket_denoise"] and not preset.get("trace_denoise")
+
+
+@pytest.mark.parametrize("task", ["t2va", "ref2va"])
+def test_quad_preset_bucket_ladder_is_aligned(task):
+    validate_bucket_ladder(_PRESETS_BH[(4, 32)]["bucket_ladder"][task], 32 * ttnn.TILE_SIZE)
 
 
 @pytest.mark.timeout(7200)

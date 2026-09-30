@@ -29,9 +29,9 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.policy import get_num_frames
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 
 # Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
@@ -510,17 +510,8 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    # measured = pipeline.last_seq_len.padded
-    # assert measured == warm_padded_len, (
-    #     f"the compile pass ran at padded_len {warm_padded_len} but the measured call ran at "
-    #     f"{measured}; this number is not warm"
-    # )
-    # The real warmth check under bucketing: the rung the measured call ran at must hold a live
-    # capture, so it replayed rather than paying an untraced generation plus recapture.
-    # if pipeline.trace_denoise:
-    #     assert pipeline._rung_captured(measured), (
-    #         f"the measured call ran at padded_len {measured}, which has no captured trace; " f"this number is not warm"
-    #     )
+    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
+    assert not missed, f"the measured call compiled programs after warmup, so this number is not warm: {missed}"
     return output
 
 

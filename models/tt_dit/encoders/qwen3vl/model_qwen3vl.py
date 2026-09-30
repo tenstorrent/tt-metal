@@ -46,6 +46,9 @@ class Qwen3VlContext:
     # Sequence-parallel axis: shards the sequence and uses causal ring attention (causal path only).
     # Composes with FSDP on the same axis (FSDP shards weights, SP shards activation rows).
     sp_axis: int | None = None
+    # Ring K/V gather rows to allocate, so every sequence length up to it shares one buffer pair.
+    kv_gather_capacity: int | None = None
+    use_persistent_ccl_buffers: bool = True
 
     def __post_init__(self) -> None:
         if self.sp_axis is None:
@@ -139,6 +142,8 @@ class Qwen3VlTextEncoder(Module):
         ccl_manager: CCLManager | None = None,
         is_fsdp: bool = False,
         high_fidelity_linears: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
@@ -198,6 +203,8 @@ class Qwen3VlTextEncoder(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             linear_compute_kernel_config=linear_compute_kernel_config,
             sp_axis=sp_axis,
+            kv_gather_capacity=kv_gather_capacity,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -531,6 +538,7 @@ class Qwen3VlAttention(Module):
         self._ccl_manager = ctx.ccl_manager
         self._sp_axis = ctx.sp_axis
         self._sp_factor = ctx.device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
+        self._kv_gather_capacity = ctx.kv_gather_capacity
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
@@ -675,8 +683,12 @@ class Qwen3VlAttention(Module):
             empty_q,
             empty_kv,
             empty_kv,
-            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype),
-            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype),
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
             joint_strategy="rear",
             logical_n=local_seq_len * self._sp_factor,
             program_config=pc,
@@ -750,10 +762,11 @@ class Qwen3VlMlp(Module):
 
         self._ccl_manager = ctx.ccl_manager
         self._tp_axis = ctx.tp_axis
+        self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
-        x = self.down_proj(x)
+        x = self.down_proj(x, use_persistent_buffer=self._use_persistent_ccl_buffers)
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)

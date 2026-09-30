@@ -62,6 +62,7 @@ class VisionParallel(NamedTuple):
     sp_axis: int | None = None
     sp_factor: int = 1
     ccl_manager: CCLManager | None = None
+    use_persistent_ccl_buffers: bool = True
 
     @property
     def tp(self) -> bool:
@@ -414,7 +415,12 @@ def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Ten
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
-    out = p.ccl_manager.all_gather(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    out = p.ccl_manager.all_gather(
+        linear.forward(x, use_persistent_buffer=p.use_persistent_ccl_buffers),
+        dim=-1,
+        mesh_axis=p.tp_axis,
+        use_hyperparams=True,
+    )
     return _drop_batch_axis(out, added)
 
 
@@ -430,7 +436,7 @@ def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn
     npad = (-rows) % (p.tp_factor * _TILE)
     if npad:
         x = ttnn.pad(x, [(0, 0), (0, npad), (0, 0)], value=0.0)
-    out = linear.forward(x, reduce_scatter_dim=-2)
+    out = linear.forward(x, reduce_scatter_dim=-2, use_persistent_buffer=p.use_persistent_ccl_buffers)
     out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
         out = out[:, :rows, :]
@@ -523,9 +529,11 @@ class Qwen3VlVisionAttention(Module):
         mesh_device,
         parallel: VisionParallel | None = None,
         linear_compute_kernel_config=None,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
+        self._kv_gather_capacity = kv_gather_capacity
         self.mesh_device = mesh_device
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
@@ -733,8 +741,12 @@ class Qwen3VlVisionAttention(Module):
             empty_joint,
             empty_joint,
             empty_joint,
-            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype),
-            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype),
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
             joint_strategy="rear",
             logical_n=local_seq_len * self._p.sp_factor,
             program_config=self._ring_program_config(local_seq_len),
@@ -805,6 +817,7 @@ class Qwen3VlVisionBlock(Module):
         mesh_device,
         parallel: VisionParallel | None = None,
         linear_compute_kernel_config=None,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
         parallel = parallel or VisionParallel()
@@ -818,6 +831,7 @@ class Qwen3VlVisionBlock(Module):
             mesh_device=mesh_device,
             parallel=parallel,
             linear_compute_kernel_config=linear_compute_kernel_config,
+            kv_gather_capacity=kv_gather_capacity,
         )
         self.norm2 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.mlp = Qwen3VlVisionMLP(
@@ -946,9 +960,13 @@ class Qwen3VlVisionModel(Module):
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
         high_fidelity_linears: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
-        self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)
+        self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)._replace(
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers
+        )
         linear_compute_kernel_config = None
         if high_fidelity_linears:
             linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -982,6 +1000,7 @@ class Qwen3VlVisionModel(Module):
                 mesh_device=mesh_device,
                 parallel=self._p,
                 linear_compute_kernel_config=linear_compute_kernel_config,
+                kv_gather_capacity=kv_gather_capacity,
             )
             for _ in range(depth)
         )

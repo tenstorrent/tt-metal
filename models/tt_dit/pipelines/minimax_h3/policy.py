@@ -280,6 +280,14 @@ def decodable_canvases() -> tuple[tuple[int, int], ...]:
     return tuple(sorted(canvases))
 
 
+# Vision-tower patches of the largest keyframe (4 per merged 32x32 patch). The tower's ring SDPA runs
+# only for a single unpadded keyframe, so this bounds its K/V gather on the non-ref2va tasks.
+MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES = max(
+    4 * (height // MINIMAX_H3_CANVAS_MULTIPLE) * (width // MINIMAX_H3_CANVAS_MULTIPLE)
+    for height, width in decodable_canvases()
+)
+
+
 def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
     """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
 

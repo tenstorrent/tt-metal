@@ -193,6 +193,7 @@ class MiniMaxH3Transformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
@@ -264,6 +265,7 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
         # 4. The block stack.
@@ -283,6 +285,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     kv_gather_capacity=kv_gather_capacity,
+                    use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                 )
                 for _ in range(num_layers)
             ]
