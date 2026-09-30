@@ -108,12 +108,36 @@ class Plan:
     y_depth: int
 
 
-def _l1_bytes(plan_like, bt, depth, x_tile, w_tile, y_tile, n):
+def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype, w_dtype, y_dtype):
+    """THE per-core CB inventory: [(cb_index, num_pages, page_bytes, data_format)].
+
+    Single source of truth for every CB size: the L1 selection function (`_l1_bytes`) and the
+    ProgramDescriptor (`create_program_descriptor`) both read this table, so a knob turn lands in one
+    place. Mirrors l1_ledger.md row by row.
+    """
+    f32, fT = ttnn.float32, F32_TILE_BYTES
+    return [
+        (CB_X_RESIDENT, depth * bt * kmax, x_tile, x_dtype),
+        (CB_WEIGHT, kmax, w_tile, w_dtype),
+        (CB_BIAS_COEF, 1, fT, f32),
+        (CB_REDUCE_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
+        (CB_SQ_ACC, 1, fT, f32),
+        (CB_PARTIAL, 2 * bt, fT, f32),
+        (CB_GATHERED, G * 2 * bt, fT, f32),
+        (CB_COMBINED, 2 * bt, fT, f32),
+        (CB_COEF_IN, bt, fT, f32),
+        (CB_COEF_OUT, bt, fT, f32),
+        (CB_LOGITS_COEF, bt, fT, f32),
+        (CB_COMB_COEF, bt, fT, f32),
+        (CB_PRE_COLS, n * bt, fT, f32),
+        (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
+        (CB_OUT_STAGE, OUT_STAGE_PAGES, fT, f32),
+    ]
+
+
+def _l1_bytes(**table_kwargs):
     """Per-core L1 footprint (identical on every core; see l1_ledger.md 'Total per-core footprint')."""
-    kmax, G, y_chunk = plan_like
-    per_token = depth * kmax * x_tile + F32_TILE_BYTES * (2 + 2 * G + 2 + 1 + 1 + 1 + 1 + n)
-    fixed = kmax * w_tile + Y_DEPTH * y_chunk * y_tile + F32_TILE_BYTES * (1 + 1 + OUT_STAGE_PAGES) + BF16_TILE_BYTES
-    return bt * per_token + fixed
+    return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_table(**table_kwargs))
 
 
 def make_plan(device, x_tensor, w_tensor, n):
@@ -132,6 +156,7 @@ def make_plan(device, x_tensor, w_tensor, n):
     x_tile = x_tensor.buffer_page_size()
     w_tile = w_tensor.buffer_page_size()
     y_tile = x_tile
+    dtypes = dict(x_dtype=x_tensor.dtype, w_dtype=w_tensor.dtype, y_dtype=x_tensor.dtype)
     budget = ttnn.get_max_worker_l1_unreserved_size() - L1_SAFETY_MARGIN
 
     group_w = min(grid_x, Ct)
@@ -149,18 +174,27 @@ def make_plan(device, x_tensor, w_tensor, n):
         core_token_tiles, t_start = _split(Mt, num_groups)
         ctt_max = max(core_token_tiles)
 
-        depth = X_BLOCK_DEPTH_DEFAULT
-        knobs = (kmax, group_cores, y_chunk)
-        per_bt = _l1_bytes(knobs, 1, depth, x_tile, w_tile, y_tile, n) - _l1_bytes(
-            knobs, 0, depth, x_tile, w_tile, y_tile, n
-        )
-        fixed = _l1_bytes(knobs, 0, depth, x_tile, w_tile, y_tile, n)
+        def l1_at(bt_, depth_):
+            return _l1_bytes(
+                bt=bt_,
+                depth=depth_,
+                kmax=kmax,
+                G=group_cores,
+                y_chunk=y_chunk,
+                n=n,
+                x_tile=x_tile,
+                w_tile=w_tile,
+                y_tile=y_tile,
+                **dtypes,
+            )
+
         bt_cap = min(ctt_max, BLOCK_TOKEN_TILES_CAP)
-        bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
-        if bt < 1:
-            depth = 1
-            per_bt = _l1_bytes(knobs, 1, depth, x_tile, w_tile, y_tile, n) - fixed
+        for depth in (X_BLOCK_DEPTH_DEFAULT, 1):  # depth-1 fallback only if the default does not fit
+            fixed = l1_at(0, depth)  # the footprint is affine in bt
+            per_bt = l1_at(1, depth) - fixed
             bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
+            if bt >= 1:
+                break
         if bt >= 1:
             break
         # Still does not fit: grow the group (smaller per-rank K slice).
@@ -229,25 +263,24 @@ def create_program_descriptor(
     x_tile = x_tensor.buffer_page_size()
     w_tile = w_tensor.buffer_page_size()
     y_tile = y_tensor.buffer_page_size()
-    f32 = ttnn.float32
 
     # ---- CBs: identical descriptors on every launched core (uniform L1 addresses for remote writes) ----
     cbs = [
-        _cb(CB_X_RESIDENT, all_cores, plan.x_block_depth * bt * kmax, x_tile, x_tensor.dtype),
-        _cb(CB_WEIGHT, all_cores, kmax, w_tile, w_tensor.dtype),
-        _cb(CB_BIAS_COEF, all_cores, 1, F32_TILE_BYTES, f32),
-        _cb(CB_REDUCE_SCALER, all_cores, 1, BF16_TILE_BYTES, ttnn.bfloat16),
-        _cb(CB_SQ_ACC, all_cores, 1, F32_TILE_BYTES, f32),
-        _cb(CB_PARTIAL, all_cores, 2 * bt, F32_TILE_BYTES, f32),
-        _cb(CB_GATHERED, all_cores, G * 2 * bt, F32_TILE_BYTES, f32),
-        _cb(CB_COMBINED, all_cores, 2 * bt, F32_TILE_BYTES, f32),
-        _cb(CB_COEF_IN, all_cores, bt, F32_TILE_BYTES, f32),
-        _cb(CB_COEF_OUT, all_cores, bt, F32_TILE_BYTES, f32),
-        _cb(CB_LOGITS_COEF, all_cores, bt, F32_TILE_BYTES, f32),
-        _cb(CB_COMB_COEF, all_cores, bt, F32_TILE_BYTES, f32),
-        _cb(CB_PRE_COLS, all_cores, n * bt, F32_TILE_BYTES, f32),
-        _cb(CB_Y_OUT, all_cores, plan.y_depth * plan.y_chunk_tiles, y_tile, y_tensor.dtype),
-        _cb(CB_OUT_STAGE, all_cores, OUT_STAGE_PAGES, F32_TILE_BYTES, f32),
+        _cb(index, all_cores, pages, page_bytes, fmt)
+        for index, pages, page_bytes, fmt in _cb_table(
+            bt=bt,
+            depth=plan.x_block_depth,
+            kmax=kmax,
+            G=G,
+            y_chunk=plan.y_chunk_tiles,
+            n=n,
+            x_tile=x_tile,
+            w_tile=w_tile,
+            y_tile=y_tile,
+            x_dtype=x_tensor.dtype,
+            w_dtype=w_tensor.dtype,
+            y_dtype=y_tensor.dtype,
+        )
     ]
 
     semaphores = [

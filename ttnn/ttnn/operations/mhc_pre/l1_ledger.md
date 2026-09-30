@@ -80,3 +80,13 @@ Totals: DRAM ≈ 73.4 + 36.7 + 0.4 + 18.4 + 0.16 ≈ **129 MB** (fp32). The DRAM
 - Data-movement budget unchanged: X once, W once per group (G_t×, R2 still deferred), outputs once. Measured: the reader
   is DRAM-bound (~110 MB in ~300 µs at T=640, C=7168 fp32), so the W re-read (≈ 1/3 of the bytes) is the largest
   remaining lever.
+
+## Verifier notes (Phase 0 verification)
+
+- **Single source of CB sizes.** Every row above is now produced by one host function,
+  `mhc_pre_program_descriptor._cb_table(...)`. Both the L1 selection function (`_l1_bytes`, which is affine
+  in `block_token_tiles`) and the ProgramDescriptor's CB list read it. Before this, `_l1_bytes` restated the
+  page counts by hand, so a knob turn could change the CBs without changing the fit test.
+- **Currency check.** The table matches the code row by row. The measured `device_l1_peak_bytes` on the golden
+  run is 1,255,424 B at C=7168 fp32 (kmax=84, G=11, bt=1, depth 2), which equals the closed form above.
+- **bf16 W** (now in SUPPORTED): `cb_weight` pages are 2048 B. At C=7168 that is 172 KB instead of 344 KB.
