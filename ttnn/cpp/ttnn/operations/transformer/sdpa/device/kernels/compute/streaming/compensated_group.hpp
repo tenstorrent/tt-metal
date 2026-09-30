@@ -1,6 +1,17 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+// Perf research knockouts (not for merge): drop the fold's MATH copies or its SFPU programs.
+#ifdef SDPA_KO_FOLDCOPY
+#define SDPA_FOLD_COPY(x)
+#else
+#define SDPA_FOLD_COPY(x) x
+#endif
+#ifdef SDPA_KO_FOLDSFPU
+#define SDPA_FOLD_SFPU(x)
+#else
+#define SDPA_FOLD_SFPU(x) x
+#endif
 
 inline void group2_pack_visibility_fence() {
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
@@ -97,24 +108,24 @@ inline void group2_numerator_row(
                 }
                 tile_regs_acquire();
                 copy_init(root_cb);
-                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single);
-                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single);
-                group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 4, single);
+                SDPA_FOLD_COPY(group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single));
+                SDPA_FOLD_COPY(group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single));
+                SDPA_FOLD_COPY(group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + chunk_plane + j, 4, single));
                 if (!identity) {
                     unary_bcast_init<BroadcastType::COL>(correction_cb);
-                    unary_bcast<BroadcastType::COL>(correction_cb, i, 6);
+                    SDPA_FOLD_COPY(unary_bcast<BroadcastType::COL>(correction_cb, i, 6));
                     unary_bcast_uninit<BroadcastType::COL>(correction_cb);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                PACK((SFPU_UNARY_CALL(
+                SDPA_FOLD_SFPU(PACK((SFPU_UNARY_CALL(
                     DST_SYNC_MODE,
                     DST_ACCUM_MODE,
                     calculate_sdpa_identity_state,
                     (2, false),
                     0,
                     VectorMode::None,
-                    identity)));
+                    identity))));
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
                 pack_tile<true>(2, root_cb, row_stride * (root_write_row + i) + dh + j);
@@ -139,14 +150,14 @@ inline void group2_numerator_row(
                 }
                 tile_regs_acquire();
                 copy_init(root_cb);
-                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single);
-                group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single);
-                group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 4, single);
-                group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + j, 6, single);
+                SDPA_FOLD_COPY(group2_copy_pair(root_cb, row_stride * (root_read_row + i) + j, 0, single));
+                SDPA_FOLD_COPY(group2_copy_pair(root_cb, row_stride * (root_read_row + i) + dh + j, 2, single));
+                SDPA_FOLD_COPY(group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 4, single));
+                SDPA_FOLD_COPY(group2_copy_pair(scratch_cb, row_stride * (scratch_read_row + i) + j, 6, single));
                 tile_regs_commit();
                 tile_regs_wait();
-                PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                    DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_identity_replay, 0, VectorMode::None)));
+                SDPA_FOLD_SFPU(PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+                    DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_identity_replay, 0, VectorMode::None))));
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
                 pack_tile<true>(2, root_cb, row_stride * (root_write_row + i) + dh + j);
@@ -164,17 +175,17 @@ inline void group2_numerator_row(
         for (uint32_t j = 0; j < dh; ++j) {
             tile_regs_acquire();
             copy_init(root_cb);
-            copy_tile(root_cb, row_stride * (root_read_row + i) + j, 0);
-            copy_tile(root_cb, row_stride * (root_read_row + i) + dh + j, 1);
-            copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 2);
-            copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + j, 3);
+            SDPA_FOLD_COPY(copy_tile(root_cb, row_stride * (root_read_row + i) + j, 0));
+            SDPA_FOLD_COPY(copy_tile(root_cb, row_stride * (root_read_row + i) + dh + j, 1));
+            SDPA_FOLD_COPY(copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + dh + j, 2));
+            SDPA_FOLD_COPY(copy_tile(scratch_cb, row_stride * (scratch_read_row + i) + j, 3));
             unary_bcast_init<BroadcastType::COL>(correction_cb);
-            unary_bcast<BroadcastType::COL>(correction_cb, i, 4);
+            SDPA_FOLD_COPY(unary_bcast<BroadcastType::COL>(correction_cb, i, 4));
             unary_bcast_uninit<BroadcastType::COL>(correction_cb);
             tile_regs_commit();
             tile_regs_wait();
-            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_changed_fold, 0, VectorMode::None)));
+            SDPA_FOLD_SFPU(PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_group2_changed_fold, 0, VectorMode::None))));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             pack_tile<true>(0, root_cb, row_stride * (root_write_row + i) + j);
             pack_tile<true>(1, root_cb, row_stride * (root_write_row + i) + dh + j);

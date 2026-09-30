@@ -848,26 +848,26 @@ ALWI void sdpa_compensated_sum_update(
     copy_init(old_cb);
     for (uint32_t b = 0; b < 2; ++b) {
         const uint32_t r = b < rows ? b : 0;
-        copy_tile(old_cb, old_hi + r * 2, 3 * b);
-        copy_tile(old_cb, old_lo + r * 2, 3 * b + 1);
-        copy_tile(new_cb, new_read_hi + r * 2, 3 * b + 2);
+        SDPA_FOLD_COPY(copy_tile(old_cb, old_hi + r * 2, 3 * b));
+        SDPA_FOLD_COPY(copy_tile(old_cb, old_lo + r * 2, 3 * b + 1));
+        SDPA_FOLD_COPY(copy_tile(new_cb, new_read_hi + r * 2, 3 * b + 2));
     }
     if (!identity_correction) {
         unary_bcast_init<BroadcastType::COL>(correction_cb);
-        unary_bcast<BroadcastType::COL>(correction_cb, correction_row, 6);
-        unary_bcast<BroadcastType::COL>(correction_cb, correction_row + (rows > 1 ? 1 : 0), 7);
+        SDPA_FOLD_COPY(unary_bcast<BroadcastType::COL>(correction_cb, correction_row, 6));
+        SDPA_FOLD_COPY(unary_bcast<BroadcastType::COL>(correction_cb, correction_row + (rows > 1 ? 1 : 0), 7));
         unary_bcast_uninit<BroadcastType::COL>(correction_cb);
     }
     tile_regs_commit();
     tile_regs_wait();
-    PACK((SFPU_UNARY_CALL(
+    SDPA_FOLD_SFPU(PACK((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sdpa_identity_state,
         (2, true),
         0,
         VectorMode::None,
-        identity_correction)));
+        identity_correction))));
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     for (uint32_t b = 0; b < rows; ++b) {
         pack_tile<true>(3 * b, new_cb, new_hi + b * 2);
