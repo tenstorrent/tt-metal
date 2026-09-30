@@ -112,3 +112,35 @@ Build fixes after fork_op.py (no behaviour change):
   `device/kernels/compute/compute_streaming.hpp` (sub_exp_block_bcast_cols, normalize_row_streaming: guarded by the
   define, which only the sparse compute kernel sets), `tests/unit/test_sparse_sdpa_high_precision.py`,
   `tests/source.yaml`, `tests/source_baseline.json`
+
+### ring_mla (latent V) at fp32 DEST on the streaming path
+- What: `ttnn.bringup.ring_mla(..., compute_kernel_config.fp32_dest_acc_en=True)` runs. The source op (and the fork until now)
+  refuses this combination (TT_FATAL "Latent-V ring attention is implemented only for streaming compute", and
+  "kv_actual_isl requires the ring-joint streaming compute path"): its streaming compute path, the only one with
+  latent V and kv_actual_isl, is taken only at bf16 DEST. The fork now takes the streaming path whenever V shares K's
+  buffer (`use_streaming_compute = !fp32_dest_acc_en || v_shares_k_buffer`), and on the streaming path keeps the
+  intermediate CBs it was written for in bf16 at fp32 DEST as well (`sum_df`, `qk_im_df` Float32 only on the legacy
+  path), as sparse_sdpa runs its streaming helpers at fp32 DEST. The only difference from the bf16-DEST program is
+  DST_ACCUM_MODE (fp32 accumulation in DEST, dst_size and subblocks from `get_dest_reg_count`). Host-only, no kernel
+  edit, no new argument: the switch is the combination the source refuses.
+- Default unchanged: every configuration the source accepts keeps its path, CBs and program (a separate K/V ring
+  joint at fp32 DEST stays on the legacy path with its Float32 sum / qk CBs; bf16 DEST is untouched).
+  `test_ring_mla_bf16_dest_matches_source` checks bf16 DEST bit-identical to `ttnn.transformer.ring_mla`. fp32_dest_acc_en
+  is in the program hash (compute kernel config). Source-test check: 210 tests, 0 regressions (the carried tests do not
+  reach ring_mla: the source's ring tests open FABRIC_1D / 1D_RING / torus meshes, which the owner's 2D-fabric rule
+  forbids here, and its one FABRIC_2D case is full-mesh at bf16 DEST, which this change does not touch). Unit suite 35
+  passed. The model cases in `tests/test_sdpa.py` are 1x4 / 2x2 meshes; on the 8-chip 4x2 LoudBox their mesh open times
+  out in fabric router sync (environment, not this change).
+- Why: Xing4.0 dense MLA (ring_mla over the 4 SP rows, 16 heads, K 576, V 512, scale 0.1447, block-cyclic cache,
+  kv_actual_isl). At bf16 DEST the scores accumulate over 18 K tiles in 16-bit DEST; on sharp softmaxes (scores up
+  to ~93 on the component test's x2 inputs) that moves single rows by up to 25% in latent space, and the attention output's
+  worst row rel L2 is 0.054 (limit 0.045; the bf16 precision model gives 0.029). A CPU model puts the excess on the
+  16-bit DEST accumulation (bf16 running state adds ~0). With fp32 DEST: worst row 0.035, golden rel vs CPU 0.0048 ->
+  0.0031. On random inputs (tests below) the sharp-case worst row goes 0.70 -> 0.16, rel 0.09 -> 0.019.
+- Tests: `tests/unit/test_ring_mla_fp32_dest.py` (7 cases, 4x2 mesh, FABRIC_2D, ring over axis 0, Linear, Xing
+  geometry, q32 / k256): accuracy vs float32 torch at chunk 0 and after a 2048 prefix, spread and sharp scores, each
+  tighter than the source at bf16 DEST; bf16 DEST bit-identical to the source; the source still refuses fp32 DEST.
+  With the output scaled by 1.02 (`RING_MLA_TEST_CORRUPT=1.02`) the spread cases fail.
+- Needed by: xing40_a4b_d_p C.dense.attention (`tt/attention.py`; `XING_MLA_SDPA=source` keeps ttnn.transformer.ring_mla
+  at bf16 DEST)
+- Files: `device/ring_joint_sdpa_program_factory.cpp`, `tests/unit/test_ring_mla_fp32_dest.py`

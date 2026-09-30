@@ -66,3 +66,11 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   device runs (06:36:55), moved its WIP out of the tree (runs/run1/wip_attention_attempt1), added the owner rule
   (fp32_dest_acc_en=False for ring_mla, use ring_mla), intake re-approved on the owner's word; C.dense.attention
   restarted from its precheck.
+- 06:55 C.dense.attention (attempt 1 after the restart): at fp32_dest_acc_en=False the streaming ring_mla failed the
+  frozen test (worst row 0.054 > 0.045 on the x2 "big" second input: sharp softmax, 18 K tiles summed in 16-bit
+  DEST). The agent extended the sdpa fork instead: latent-V ring_mla takes the streaming path at fp32 DEST (host-only,
+  use_streaming_compute = !fp32_dest_acc_en || v_shares_k_buffer; bf16 DEST bit-identical to the source; 7 unit tests
+  on 4x2; CHANGELOG + INDEX). Gate PASS (pcc 0.99999, rel vs cpu 0.0031), but the gate commit failed the repo's
+  prefer-expect-error hook (pytest.raises in the new fork test) and the orchestrator crashed. Owner chose "keep" (the
+  fork: streaming + fp32 DEST) over bf16 DEST + a test exemption. Overseer fixed the one pytest.raises -> expect_error
+  (test passes) and resumed.
