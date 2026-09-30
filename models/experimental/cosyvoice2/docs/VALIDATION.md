@@ -8,8 +8,8 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 |---|---|---|---|
 | RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **met: worst 0.628, aggregate 0.479** over six distinct utterances after the bucket warm-up (3.2 min at a warm start; below); `Meets()` recorded | `tests/perf/test_pipeline_perf.py` |
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
-| WER < 5.0 | Stage 1 | **met: corpus WER 0.68 %** on the Stage 1 audio (chunked HiFT), the same as the PyTorch reference (below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
-| speaker similarity > 0.60 | Stage 1 | **met: 95.87** on the Stage 1 audio (chunked HiFT), reference 95.21 (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
+| WER < 5.0 | Stage 1 | **met: corpus WER 0.68 % in each of five noise draws**, the same as the PyTorch reference's (2026-09-30, masked HiFT; "WER and similarity over five noise draws" below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
+| speaker similarity > 0.60 | Stage 1 | **met: 95.88 (95.84–95.92 over five noise draws)**, reference 95.22 (95.21–95.24) (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
 | time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.34–1.48 s, worst streaming RTF 1.06–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups ("Streaming, measured" below); `Misses()` recorded, with the lever | not yet by a device test: `demo/demo.py --stream` |
 
 ## How the figures are produced
@@ -716,6 +716,35 @@ D38's −50 dBFS floor is what let the silenced endings through: it passed 260-1
 - The final call's HiFT took 0.140 s against 0.120 s in the interleaved test. That run shared the host with CPU jobs;
   the clean figure is in "Streaming, measured".
 
+## WER and similarity over five noise draws (2026-09-30)
+
+**Why.** One noise draw's trailing "you" moved the streaming corpus WER from 0.68 % to 1.36 % (B28). So WER and
+similarity are now reported as the mean and range over five draws of the vocoder's noise per utterance (seeds 1–5).
+The tokens are fixed by the LLM's seed (1986), so only the noise varies.
+- TT: `scripts/noise_draws.py`.
+- The reference: `run_reference.py --noise-seed` and `streaming_reference.py --noise-seed`.
+- Scoring: `scripts/eval_draws.py`, which uses the corpus scorer's own functions, unchanged.
+
+Every draw sampled the same tokens as the undrawn runs. For Stage 1, TT and the reference each use their own tokens,
+which differ, as before. For streaming, both stream TT's Stage 1 tokens: TT live (`synthesize_stream`), upstream
+offline over the same tokens. TT runs the masked HiFT (`ed1c3ad1c5`).
+
+| case | words | WER %: TT Stage 1 | reference Stage 1 | TT streaming | reference streaming | SIM: TT Stage 1 | reference Stage 1 | TT streaming | reference streaming |
+|---|---|---|---|---|---|---|---|---|---|
+| 121-127105-0003 | 18 | 0.00 | 0.00 | 0.00 | 0.00 | 94.75 (94.68–94.87) | 94.36 (94.33–94.41) | 94.53 (94.48–94.61) | 95.11 (95.08–95.14) |
+| 121-127105-0015 | 10 | 0.00 | 0.00 | 0.00 | 0.00 | 94.68 (94.57–94.77) | 92.59 (92.56–92.61) | 93.40 (93.28–93.59) | 93.72 (93.67–93.76) |
+| 121-127105-0024 | 48 | 0.00 | 0.00 | 0.00 | 0.00 | 93.51 (93.47–93.54) | 93.93 (93.90–93.96) | 93.84 (93.82–93.87) | 93.39 (93.38–93.40) |
+| 260-123286-0014 | 7 | 0.00 | 14.29 | 0.00 | 0.00 | 95.91 (95.88–95.92) | 95.85 (95.77–95.89) | 96.42 (96.38–96.52) | 96.10 (96.07–96.13) |
+| 260-123440-0002 | 44 | 2.27 | 0.00 | 2.27 | 2.27 | 98.29 (98.27–98.33) | 97.74 (97.72–97.74) | 98.47 (98.42–98.50) | 98.60 (98.59–98.61) |
+| 260-123440-0010 | 20 | 0.00 | 0.00 | 0.00 | 0.00 | 98.19 (98.16–98.21) | 96.87 (96.85–96.94) | 98.32 (98.29–98.37) | 98.44 (98.39–98.47) |
+| **corpus** | 147 | **0.68** | **0.68** | **0.68** | **0.68** | **95.88 (95.84–95.92)** | **95.22 (95.21–95.24)** | **95.83 (95.81–95.87)** | **95.89 (95.87–95.91)** |
+
+- **No utterance's WER moves between draws**, in any of the four groups, so each WER cell is the same in all five.
+- **TT's one error** (260-123440-0002, 1 word in 44) is the one upstream's streaming makes on the same tokens. The
+  reference's Stage 1 error is on its own tokens of 260-123286-0014.
+- **Similarity varies by at most 0.3 between draws.**
+- **The "you" clip's regression test** (11 draws, "Masked end padding in HiFT") stays in the suite.
+
 ## Streaming, stage A: offline, from fixed tokens (2026-09-29)
 
 `tt/streaming.py` runs upstream's streaming schedule (`CosyVoice2Model.tts(stream=True)`, reproduced in its module
@@ -849,7 +878,9 @@ stage A's reference):
 - upstream: 0.68 % and 95.90.
 
 The extra error is Whisper appending "you" to 260-123440-0010, as it did on stage A's offline streaming of the same
-tokens.
+tokens. It was the final call's silenced ending (B28). With the masked final call, over five noise draws: 0.68 % in
+every draw and similarity 95.83 (95.81–95.87); upstream's streaming 0.68 % and 95.89 (95.87–95.91) ("WER and
+similarity over five noise draws").
 
 **Streaming without its warm-up is refused.** A third process ran one request (121-127105-0003) with `--warmup none`,
 under `TT_METAL_TRACE_ALLOC_TRACKING=1`:

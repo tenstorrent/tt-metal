@@ -19,8 +19,8 @@ streaming RTF is 1.06–1.12.
 |---|---|---|---|
 | RTF < 1.0, non-streaming | 1 | worst **0.628**, aggregate 0.479, over six distinct utterances | met |
 | token accuracy > 95 % vs the PyTorch reference | 1 | **95.94 %**, teacher-forced over 5,003 positions (27 sequences, 4 speakers) | met |
-| WER < 5 % | 1 | **0.68 %** (1 error in 147 words); the PyTorch reference also 0.68 % | met |
-| speaker similarity > 0.60 (cosine) | 1 | **0.959**; the PyTorch reference 0.952 | met |
+| WER < 5 % | 1 | **0.68 %** (1 error in 147 words) in each of five noise draws; the PyTorch reference also 0.68 % in each | met |
+| speaker similarity > 0.60 (cosine) | 1 | **0.959** (0.958–0.959 over five draws); the PyTorch reference 0.952 | met |
 | time to first packet < 500 ms; streaming RTF < 0.4 | 3 | first audio **1.34–1.48 s**; streaming RTF worst **1.06–1.12**, aggregate 0.84–0.85 | missed |
 
 - Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The non-streaming RTF and token-accuracy
@@ -35,7 +35,9 @@ How the figures were taken:
   - the corpus is small: six LibriSpeech test-clean utterances from two speakers;
   - ASR is Whisper large-v3;
   - similarity is the `microsoft/wavlm-base-plus-sv` x-vector cosine;
-  - both are scored by the same script for this port and for the PyTorch reference.
+  - both are scored by the same script for this port and for the PyTorch reference;
+  - each is the mean over five draws of the vocoder's noise, with the tokens fixed, so no figure rests on one draw
+    (`scripts/noise_draws.py`, the reference scripts' `--noise-seed`, `scripts/eval_draws.py`).
 
 ## What runs where
 
@@ -122,6 +124,20 @@ python models/experimental/cosyvoice2/demo/demo.py --inputs $COSYVOICE2_INPUTS -
 $REF $S/run_reference.py --parity --out-dir <reference dir>
 $REF $S/eval_wer_sim.py --run-dir <reference dir>
 $REF $S/eval_wer_sim.py --run-dir <run dir> --baseline <reference dir>
+```
+
+WER and similarity over five noise draws, as `docs/VALIDATION.md` reports them. The draws keep the tokens fixed and
+vary only the vocoder's noise:
+
+```bash
+python models/experimental/cosyvoice2/scripts/noise_draws.py --inputs $COSYVOICE2_INPUTS --out <draws dir>  # device
+for n in 1 2 3 4 5; do
+  $REF $S/run_reference.py --noise-seed $n --out-dir <draws dir>/ref_stage1_seed$n
+  $REF $S/streaming_reference.py --noise-seed $n --inputs $COSYVOICE2_INPUTS --tokens-from <Stage 1 run dir> \
+      --out-dir <draws dir>/ref_stream_seed$n
+done
+$REF $S/eval_draws.py --out draws.json --group "TT Stage 1" <draws dir>/tt_stage1_seed{1..5} \
+    --group "reference Stage 1" <draws dir>/ref_stage1_seed{1..5}   # ... and the two streaming groups
 ```
 
 ## Tests

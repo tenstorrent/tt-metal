@@ -6,7 +6,8 @@
 RUN IN THE REFERENCE VENV (see requirements-reference*.txt and scripts/reference_env.py):
 
     COSYVOICE2_REPO=<upstream checkout> LIBRISPEECH_ROOT=<dir containing LibriSpeech/> \\
-        $COSYVOICE2_REF_ENV/bin/python run_reference.py --out-dir <dir> [--parity | --extension] [--seed 1986]
+        $COSYVOICE2_REF_ENV/bin/python run_reference.py --out-dir <dir> [--parity | --extension] [--seed 1986] \\
+            [--noise-seed N]
 
 Each case runs `CosyVoice2.inference_zero_shot(text, prompt_text, prompt_wav, stream=False)` -- the same
 normalization, splitting and frontend as scripts/prepare_inputs.py -- on CPU in fp32, after
@@ -17,6 +18,10 @@ The reference venv pins the same torch as python_env (2.11.0+cpu), but the TTNN 
 bit-identical to upstream's. So a seeded run is a baseline for WER/SIM, not a token-for-token target; token
 agreement is measured teacher-forced. Upstream's generated speech tokens are captured per segment, by wrapping
 `token2wav`, and recorded for that comparison.
+
+`--noise-seed N`: one draw of the vocoder's noise over the same tokens. torch is re-seeded (N x 1000 + call) just
+before each `token2wav`, after the LLM has finished, and its state restored after, so the tokens stay those of
+`--seed`. WER/SIM over several draws (scripts/eval_draws.py) keeps a claim off one lucky draw.
 """
 from __future__ import annotations
 
@@ -42,6 +47,7 @@ def main() -> int:
     ap.add_argument("--extension", action="store_true", help="the token-accuracy extension instead (corpus.py)")
     ap.add_argument("--parity", action="store_true")
     ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--noise-seed", type=int, default=None, help="one vocoder noise draw over the same tokens")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -53,7 +59,16 @@ def main() -> int:
 
     def capture(*a, **kw):
         captured.append(kw["token"].reshape(-1).tolist())
-        return token2wav(*a, **kw)
+        if args.noise_seed is None:
+            return token2wav(*a, **kw)
+        import torch
+
+        state = torch.get_rng_state()  # the LLM's stream: the next segment must sample the same tokens
+        torch.manual_seed(args.noise_seed * 1000 + len(captured) - 1)
+        try:
+            return token2wav(*a, **kw)
+        finally:
+            torch.set_rng_state(state)
 
     model.model.token2wav = capture
 
@@ -79,6 +94,7 @@ def main() -> int:
                 "wav": name,
                 "prompt_wav_abs": prompt_wav,
                 "seed": args.seed,
+                "noise_seed": args.noise_seed,
                 "audio_s": round(audio_s, 3),
                 "wall_s": round(wall, 3),
                 "rtf": round(wall / audio_s, 3),

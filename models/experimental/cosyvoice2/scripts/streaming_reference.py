@@ -68,6 +68,7 @@ def main() -> int:
     ap.add_argument("--inputs", required=True)
     ap.add_argument("--tokens-from", required=True, help="a run directory whose results.json has segment_tokens")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--noise-seed", type=int, default=SEED, help="HiFT call n's noise: seed x 1000 + n")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -96,7 +97,7 @@ def main() -> int:
     def recording_hift(speech_feat, cache_source=torch.zeros(1, 1, 0), **k):
         n = len(hift_calls)
         frames = speech_feat.shape[2]
-        noise = torch.randn(1, frames * 480, 9, generator=torch.Generator().manual_seed(SEED * 1000 + n))
+        noise = torch.randn(1, frames * 480, 9, generator=torch.Generator().manual_seed(args.noise_seed * 1000 + n))
         with injected_sine_noise(torch, noise):
             speech, source = hift_inference(speech_feat=speech_feat, cache_source=cache_source, **k)
         hift_calls.append({"mel": speech_feat.transpose(1, 2).detach().clone(), "noise": noise, "f0": f0_calls[-1]})
