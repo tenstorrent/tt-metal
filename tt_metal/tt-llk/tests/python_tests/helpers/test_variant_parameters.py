@@ -2080,3 +2080,30 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
         )
+
+
+@dataclass
+class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
+    """The gate path the generalized MoE gate perf kernel runs: ``ungrouped`` (the ttnn op) or ``grouped`` (the
+    DeepSeek gate). The token geometry is fixed (256 experts, top 8, one token per DEST section, no softmax, no
+    reload, bf16 scores and bias in, uint16 out, eps 0.5 and scale 2.5 as fp32 bit patterns), so the perf module
+    publishes this one column instead of the whole GENERALIZED_MOE_GATE surface; the constants are emitted here.
+    """
+
+    gmg_path: str = "ungrouped"
+
+    def convert_to_cpp(self) -> str:
+        grouped = self.gmg_path == "grouped"
+        return "\n".join(
+            [
+                f"constexpr bool GMG_GROUPED = {str(grouped).lower()};",
+                "constexpr std::uint32_t GMG_TOPK = 8;",
+                "constexpr bool GMG_SOFTMAX = false;",
+                "constexpr bool GMG_RELOAD = false;",
+                "constexpr std::uint32_t GMG_EPS = 0x3f000000;  // 0.5f",
+                "constexpr std::uint32_t GMG_SCALE = 0x40200000;  // 2.5f",
+                "constexpr bool GMG_TRANSPOSE_OF_FACES = true;",
+                "constexpr std::uint32_t GMG_OUTPUT_TILES = 3;",
+                "constexpr bool ACC_TO_DEST = false;",
+            ]
+        )
