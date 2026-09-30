@@ -60,6 +60,13 @@ Y_DEPTH = 2  # cb_y_out windows in flight
 Y_CHUNK_TILES_CAP = 8  # 4-8 writes in flight per barrier saturate (catalog: double_buffer)
 OUT_STAGE_PAGES = 2  # one post + one comb staging tile
 L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (kernel config, stack)
+# Upper bound on block_token_tiles (the selection function takes min(this, core share, L1 fit)).
+# Measured on BH p150 (fp32, device kernel ns, bt=coarsest-fit -> bt=1): 640x7168 384->383 us,
+# 640x1792 133->128, 1280x4096 420->381, 4096x1792 591->521 (bt 2/4/7 in between). The whole K slice
+# is still one block; finer token blocks let the X read of block b+1 overlap block b's combine round
+# trip, y-mix and y stores (design perf lamp L1). Raise it to trade that overlap for fewer per-block
+# fixed costs.
+BLOCK_TOKEN_TILES_CAP = 1
 
 
 def _f32_bits(x):
@@ -148,11 +155,12 @@ def make_plan(device, x_tensor, w_tensor, n):
             knobs, 0, depth, x_tile, w_tile, y_tile, n
         )
         fixed = _l1_bytes(knobs, 0, depth, x_tile, w_tile, y_tile, n)
-        bt = min(ctt_max, (budget - fixed) // per_bt) if budget > fixed else 0
+        bt_cap = min(ctt_max, BLOCK_TOKEN_TILES_CAP)
+        bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
         if bt < 1:
             depth = 1
             per_bt = _l1_bytes(knobs, 1, depth, x_tile, w_tile, y_tile, n) - fixed
-            bt = min(ctt_max, (budget - fixed) // per_bt) if budget > fixed else 0
+            bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
         if bt >= 1:
             break
         # Still does not fit: grow the group (smaller per-rank K slice).

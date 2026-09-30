@@ -130,7 +130,7 @@ void coefficients(
         vFloat r = rsqrt_pos(ssq * inv_nc + neps);
         dst_reg[MIX] = r;
     }
-#pragma GCC unroll 0
+#pragma GCC unroll 32
     for (int k = 0; k < MIX; ++k) {
         const uint32_t a_bits = k < N ? a_pre_bits : (k < 2 * N ? a_post_bits : a_res_bits);
         vFloat r = dst_reg[MIX];
@@ -152,7 +152,7 @@ void coefficients(
 
 // Column normalisation: m[i][j] *= 1 / (sum_i m[i][j] + eps), sums in index order.
 sfpi_inline void col_norm(uint32_t eps_bits) {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int j = 0; j < N; ++j) {
         vFloat s = dst_reg[LOGIT0 + j];
         for (int i = 1; i < N; ++i) {
@@ -168,7 +168,7 @@ sfpi_inline void col_norm(uint32_t eps_bits) {
 
 // Row normalisation: m[i][j] *= 1 / (sum_j m[i][j] + eps).
 sfpi_inline void row_norm(uint32_t eps_bits) {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int i = 0; i < N; ++i) {
         vFloat s = dst_reg[LOGIT0 + i * N];
         for (int j = 1; j < N; ++j) {
@@ -185,7 +185,7 @@ sfpi_inline void row_norm(uint32_t eps_bits) {
 // sinkhorn_block on one coefficient-major tile (DEST tile 0): logits -> comb, all iterations in DEST.
 void sinkhorn(uint32_t eps_bits, uint32_t iters) {
     // m = softmax_j(L) + eps, row max subtracted (overflow-safe).
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int i = 0; i < N; ++i) {
         const int row = LOGIT0 + i * N;
         {

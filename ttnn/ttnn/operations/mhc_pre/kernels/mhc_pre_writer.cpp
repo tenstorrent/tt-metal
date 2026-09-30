@@ -139,18 +139,14 @@ void kernel_main() {
         // ---- scatter S -> coefficient-major tiles ----
         cb_reserve_back(cb_coef_in, extent);
         {
-            volatile tt_l1_ptr float* s = reinterpret_cast<volatile tt_l1_ptr float*>(s_addr);
-            volatile tt_l1_ptr float* d = reinterpret_cast<volatile tt_l1_ptr float*>(get_write_ptr(cb_coef_in));
+            const float* s = reinterpret_cast<const float*>(s_addr);
+            float* d = reinterpret_cast<float*>(get_write_ptr(cb_coef_in));
             for (uint32_t t = 0; t < extent; ++t) {
-                volatile tt_l1_ptr float* mix = s + t * TILE_DATUMS;
-                volatile tt_l1_ptr float* sq = s + (block_token_tiles + t) * TILE_DATUMS;
-                volatile tt_l1_ptr float* dt = d + t * TILE_DATUMS;
-                for (uint32_t l = 0; l < 32; ++l) {
-                    for (uint32_t k = 0; k < mix_cols; ++k) {
-                        dt[slot_index(k, l)] = mix[rc_index(l, k)];
-                    }
-                    dt[slot_index(mix_cols, l)] = sq[rc_index(l, 0)];
-                }
+                // mixes: cols 0..mix_cols-1 of the mix tile -> slots 0..mix_cols-1
+                mhc_layout::cols_to_slots<mix_cols, 0, 0>(s + t * TILE_DATUMS, d + t * TILE_DATUMS);
+                // sum(x^2): col 0 of the sumsq tile -> slot mix_cols
+                mhc_layout::cols_to_slots<1, 0, mix_cols>(
+                    s + (block_token_tiles + t) * TILE_DATUMS, d + t * TILE_DATUMS);
             }
         }
         cb_push_back(cb_coef_in, extent);
@@ -161,29 +157,30 @@ void kernel_main() {
         // ---- expand_pre_block + post (owned rows) ----
         cb_wait_front(cb_coef_out, extent);
         {
-            volatile tt_l1_ptr float* co = reinterpret_cast<volatile tt_l1_ptr float*>(get_read_ptr(cb_coef_out));
+            const float* co = reinterpret_cast<const float*>(get_read_ptr(cb_coef_out));
             cb_reserve_back(cb_pre_cols, n_streams * extent);
-            volatile tt_l1_ptr float* pc = reinterpret_cast<volatile tt_l1_ptr float*>(get_write_ptr(cb_pre_cols));
+            float* pc = reinterpret_cast<float*>(get_write_ptr(cb_pre_cols));
             for (uint32_t t = 0; t < extent; ++t) {
+                // pre_i (slot i) -> column 0 of pre-column tile i
+#pragma GCC unroll 8
                 for (uint32_t i = 0; i < n_streams; ++i) {
-                    volatile tt_l1_ptr float* dst = pc + (t * n_streams + i) * TILE_DATUMS;
+                    float* dst = pc + (t * n_streams + i) * TILE_DATUMS;
+                    const float* src = co + t * TILE_DATUMS + slot_index(i, 0);
+#pragma GCC unroll 1
                     for (uint32_t l = 0; l < 32; ++l) {
-                        dst[rc_index(l, 0)] = co[t * TILE_DATUMS + slot_index(i, l)];
+                        dst[rc_index(l, 0)] = src[slot_index(0, l)];
                     }
                 }
             }
             cb_push_back(cb_pre_cols, n_streams * extent);
 
-            volatile tt_l1_ptr float* sp = reinterpret_cast<volatile tt_l1_ptr float*>(stage_post);
+            float* sp = reinterpret_cast<float*>(stage_post);
             for (uint32_t t = 0; t < extent; ++t) {
                 if (((row0 + t) % group_cores) != rank) {
                     continue;
                 }
-                for (uint32_t l = 0; l < 32; ++l) {
-                    for (uint32_t i = 0; i < n_streams; ++i) {
-                        sp[rc_index(l, i)] = co[t * TILE_DATUMS + slot_index(n_streams + i, l)];
-                    }
-                }
+                // post (slots n..2n-1) -> cols 0..n-1
+                mhc_layout::slots_to_cols<n_streams, n_streams, 0>(co + t * TILE_DATUMS, sp);
                 noc_async_write_page(t_start + row0 + t, post_acc, stage_post);
                 noc_async_write_barrier();
             }
@@ -223,13 +220,9 @@ void kernel_main() {
                 continue;
             }
             cb_wait_front(cb_comb_coef, 1);
-            volatile tt_l1_ptr float* cc = reinterpret_cast<volatile tt_l1_ptr float*>(get_read_ptr(cb_comb_coef));
-            volatile tt_l1_ptr float* sc = reinterpret_cast<volatile tt_l1_ptr float*>(stage_comb);
-            for (uint32_t l = 0; l < 32; ++l) {
-                for (uint32_t q = 0; q < n_streams * n_streams; ++q) {
-                    sc[rc_index(l, q)] = cc[slot_index(2 * n_streams + q, l)];
-                }
-            }
+            // comb (slots 2n..2n+n*n-1) -> cols 0..n*n-1, comb[i*n+j] = comb[i][j]
+            mhc_layout::slots_to_cols<n_streams * n_streams, 2 * n_streams, 0>(
+                reinterpret_cast<const float*>(get_read_ptr(cb_comb_coef)), reinterpret_cast<float*>(stage_comb));
             noc_async_write_page(t_start + row0 + t, comb_acc, stage_comb);
             noc_async_write_barrier();
             cb_pop_front(cb_comb_coef, 1);
