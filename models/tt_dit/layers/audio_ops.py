@@ -58,8 +58,6 @@ DEFAULT_MAX_C_IN_BLOCK = 128
 
 _WEIGHT_PREP_REVISION = 3
 
-_KERNEL_SPLIT_MAX_K = 7
-
 
 def weights_variant(
     split_mode: str,
@@ -128,11 +126,9 @@ def conv3d_maybe_split(
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
-    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > _KERNEL_SPLIT_MAX_K:
-        split_mode = "full"
     config = conv_kwargs.get("config")
-    if config is not None and config.operand_split != (split_mode == "kernel"):
-        config.operand_split = split_mode == "kernel"
+    if config is not None and config.enable_fp32_operand_split != (split_mode == "kernel"):
+        config.enable_fp32_operand_split = split_mode == "kernel"
     if split_mode == "off":
         return ttnn.experimental.conv3d(
             input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
@@ -928,7 +924,7 @@ class Conv2dViaConv3d(Module):
             w_factor=1,
         )
         if split_mode == "kernel" and dtype == ttnn.float32:
-            self.conv_config.operand_split = True
+            self.conv_config.enable_fp32_operand_split = True
 
         from models.common.utility_functions import is_blackhole
 
@@ -1108,7 +1104,7 @@ class Conv1dViaConv3d(Module):
             self.in_channels, self.out_channels, self.kernel_size, dtype, grid_size=grid, h_factor=1, w_factor=1
         )
         if self.split_mode == "kernel":
-            self.conv_config.operand_split = True
+            self.conv_config.enable_fp32_operand_split = True
         # Column-parallel C-TP: each chip owns out_channels/factor C_out; C_in stays full (gathered).
         self.out_channels_shard = self.out_channels // channel_factor(parallel_config)
         if channel_factor(parallel_config) > 1:
@@ -1121,7 +1117,7 @@ class Conv1dViaConv3d(Module):
                 C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-                operand_split=self.conv_config.operand_split,
+                enable_fp32_operand_split=self.conv_config.enable_fp32_operand_split,
             )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(

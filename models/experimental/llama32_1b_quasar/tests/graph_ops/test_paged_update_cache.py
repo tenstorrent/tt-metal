@@ -41,7 +41,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [128, 8, 32, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },

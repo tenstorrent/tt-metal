@@ -29,7 +29,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <cstdint>
@@ -307,8 +306,13 @@ std::vector<std::optional<Tensor>> tanh_bw(
 
     DataType output_dtype = input.dtype();
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
-        grad, input, output_dtype, output_memory_config, input_grad);
+    auto result_tensor = ttnn::operations::unary_backward::launch_unary_backward(
+        ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW,
+        grad,
+        input,
+        output_dtype,
+        output_memory_config,
+        input_grad);
     grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
@@ -496,7 +500,6 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(grad);
     }
-    float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
     ttnn::rsqrt(input, false, output_mem_config, input_grad);
@@ -507,7 +510,10 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
         std::nullopt,
         output_mem_config,
         input_grad);
-    where(ttnn::eqz(input, output_mem_config), t_inf, input_grad.value(), output_mem_config, input_grad);
+    // d/dx rsqrt(x) is -0.5 * x^-3/2, so at zero the answer is -inf for a positive gradient
+    // and +inf for a negative one -- which is what the arithmetic above already produces,
+    // since rsqrt(0) is inf and the -0.5f carries the sign. Writing +inf unconditionally
+    // inverted it for every positive gradient.
     where(ttnn::ltz(input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
     where(
         ttnn::logical_and(
@@ -868,17 +874,17 @@ std::vector<Tensor> log_bw(
 std::vector<Tensor> relu6_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = where(ttnn::le(input, 0.0f, std::nullopt, output_mem_config), 0.0f, 6.0f, output_mem_config);
-    grad_result = where(
+    // grad where 0 < input < 6, zero elsewhere. Both comparisons are false for a NaN input, so the
+    // false arm is also what NaN returns and has to stay zero, which is the gradient torch gives.
+    Tensor grad_result = where(
         ttnn::logical_and(
             ttnn::gtz(input, output_mem_config),
             ttnn::lt(input, 6.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         grad,
-        grad_result,
+        0.0f,
         output_mem_config);
-    grad_result = where(ttnn::ge(input, 6.0f, std::nullopt, output_mem_config), 0.0f, grad_result, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;

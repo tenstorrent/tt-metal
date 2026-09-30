@@ -66,7 +66,7 @@ class MiniMaxH3AudioDecoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        split_mode: str = "full",
+        split_mode: str = "kernel",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",

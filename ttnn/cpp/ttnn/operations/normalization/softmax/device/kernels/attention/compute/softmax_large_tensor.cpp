@@ -505,8 +505,14 @@ void kernel_main() {
 
         DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).pop_front(1);
 
-        recip_tile_init();
-        recip_tile(dst0);
+        // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+        if constexpr (DST_ACCUM_MODE) {
+            recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+            recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(dst0);
+        } else {
+            recip_tile_init();
+            recip_tile(dst0);
+        }
 
         tile_regs_commit();
         tile_regs_wait();

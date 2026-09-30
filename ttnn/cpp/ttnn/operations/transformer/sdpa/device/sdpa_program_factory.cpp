@@ -413,7 +413,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         log_debug(tt::LogOp, "page_table_df: {}", page_table_df);
     }
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -691,6 +691,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 19: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
         static_cast<uint32_t>(is_windowed),            // arg 21: windowed block-diagonal mask generation
+        static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -754,9 +755,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         }
     } else {
         TT_FATAL(fixed_offset == 0.0f, "fixed_offset requires fixed_offset_softmax");
-    }
-    if (operation_attributes.output_concat_heads) {
-        defines_map["OUT_CONCAT_HEADS"] = "1";
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 

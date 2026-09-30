@@ -186,8 +186,8 @@ def _pad_overrun_summary(seq_len_cache, overruns):
 # floor across all L61 variants (Kimi/GLM/Mistral share this constant).
 LAYER_PCC_THRESHOLD = 0.88
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
-# future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
-# (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's 0-2+every-4th subsample only reaches 0.980).
+# future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_3 @L75); indexer-K nope 0.952
+# (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_3's 0-2+every-4th subsample only reaches 0.980).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
@@ -203,19 +203,21 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
+    # then re-cut three times. Recentered to CI run 36356786056 / job 108828333472: every chunk came
+    # in 2.4-5.2% under the previous centre (run 34492835936 / job 102927415897), with the drop growing
+    # with KV depth.
     (61, 11, 10): [
-        0.413,
-        0.419,
-        0.452,
-        0.481,
-        0.513,
-        0.549,
-        0.584,
-        0.623,
-        0.676,
-        0.716,
-        0.756,
+        0.403,
+        0.406,
+        0.440,
+        0.468,
+        0.500,
+        0.532,
+        0.562,
+        0.593,
+        0.638,
+        0.678,
+        0.717,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -239,12 +241,15 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    (78, 11, 10): [0.543, 0.539, 0.552, 0.545, 0.561, 0.558, 0.557, 0.561, 0.577, 0.582, 0.592],
+    # Recentered to CI run 36356786056 / job 108727344674. Main had already drifted ~13 ms under the
+    # previous centre on every chunk (jobs 108833541819, 108591991106, 108483306778 read 0.530s at
+    # chunk 0); ND-sharded routed-expert weights take a flat ~5 ms more per chunk.
+    (78, 11, 10): [0.525, 0.521, 0.534, 0.528, 0.542, 0.540, 0.539, 0.543, 0.558, 0.564, 0.574],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
-GLM_PERF_GATED_VARIANT = "glm_5_2"
+GLM_PERF_GATED_VARIANT = "glm_5_3"
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -398,7 +403,7 @@ def _record_indexer_k_cache_pcc(
     because GLM's indexer RoPE is natively interleaved and the vLLM golden stores that same basis
     (verified on device: the half-split reindex gives ~0 PCC, direct gives ~0.9999). Same gather/un-rotate
     as the KVPE cache (caller-owned tensor, ConcatMesh2dToTensor dims=(2,1), blockcyclic_positions).
-    indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 + every 4th) — layers without
+    indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_3: 0-2 + every 4th) — layers without
     a golden are skipped. GLM DSA variants only."""
     logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
     cache_full, stripes = gather_cache_natural(tt_index_kv_cache, mesh_device, tp_shard_kv)  # [slots, T, D]
@@ -411,7 +416,7 @@ def _record_indexer_k_cache_pcc(
     index_hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
     idx_min_pcc = {}
     for i in layers:
-        # Compact index cache (GLM-5.2 cross-layer reuse): layer i's slot is its full-indexer rank, not i
+        # Compact index cache (GLM-5.3 cross-layer reuse): layer i's slot is its full-indexer rank, not i
         # (rank == i for glm_5_1, where every layer is full). Matches the indexer's own write addressing.
         dev_cache = unrotate_cache_layer(cache_full[full_indexer_rank(config, i)], p, total_len)
         dev_cache = (dev_cache.float() @ index_hadamard).to(torch.bfloat16)
@@ -546,7 +551,7 @@ def _preload_indexer_k_prefix_from_trace(
     """Preload the first `preload_isl` tokens of the DSA indexer key cache from the golden dsa/indexer_k
     trace, so a measured chunk at KV depth preload_isl has a REAL indexer prefix (representative top-k
     selection at depth) rather than a zero prior. Only "full" indexer layers own a cache slot / have a
-    golden (glm_5_1: all; glm_5_2: 0-2 + every 4th); layer i is written to its compacted slot
+    golden (glm_5_1: all; glm_5_3: 0-2 + every 4th); layer i is written to its compacted slot
     full_indexer_rank(config, i), and the cache is strided by the full-layer count over the built
     layers. The golden
     index_head_dim key is [rope | nope] already in the device's interleaved RoPE basis (GLM). Apply the
@@ -914,7 +919,7 @@ def run_chunked_transformer(
     # forward, exactly like the KVPE cache. It is user-major layer-stacked
     # [num_users*index_cache_layers, 1, T, D_idx], so the indexer addresses slot
     # user*index_cache_layers + cache_layer_idx. Unlike the per-layer KVPE cache, the indexer stride is the
-    # COMPACTED full-indexer count over the layers this instance builds — GLM-5.2 "shared" layers reuse a
+    # COMPACTED full-indexer count over the layers this instance builds — GLM-5.3 "shared" layers reuse a
     # "full" layer's cache and get no slot of their own, and full_indexer_rank returns num_layers unchanged
     # without an indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
     tt_index_kv_cache = None
@@ -1243,7 +1248,7 @@ def test_kimi_prefill_transformer_chunked_padded(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_padded(
@@ -1257,7 +1262,7 @@ def test_glm_prefill_transformer_chunked_padded(
     num_links,
     mode,
 ):
-    """Padded/rotated chunked prefill for GLM-5.2, traced vs untraced (see _PADDED_MODES)."""
+    """Padded/rotated chunked prefill for GLM-5.3, traced vs untraced (see _PADDED_MODES)."""
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_padded_trace(
         variant,
@@ -1422,9 +1427,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 
 # GLM variants
 # ---------------------------------------------------------------------------
-# Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_2 variants and the
+# Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_3 variants and the
 # on-device gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path)
-# + GLM fabric payload (5.1 == 5.2 dims). glm_5_2 additionally exercises DSA indexer reuse per chunk: each
+# + GLM fabric payload (5.1 == 5.2 dims). glm_5_3 additionally exercises DSA indexer reuse per chunk: each
 # chunk is one forward, so full layers recompute that chunk's top-k and shared layers reuse it within the
 # chunk. Golden = each variant's vLLM 55k structured trace (chunked_group_a_v1; via test_prefill_trace_default,
 # override with PREFILL_TRACE_DIR).
@@ -1432,8 +1437,8 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 # ONE test, both trace modes, ONE driver — so the two modes do exactly the same device work and their PCCs
 # are directly comparable. WHAT EACH MODE CHECKS:
 #
-#   notrace : per-layer decoder-output PCC  +  KVPE cache PCC  +  indexer-K cache PCC (glm_5_2)
-#   traced  :                                 KVPE cache PCC  +  indexer-K cache PCC (glm_5_2)
+#   notrace : per-layer decoder-output PCC  +  KVPE cache PCC  +  indexer-K cache PCC (glm_5_3)
+#   traced  :                                 KVPE cache PCC  +  indexer-K cache PCC (glm_5_3)
 #
 # The per-layer check is untraced-only by construction, not by preference: it needs
 # return_intermediates=True, which snapshots each layer to host in the middle of forward(), and a host
@@ -1487,7 +1492,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 # sparse path has exactly one cache layout (SP*TP-striped) and run_chunked_transformer_updated derives it
 # from the config, so there is nothing for a test to select. The torus row covers the snake RING route;
 # the fabric2d row covers the open PATH, where no cycle closes.
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked(
@@ -1808,7 +1813,7 @@ def run_chunked_transformer_updated(
     # Production overlap qualification asks this full-model harness to prove that the requested profile
     # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
     # behavior, while the checked qualification driver cannot report a win from two accidentally identical
-    # serial runs (or from only a subset of the GLM-5.2 full-indexer layers).
+    # serial runs (or from only a subset of the GLM-5.3 full-indexer layers).
     expected_overlap_profile = os.environ.get("TT_PREFILL_EXPECT_SPARSE_MLA_OVERLAP_PROFILE")
     profile_call_counts = None
     if expected_overlap_profile is not None:
@@ -1874,7 +1879,7 @@ def run_chunked_transformer_updated(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    # Sparse (DSA: glm_5_1 / glm_5_2) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache
+    # Sparse (DSA: glm_5_1 / glm_5_3) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache
     # (sparse_sdpa reads it natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE
     # default that dense ring_mla wants. Match the cache format to the path (dense variants keep the
     # default). Same distinction as run_chunked_transformer.
@@ -1896,7 +1901,7 @@ def run_chunked_transformer_updated(
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
     # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count over the built
-    # layers (>1 for glm_5_2 cross-layer reuse; num_layers without an indexer_types map) so it matches the
+    # layers (>1 for glm_5_3 cross-layer reuse; num_layers without an indexer_types map) so it matches the
     # indexer's cache_batch stride. bf8 TILE. Dense variants get None.
     tt_index_kv_cache = None
     if resolve_has_indexer(config):
@@ -2388,11 +2393,11 @@ def run_chunked_transformer_updated(
             seq_cache,
             total_len,
             config.kv_lora_rank,
-            # Calibrated floors are model-specific: Kimi's 0.96 sits ABOVE GLM-5.2's documented KVPE
+            # Calibrated floors are model-specific: Kimi's 0.96 sits ABOVE GLM-5.3's documented KVPE
             # minimum (~0.86 @ L75), so applying it to GLM fails a perfectly good run.
             assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             # FULL DEPTH for the accuracy driver. Gating at GATED_LAYER_DEPTH left the LAST layer with no
-            # asserted check at all on GLM-5.2 L78: its decoder-output snapshot does not exist
+            # asserted check at all on GLM-5.3 L78: its decoder-output snapshot does not exist
             # (kv_only_last_layer strips it), the traced arm runs check_layer_pcc=False, layer 77 is a
             # `shared` indexer layer so the indexer-K PCC does not cover it either, and 77 > 10 made the
             # KVPE assertion recording-only. A regression confined to layers > 10 that left indexer-K
@@ -2849,11 +2854,11 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     )
 
 
-# GLM (glm_5_1 / glm_5_2) counterpart of the no-PCC perf sweep: same chunked driver, sparse (DSA) path.
+# GLM (glm_5_1 / glm_5_3) counterpart of the no-PCC perf sweep: same chunked driver, sparse (DSA) path.
 # Reports end-to-end prefill time — the per-iteration total ("iter {it} done ... in Xs") and the per-chunk
 # median/stddev table — for the two GLM variants at matched ISL (n_chunks x CHUNK) and num_layers. No PCC;
 # the empty-cache case (preload0) needs no golden trace, preload_isl > 0 requires it. Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
-# routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
+# routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_3 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
 # notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
@@ -2908,7 +2913,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup on the perf path: same sp*tp cache striping the accuracy test asserts PCC for, measured here.
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.skipif(
     not (is_high_power() or os.environ.get("DS_PERF_IGNORE_POWER") == "1"),
@@ -3092,7 +3097,7 @@ def run_chunked_transformer_padded_trace(
 
     def _make_index_cache():
         """The sparse path's indexer key cache. Strided by the COMPACTED full-indexer count over the
-        built layers (>1 for glm_5_2 cross-layer reuse, where `shared` layers own no indexer and never
+        built layers (>1 for glm_5_3 cross-layer reuse, where `shared` layers own no indexer and never
         write), so it matches the indexer's cache_batch stride. None for dense variants."""
         if not has_indexer:
             return None

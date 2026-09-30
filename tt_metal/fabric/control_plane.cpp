@@ -869,8 +869,8 @@ void ControlPlane::initialize_fabric_context() {
         "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
         enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+        this->fabric_context_ =
+            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
     }
 }
 
@@ -1924,7 +1924,7 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routi
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
     intra_mesh_routing_path_t<1, false> routing_path_1d;
-    routing_path_1d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), num_chips);
+    routing_path_1d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, 0), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
@@ -1960,7 +1960,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[1]);
 
     intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+    routing_path_2d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, chip_id), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
 

@@ -60,14 +60,17 @@ inline void bind_actual_end(
     tt::tt_metal::experimental::ProgramSpec& spec,
     tt::tt_metal::experimental::ProgramRunArgs& run,
     const std::optional<Tensor>& actual_end,
-    const Tensor& actual_start,
     tt::tt_metal::experimental::KernelSpec& reader) {
     using namespace tt::tt_metal::experimental;
+    reader.compile_time_args.insert({"has_actual_end", uint32_t(actual_end.has_value())});
+    // Leave the parameter unbound when absent; kernels resolve it with get_token_if_present.
+    if (!actual_end) {
+        return;
+    }
     const TensorParamName name{"actual_end"};
-    const auto& tensor = (actual_end ? *actual_end : actual_start).mesh_tensor();
+    const auto& tensor = actual_end->mesh_tensor();
     spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
     run.tensor_args.emplace(name, tensor);
     reader.tensor_bindings.push_back({name, "actual_end"});
-    reader.compile_time_args.insert({"has_actual_end", uint32_t(actual_end.has_value())});
 }
 }  // namespace ttnn::experimental::prim::kda_factory_detail

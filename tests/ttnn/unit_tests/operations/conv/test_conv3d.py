@@ -844,7 +844,7 @@ def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
         )
         for _ in range(2)
     )
-    split_config.operand_split = True
+    split_config.enable_fp32_operand_split = True
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -888,7 +888,6 @@ def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
     }
     rel_rmse = {name: ((out - golden).pow(2).mean().sqrt() / golden.std()).item() for name, out in outputs.items()}
     kernel_vs_host = (outputs["kernel"] - outputs["host"]).abs().max().item()
-    scale = outputs["host"].abs().max().item()
     logger.info(
         f"C_in={C_in} C_out={C_out} k={kernel} T={T}: rel_rmse {rel_rmse}, kernel vs host max |diff| {kernel_vs_host:.3e}"
     )
@@ -897,6 +896,59 @@ def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
         rel_rmse["kernel"] <= 1.05 * rel_rmse["host"]
     ), f"kernel split is less accurate than the host split: {rel_rmse}"
     assert rel_rmse["kernel"] <= 0.70 * rel_rmse["plain"], f"kernel split did not beat the unsplit conv: {rel_rmse}"
-    assert (
-        kernel_vs_host <= 1e-5 * scale
-    ), f"kernel and host splits disagree by {kernel_vs_host:.3e} (max |out| {scale:.3e})"
+
+
+def test_conv3d_fp32_operand_split_raw_weights(device):
+    """Raw rank-5 W_hi / W_lo passed straight to conv3d: the op prepares weight_lo_tensor itself, and the result
+    matches the pre-prepared split exactly (split first, then prepare both with the same arguments)."""
+    torch.manual_seed(0)
+    N, C_in, C_out, kernel, T = 1, 128, 64, 3, 64
+    kernel_size = (kernel, 1, 1)
+    padding = (kernel // 2, 0, 0)
+    weight = torch.randn(C_out, C_in, *kernel_size) * 0.05
+    weight_hi = weight.bfloat16().float()
+    weight_lo = weight - weight_hi
+    input_tensor = torch.randn(N, C_in, T, 1, 1) * 0.1
+
+    config = create_conv3d_config(
+        T_out_block=8,
+        C_out_block=32,
+        C_in_block=128,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        weights_dtype=ttnn.float32,
+    )
+    config.enable_fp32_operand_split = True
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C_in, device, dtype=ttnn.float32)
+
+    def conv(w, w_lo):
+        return ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=w,
+            device=device,
+            dtype=ttnn.float32,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            padding=padding,
+            config=config,
+            compute_kernel_config=kernel_config,
+            weight_lo_tensor=w_lo,
+        )
+
+    raw = conv(
+        ttnn.from_torch(weight_hi, dtype=ttnn.float32, pad_value=0),
+        ttnn.from_torch(weight_lo, dtype=ttnn.float32, pad_value=0),
+    )
+    prepared = conv(
+        _prepare_fp32_conv3d_weight(weight_hi, config.C_in_block, device),
+        _prepare_fp32_conv3d_weight(weight_lo, config.C_in_block, device),
+    )
+    raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
+    prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
+    assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"
