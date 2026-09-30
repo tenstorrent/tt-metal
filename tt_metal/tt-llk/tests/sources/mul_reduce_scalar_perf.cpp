@@ -124,7 +124,7 @@ inline void _calculate_fill_x_(const float value)
 
 static constexpr float REDUCE_SCALER = 1.0f;
 
-inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape, const std::uint32_t math_format)
+inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
@@ -194,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                row_math(tile_cnt, tensor_shape, formats.math);
+                row_math(tile_cnt, tensor_shape);
             }
         }
         else
@@ -202,7 +202,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_math_wait_for_dest_available_<DST_SYNC>();
-                row_math(tile_cnt, tensor_shape, formats.math);
+                row_math(tile_cnt, tensor_shape);
                 _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
             }
         }
