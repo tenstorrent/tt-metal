@@ -29,7 +29,7 @@ def test_fabric_mux_exports_are_experimental_only():
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device):
+def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_error):
     fabric_mux = ttnn.experimental.fabric_mux
     logical_core = ttnn.CoreCoord(0, 0)
     virtual_core = mesh_device.worker_core_from_logical_core(logical_core)
@@ -146,6 +146,22 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device):
     assert reused_semaphore_ids == list(range(9)), (
         "reusing the termination semaphore must add 4 semaphores, not 5; " f"got ids {reused_semaphore_ids}"
     )
+
+    with expect_error(RuntimeError, "Fabric mux client index 256 is out of range for channel count 1"):
+        fabric_mux.client_runtime_args(
+            connection_valid=True,
+            is_termination_master=False,
+            channel_type=channel_type,
+            mux_virtual_core=virtual_core,
+            client_index=256,
+            client_logical_core=logical_core,
+            config=mux_config,
+            program_descriptor=program_descriptor,
+            termination_master_virtual_core=virtual_core,
+        )
+    assert [
+        semaphore.id for semaphore in program_descriptor.semaphores
+    ] == reused_semaphore_ids, "invalid client index must not allocate semaphores"
 
 
 NUM_FULL_SIZE_BUFFERS = 2

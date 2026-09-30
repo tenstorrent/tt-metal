@@ -1884,6 +1884,22 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
+namespace {
+
+void validate_fabric_mux_client_index(
+    uint32_t client_index,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config) {
+    const auto channel_count = mux_kernel_config.get_num_channels(channel_type);
+    TT_FATAL(
+        client_index < channel_count,
+        "Fabric mux client index {} is out of range for channel count {}",
+        client_index,
+        channel_count);
+}
+
+}  // namespace
+
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -1910,6 +1926,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -1950,6 +1967,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     // Allocate a worker-core-scoped semaphore by querying the next available ID
     // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
     auto alloc_sem = [&]() -> uint32_t {

@@ -23,8 +23,6 @@
 namespace ttnn::operations::experimental::fabric_mux {
 namespace {
 
-// The C++ helper appends arguments to an existing vector; Python callers need
-// an independent value that can be inserted into a kernel descriptor.
 std::vector<uint32_t> client_compile_time_args(
     uint32_t num_clients,
     tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -34,8 +32,6 @@ std::vector<uint32_t> client_compile_time_args(
     return arguments;
 }
 
-// Keep semaphore allocation in TT-Metal so descriptor construction uses the
-// same runtime-argument ABI and semaphore ownership rules as native CCLs.
 std::vector<uint32_t> client_runtime_args(
     bool connection_valid,
     bool is_termination_master,
@@ -88,12 +84,32 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             nb::arg("base_l1_address"),
             nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
             nb::arg("usable_l1_end_address") = 0,
-            "Create a mux configuration whose private memory begins at base_l1_address. The memory map must end at "
-            "or below usable_l1_end_address (exclusive); 0 selects the physical end of L1.")
+            R"doc(
+            Configure the mux L1 memory map.
+
+            Args:
+                num_full_size_channels: Number of full-size channels.
+                num_header_only_channels: Number of header-only channels.
+                num_buffers_per_full_size_channel: Buffers per full-size channel.
+                num_buffers_per_header_only_channel: Buffers per header-only channel.
+                full_size_channel_buffer_size_bytes: Bytes per full-size buffer.
+                base_l1_address: First address of the mux memory map.
+                core_type: Core type for the mux; defaults to WORKER.
+                usable_l1_end_address: Exclusive L1 ceiling; 0 selects the physical L1 end.
+
+            Raises:
+                RuntimeError: No channels are configured, a buffer exceeds the supported size, the core type is
+                    unsupported, or the memory map exceeds the L1 ceiling.
+            )doc")
         .def(
             "kernel_compile_time_args",
             &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_compile_time_args,
-            "Return compile-time arguments for tt_fabric_mux.cpp.")
+            R"doc(
+            Return compile-time arguments for the fabric mux kernel.
+
+            Returns:
+                list[int]: Mux kernel compile-time arguments.
+            )doc")
         .def(
             "kernel_runtime_args",
             &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
@@ -103,26 +119,67 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             nb::arg("link_index"),
             nb::arg("program_descriptor"),
             nb::arg("mux_logical_core"),
-            "Return mux-kernel runtime arguments and append its fabric connection resources to the descriptor.")
+            R"doc(
+            Build mux kernel runtime arguments and append fabric connection resources to the descriptor.
+
+            Args:
+                source_node_id: Fabric node hosting the mux.
+                destination_node_id: Fabric node reached through the selected link.
+                link_index: Fabric link to the destination node.
+                program_descriptor: Descriptor that receives the connection resources.
+                mux_logical_core: Logical core hosting the mux.
+
+            Returns:
+                list[int]: Mux kernel runtime arguments.
+            )doc")
         .def(
             "num_channels",
             &tt::tt_fabric::FabricMuxConfig::get_num_channels,
             nb::arg("channel_type"),
-            "Return the number of channels of channel_type.")
+            R"doc(
+            Return the number of channels of the selected type.
+
+            Args:
+                channel_type: FULL_SIZE or HEADER_ONLY.
+
+            Returns:
+                int: Channel count.
+            )doc")
         .def(
             "num_buffers",
             &tt::tt_fabric::FabricMuxConfig::get_num_buffers,
             nb::arg("channel_type"),
-            "Return the number of buffers in each channel of channel_type.")
+            R"doc(
+            Return the number of buffers in each channel of the selected type.
+
+            Args:
+                channel_type: FULL_SIZE or HEADER_ONLY.
+
+            Returns:
+                int: Buffers per channel.
+            )doc")
         .def(
             "buffer_size_bytes",
             &tt::tt_fabric::FabricMuxConfig::get_buffer_size_bytes,
             nb::arg("channel_type"),
-            "Return the size in bytes of one buffer in a channel of channel_type.")
+            R"doc(
+            Return the size of one buffer in a channel of the selected type.
+
+            Args:
+                channel_type: FULL_SIZE or HEADER_ONLY.
+
+            Returns:
+                int: Buffer size in bytes.
+            )doc")
         .def(
             "memory_map_end_address",
             &tt::tt_fabric::FabricMuxConfig::get_memory_map_end_address,
-            "Return the first L1 address past the mux memory map.");
+            R"doc(
+            Return the exclusive end address of the mux L1 memory map.
+
+            Returns:
+                int: First L1 address after the mux memory map.
+            )doc");
 
     fabric_mux_module.def(
         "client_compile_time_args",
@@ -131,7 +188,17 @@ void bind_fabric_mux(nb::module_& experimental_module) {
         nb::arg("num_clients"),
         nb::arg("channel_type"),
         nb::arg("config"),
-        "Return the compile-time arguments required by a fabric-mux client kernel.");
+        R"doc(
+        Build compile-time arguments for a fabric mux client kernel.
+
+        Args:
+            num_clients: Number of clients sharing the mux direction.
+            channel_type: FULL_SIZE or HEADER_ONLY.
+            config: Mux configuration.
+
+        Returns:
+            list[int]: Client kernel compile-time arguments.
+        )doc");
 
     fabric_mux_module.def(
         "client_runtime_args",
@@ -147,12 +214,38 @@ void bind_fabric_mux(nb::module_& experimental_module) {
         nb::arg("program_descriptor"),
         nb::arg("termination_master_virtual_core"),
         nb::arg("termination_master_semaphore_id") = nb::none(),
-        "Return one client's runtime arguments and append its semaphores to the descriptor.");
+        R"doc(
+        Build one client's runtime arguments and append its new semaphores to the descriptor.
+
+        Args:
+            connection_valid: Whether this client has a mux connection.
+            is_termination_master: Whether this client owns termination synchronization.
+            channel_type: FULL_SIZE or HEADER_ONLY.
+            mux_virtual_core: Virtual coordinates of the mux core.
+            client_index: Channel index for this client.
+            client_logical_core: Logical coordinates of the client core.
+            config: Mux configuration.
+            program_descriptor: Descriptor that receives client semaphores.
+            termination_master_virtual_core: Virtual coordinates of the termination master.
+            termination_master_semaphore_id: Existing termination semaphore ID to reuse, or None to allocate one.
+
+        Returns:
+            list[int]: The 17 client kernel runtime arguments.
+
+        Raises:
+            RuntimeError: The client index is outside the configured channel count, or the descriptor has no
+                available semaphore IDs on the client core.
+        )doc");
 
     fabric_mux_module.def(
         "channel_buffer_size_bytes",
         &tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes,
-        "Return the maximum buffer size for one full-size mux channel.");
+        R"doc(
+        Return the maximum buffer size for one full-size mux channel.
+
+        Returns:
+            int: Maximum buffer size in bytes.
+        )doc");
 }
 
 }  // namespace ttnn::operations::experimental::fabric_mux
