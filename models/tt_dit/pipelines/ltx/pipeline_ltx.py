@@ -43,6 +43,7 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
+from ...utils.memory_log import log_dram
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
@@ -1438,7 +1439,9 @@ class LTXPipeline:
         with Watchdog("vae decode"):
             if output_type == "yuv" and getattr(self.vae_decoder, "trace_yuv_output", False) and self.dynamic_load:
                 raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
+            log_dram(self.mesh_device, f"before video decode ({type(self.vae_decoder).__name__})")
             video = self.vae_decoder(latent_spatial, output_type=output_type)
+            log_dram(self.mesh_device, f"after video decode ({type(self.vae_decoder).__name__})")
         if output_type == "yuv":
             return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
