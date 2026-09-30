@@ -106,7 +106,7 @@ pytest models/experimental/bevformer/tests/pcc/test_backbone_fpn.py
 The backbone and FPN tests use seeded random weights (`tests/backbone_weights.py`), tuned to the output statistics of the trained backbone, and assert PCC 0.99.
 
 #### test_decoder.py
-Tests the six-layer detection decoder, layer by layer.
+Tests the six-layer detection decoder.
 
 **What it tests:**
 - The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid and batch size 2

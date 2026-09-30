@@ -87,9 +87,11 @@ class DetectionTransformerDecoder(nn.Module):
         )
 
     def forward(self, query, value, query_pos, reference_points, spatial_shapes, reg_branches):
-        """Returns every layer's output ``(L, nq, bs, C)`` and refined reference points ``(L, bs, nq, 3)``.
+        """Sequence-first ``query``/``query_pos`` ``(nq, bs, C)`` and ``value`` ``(bev_h * bev_w, bs, C)``;
+        ``reference_points`` ``(bs, nq, 3)`` in [0, 1]; ``spatial_shapes`` the ``(1, 2)`` integer
+        tensor ``[[bev_h, bev_w]]``.
 
-        ``spatial_shapes`` is the ``(1, 2)`` integer tensor ``[[bev_h, bev_w]]``.
+        Returns every layer's output ``(L, nq, bs, C)`` and refined reference points ``(L, bs, nq, 3)``.
         """
         output = query
         intermediate = []
@@ -98,11 +100,11 @@ class DetectionTransformerDecoder(nn.Module):
             reference_points_input = reference_points[..., :2].unsqueeze(2)
             output = layer(output, value, query_pos, reference_points_input, spatial_shapes)
 
-            tmp = reg_branches[lid](output.permute(1, 0, 2))
+            box_delta = reg_branches[lid](output.permute(1, 0, 2))
             new_reference_points = torch.cat(
                 [
-                    tmp[..., REG_XY] + inverse_sigmoid(reference_points[..., :2]),
-                    tmp[..., REG_Z] + inverse_sigmoid(reference_points[..., 2:3]),
+                    box_delta[..., REG_XY] + inverse_sigmoid(reference_points[..., :2]),
+                    box_delta[..., REG_Z] + inverse_sigmoid(reference_points[..., 2:3]),
                 ],
                 dim=-1,
             )

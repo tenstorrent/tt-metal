@@ -256,7 +256,8 @@ class TTMSDeformableAttention:
         if sampling_offsets is None:
             raise ValueError(
                 "TTMSDeformableAttention requires params.sampling_offsets to fold the offset "
-                "normalizer; got params=None or missing sampling_offsets."
+                "normalizer. It is missing, or another TTMSDeformableAttention built from these "
+                "params already folded and freed it; each instance needs its own params."
             )
 
         weight = sampling_offsets.weight
@@ -288,8 +289,7 @@ class TTMSDeformableAttention:
         ttnn.deallocate(weight)
         if bias is not None:
             ttnn.deallocate(bias)
-        # A second instance built from these params now fails the check above instead of
-        # reading deallocated tensors.
+        # Consumed: another instance built from these params fails the check above.
         self.params.sampling_offsets = None
         return folded_weight, folded_bias
 
