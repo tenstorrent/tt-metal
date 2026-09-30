@@ -21,6 +21,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     model_path,
     parametrize_batch,
     parametrize_mesh_tp,
+    random_gdn_state_dict,
     replicate_to_device,
     shard_to_device,
     tp_composer,
@@ -724,7 +725,8 @@ def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, e
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
-def test_gdn_tp_prefill_trace_replay(mesh_device, reset_seeds, ensure_gc, request):
+@pytest.mark.parametrize("weights", ["checkpoint", "random"])
+def test_gdn_tp_prefill_trace_replay(mesh_device, weights, reset_seeds, ensure_gc, request):
     """Chunk-outer prefill through ONE captured trace equals the eager chunks, bit for bit.
 
     Three 2048-token chunks with the persistent carry (_stable_state), first eagerly, then as the
@@ -732,13 +734,15 @@ def test_gdn_tp_prefill_trace_replay(mesh_device, reset_seeds, ensure_gc, reques
     replayed three times with each chunk ttnn.copy'd into the persistent input buffer and the baked
     output read back. Catches anything on the prefill path that allocates or writes from the host
     inside the trace (constants must be built by reset_state) or whose programs differ per chunk.
+    The property needs no trained weights: the `random` variant runs wherever HF_MODEL holds the
+    model's config.json, the `checkpoint` variant where the layer's safetensors are too.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T, n_chunks = 2048, 3
     mesh = mesh_device
     args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=T * n_chunks)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
-    sd = load_gdn_layer(args.CKPT_DIR, li)
+    sd = load_gdn_layer(args.CKPT_DIR, li) if weights == "checkpoint" else random_gdn_state_dict(args, seed=li)
     from models.tt_transformers.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh)
