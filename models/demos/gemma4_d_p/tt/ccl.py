@@ -122,7 +122,7 @@ class CCLManager:
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Return persistent ring-attention receive storage.
 
-        Sliding layers use separate keys for even and odd layer indices.
+        Sliding layers select one of five K/V buffer pairs by layer index modulo 5.
         Dense attention uses full cache capacity; sliding attention uses halo size.
         Heads are sharded across TP columns and replicated across CP rows.
         """
