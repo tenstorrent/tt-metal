@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "pcc_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.9999969061570135
+  },
+  "rel_l2_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.0027941486332565546
+  },
+  "rel_l2_cp_slice0_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.0028039009775966406
+  },
+  "rel_l2_cp_slice1_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.002882901579141617
+  },
+  "rel_l2_cp_slice2_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.0028201150707900524
+  },
+  "rel_l2_cp_slice3_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.002665488515049219
+  },
+  "rel_l2_head_rows_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 0.0030516230035573244
+  },
+  "row_norm_ratio_max_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 1.0030955076217651
+  },
+  "row_norm_ratio_min_attention_L00": {
+   "t": "2026-09-30T23:43:45",
+   "value": 1.0000014305114746
+  }
+ },
+ "task": "C.full_dense.attention"
+}

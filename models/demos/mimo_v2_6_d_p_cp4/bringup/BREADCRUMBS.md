@@ -50,3 +50,44 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   worst row 0.0048.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attn_norm.py`
   (the `FAIL pcc=0` line before the real pass comes from the precompile collect pass, so ignore it).
+
+## C.full_dense.attention.test.1 (test review)
+
+- Started from the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py` (same golden: s4096 chunk 1, start 2048, [2048, 4096] attn_norm -> attn_out). Kept its checks: PCC >= 0.99 (gated), finite output, whole-chunk rel L2 <= 0.015, first 128 rows <= 0.015, and a per-token norm ratio in [0.97, 1.03].
+- Added: rel L2 per CP slice (4 x 512 rows) <= 0.012, recorded as `rel_l2_cp_slice{r}_attention_L00`. CPU measurements against the golden (script `/tmp/cp4m/measure.py`, not kept), as PCC / whole rel / worst slice rel: reference 1.0 / 0.0017 / 0.0017; ring of one hop only 0.99992 / 0.0129 / 0.0216 (the prior checks all miss it); RoPE positions restarting per slice 0.99985 / 0.0165 / 0.0256; no ring 0.99968 / 0.0254 / 0.0374; non-causal across slices 0.99967 / 0.0258 / 0.0392; causal only within a slice 0.99976 / 0.0217 / 0.0251.
+- Verified: BRINGUP_IMPL=reference passes (pcc 1.0, rel 0.0017, slices 0.0017 each, ratio [0.9992, 1.0008]). BRINGUP_IMPL=stub fails (pcc 0). The device gate currently fails with NotImplementedError (no device module yet).
+- The device module must return the full chunk's attn_out in chunk row order (slice r = rows r*512..), in the same shape as the golden.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attention.py`
+
+## C.full_dense.attention.implement.1 (implement)
+
+- `tt/ccl.py`: `RingCCL`, from `gpt_oss_d_p/tt/ccl.py`. It holds the 3 ring semaphores, puts the CCL workers in the
+  last compute column (offset (grid.x-1, 0)) and gives the SDPA grid (grid.x-1, grid.y). The persistent gather buffers
+  [1, nkv, seq, W] are replicated, zeroed once, and keyed by shape. Linear topology, 1 link, cp_axis 1.
+- `tt/attention.py`: `TtFullAttention` (CP=4, TP=1) + `TtKVCacheRing`, copied from the prior's TtFullAttention.
+  Every chip has the whole weights. Q is [4096, 64*192]. KV is [4096, 4*(192+192)], per head [k_h | v_h*0.707
+  zero-padded to 192]. The o_proj is unpadded [8192, 4096]. Two HiFi4 matmuls feed nlp_create_q_heads_split (the Q
+  split gives the RoPE split). Partial RoPE uses `rotary_embedding` + concat. `update_padded_kv_cache`
+  (kv_actual_global=start, cluster_axis=1) writes K and V. Then `ring_joint_scaled_dot_product_attention` runs
+  (causal, chunked, kv_cache_batch_idx 0, logical_n start+S, q64/k256, HiFi4 + fp32 dest, exact exp, scale fp32(192^-0.5)).
+  The output is sliced to V 128, then nlp_concat_heads, then o_proj. No CCL after.
+- The RoPE tables are chunk-major per chip, built once at load for every chunk size in the spec (ladder + target:
+  2048, 5120, 8192) up to max seq 56320. Per chunk they are sliced on device at local row start/4, the same on every
+  chip. A chunk size that is not in the spec asserts.
+- The ring cache is per chip [1, 4, max_seq/4, 192] bf16, interleaved DRAM. Its layout depends on the chunk size
+  C (local row n*L+j on chip r = global n*C + r*L + j), so the cache is bound to one chunk (`bind_chunk`). The harness
+  host fn binds it to ctx.length. A prefix loaded before that is kept on the host and written at bind time (harness
+  boundary, not the module forward). `to_torch` inverts the layout and returns V[..., :128].
+- Gotchas (proposed in known_issues): passing `kv_actual_isl` needs fp32 dest off (streaming kernel), so it is
+  omitted. Starts are chunk-aligned, so the plain chunked path is exact. `nlp_concat_heads` on 64x192 overflows L1,
+  hence the slice to 128 before the concat (instead of the prior's zero-row o_proj).
+- hooks: `_attention_module`, `_attention_host_fn`, `device_component("attention")` (a fresh ring cache per call,
+  holding the golden prefix, built for the golden chunk). `DEVICE_STEPS["full_dense"]` now has `attention`.
+  `_HybridState` keeps device ring caches for the device-attention layers, and the hybrid shares one RingCCL.
+- Gate: pcc 0.999997, rel L2 0.0028, first 128 rows 0.0031, ratio [1.0000, 1.0031], per CP slice
+  [0.0028, 0.0029, 0.0028, 0.0027].
+- Ad-hoc probe (not kept): chunk 0 and chunk 1 of s4096 run on one cache scored PCC 0.999998 / 0.999997
+  (rel 0.0021 / 0.0027). The state read-back vs golden was rel 0.0029 for K and V over [0, 4096).
+- Not done: the narrow-V ring path. Validation relaxes VDH == DH for causal/chunked calls, but no one has tried it
+  in the kernel. Sliding layers still raise NotImplementedError.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_cp4/tests/bringup/test_c_full_dense_attention.py`
