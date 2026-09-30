@@ -16,3 +16,11 @@ Next, once `ssh g14blx03 grep -q DRIVE19_DONE fasth3/drive19.log`:
    `tmp/t19/crop.sh <seed> face t0 h0 w0 3 14 20` (~1 min each on CPU). Then `python tmp/t19/sanity.py <crop_dir> <conv mp4> t0 h0 w0`.
 4. Write FINDINGS.md, copy mp4s/stills to tt-project/baselines/t19/, clean up: blx03 /var/tmp/fasth3/t19,
    blx03 out/ltx25_1080p_6s/t19_conv3, blx03 worktree ~/fasth3/t19 (git worktree remove), local tmp/t19/data (latents, crop .pt).
+
+## 2026-09-30 20:45 (after g15blx02 reboot)
+Driver never submitted: ~/fasth3/drive19.log is empty and no drive19 process survives. No /var/tmp/fasth3/t19 dumps exist.
+blx03 broker is HELD (degraded) since 13:37 PT: t41's job 904 was broker-killed with "chips left PCIe", 8/32 chips
+(8-15) off the bus, bridge-reset and glx_reset attempts (jobs 906-910) failed. No submission while it is held.
+t16's ref_dv145 has no latents (raw/ holds only run.log), so the conv run is still needed for the CPU crop A/B.
+Next: once `tt-device-mcp status 1` on blx03 shows no HELD row and no other smarton job, relaunch drive19.sh
+(setsid nohup, log ~/fasth3/drive19.log). drive16.sh is done, so busy() only waits on other smarton jobs.
