@@ -786,9 +786,13 @@ __attribute__((noinline)) void calculate_i1_fresh_cpp()
         }
         v_endif;
 #ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
-#endif
+        // bf16 destination: store THROUGH a vFloat16b so the store names its
+        // own target precision.
+        const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0]        = b;
+#else
         sfpi::dst_reg[0] = val;
+#endif
         sfpi::dst_reg++;
     }
 }

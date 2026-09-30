@@ -57,8 +57,10 @@ __attribute__((noinline)) void calculate_snake_beta_fresh_cpp(
 
         const sfpi::vFloat inv_beta              = fresh_recip<1>(beta);
         sfpi::vFloat result                      = (r * r) * inv_beta + x;
-        result                                   = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg[dst_index_out * tile_rows] = result;
+        // bf16 destination: store THROUGH a vFloat16b so the store names its
+        // own target precision.
+        const sfpi::vFloat16b b                  = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[dst_index_out * tile_rows] = b;
         sfpi::dst_reg++;
     }
 }

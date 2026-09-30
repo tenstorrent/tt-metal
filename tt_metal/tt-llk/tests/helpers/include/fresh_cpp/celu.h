@@ -57,11 +57,16 @@ __attribute__((noinline)) void calculate_celu_fresh_cpp()
         v_endif;
         if constexpr (!DST_ACCUM_MODE)
         {
-            // bf16 destination: round to nearest-even before the store
-            // truncates (the positive pass-through lanes are already bf16).
-            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+            // bf16 destination: round to nearest-even and store THROUGH a
+            // vFloat16b, so the store names its own target precision (the
+            // positive pass-through lanes are already bf16).
+            const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0]        = b;
         }
-        sfpi::dst_reg[0] = r;
+        else
+        {
+            sfpi::dst_reg[0] = r;
+        }
         sfpi::dst_reg++;
     }
 }

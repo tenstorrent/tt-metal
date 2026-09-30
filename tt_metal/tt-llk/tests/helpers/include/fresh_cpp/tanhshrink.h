@@ -105,9 +105,15 @@ __attribute__((noinline)) void calculate_tanhshrink_fresh_cpp()
 
         if constexpr (!IS_FP32_DEST_ACC)
         {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            // bf16 destination: store THROUGH a vFloat16b so the store names
+            // its own target precision.
+            const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0]        = b;
         }
-        sfpi::dst_reg[0] = result;
+        else
+        {
+            sfpi::dst_reg[0] = result;
+        }
         sfpi::dst_reg++;
     }
 }

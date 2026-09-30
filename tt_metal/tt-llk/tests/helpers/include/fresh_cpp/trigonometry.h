@@ -175,9 +175,15 @@ __attribute__((noinline)) void calculate_acosh_fresh_cpp()
 
         if constexpr (!IS_FP32_DEST_ACC)
         {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
+            // bf16 destination: store THROUGH a vFloat16b so the store names
+            // its own target precision.
+            const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0]        = b;
         }
-        sfpi::dst_reg[0] = res;
+        else
+        {
+            sfpi::dst_reg[0] = res;
+        }
         sfpi::dst_reg++;
     }
 }

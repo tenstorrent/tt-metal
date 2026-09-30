@@ -70,8 +70,10 @@ __attribute__((noinline)) void calculate_selu_fresh_cpp(const std::uint32_t scal
             result = scale_f * x;
         }
         v_endif;
-        result           = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg[0] = result;
+        // bf16 destination: store THROUGH a vFloat16b so the store names its
+        // own target precision.
+        const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0]        = b;
         sfpi::dst_reg++;
     }
 }

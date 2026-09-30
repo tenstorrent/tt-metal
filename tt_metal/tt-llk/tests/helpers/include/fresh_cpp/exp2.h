@@ -52,9 +52,10 @@ __attribute__((noinline)) void calculate_exp2_fresh_cpp()
 
         sfpi::vFloat y = sfpi::setexp(frac, sfpi::exexp(zc, sfpi::ExponentMode::Biased));
 
-        // bf16 destination: round to nearest-even before the store truncates.
-        y                = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg[0] = y;
+        // bf16 destination: round to nearest-even and store THROUGH a
+        // vFloat16b, so the store names its own target precision.
+        const sfpi::vFloat16b b = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0]        = b;
         sfpi::dst_reg++;
     }
 }
