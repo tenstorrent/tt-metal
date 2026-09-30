@@ -277,7 +277,9 @@ def _stub_farm(work, *, idmap_sem_body=b"sem-text\n"):
     return farm, idmap
 
 
-def _run_silicon_stub(work, *, dead="", band_bits=10, npar=8, sem_body=b"sem-text\n"):
+def _run_silicon_stub(
+    work, *, dead="", band_bits=10, npar=8, sem_body=b"sem-text\n", extra_env=None
+):
     """Invoke prove_all's silicon_stream engine over the stub farm."""
     work.mkdir(parents=True, exist_ok=True)
     farm, idmap = _stub_farm(work, idmap_sem_body=sem_body)
@@ -296,6 +298,7 @@ def _run_silicon_stub(work, *, dead="", band_bits=10, npar=8, sem_body=b"sem-tex
         NPAR=str(npar),
         BAND_BITS=str(band_bits),
     )
+    os.environ.update(extra_env or {})
     try:
         rec = PA.run_silicon_stream("myop", SILICON_MAN_ROW, work / "ev", args, 600)
     finally:
@@ -342,6 +345,17 @@ def part_a_silicon_stream():
         assert not PA.cache_eligible("silicon_stream")
         assert PA.cache_eligible("formal_equiv") and PA.cache_eligible("bitexact")
         assert before == 8
+
+        # 3b. an inherited SPACE/FULL_SPACE in the environment cannot shrink the
+        #     sweep or re-license a reduced one: the engine pins BOTH from the
+        #     manifest's arity_space, which is the authority on the op's space.
+        rec3, calls3, _ = _run_silicon_stub(
+            root / "envspace", extra_env={"SPACE": "1024", "FULL_SPACE": "1024"}
+        )
+        assert rec3["class"] == "SILICON-EXHAUSTIVE", rec3
+        assert rec3["covered"] == str(1 << 20), rec3
+        assert {int(c["total"], 0) for c in calls3} == {(1 << 20) // 8}, calls3
+        assert rec3["geometry"]["SPACE"] == str(1 << 20), rec3
 
         # 4. a dead chip must never be certified — the combiner says INCOMPLETE
         #    and the record stays an auditable operational failure.

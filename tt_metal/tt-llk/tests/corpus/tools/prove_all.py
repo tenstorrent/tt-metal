@@ -711,6 +711,11 @@ def run_silicon_stream(op, man_row, out_dir, args, timeout):
         # galaxy_shard.sh's own SWEEP knob makes.
         SWEEP="fp32" if man_row["arity_space"].startswith("single-") else "binary",
         SPACE=str(space),
+        # The manifest's arity_space is the authority on how big this op's space
+        # IS, so it is also what "ALL-INPUTS" has to mean for it.  Passing it
+        # separately from SPACE is what stops a reduced sweep being promoted to
+        # SILICON-EXHAUSTIVE (and lets a genuine single-2^16 op certify).
+        FULL_SPACE=str(space),
         SEM=sem,
         HAND=hand,
         FARM_ROOT=str(args.silicon_farm_root),

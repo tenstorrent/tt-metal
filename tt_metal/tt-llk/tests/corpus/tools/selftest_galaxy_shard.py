@@ -67,10 +67,19 @@ for k in range(n_bands):
     s = start + k * band
     covered += min(band, start + total - s)
 assert covered == total, "stub band recurrence lost coverage"
+# Label exactly as the real streamers do: a slice covers SPACE/NPAR, so in a
+# real galaxy run every slice says PARTIAL and only the combiner may say
+# ALL-INPUTS.  A stub that always said ALL-INPUTS could not catch a combiner
+# that accepted the wrong label.
+verdict = (
+    "BIT-EXACT-ALL-INPUTS"
+    if covered == (1 << 32)
+    else "BIT-EXACT-PARTIAL-%d-OF-2^32" % covered
+)
 (out / (ns.op + "-VERDICT.txt")).write_text(
-    "OP=%s VERDICT=BIT-EXACT-ALL-INPUTS start=%d total=%d bands=%d covered=%d "
+    "OP=%s VERDICT=%s start=%d total=%d bands=%d covered=%d "
     "(full 2^32=%s) wall_s=0.0 witness_bands=[]\\n"
-    % (ns.op, start, total, n_bands, covered, covered == (1 << 32))
+    % (ns.op, verdict, start, total, n_bands, covered, covered == (1 << 32))
 )
 if ns.golden:
     (out / (ns.op + "-CORRECTNESS-VERDICT.txt")).write_text(
@@ -186,7 +195,37 @@ def test_partition_matrix(tmp: Path) -> None:
         )
         assert rc == 0, f"space={space} npar={npar} bb={band_bits}: rc={rc} :: {last}"
         assert_exact_cover(calls, space, npar)
+        # Tiling the requested space must never be reported as exhausting 2^32.
+        expect = (
+            "BIT-EXACT-ALL-INPUTS"
+            if space == TWO32
+            else f"BIT-EXACT-PARTIAL-{space}-OF-2^32"
+        )
+        assert f"VERDICT={expect}" in last, f"space={space}: expected {expect} :: {last}"
     print(f"PASS {len(cases)} shard geometries partition exactly (incl. ragged bands)")
+
+
+def test_reduced_space_cannot_certify(tmp: Path) -> None:
+    """The defect this guards: a reduced SPACE tiles itself exactly.
+
+    Every slice verdict is well-formed, the partition is perfect and rc is 0 --
+    and the run still covered 0.02% of the space.  `covered == space` is true of
+    ANY requested range, so the combiner must label against 2^32, exactly as the
+    streamers do per slice.  Before this, `SPACE=2^18 galaxy_shard.sh` printed
+    VERDICT=BIT-EXACT-ALL-INPUTS.
+    """
+    for space in (1 << 18, 1 << 20, TWO32 // 2):
+        rc, last, calls, _ = run_shard(
+            tmp, f"reduced-{space}", NPAR=32, BAND_BITS=10, SPACE=space
+        )
+        assert_exact_cover(calls, space, 32)
+        assert "BIT-EXACT-ALL-INPUTS" not in last, (
+            f"a {space}-input sweep certified itself as exhaustive :: {last}"
+        )
+        assert f"VERDICT=BIT-EXACT-PARTIAL-{space}-OF-2^32" in last, last
+        # The comparison did pass, so rc stays 0; the LABEL carries the coverage.
+        assert rc == 0, f"space={space}: rc={rc} :: {last}"
+    print("PASS a reduced SPACE reports PARTIAL, never ALL-INPUTS")
 
 
 def test_degenerate_geometries_refuse(tmp: Path) -> None:
@@ -309,6 +348,7 @@ def test_combiner_failed_chips_override_present_verdicts() -> None:
             )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert passed, summary
+        assert "VERDICT=BIT-EXACT-PARTIAL-10-OF-2^32" in summary, summary
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False, {1})
         assert not passed and "invalid=[1]" in summary, summary
     print("PASS combiner honours --failed-chips over a present verdict file")
@@ -322,6 +362,7 @@ def main() -> int:
         root = Path(tmp)
         test_exact_partition(root)
         test_partition_matrix(root)
+        test_reduced_space_cannot_certify(root)
         test_degenerate_geometries_refuse(root)
         test_dead_slice_is_not_covered(root)
         test_stale_verdict_cannot_stand_in_for_a_dead_slice(root)

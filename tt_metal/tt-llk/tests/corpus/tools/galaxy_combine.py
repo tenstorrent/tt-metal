@@ -7,6 +7,20 @@ import argparse
 from pathlib import Path
 import re
 
+# Two different quantities, conflated until now:
+#   `space`       what THIS RUN asked the slices to sweep (galaxy_shard.sh SPACE)
+#   `full_space`  the op's WHOLE input space, the only thing "ALL-INPUTS" means
+# `covered == space` is true of any requested range, so it cannot license the
+# exhaustive label; only `covered == full_space` can.  Default full_space to the
+# single-/joint-2^32 space both streamers sweep; a caller that knows the op's
+# space is smaller (prove_all, from the manifest's arity_space) says so.
+TWO32 = 1 << 32
+
+
+def space_label(n: int) -> str:
+    """Render a power of two as 2^N, anything else as a decimal count."""
+    return f"2^{n.bit_length() - 1}" if n > 0 and n & (n - 1) == 0 else str(n)
+
 
 def verdict_tokens(text: str) -> dict[str, str]:
     """Parse whitespace-delimited key=value fields without substring matches."""
@@ -24,6 +38,7 @@ def combine(
     golden: bool,
     shard_failed: bool,
     failed_chips: "set[int] | None" = None,
+    full_space: int = TWO32,
 ):
     covered = 0
     # A zero-sized slice is not a covered slice: with space==0 (or space<npar)
@@ -88,9 +103,22 @@ def combine(
             ):
                 numeric_ok = False
     invalid_list = sorted(invalid)
-    full = covered == space and not invalid_list and not shard_failed
-    if all_equal and full:
-        verdict = "BIT-EXACT-ALL-INPUTS"
+    # Tiling the requested range is necessary but NOT sufficient: `covered ==
+    # space` only says the slices partitioned the space this run asked for.  A
+    # reduced SPACE (e.g. a 2^18 smoke) satisfies it exactly and used to be
+    # stamped BIT-EXACT-ALL-INPUTS -- the reduced-sweep-certifies-itself defect
+    # the streamers were fixed for, surviving up here because the combiner had
+    # nothing but the request to compare against.  The exit status follows the
+    # comparison, as the streamers do; the LABEL carries the coverage.
+    tiled = covered == space and not invalid_list and not shard_failed
+    if full_space < 1:
+        tiled = False
+    if all_equal and tiled:
+        verdict = (
+            "BIT-EXACT-ALL-INPUTS"
+            if covered == full_space
+            else "BIT-EXACT-PARTIAL-%d-OF-%s" % (covered, space_label(full_space))
+        )
     elif not all_equal and not invalid_list:
         verdict = "DIVERGENT"
     else:
@@ -100,7 +128,9 @@ def combine(
     )
     summary = (
         f"OP={op} VERDICT={verdict} slices={npar} covered={covered} "
-        f"(full {space}={covered == space}) invalid={invalid_list} witness={witness} "
+        f"requested={space} tiled={covered == space} "
+        f"full_space={full_space} (full {space_label(full_space)}="
+        f"{covered == full_space}) invalid={invalid_list} witness={witness} "
         f"numeric_gate={numeric_status} "
         "numeric_contract=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
         "NOT-ABSOLUTE-ULP-CERTIFIED"
@@ -122,6 +152,14 @@ def main() -> int:
         help="comma-separated chip indices whose slice process exited non-zero; "
         "their ranges are marked invalid regardless of any verdict file present",
     )
+    parser.add_argument(
+        "--full-space",
+        type=int,
+        default=TWO32,
+        help="the op's WHOLE input space (default 2^32, what both streamers "
+        "sweep).  BIT-EXACT-ALL-INPUTS requires covered == this; a smaller "
+        "`space` is labelled BIT-EXACT-PARTIAL-<covered>-OF-<full-space>.",
+    )
     args = parser.parse_args()
     failed_chips = {int(x) for x in args.failed_chips.split(",") if x.strip()}
     summary, passed = combine(
@@ -132,6 +170,7 @@ def main() -> int:
         bool(args.golden),
         bool(args.shard_rc),
         failed_chips,
+        args.full_space,
     )
     print(summary)
     return 0 if passed else 1

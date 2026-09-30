@@ -16,7 +16,11 @@
 #   SWEEP     binary | fp32   which streamer (default binary)
 #             binary = two-operand joint space (binary_stream_sweep.py)
 #             fp32   = one-operand space      (fp32_stream_sweep.py)
-#   SPACE     input-space size, default 2^32 (both sweeps today)
+#   SPACE     how much of the space THIS RUN sweeps, default 2^32
+#   FULL_SPACE the op's WHOLE input space, default 2^32 (both sweeps today).
+#             BIT-EXACT-ALL-INPUTS needs covered==FULL_SPACE; a reduced SPACE is
+#             labelled BIT-EXACT-PARTIAL-<covered>-OF-<FULL_SPACE> and can never
+#             be promoted to an exhaustive claim by accident.
 #   NPAR      chips, default 32
 #   BAND_BITS per-slice band size, default 23
 #   STAGGER   seconds between chip launches, default 3
@@ -40,6 +44,7 @@ NPAR="${NPAR:-32}"
 BAND_BITS="${BAND_BITS:-23}"
 STAGGER="${STAGGER:-3}"
 SPACE="${SPACE:-4294967296}"
+FULL_SPACE="${FULL_SPACE:-4294967296}"
 PYDIR="$FARM_ROOT/tests/python_tests"
 TOOLS="$FARM_ROOT/tests/corpus/tools"
 BUILD="$FARM_ROOT/build"
@@ -58,13 +63,19 @@ esac
 # mid-script instead of a named refusal).  Validate them as plain decimals up
 # front so a typo is a refusal, never a zero-sized "proof".
 _posint() { case "${2:-}" in ''|*[!0-9]*) echo "FATAL: $1 must be a decimal integer, got '${2:-}'" >&2; exit 2 ;; esac; }
-_posint NPAR      "$NPAR"
-_posint SPACE     "$SPACE"
-_posint BAND_BITS "$BAND_BITS"
-_posint STAGGER   "$STAGGER"
+_posint NPAR       "$NPAR"
+_posint SPACE      "$SPACE"
+_posint FULL_SPACE "$FULL_SPACE"
+_posint BAND_BITS  "$BAND_BITS"
+_posint STAGGER    "$STAGGER"
 case "${GOLDEN:-1}" in 0|1) ;; *) echo "FATAL: GOLDEN must be 0 or 1, got '${GOLDEN:-}'" >&2; exit 2 ;; esac
 [ "$NPAR"  -gt 0 ] || { echo "FATAL: NPAR must be positive" >&2; exit 2; }
 [ "$SPACE" -gt 0 ] || { echo "FATAL: SPACE must be positive — a zero-sized space would 'cover' itself" >&2; exit 2; }
+[ "$FULL_SPACE" -gt 0 ] || { echo "FATAL: FULL_SPACE must be positive" >&2; exit 2; }
+# Sweeping MORE than the op's whole space is a mis-declared geometry, not a
+# stronger proof; refuse rather than let covered overshoot FULL_SPACE.
+[ "$SPACE" -le "$FULL_SPACE" ] \
+  || { echo "FATAL: SPACE=$SPACE exceeds FULL_SPACE=$FULL_SPACE" >&2; exit 2; }
 [ "$BAND_BITS" -gt 0 ] && [ "$BAND_BITS" -le 32 ] \
   || { echo "FATAL: BAND_BITS must be in 1..32, got '$BAND_BITS'" >&2; exit 2; }
 
@@ -221,7 +232,8 @@ echo "all slices done $(date -u +%H:%M:%SZ) failed_chips=[${failed_chips}]" | te
 # --failed-chips names the dead slices so the combiner marks their ranges
 # invalid by identity, instead of leaning on one shard_rc boolean that a
 # hand re-run of galaxy_combine.py would not reproduce.
-combine_args=("$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc")
+combine_args=("$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc"
+              --full-space "$FULL_SPACE")
 [ -n "$failed_chips" ] && combine_args+=(--failed-chips "$failed_chips")
 "$VENV" "$TOOLS/galaxy_combine.py" "${combine_args[@]}" | tee "$OUT/$OP-VERDICT.txt"
 combine_rc=${PIPESTATUS[0]}
