@@ -14,29 +14,18 @@ namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 std::array<ttnn::Tensor, 3> offset_cumsum(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
-    uint32_t num_links,
+    uint32_t /*num_links*/,
     uint32_t experts_per_chip,
     const ttnn::MemoryConfig& memory_config,
-    bool use_l1_small_for_semaphores) {
+    bool /*use_l1_small_for_semaphores*/) {
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];
 
     auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({1, n_routed_experts}));
 
-    auto gathered = ttnn::all_gather(
-        reshaped,
-        /*dim=*/0,
-        /*cluster_axis=*/cluster_axis,
-        /*memory_config=*/memory_config,
-        /*persistent_output_tensor=*/std::nullopt,
-        /*subdevice_id=*/std::nullopt,
-        /*sub_core_grid=*/std::nullopt,
-        /*num_links=*/num_links,
-        /*topology=*/std::nullopt,
-        /*chunks_per_sync=*/std::nullopt,
-        /*num_workers_per_link=*/std::nullopt,
-        /*num_buffers_per_channel=*/std::nullopt,
-        /*use_l1_small_for_semaphores=*/use_l1_small_for_semaphores);
+    // all_gather no longer consumes the legacy link/semaphore options. Keep them
+    // in offset_cumsum's API for compatibility, without a warning on every call.
+    auto gathered = ttnn::all_gather(reshaped, /*dim=*/0, /*cluster_axis=*/cluster_axis, memory_config);
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 

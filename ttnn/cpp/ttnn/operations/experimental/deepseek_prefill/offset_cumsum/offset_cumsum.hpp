@@ -11,10 +11,8 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 
-// `use_l1_small_for_semaphores`: route the internal cross-device all-gather's global semaphores to the
-// L1_SMALL region instead of main L1. The all-gather creates its sync semaphores internally and keeps
-// them resident; in main L1 they pin the L1 floor and clash with the next layer's MLA static CBs. Routing
-// them to L1_SMALL keeps them off the main-L1 floor. Requires the device opened with l1_small_size > 0.
+// `num_links` and `use_l1_small_for_semaphores` are retained for API compatibility.
+// The current internal all_gather implementation ignores these legacy options.
 std::array<ttnn::Tensor, 3> offset_cumsum(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
