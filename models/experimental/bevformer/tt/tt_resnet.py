@@ -38,10 +38,19 @@ class TtModulatedDeformConv2dPack:
 
         # conv_offset emits the pixel offsets, already in the device DCN's (x, y) order (see
         # create_resnet_parameters), then the mask logits. Its output is bfloat16 whatever the
-        # input dtype, since the offsets set the sampling positions.
+        # input dtype, since the offsets set the sampling positions. Trained offsets reach tens
+        # of pixels, and accumulating in a bfloat16 destination register errs by up to a few of
+        # them, so the register is fp32. The partial sums conv2d writes back between reduction
+        # blocks stay bfloat16 (packer_l1_acc is off); keeping those in fp32 too measured no
+        # better.
         self.num_offset_channels = 2 * kernel_positions
         self.conv_offset = TtnnConv2D(
-            offset_args, conv_pth.conv_offset, device=device, input_dtype=input_dtype, output_dtype=ttnn.bfloat16
+            offset_args,
+            conv_pth.conv_offset,
+            device=device,
+            fp32_dest_acc_en=True,
+            input_dtype=input_dtype,
+            output_dtype=ttnn.bfloat16,
         )
 
     def __call__(self, x):
