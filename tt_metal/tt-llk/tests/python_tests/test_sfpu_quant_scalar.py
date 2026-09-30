@@ -6,7 +6,7 @@ LLK SFPU quantization tests: quant (Float32 -> Int32), requant (Int32 -> Int32) 
 with a per-tensor scale, in the two LLK forms of the scale (see perf_sfpu_quant_scalar.py): the scale as a DEST
 tile (``tile``) and the scale loaded once by the init (``scalar``). Both forms run on the same stimuli against the
 same host reference, bit for bit: whole-number results (``exact``) and fractions, ties and both saturation ends
-(the signed int8 rounding of SFPSTOCHRND rounds half to even and clamps to plus or minus 127). One configuration
+(the signed int8 rounding of SFPSTOCHRND rounds to nearest with ties away from zero and clamps to plus or minus 127). One configuration
 per test, so the compile-producer / consumer split of the harness builds every variant.
 
 Int32 buffers use two's complement in L1 (twos_complement=True), the encoding the quant kernels read and write.
@@ -58,7 +58,11 @@ def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:
 def _reference(quant_op: str, x: torch.Tensor) -> torch.Tensor:
     if quant_op == "dequant":
         return (x.to(torch.float32) - _ZERO_POINT) * _SCALE
-    q = torch.round(x.to(torch.float32) * _SCALE + _ZERO_POINT)
+    # x * scale + zero_point in float32 as the SFPMAD computes it, then the SFPSTOCHRND float to int8 conversion in
+    # its round-to-nearest mode: ties away from zero (tt-isa-documentation, SFPSTOCHRND float to integer), clamp to
+    # plus or minus 127. floor(|y| + 0.5) in float64 is exact for every float32 y.
+    y = (x.to(torch.float32) * _SCALE + _ZERO_POINT).to(torch.float64)
+    q = torch.sign(y) * torch.floor(y.abs() + 0.5)
     return torch.clamp(q, -127, 127).to(torch.int32)
 
 
