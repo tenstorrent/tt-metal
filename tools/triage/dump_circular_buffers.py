@@ -117,6 +117,8 @@ def read_core(location: OnChipCoordinate, dispatcher_data: DispatcherData) -> li
         if arch is None or core.go_message == "DONE" or core.mailboxes is None:
             return None
         kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
+        if int(kernel_config.enables) == 0:
+            return None
         rows = local_rows(location, kernel_config, core.kernel_config_base, arch)
         rows += remote_rows(location, kernel_config, core.kernel_config_base, arch)
         return rows or None
