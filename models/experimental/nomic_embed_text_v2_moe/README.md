@@ -86,14 +86,17 @@ tests/
   conftest.py                 session-scoped checkpoint, model and tokenizer fixtures
   pcc/                        correctness tests: one file per operator group, module and the model
   pcc/module_common.py        shared scaffolding for the module tests, not a test file itself
+  perf/                       host latency and device kernel time on a fixed set of shapes
+  perf/perf_common.py         shared scaffolding for the perf tests, not a test file itself
 tt/
   model_config.py             dtypes, layout and compute kernel configs, bound to a device
+  matmul_config.py            program configs for every matmul, derived from the call's shape
   common.py                   weight reorientation, rotary tables, attention mask, reshapes
   embeddings.py               word lookup, token-type embedding folded into the table
   attention.py                fused QKV, rotary, bidirectional SDPA, output projection
   mlp.py                      dense FFN, even-numbered layers
   router.py                   fp32 softmax, top-k, dense routing weights
-  experts.py                  all experts as two broadcast-batch matmuls, gate and reduce
+  experts.py                  every token through every expert's w1 and w2, gate and reduce
   moe.py                      router plus experts, odd-numbered layers
   block.py                    one encoder block, post-norm with fused residual adds
   encoder.py                  the 12 blocks in sequence
@@ -178,6 +181,18 @@ pytest .../tests/pcc/test_ttnn_operators*.py -v     # operators
 pytest .../tests/pcc/ -k "ttnn and not operators"   # modules and the model
 pytest .../tests/pcc/test_ttnn_model.py -v          # end to end
 ```
+
+### Performance
+
+```bash
+pytest models/experimental/nomic_embed_text_v2_moe/tests/perf/test_nomic_perf.py -v
+pytest models/experimental/nomic_embed_text_v2_moe/tests/perf/test_nomic_device_perf.py -v
+```
+
+The first reports host latency at three shapes plus a full `encode` request; the second reports
+device kernel time and asserts it against the recorded baseline at a 3% margin. Run the device
+test separately from anything setting `TT_METAL_WATCHER`: the profiler and Watcher contend for
+the same debug resources.
 
 ### Demo
 

@@ -22,6 +22,8 @@ void kernel_main() {
     static_assert(sdpa_fidelity_from_sel<3>() == MathFidelity::HiFi3);
     static_assert(sdpa_fidelity_from_sel<4>() == MathFidelity::HiFi4);
 
+    MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, output_tiles));
+    PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     for (std::uint32_t tile = 0; tile < count; ++tile) {
         input.wait_front(1);

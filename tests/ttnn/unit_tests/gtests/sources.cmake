@@ -33,6 +33,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
+    test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
@@ -49,6 +50,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_commands.cpp
     ccl/test_ccl_helpers.cpp
+    ccl/test_ccl_llama_rs_signaler.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp

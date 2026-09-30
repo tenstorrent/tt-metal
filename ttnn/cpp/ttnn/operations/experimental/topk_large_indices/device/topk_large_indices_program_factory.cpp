@@ -227,6 +227,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     reader_compile_args.push_back(has_meta ? cb_meta : 0u);
     reader_compile_args.push_back(has_meta ? operation_attributes.valid_length_offset : 0u);
     interleaved_accessor_args(has_meta ? *tensor_args.valid_length_tensor : input).append_to(reader_compile_args);
+    // Real-token-end block: accessor only (placeholder when absent). No presence flag -- metadata mode is
+    // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
+    const bool has_vend = tensor_args.has_valid_end_metadata();
+    interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -274,7 +278,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .valid_length = operation_attributes.valid_length};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
-    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0});
+    const uint32_t valid_end_addr =
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr});
     tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
@@ -299,6 +306,10 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     reader_args[topk_common_args::input_address] = input.buffer()->address();
     reader_args[topk_common_args::metadata_address] =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
+    // Refreshed alongside metadata_address: the bound lives in a device tensor whose buffer can move
+    // between dispatches, and a stale address here would silently clamp the search to garbage.
+    reader_args[topk_common_args::valid_end_address] =
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length

@@ -37,7 +37,7 @@ unset, the `weight_cache_path` fixture silently builds a fresh cache under the H
 | `MODEL` | test function | variant / layers |
 |---|---|---|
 | `KIMI_K2_7` | `test_kimi_prefill_transformer_chunked_perf` | `kimi_k2_7` / `L61` |
-| `GLM5_2` | `test_glm_prefill_transformer_chunked_no_pcc` | `glm52` / `L78` |
+| `GLM5_3` | `test_glm_prefill_transformer_chunked_no_pcc` | `glm53` / `L78` |
 
 The rest of the node id, overridable per run. These are parametrize **ids**, not values —
 `ITERS_ID=iters25`, not `25`:
