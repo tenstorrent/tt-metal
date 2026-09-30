@@ -37,9 +37,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         ROW_MAJOR per device.
 
         The output is BFLOAT16 whatever the input: a BFLOAT8_B buffer is dequantised by the untilize,
-        exactly, since every bfp8 value is representable in BFLOAT16. There is no BFLOAT8_B ROW_MAJOR
-        input (bfp8 only exists tiled) and no fp8 output path: fp8 comes out of the packer, and the
-        untilize here runs on cores that do not write the output.
+        exactly, since every BFLOAT8_B value is representable in BFLOAT16. There is no BFLOAT8_B
+        ROW_MAJOR input (BFLOAT8_B only exists tiled). Unlike `combine`, there is no FP8_E4M3 output
+        (`use_fp8_combine`): that conversion happens in the packer, and the untilize here runs on cores
+        that do not write the output.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),

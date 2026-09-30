@@ -313,7 +313,7 @@ void add_untilizer_cbs(
         .core_ranges = core,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = cmbf2d::UNT_CB_OUT,
-            .data_format = tt::DataFormat::Float16_b,
+            .data_format = token_data_format(),
             .page_size = token_size_bytes(tensor_args),
         }}}});
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -324,8 +324,7 @@ void add_untilizer_cbs(
             .data_format = tt::DataFormat::UInt32,
             .page_size = BATCH_COUNT_PAGE_BYTES,
         }}}});
-    // In the dispatched buffer's own format, so the unpacker dequantises a bfp8 tile on its way to the
-    // BFLOAT16 cb_out.
+    // In the dispatched buffer's own format, so the unpacker dequantises a bfp8 tile on its way to cb_out.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args),
         .core_ranges = core,

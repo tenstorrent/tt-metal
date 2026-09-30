@@ -115,7 +115,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         buf.dtype(),
         buf.layout());
     // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
-    // pages by exactly one token; a TILE one is untilized into tokens on the way through.
+    // pages by exactly one token; a TILE one pages by one tile, which the untilizer reads and strides its input
+    // CB by.
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
@@ -236,9 +237,7 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            args.output_mem_config));
+            TOKEN_DTYPE, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
