@@ -1092,6 +1092,16 @@ inline void _bitonic_topk_local_sort_(
     bool init_load  = (topk_replay_init >= 0) ? true : false;
     bool init_store = (topk_replay_init >= 0) ? true : false;
     bool init_phase;
+    if (i_start_phase > 0 && init_load)
+    {
+        // Only the phase 0 loop records the load16 and store16 windows; a call that starts at a later phase replays
+        // them, so record them here (without executing) when the cache does not hold them (after an init, a merge,
+        // a rebuild or a fuse). No caller starts after phase 0 today.
+        load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+        load_replay_buf<NoExec>(8, ldst_count, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8); });
+        init_load  = false;
+        init_store = false;
+    }
 
     // With the first tile sorted, phases 0 to 4 address the second tile only: groups 2 and 3 of the phase 0 to 3
     // loops and the second 32-datum sequence of phase 4, both reached by moving the DEST target offset 64 rows up
