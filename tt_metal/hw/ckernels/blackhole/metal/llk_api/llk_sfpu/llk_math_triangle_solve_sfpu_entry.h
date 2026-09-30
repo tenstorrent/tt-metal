@@ -14,9 +14,15 @@
 
 namespace ckernel {
 
+/**
+ * @brief Configure the SFPU for the triangle solve: the ADDR_MOD_7 its SFPLOAD/SFPSTOREs use, nothing else.
+ *
+ * @note Call before the first @ref llk_math_triangle_solve_sfpu_tile of a kernel section; the solve keeps no other
+ * state.
+ */
 inline void llk_math_triangle_solve_sfpu_init() {
     SAN_HOOK(unsupported());
-    llk_math_eltwise_binary_sfpu_init<SfpuType::triangle_solve>(sfpu::_triangle_solve_init_);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::triangle_solve>();
 }
 
 /**
@@ -42,7 +48,7 @@ inline void llk_math_triangle_solve_sfpu_tile(
     // written by the packer or the NoC.
     invalidate_l1_cache();
     // The solve addresses DEST absolutely (tile index * rows per tile), so the DEST base is 0.
-    _llk_math_eltwise_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0 /*dst_index*/);
     sfpu::_triangle_solve_tile_<L_FORMAT, L_NEGATED>(idst_in, idst_out, l1_base);
     _llk_math_eltwise_sfpu_done_();
 }

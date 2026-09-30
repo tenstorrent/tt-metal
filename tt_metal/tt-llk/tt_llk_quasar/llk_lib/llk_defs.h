@@ -209,7 +209,6 @@ enum class SfpuType : std::uint32_t
     remainder_int32,
     situ_glu,
     snake_beta,
-    triangle_solve,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its
