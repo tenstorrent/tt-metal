@@ -586,11 +586,15 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, timing_tree, diffvae_optio
     config = decoder_config(CHECKPOINT)
     t_lat = bench_options.latent_frames()
     latent = bench.latent(config, t_lat, latent_hw)
+    lh, lw = latent_hw
+    if path := os.environ.get("DIFFVAE_LATENT"):
+        # A pipeline's final video latent, (1, T*H*W, C) in (t, h, w) token order: real content.
+        tokens = torch.load(path)["video"]
+        latent = tokens.reshape(1, t_lat, lh, lw, -1).permute(0, 4, 1, 2, 3).contiguous().to(latent.dtype)
     dec = bench.production_decoder(mesh_device, config, bench_options.ccl(mesh_device), diffvae_options)
     dec.load_checkpoint(CHECKPOINT)
 
     px, dt = bench.timed_decode(dec, latent, mesh_device)
-    lh, lw = latent_hw
     print(
         f"\n[decode {bench.describe(diffvae_options)} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw})"
         f" -> {tuple(px.shape)}: {dt:8.0f} ms\n"
