@@ -13,3 +13,6 @@
 - 2026-09-30 14:15 UTC (attempt 3): 601/602 FAILED in 3 s — t22 had no ttnn/ttnn/_ttnn.so (ImportError
   get_all_unsafe_tracked_ids). Fixed: symlink ttnn/ttnn/_ttnn.so -> t14's build (t22 has no ttnn diff vs t14; import checked OK).
   Resubmitted directly: job 630 (noisepf), 631 (noisepf_ph). On resume: `bash tmp/cmp.sh noisepf 630`, `bash tmp/cmp.sh noisepf_ph 631`.
+- 2026-09-30 14:50 UTC (attempt 4): 630/631 FAILED at mesh open — t22 lacked the `runtime` symlink (firmware .ld not found).
+  Fixed: `ln -s ../t7/runtime runtime` (same as t14). Resubmitted via prewarm_and_submit.sh (-t 450):
+  job 638 (noisepf), 639 (noisepf_ph). On resume: `bash tmp/cmp.sh noisepf 638`, `bash tmp/cmp.sh noisepf_ph 639`.
