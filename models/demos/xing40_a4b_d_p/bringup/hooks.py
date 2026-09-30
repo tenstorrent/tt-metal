@@ -9,7 +9,6 @@ Contract side (contract role): contract_independent_pcc (optional).
 See models/demos/common/bringup/reference/interface.py and testing/harness.py for the contracts.
 """
 
-
 import torch
 
 
@@ -27,7 +26,7 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a"},
+    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -39,6 +38,8 @@ _NORM_STEPS = {"attn_norm"}
 # q_a stem (tt/q_a.py:TtQa): column-split [S, H] in -> K-split q_a_proj -> all_reduce axis 1 -> q_a_layernorm ->
 # row-split q_resid [S, 768], replicated over axis 1.
 _QA_STEPS = {"q_a"}
+# Dense causal MLA (tt/attention.py:TtMlaAttention), stateful: owns the layer's block-cyclic device latent cache.
+_ATTENTION_STEPS = {"attention"}
 
 
 def _loader(spec):
@@ -127,7 +128,56 @@ def _qa_host_fn(mesh, module):
     return fn
 
 
+class _AttentionHostFn:
+    """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 768]) -> attn_out host [S, H] fp32.
+
+    Harness boundary around TtMlaAttention, which keeps the layer's MLA latent cache on the device. With a device
+    ctx (component / swap tests: ``state_prefix``, ``prefix_len``, ``max_seq`` in ctx.extra) every call reloads the
+    golden kv_latent prefix. In the hybrid model the cache persists across chunks; the hybrid state calls ``reset``
+    / ``load_prefix`` / ``read_state``."""
+
+    stateful = True
+    state_key = "kv_latent"
+
+    def __init__(self, mesh, module):
+        self.mesh, self.mod = mesh, module
+        self.reset()
+
+    def reset(self):
+        self._pending, self._fresh = None, True
+
+    def load_prefix(self, kv_latent):
+        self._pending, self._fresh = kv_latent, True
+
+    def read_state(self, length):
+        return self.mod.read_state(length)
+
+    def __call__(self, ctx, x, q_resid):
+        import ttnn
+        from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_device, col_split_to_host, row_split_to_device
+
+        if "state_prefix" in ctx.extra:
+            self.mod.setup(ctx.length, ctx.extra["max_seq"])
+            self.mod.load_state(ctx.extra["state_prefix"]["kv_latent"][: ctx.extra["prefix_len"]])
+        else:
+            self.mod.setup(ctx.length, ctx.state.max_seq)
+            if self._fresh:
+                self.mod.load_state(self._pending)
+                self._fresh = False
+        xd = col_split_to_device(self.mesh, x, dtype=ttnn.bfloat16)
+        qd = row_split_to_device(self.mesh, q_resid, dtype=ttnn.bfloat16)
+        od = self.mod(xd, qd, ctx.start)
+        out = col_split_to_host(self.mesh, od).float()
+        for t in (xd, qd, od):
+            ttnn.deallocate(t)
+        return out
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
+    if step in _ATTENTION_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.attention import build_attention
+
+        return _AttentionHostFn(mesh, build_attention(mesh, loader, cfg, layer))
     if step in _COLLAPSE_STEPS:
         from models.demos.xing40_a4b_d_p.tt.collapse import build_collapse
 
@@ -155,16 +205,26 @@ def device_component(mesh, spec, layer, step):
 
 
 class _HybridState:
-    """The CPU reference state (no device-stateful step is swapped yet)."""
+    """The CPU reference state, with the caches of the device's stateful steps (``_AttentionHostFn``: kv_latent) on
+    the device."""
 
-    def __init__(self, ref, max_seq):
+    def __init__(self, ref, max_seq, device_state=None):
         self.ref, self.s = ref, ref.new_state(max_seq)
+        self.dev = device_state or {}  # layer -> [stateful host fns], each owning ``state_key``
+        for fns in self.dev.values():
+            for fn in fns:
+                fn.reset()
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
+        for fn in self.dev.get(layer, ()):
+            fn.load_prefix(tensors[fn.state_key][:length])
 
     def to_torch(self, layer, length):
-        return self.ref.state_tensors(self.s, layer, length)
+        d = self.ref.state_tensors(self.s, layer, length)
+        for fn in self.dev.get(layer, ()):
+            d[fn.state_key] = fn.read_state(length)
+        return d
 
 
 class HybridDeviceModel:
@@ -189,7 +249,8 @@ class HybridDeviceModel:
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq)
+        dev = {i: [f for f in o.values() if getattr(f, "stateful", False)] for i, o in self.overrides.items()}
+        return _HybridState(self.ref, max_seq, dev)
 
     def embed(self, tokens):
         import torch.nn.functional as F
