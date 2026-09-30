@@ -1531,6 +1531,13 @@ tasks:
     - experts
     - shared_expert
     layer: 2
+  frozen:
+    at: '2026-09-30T15:39:10'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_12_shared_expert.py: 61b1385b7f4e3eaa4e32d873cc6daf01351837463b3c4ac6574a052e319974ef
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.moe.moe_add
   title: moe moe_add (residual) on device, layer 2
   step: implement
