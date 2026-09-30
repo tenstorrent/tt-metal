@@ -90,7 +90,15 @@ def run_component_test(
     compare_mode: str | None = None,
     thr: float | None = None,
     metric: str | None = None,
+    checks: str | None = None,
 ) -> bool:
+    """checks=None: the gate vs the golden only (compare_mode, thr). checks="auto" (F56): also the built-in checks
+    by output kind and the second inputs (testing/component_checks.py); BRINGUP_IMPL=mutations runs the freeze sweep
+    (CPU) instead."""
+    if checks not in (None, "auto"):
+        raise ValueError(f"checks={checks!r}: None or 'auto'")
+    if checks == "auto":
+        return _run_auto(s, step, layer, mesh, compare_mode, thr, metric)
     ref_hooks = s.hooks()
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
@@ -114,6 +122,47 @@ def run_component_test(
         metric or f"pcc_{step}_L{layer:02d}", out, want, mode, threshold(s, "component") if thr is None else thr
     )
     return ok
+
+
+_EXPECT = {}  # (layer, step, chunk, mode, thr) -> Expect; reused only with the same reference object (dev proofs)
+
+
+def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
+    from models.demos.common.bringup.plan.op_request import deferred_steps
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    g, c = component_golden(s)
+    layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
+    ref = s.hooks().reference(s, layers=[layer], dtype=torch.float32)
+    st = _step(ref, layer, step)
+    want = g.layer(c, layer)[st.output]
+    want = want.float() if want.is_floating_point() else want
+    thr = threshold(s, "component") if thr is None else thr
+    name = metric or f"pcc_{step}_L{layer:02d}"
+    if impl_mode() == "device" and (s.block_type_of(layer), step) in deferred_steps(s):
+        print(f"FAIL {step}: deferred to op-gen (task DEFERRED); it runs on the CPU until the op is delivered")
+        return False
+    key = (layer, step, c, compare_mode, thr)
+    ex = _EXPECT.get(key)
+    if ex is None or ex.ref is not ref:  # the CPU side is the same for every module run on this reference object
+        ex = _EXPECT[key] = CC.Expect(s, ref, layer, st, g, c, want, thr, compare_mode)
+    if impl_mode() == "mutations":
+        return CC.sweep(ex, name)
+    fn = module_under_test(s, ref, mesh, layer, step)
+    if getattr(fn, "cpu_bridge", False):
+        print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
+        return False
+    outs = {}
+    for case in ex.cases:
+        try:
+            outs[case.name] = fn(case.rctx(), case.dctx(), *CC._clone(case.inputs))
+        except Exception as e:  # noqa: BLE001 - a module that fails on a second input fails that check
+            if case.name == "golden":
+                raise
+            outs[case.name] = e
+    print(ex.describe())
+    ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, thr)
+    return not ex.evaluate(outs) and ok
 
 
 SWAP_STEP_DEFAULTS = {
