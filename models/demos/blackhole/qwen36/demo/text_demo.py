@@ -63,6 +63,13 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
+
+
+def _spec_requested():
+    """QWEN36_SPEC (default on) selects MTP speculative decode on the single-user TP path."""
+    return os.environ.get("QWEN36_SPEC", "1") != "0"
+
+
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
@@ -279,6 +286,8 @@ def test_demo_text(
         device,
         max_batch_size=batch,
         max_seq_len=max_seq_len,
+        # Build the MTP drafter only when spec decode may run; None keeps the QWEN36_MTP / dense-vs-MoE default.
+        enable_mtp=None if _spec_requested() else False,
         # n_layers=4,  # fast iteration
         # layer_indices=[0, 3],  # profile specific layers
     )
@@ -431,7 +440,12 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     max_seq_len = num_blocks * BLOCK_SIZE
 
     t0 = time.time()
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
+    model = Qwen36Model.from_pretrained(
+        device,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        enable_mtp=False,  # teacher-forced: always plain decode, no drafter
+    )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
@@ -601,7 +615,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # and fall through to plain decode; presence penalty is wired into spec only when temp > 0 (it penalizes
     # the verify rows the accept test uses); at temp <= 0 spec's argmax is unpenalized, so that case falls
     # through to plain decode, whose _pick() applies the penalty.
-    _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
+    _spec_req = _spec_requested()
     if token_acc is not None:
         logger.info("[TP] teacher forcing (token_acc) -> plain single-token decode")
     elif _spec_req:
