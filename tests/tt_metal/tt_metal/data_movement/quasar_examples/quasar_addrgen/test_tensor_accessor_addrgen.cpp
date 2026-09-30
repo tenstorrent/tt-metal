@@ -754,6 +754,44 @@ std::vector<LayoutCase> layout_cases() {
          .shard_grid = {2, 1},
          .nd_round_robin = true});
 
+    // Blocked (split in both dims), round-robin over 2 cores: runs on emu-quasar-2x3, unlike the true 2D-grid BLOCK
+    // rows below. Page-id order is not monotonic in bank address: each tensor row visits shard 0 (bank 0) then shard 1
+    // (bank 1); after a shard's rows, the next band's shards are the second slot of the same banks. The walk must be
+    // reprogrammed at each band (2 seeks for the tensor).
+    cases.push_back(
+        {.name = "NdBlockRoundRobinL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,  // ND spec; BLOCK selects page = shard-row segment
+         .rows = 8,
+         .cols = 128,
+         .shard_rows = 4,
+         .shard_cols = 64,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true});
+    // Same, but 3 shards per band on 2 banks: a band's shards land on banks 0, 1, 0 (the third one slot deeper), which
+    // no single banking loop can walk, so each shard-row segment is its own software seek. Correct, not fast.
+    cases.push_back(
+        {.name = "NdBlockRoundRobin3WideL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+         .rows = 8,
+         .cols = 192,
+         .shard_rows = 4,
+         .shard_cols = 64,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true});
+    cases.push_back(
+        {.name = "NdBlockRoundRobinL1Tile",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+         .layout = Layout::TILE,
+         .rows = 128,
+         .cols = 128,
+         .shard_rows = 64,
+         .shard_cols = 64,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true});
+
     // TILE layout: a parallel axis over the same recipe families, but a page is always exactly one
     // 32x32 tile (get_page_shape_tile ignores shard shape), unlike ROW_MAJOR where WIDTH/BLOCK bundle
     // a whole shard-row segment into one page. Shapes here are tile-aligned (multiples of kTileDim).
