@@ -680,7 +680,11 @@ For complete examples, see:
 
 1. **Architecture enum**: Convert lowercase YAML values to uppercase proto enum values (`wormhole_b0` → `WORMHOLE_B0`)
 2. **Channel count**: Use the number of ethernet ports per direction from `ChipSpec.ethernet_ports`
-3. **Policy**: Default to `STRICT` unless you have specific requirements
+3. **Policy**: Default to `STRICT` unless you have specific requirements. `RELAXED` tolerates
+   fewer lanes than `count` — including **zero** for inter-mesh connections (issue #56762):
+   the mapper places endpoints to realize as many links as possible (best effort), and a
+   connection with no realizable links stays logical-only (host-interconnect data path)
+   with a loud warning instead of a mapping failure
 4. **Device IDs**: When converting strict Graph connections, you may need to map port-based connections to device IDs based on your topology
 5. **Bidirectional connections**: Remember to add reverse connections for bidirectional links
 6. **Graph type**: Always use `type: "FABRIC"` for the top-level graph descriptor

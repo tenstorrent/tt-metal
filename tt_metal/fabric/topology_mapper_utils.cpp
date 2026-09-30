@@ -2941,6 +2941,21 @@ bool add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                // No physical exit nodes toward this destination mesh at all. Under RELAXED zero-link
+                // tolerance (issue #56762) this is legal even in a MIXED topology where the source mesh
+                // has links to some OTHER destination -- the requested connection to this destination
+                // stays logical-only (host interconnect). Warn and skip its exit constraint instead of
+                // failing the whole mapping. STRICT still fails.
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has NO physical exit "
+                        "nodes from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return false;
             }
             const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
@@ -2987,6 +3002,19 @@ bool add_exit_node_constraints(
             }
 
             if (effective_exit_pair_min_count == 0) {
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    // Zero-link tolerance (issue #56762): no physical links toward the mapped
+                    // destination mesh -- the requested connection stays logical-only. Warn loudly
+                    // and skip the exit cardinality constraint instead of failing the mapping.
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
+                        "links from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return false;
             }
 
@@ -3293,6 +3321,13 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
+        // RELAXED zero-link tolerance (issue #56762) is INTER-MESH ONLY: intra-mesh target edges
+        // stay hard, so allow_unmatched_target_edges is deliberately left false here. A mesh's own
+        // chips must be physically connected -- a zero-link intra-mesh edge would mean an
+        // unroutable mesh interior.
+        // TODO(fabric-2.0): intra-mesh zero-link tolerance is NOT yet allowed; revisit once Fabric
+        // 2.0 lands (host-interconnect intra-mesh routing). Do not call
+        // intra_mesh_constraints.set_allow_unmatched_target_edges(true) until then.
 
         if (!config.disable_rank_bindings) {
             add_rank_binding_constraints(
@@ -3344,6 +3379,16 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
+
+        // Enforce the inter-mesh-only invariant of RELAXED zero-link tolerance (issue #56762): a
+        // mesh's own interior must be physically connected, so intra-mesh target edges are always
+        // hard. This fast-fails if a future edit ever flips the (shared-type) flag on this path.
+        // TODO(fabric-2.0): revisit intra-mesh zero-link tolerance.
+        TT_FATAL(
+            !intra_mesh_constraints.allow_unmatched_target_edges(),
+            "Intra-mesh solve must not allow unmatched target edges (zero-link tolerance is inter-mesh only); "
+            "logical mesh {}",
+            logical_mesh_id.get());
 
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
@@ -3483,6 +3528,23 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                 inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
                 session_ = {};
                 host_cap_relaxed_ = true;
+                continue;
+            }
+            // RELAXED zero-link fallback (issue #56762): the hard-edge solve found no placement.
+            // Retry once with inter-mesh edges SOFT: zero physical links tolerated, realized edges
+            // maximized best-effort. Kept behind exhaustion so fully-cabled systems keep the fast
+            // fully-pruned hard path (identical behavior and solve cost to before).
+            if (!zero_link_fallback_engaged_ && emitted_ == 0 &&
+                inter_mesh_validation_mode_ == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                log_warning(
+                    tt::LogFabric,
+                    "Multi-mesh mapping found no placement with all inter-mesh connections realized ({}); "
+                    "retrying with RELAXED zero-link tolerance -- some requested inter-mesh connections may "
+                    "resolve to ZERO physical links (logical-only, host interconnect)",
+                    placement.error_message);
+                inter_mesh_constraints_.set_allow_unmatched_target_edges(true);
+                session_ = {};
+                zero_link_fallback_engaged_ = true;
                 continue;
             }
             log_info(

@@ -223,6 +223,82 @@ TEST_F(ControlPlaneFixture, TestGalaxy4x4SplitHostLayoutCheck) {
     }
 }
 
+// RELAXED zero-link tolerance (issue #56762), disconnected-cluster case: run on a mock stitched
+// from two SAME-revision (revC subtorus) quads from DIFFERENT systems with zero ethernet links
+// between them (see disconnected_sc36_quads_mapping.yaml -- SC36 revC aisleD + SC24 revC virtu).
+// Control-plane init must succeed, the MGD-requested RELAXED inter-mesh connection must be present
+// as a request, and it must resolve to exactly ZERO physical connections in both directions
+// (logical-only edge, host-interconnect data path).
+TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Both meshes initialized on their (mutually disconnected) quads.
+    EXPECT_EQ(mesh_graph.get_mesh_ids().size(), 2u);
+
+    // The MGD really requests the inter-mesh connection...
+    const auto& requested = mesh_graph.get_requested_intermesh_connections();
+    ASSERT_TRUE(requested.contains(0) && requested.at(0).contains(1))
+        << "Fixture error: the MGD must declare a mesh 0 <-> mesh 1 RELAXED connection";
+
+    // ...but zero physical connections resolve, in both directions.
+    EXPECT_TRUE(control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{0}, MeshId{1}).empty())
+        << "The quads come from different captures with no shared links; nothing may resolve 0 -> 1";
+    EXPECT_TRUE(control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{0}).empty())
+        << "The quads come from different captures with no shared links; nothing may resolve 1 -> 0";
+}
+
+// Every inter-mesh connection the MGD requests must resolve to AT LEAST one physical connection
+// after control plane init. RELAXED inter-mesh connections may legally resolve to zero links
+// (zero-link tolerance, issue #56762) -- but on the real/mock systems these layout suites run
+// against, the cabling exists, so a zero-link resolution means the mapper or the gather dropped
+// a connection. This test pins that floor for every mesh pair the MGD declares, in both
+// directions.
+TEST_F(ControlPlaneFixture, TestAllRequestedIntermeshConnectionsResolved) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    size_t checked_pairs = 0;
+    const auto expect_at_least_one_connection = [&](uint32_t src_mesh, uint32_t dst_mesh, uint32_t requested) {
+        const auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+            MeshId{src_mesh}, MeshId{dst_mesh});
+        EXPECT_FALSE(pairs.empty()) << fmt::format(
+            "MGD requests an inter-mesh connection ({} channel(s)) between mesh {} and mesh {}, but ZERO "
+            "connections resolved after control plane init",
+            requested,
+            src_mesh,
+            dst_mesh);
+        ++checked_pairs;
+    };
+
+    // Mesh-level (RELAXED-style) requested connections.
+    for (const auto& [src_mesh, dst_map] : mesh_graph.get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, requested_channels] : dst_map) {
+            expect_at_least_one_connection(src_mesh, dst_mesh, requested_channels);
+        }
+    }
+    // Device-level (STRICT-style) requested ports.
+    for (const auto& [src_mesh, dst_map] : mesh_graph.get_requested_intermesh_ports()) {
+        for (const auto& [dst_mesh, port_list] : dst_map) {
+            expect_at_least_one_connection(src_mesh, dst_mesh, static_cast<uint32_t>(port_list.size()));
+        }
+    }
+
+    if (checked_pairs == 0) {
+        GTEST_SKIP() << "MGD requests no inter-mesh connections; nothing to check";
+    }
+}
+
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
