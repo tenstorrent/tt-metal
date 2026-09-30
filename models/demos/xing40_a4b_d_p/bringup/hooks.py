@@ -27,13 +27,15 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc", "attn_collapse"},
+    "dense": {"attn_hc", "attn_collapse", "attn_norm"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
 _HC_STEPS = {"attn_hc", "ffn_hc"}
 # mHC collapse steps (tt/collapse.py:TtHcCollapse): (streams, hc) -> [S, H], no weights.
 _COLLAPSE_STEPS = {"attn_collapse", "ffn_collapse"}
+# Distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm): column-split [S, H] in -> column-split [S, H] out.
+_NORM_STEPS = {"attn_norm"}
 
 
 def _loader(spec):
@@ -87,6 +89,23 @@ def _collapse_host_fn(mesh, module, hidden):
     return fn
 
 
+def _norm_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, H] fp32 (harness boundary: column-split in, column-split out)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_device, col_split_to_host
+
+    def fn(ctx, x):
+        xd = col_split_to_device(mesh, x)
+        od = module(xd)
+        out = col_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _COLLAPSE_STEPS:
         from models.demos.xing40_a4b_d_p.tt.collapse import build_collapse
@@ -96,6 +115,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.mhc import build_hc
 
         return _hc_host_fn(mesh, build_hc(mesh, loader, cfg, layer, step), cfg.hidden_size)
+    if step in _NORM_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.norm import build_norm
+
+        return _norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, step))
     return None
 
 
