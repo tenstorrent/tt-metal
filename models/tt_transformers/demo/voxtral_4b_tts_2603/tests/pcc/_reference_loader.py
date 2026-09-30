@@ -288,9 +288,7 @@ class TimeEmbedding(nn.Module):
 
     def _build_inv_freq(self, device=None) -> torch.Tensor:
         half = self._dim // 2
-        return torch.exp(
-            -math.log(self._theta) * torch.arange(half, device=device).float() / half
-        )
+        return torch.exp(-math.log(self._theta) * torch.arange(half, device=device).float() / half)
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         emb = torch.einsum("bi, j -> bj", t, self.inv_freq)
@@ -311,9 +309,9 @@ class FlowMatchingAudioTransformer(nn.Module):
         self.model_args = from_nested_dict(MultimodalAudioModelArgs, audio_model_args)
         assert isinstance(self.model_args, MultimodalAudioModelArgs)
         args = self.model_args.acoustic_transformer_args
-        assert isinstance(args, AcousticTransformerArgs), (
-            "acoustic_transformer_args stayed a raw dict -- from_nested_dict did not recurse"
-        )
+        assert isinstance(
+            args, AcousticTransformerArgs
+        ), "acoustic_transformer_args stayed a raw dict -- from_nested_dict did not recurse"
         self.acoustic_transformer_args = args
 
         acoustic_codebook_sizes = self.model_args.get_codebook_sizes(
@@ -347,9 +345,7 @@ class FlowMatchingAudioTransformer(nn.Module):
     def _init_output_layer(self) -> None:
         args = self.acoustic_transformer_args
         padded_codebook_sizes = self.model_args.get_codebook_sizes(pad_to_multiple=128)
-        self.semantic_codebook_output = nn.Linear(
-            args.dim, padded_codebook_sizes[0], args.use_biases
-        )
+        self.semantic_codebook_output = nn.Linear(args.dim, padded_codebook_sizes[0], args.use_biases)
         self.acoustic_codebook_output = nn.Linear(
             in_features=args.dim,
             out_features=self.model_args.n_acoustic_codebook,
@@ -429,14 +425,10 @@ class FlowMatchingAudioTransformer(nn.Module):
     def forward(self, llm_hidden: torch.Tensor, cfg_alpha: torch.Tensor) -> torch.Tensor:
         semantic_logit = self.semantic_codebook_output(llm_hidden).float()
         semantic_logit[:, self._empty_audio_token_id] = -float("inf")
-        semantic_logit[
-            :, (len(AudioSpecialTokens) + self.model_args.semantic_codebook_size) :
-        ] = -float("inf")
+        semantic_logit[:, (len(AudioSpecialTokens) + self.model_args.semantic_codebook_size) :] = -float("inf")
 
         semantic_code = semantic_logit.argmax(dim=-1, keepdim=True)
-        acoustic_codes = self.decode_one_frame(
-            semantic_code.squeeze(1), llm_hidden, cfg_alpha=cfg_alpha
-        )
+        acoustic_codes = self.decode_one_frame(semantic_code.squeeze(1), llm_hidden, cfg_alpha=cfg_alpha)
         return torch.concatenate([semantic_code, acoustic_codes], dim=1)
 
 
@@ -485,14 +477,10 @@ class AudioTokenizerArgs:
 
     def __post_init__(self) -> None:
         assert (
-            len(self.encoder_transformer_lengths)
-            == len(self.encoder_convs_kernels)
-            == len(self.encoder_convs_strides)
+            len(self.encoder_transformer_lengths) == len(self.encoder_convs_kernels) == len(self.encoder_convs_strides)
         )
         assert (
-            len(self.decoder_transformer_lengths)
-            == len(self.decoder_convs_kernels)
-            == len(self.decoder_convs_strides)
+            len(self.decoder_transformer_lengths) == len(self.decoder_convs_kernels) == len(self.decoder_convs_strides)
         )
 
     def __str2list__(self, input_str: str) -> Tuple[int, ...]:
@@ -524,9 +512,7 @@ class AudioTokenizerArgs:
 
     @property
     def frame_rate(self) -> float:
-        return self.sampling_rate / (
-            self.pretransform_patch_size * math.prod(self.encoder_convs_strides)
-        )
+        return self.sampling_rate / (self.pretransform_patch_size * math.prod(self.encoder_convs_strides))
 
 
 class SemanticCodebook(nn.Module):
@@ -691,9 +677,7 @@ class CausalConv1d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         n_frames = (x.shape[-1] - self._effective_kernel_size + self._padding_total) / self._stride + 1
-        target_length = (math.ceil(n_frames) - 1) * self._stride + (
-            self._effective_kernel_size - self._padding_total
-        )
+        target_length = (math.ceil(n_frames) - 1) * self._stride + (self._effective_kernel_size - self._padding_total)
         extra_padding = target_length - x.shape[-1]
         x = pad1d(x, (self._padding_total, extra_padding), mode=self.pad_mode)
         return self.conv(x)
@@ -712,9 +696,7 @@ class CausalConvTranspose1d(nn.Module):
         use_bias: bool = True,
     ) -> None:
         super().__init__()
-        conv = nn.ConvTranspose1d(
-            in_channels, out_channels, kernel_size, stride=stride, groups=groups, bias=use_bias
-        )
+        conv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride=stride, groups=groups, bias=use_bias)
         self.conv = weight_norm(conv) if use_weight_norm else conv
         self.trim_ratio = trim_ratio
 
@@ -783,9 +765,7 @@ class CodecAttention(nn.Module):
             slopes = slopes_power_of_2(n_heads)
         else:
             m = 2 ** math.floor(math.log2(n_heads))
-            slopes = torch.cat(
-                [slopes_power_of_2(m), slopes_power_of_2(2 * m)[::2][: n_heads - m]]
-            )
+            slopes = torch.cat([slopes_power_of_2(m), slopes_power_of_2(2 * m)[::2][: n_heads - m]])
         return slopes.to(torch.float32).contiguous()
 
     def _native_attention(self, xq, xk, xv) -> torch.Tensor:
@@ -843,9 +823,7 @@ class CodecTransformerBlock(nn.Module):
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.attention = CodecAttention(args, layer_id=layer_id)
-        self.feed_forward = FeedForward(
-            dim=args.dim, hidden_dim=args.hidden_dim, use_biases=args.use_biases
-        )
+        self.feed_forward = FeedForward(dim=args.dim, hidden_dim=args.hidden_dim, use_biases=args.use_biases)
         self.attention_norm = nn.RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = nn.RMSNorm(args.dim, eps=args.norm_eps)
         self.post_attention_norm = None
@@ -975,9 +953,7 @@ class VoxtralTTSAudioTokenizer(nn.Module):
             self.decoder_window_sizes.append(cur_window_size)
             decoder_blocks.append(CodecTransformer(args=layer_args, n_layers=n_layers))
 
-            if (idx + 1 != len(dec_lengths)) and (
-                (dec_kernels[idx + 1] != 1) or (dec_strides[idx + 1] != 1)
-            ):
+            if (idx + 1 != len(dec_lengths)) and ((dec_kernels[idx + 1] != 1) or (dec_strides[idx + 1] != 1)):
                 decoder_blocks.append(
                     CausalConvTranspose1d(
                         args.dim,
@@ -1324,9 +1300,7 @@ def _verify(model: nn.Module, cfg: MistralConfig, params: dict, n_ckpt_tensors: 
     if codec.downsample_factor != 1920:
         raise RuntimeError(f"codec downsample_factor {codec.downsample_factor} != 1920")
     if codec.decoder_window_sizes != [2, 4, 8, 16]:
-        raise RuntimeError(
-            f"codec decoder sliding windows {codec.decoder_window_sizes} != [2, 4, 8, 16]"
-        )
+        raise RuntimeError(f"codec decoder sliding windows {codec.decoder_window_sizes} != [2, 4, 8, 16]")
 
     # Every substantial group of the checkpoint is reachable from this module.
     n_state = len(model.state_dict())
@@ -1385,9 +1359,7 @@ def load_reference_model(model_id: str = _DEFAULT_MODEL_ID):
         model = VoxtralTTSReferenceModel(cfg)
     with _skip_param_init():
         model.acoustic_transformer = FlowMatchingAudioTransformer(audio_model_args)
-        model.audio_tokenizer = VoxtralTTSAudioTokenizer(
-            codec_args, audio_model_args, cfg.hidden_size
-        )
+        model.audio_tokenizer = VoxtralTTSAudioTokenizer(codec_args, audio_model_args, cfg.hidden_size)
 
     expected_keys = set(model.state_dict().keys())
     got_keys = set(state.keys())
@@ -1397,8 +1369,7 @@ def load_reference_model(model_id: str = _DEFAULT_MODEL_ID):
     missing = [k for k in missing if not k.startswith("model.rotary_emb.")]
     if missing or unexpected:
         raise RuntimeError(
-            f"consolidated -> reference remap incomplete: missing={missing[:8]} "
-            f"unexpected={unexpected[:8]}"
+            f"consolidated -> reference remap incomplete: missing={missing[:8]} " f"unexpected={unexpected[:8]}"
         )
 
     model.load_state_dict(state, strict=False, assign=True)

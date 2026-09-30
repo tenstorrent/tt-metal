@@ -25,16 +25,17 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
 
 
 def build(device, torch_module):
-    table = _from_torch(
-        torch_module.weight.detach().contiguous(), device, layout=ttnn.ROW_MAJOR_LAYOUT
-    )
+    table = _from_torch(torch_module.weight.detach().contiguous(), device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def token_embed(input_ids, **kwargs):
         return ttnn.embedding(input_ids, table, layout=ttnn.TILE_LAYOUT)

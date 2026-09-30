@@ -111,7 +111,9 @@ def main(argv=None):
 
             scores = quality.score(waves[:requested], result["sampling_rate"], texts[:requested])
             for i in range(requested):
-                print(f"  [{i:02d}] WER={scores['wer'][i]:.3f} MOS={scores['mos'][i]:.2f}  {scores['transcripts'][i]!r}")
+                print(
+                    f"  [{i:02d}] WER={scores['wer'][i]:.3f} MOS={scores['mos'][i]:.2f}  {scores['transcripts'][i]!r}"
+                )
             print(f"corpus WER={scores['corpus_wer']:.4f}  mean MOS={sum(scores['mos']) / requested:.3f}")
         return 0
     finally:

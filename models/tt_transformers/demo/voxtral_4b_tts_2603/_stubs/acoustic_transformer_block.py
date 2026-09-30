@@ -33,7 +33,6 @@ import math
 import torch
 
 import ttnn
-
 from models.demos.voxtral_4b_tts_2603.tt import cpp_down, cpp_swiglu, ttl_down
 
 _TILE = 32

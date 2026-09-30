@@ -23,7 +23,6 @@ import torch
 
 import ttnn
 
-
 # `ttnn.linear`/`ttnn.matmul` on their DEFAULTS leave `fp32_dest_acc_en` off, so the accumulator
 # rounds to bfloat16 at every step even when the activations are float32. The consumer of this
 # stack resolves a top-1/top-2 margin of a few hundredths, and the audio path rounds onto 21
@@ -37,7 +36,10 @@ def _from_torch(t, device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
@@ -51,9 +53,7 @@ def build(device, torch_module):
     def time_embedding(t, **kwargs):
         batch = int(t.shape[0])
         widened = ttnn.typecast(ttnn.reshape(t, [1, 1, batch, int(t.shape[-1])]), ttnn.float32)
-        phase = ttnn.matmul(
-            ttnn.sum(widened, dim=-1, keepdim=True), inv_freq, compute_kernel_config=_COMPUTE
-        )
+        phase = ttnn.matmul(ttnn.sum(widened, dim=-1, keepdim=True), inv_freq, compute_kernel_config=_COMPUTE)
         out = ttnn.concat([ttnn.cos(phase), ttnn.sin(phase)], dim=-1)
         return ttnn.reshape(out, [batch, 2 * half])
 

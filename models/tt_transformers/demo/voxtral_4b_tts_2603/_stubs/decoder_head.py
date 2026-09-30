@@ -24,7 +24,6 @@ import torch
 
 import ttnn
 
-
 _CHUNK_COLS = 32768
 
 # The 3072-term dot product behind every one of the 131072 logits accumulates in DEST. Leaving
@@ -41,7 +40,10 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
@@ -53,10 +55,7 @@ def build(device, torch_module):
     out_dim = int(head.out_features)
 
     weight = head.weight.detach().transpose(0, 1).contiguous()
-    chunks = [
-        _from_torch(weight[:, i : i + _CHUNK_COLS].contiguous(), device)
-        for i in range(0, out_dim, _CHUNK_COLS)
-    ]
+    chunks = [_from_torch(weight[:, i : i + _CHUNK_COLS].contiguous(), device) for i in range(0, out_dim, _CHUNK_COLS)]
     bias = None
     if head.bias is not None:
         bias = _from_torch(head.bias.detach().reshape(1, 1, 1, out_dim), device)

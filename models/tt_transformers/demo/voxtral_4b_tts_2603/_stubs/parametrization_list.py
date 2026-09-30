@@ -36,7 +36,10 @@ def _from_torch(t, device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)

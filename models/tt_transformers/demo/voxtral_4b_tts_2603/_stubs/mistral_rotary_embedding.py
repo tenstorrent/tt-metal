@@ -25,7 +25,6 @@ import torch
 
 import ttnn
 
-
 _MAX_POSITIONS = 8192
 
 
@@ -33,7 +32,10 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
@@ -65,12 +67,16 @@ def build(device, torch_module):
     # taken with a plain slice, which carries no dtype constraint. TILE layout would: its -2 axis
     # is tiled 32 rows at a time, so slicing row 33 out of the tiled table is not a free view.
     cos_rows = _from_torch(
-        cos.reshape(1, _MAX_POSITIONS, head_dim).contiguous(), device,
-        dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        cos.reshape(1, _MAX_POSITIONS, head_dim).contiguous(),
+        device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     sin_rows = _from_torch(
-        sin.reshape(1, _MAX_POSITIONS, head_dim).contiguous(), device,
-        dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        sin.reshape(1, _MAX_POSITIONS, head_dim).contiguous(),
+        device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     def mistral_rotary_embedding(x, position_ids=None, position=None, **kwargs):

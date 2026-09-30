@@ -61,7 +61,6 @@ from __future__ import annotations
 import torch
 
 import ttnn
-
 from models.demos.voxtral_4b_tts_2603.tt import common
 
 # One tile holds the whole sequence: 3 real tokens + 29 pad rows.

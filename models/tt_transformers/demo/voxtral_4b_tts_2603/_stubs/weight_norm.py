@@ -30,8 +30,7 @@ import ttnn
 def build(device, torch_module):
     if int(torch_module.dim) != 0:
         raise NotImplementedError(
-            f"weight_norm over dim {torch_module.dim} is not ported; only dim 0 "
-            f"(per-output-channel)"
+            f"weight_norm over dim {torch_module.dim} is not ported; only dim 0 " f"(per-output-channel)"
         )
 
     def weight_norm(weight_g, weight_v=None, **kwargs):

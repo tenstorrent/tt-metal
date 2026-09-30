@@ -205,38 +205,38 @@ PROMPT_TEXTS = [
 # WER 0.00-0.03 while rows needing 4-11 came back as babble that never emitted end_audio (corpus
 # WER 1.50, 29 of 32 rows ran to the 256-frame cap). Equal lengths are asserted, not assumed.
 SPEECH_TEXTS = [
-    'The lighthouse keeper wrote in his journal every evening, noting the colour of the water.',
-    'In the quiet hours before dawn the bakery ovens were already warm and waiting inside.',
-    'She tuned the old radio slowly until a gentle piano concerto finally emerged from the small speaker.',
-    'The expedition mapped the cave system for three long weeks, marking every passage with white chalk.',
-    'Autumn arrived early that year, and the tall maple trees turned copper almost overnight.',
-    'He repaired bicycles in a narrow shop behind the station, where spare wheels hung everywhere.',
-    'The letter had travelled for six months across two oceans before it reached the small farmhouse.',
-    'Astronomers watched the comet approach for weeks, adjusting their telescopes every night.',
-    'A young violinist practised the same difficult passage for hours until her fingers ached.',
-    'The archive basement held thousands of old photographs, each one carefully labelled by hand in ink.',
-    'Rain fell steadily on the glass greenhouse roof while the gardener repotted the orchids.',
-    'The ferry crossed the strait each morning, carrying commuters and crates of fish.',
-    'Engineers tested the bridge cables with careful instruments for a month before the road finally reopened.',
+    "The lighthouse keeper wrote in his journal every evening, noting the colour of the water.",
+    "In the quiet hours before dawn the bakery ovens were already warm and waiting inside.",
+    "She tuned the old radio slowly until a gentle piano concerto finally emerged from the small speaker.",
+    "The expedition mapped the cave system for three long weeks, marking every passage with white chalk.",
+    "Autumn arrived early that year, and the tall maple trees turned copper almost overnight.",
+    "He repaired bicycles in a narrow shop behind the station, where spare wheels hung everywhere.",
+    "The letter had travelled for six months across two oceans before it reached the small farmhouse.",
+    "Astronomers watched the comet approach for weeks, adjusting their telescopes every night.",
+    "A young violinist practised the same difficult passage for hours until her fingers ached.",
+    "The archive basement held thousands of old photographs, each one carefully labelled by hand in ink.",
+    "Rain fell steadily on the glass greenhouse roof while the gardener repotted the orchids.",
+    "The ferry crossed the strait each morning, carrying commuters and crates of fish.",
+    "Engineers tested the bridge cables with careful instruments for a month before the road finally reopened.",
     "In the museum's back room a conservator removed varnish from an old painting.",
-    'The village held a festival every summer, with paper lanterns strung across the square.',
-    'A cartographer redrew the coastline after the storm, because the old maps were wrong.',
-    'He learned to cook from his grandmother, who measured nothing at all and tasted everything twice.',
-    'The observatory sat above the treeline, and on clear nights the stars seemed close.',
-    'Librarians catalogued the donated collection for many months, discovering several very rare books.',
-    'The potter worked fast once the clay was centred, drawing the walls up at once.',
-    'Snow closed the pass for a week, so the mail was carried in on skis.',
-    'A biologist counted the nesting pairs along the tall cliff face every spring for a decade.',
-    'The orchestra rehearsed in a cold hall, and the players wore thick gloves between movements.',
-    'Workers slowly restored the old clock tower over two summers, replacing every rusted gear.',
-    'She kept a small wooden boat moored at the pier and sailed it alone on weekends.',
-    'The bookshop occupied three floors of a crooked stone building near the busy old harbour.',
-    'Geologists drilled a core sample from the lakebed, reading centuries of climate history.',
-    'A blacksmith demonstrated the old techniques at the summer fair, and the children watched closely.',
-    'The slow train ran through farmland for an hour before the first grey houses finally appeared.',
-    'Translators argued for days about a single line of the poem and never fully agreed.',
-    'The bee keeper opened each hive slowly, reading the mood of the whole colony first.',
-    'Divers surveyed the wreck at forty metres, photographing the hull before the light faded.',
+    "The village held a festival every summer, with paper lanterns strung across the square.",
+    "A cartographer redrew the coastline after the storm, because the old maps were wrong.",
+    "He learned to cook from his grandmother, who measured nothing at all and tasted everything twice.",
+    "The observatory sat above the treeline, and on clear nights the stars seemed close.",
+    "Librarians catalogued the donated collection for many months, discovering several very rare books.",
+    "The potter worked fast once the clay was centred, drawing the walls up at once.",
+    "Snow closed the pass for a week, so the mail was carried in on skis.",
+    "A biologist counted the nesting pairs along the tall cliff face every spring for a decade.",
+    "The orchestra rehearsed in a cold hall, and the players wore thick gloves between movements.",
+    "Workers slowly restored the old clock tower over two summers, replacing every rusted gear.",
+    "She kept a small wooden boat moored at the pier and sailed it alone on weekends.",
+    "The bookshop occupied three floors of a crooked stone building near the busy old harbour.",
+    "Geologists drilled a core sample from the lakebed, reading centuries of climate history.",
+    "A blacksmith demonstrated the old techniques at the summer fair, and the children watched closely.",
+    "The slow train ran through farmland for an hour before the first grey houses finally appeared.",
+    "Translators argued for days about a single line of the poem and never fully agreed.",
+    "The bee keeper opened each hive slowly, reading the mood of the whole colony first.",
+    "Divers surveyed the wreck at forty metres, photographing the hull before the light faded.",
 ]
 
 # THE VOICE THE MODEL SPEAKS IN, which it cannot invent for itself.
@@ -311,11 +311,13 @@ def build_voice_prompt(texts, voice: str, model_id: str = HF_MODEL_ID):
     # SPEECH_TEXTS). A ragged batch is refused rather than silently degraded.
     widths = sorted({len(b) for b in bodies})
     if len(widths) != 1:
-        raise ValueError(
-            f"speech texts must tokenize to one common length for an unpadded batch; got widths {widths}"
-        )
+        raise ValueError(f"speech texts must tokenize to one common length for an unpadded batch; got widths {widths}")
     rows = [
-        [bos, _BEGIN_AUDIO_ID] + [_AUDIO_ID] * n_audio + [_NEXT_AUDIO_TEXT_ID] + body + [_REPEAT_AUDIO_TEXT_ID, _BEGIN_AUDIO_ID]
+        [bos, _BEGIN_AUDIO_ID]
+        + [_AUDIO_ID] * n_audio
+        + [_NEXT_AUDIO_TEXT_ID]
+        + body
+        + [_REPEAT_AUDIO_TEXT_ID, _BEGIN_AUDIO_ID]
         for body in bodies
     ]
     input_ids = torch.tensor(rows, dtype=torch.long)
@@ -361,6 +363,7 @@ def full_prompt_len(batch: int = DEFAULT_BATCH, model_id: str = HF_MODEL_ID) -> 
 # --------------------------------------------------------------------------------------
 # Decode horizon -- see e2e_plan.json -> decode_horizon
 # --------------------------------------------------------------------------------------
+
 
 def begin_audio_token_id(model_id: str = HF_MODEL_ID) -> int:
     """`[BEGIN_AUDIO]` (25) -- the token that tells the backbone to start emitting audio frames.

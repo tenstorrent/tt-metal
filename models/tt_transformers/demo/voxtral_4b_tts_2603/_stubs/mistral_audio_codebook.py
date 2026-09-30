@@ -30,7 +30,10 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     t = t.to(torch.bfloat16) if dtype == ttnn.bfloat16 else t.to(torch.float32)
     if device.__class__.__name__ == "MeshDevice":
         return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=device,
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
@@ -79,12 +82,8 @@ def build(device, torch_module):
     def mistral_audio_codebook(codes, **kwargs):
         batch, rows, frames = (int(v) for v in codes.shape)
 
-        sem_codes = ttnn.reshape(
-            ttnn.slice(codes, [0, 0, 0], [batch, n_semantic, frames]), [batch, frames]
-        )
-        sem = ttnn.transpose(
-            _split_embedding(sem_codes, table, layout=ttnn.TILE_LAYOUT), -2, -1
-        )
+        sem_codes = ttnn.reshape(ttnn.slice(codes, [0, 0, 0], [batch, n_semantic, frames]), [batch, frames])
+        sem = ttnn.transpose(_split_embedding(sem_codes, table, layout=ttnn.TILE_LAYOUT), -2, -1)
 
         aco_codes = ttnn.typecast(
             ttnn.to_layout(

@@ -31,7 +31,9 @@ TRACE_REGION_SIZE = 200 * 1024 * 1024
 
 
 @contextlib.contextmanager
-def selftest_device(device_id: int = int(os.environ.get("VOXTRAL_DEVICE_ID", "0")), trace_region_size: int = TRACE_REGION_SIZE):
+def selftest_device(
+    device_id: int = int(os.environ.get("VOXTRAL_DEVICE_ID", "0")), trace_region_size: int = TRACE_REGION_SIZE
+):
     """Open ONE single-command-queue device for a standalone selftest, and always close it."""
     device = ttnn.open_device(
         device_id=device_id,

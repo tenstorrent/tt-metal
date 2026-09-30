@@ -38,7 +38,6 @@ import torch
 
 import ttnn
 
-
 _COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
 )
