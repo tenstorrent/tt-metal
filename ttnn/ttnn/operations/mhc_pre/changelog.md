@@ -172,3 +172,29 @@
   Sinkhorn logits, identical streams, both depth chains); full suite expected 206/206 as before.
 - Issues encountered: one Tracy capture-tool crash / timeout on a profile run (capture-side infra; the re-run was clean).
 - Tests added: none (the existing perf test covers the path; `--dev` run of 640×7168 clean under the watcher).
+
+## Refinement 3b — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast) (debug: fix gate violations)
+- Date: 2026-09-30
+- What was done: fixed an intermittent precision failure in the R2 W column broadcast. The sender published
+  each W chunk to its own compute (`cb_push_back`) before `sender.send()`. With fp32 W, the compute's hi/lo split
+  rewrites `cb_weight` in place (aliased `cb_weight_split`), so it could overwrite the chunk while the multicast
+  was still reading that source L1. Receivers then got partially split W. The reader now pushes after `send()`
+  returns, since that is when the pipe's source guard allows reuse.
+  - Reused: the whole R2 path.
+  - Changed: the order of 2 lines in the reader's sender loop.
+- Accuracy achieved: bf16-X/fp32-W post/comb rel-RMS 2.4–3.1e-4 (gate 5e-4) on [17×512, 1000×28672, 256×24576].
+  Stress, 40 seeds at 256×24576: 1 failure before the fix (comb 1.36e-2), 0 after.
+- Golden test progress: 206/206 (full suite).
+- Perf (BH device-ns):
+
+  | Shape | bf16 | fp32 X |
+  |---|---|---|
+  | 640×7168 | 191.9 µs | 543.5 µs |
+  | 640×1792 | 86.5 µs | 157.3 µs |
+  | 1280×4096 | 199.2 µs | 447.6 µs |
+  | 4096×1792 | 352.8 µs | 633.5 µs |
+
+  fp32-X 640×7168 lost about 40 µs against the racy version: the sender's in-place split now waits for each
+  chunk's mcast. It is still below the pre-R3 567 µs.
+- Issues encountered: None beyond the race.
+- Tests added: none. The stress probe was saved under `tests/ttnn/unit_tests/operations/mhc_pre/probes/`.

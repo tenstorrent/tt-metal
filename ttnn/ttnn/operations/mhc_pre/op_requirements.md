@@ -222,6 +222,30 @@ Sinkhorn) with only 2 blocks per core. Next: overlap/shorten that tail (Refineme
 L3 project(b+1) before coefficients(b), split y store), not done here because the verifier scoped this heading to
 the one T3 lever.
 
+
+
+### [x] Refinement 3b — Speed up the perf-focus profile T=640, C=7168, bf16 streams (W column broadcast) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 3 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/mhc_pre/test_mhc_pre_precision_baseline.py::test_mhc_pre_bf16_stream_fp32_weight_precision[X1x1x256x24576] - AssertionError: comb: rel_rms 0.011754175593281494
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 205/206). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: root cause was a source-L1 race in the R2 W sender. It pushed each W chunk to its own compute *before*
+`sender.send()`. The fp32-W hi/lo split rewrites `cb_weight` in place (aliased `cb_weight_split`), so the sender's
+compute could overwrite chunk j while the multicast was still reading it. Receivers then got half-split W, giving
+intermittent comb rel-RMS of about 1e-2. Reproduced 1 in 40 seeds (256×24576 bf16/fp32-W) before the fix and 0 in
+40 after. Fix: push after `send()` returns (the pipe's source guard). Full golden suite 206/206; unit dir 35/35 (×4
+runs). Perf, BH device-ns: bf16 640×7168 191.9 µs (unchanged); fp32-X 640×7168 543.5 µs (was 504 with the race;
+567 before R3), because the sender's in-place split now waits for each chunk's mcast.
+
 ### [ ] Refinement 4 — Speed up the perf-focus profile T=640, C=1792, bf16 streams
 
 **Type**: perf

@@ -115,8 +115,12 @@ void kernel_main() {
                         read_w_chunk(w_base, p1, chunk_end(p1));
                     }
                     const uint32_t a = w_base + p0 * w_tile_bytes;
-                    cb_push_back(cb_weight, p1 - p0);  // compute only reads it: publish before the mcast
+                    // Publish to this core's compute only AFTER send() returns (source L1 guard): the fp32-W
+                    // split rewrites cb_weight IN PLACE (aliased cb_weight_split), so pushing first lets the
+                    // sender's compute overwrite chunk j while the mcast is still reading it (receivers then
+                    // get half-split W — an intermittent precision failure).
                     sender.send(a, a, (p1 - p0) * w_tile_bytes);
+                    cb_push_back(cb_weight, p1 - p0);
                     noc_async_read_barrier();
                 }
             } else {
