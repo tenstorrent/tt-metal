@@ -114,3 +114,8 @@ first audio 1,469 ms, worst RTF 1.110).
     13-token final chunk pays a full non-streaming flow, 1.01 s, for 0.52 s of audio.
   - The 3.0 s utterance fits in two chunks (25 + 50): 0.905–0.957.
   - The flows alone take 0.47–0.74 of every utterance's duration (`docs/VALIDATION.md`, "Streaming RTF above 1.0").
+- **One CFM Euler step** at the first chunk's size (512 mel frames, batch 2; `docs/VALIDATION.md`, "One CFM Euler
+  step, profiled"):
+  - 64.7 ms eager, of which the host spends 62.6 ms enqueueing the estimator's 1,158 ops; 49.2 ms traced;
+  - on the device, 47.8 ms of kernel time, 18.5 ms of it merging attention heads (a transpose and a reshape in each
+    of the 56 transformer blocks).

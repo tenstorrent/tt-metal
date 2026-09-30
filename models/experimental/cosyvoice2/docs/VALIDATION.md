@@ -1033,6 +1033,69 @@ nothing else (at most 0.01 s). Every chunk runs between two decode steps, or aft
 LLM and HiFT are counted. No schedule of the same chunks reaches 0.4. A chunk's flow has to get cheaper, through
 fewer Euler steps or a cheaper step.
 
+## One CFM Euler step, profiled (Stage 3, 2026-09-30)
+
+**How** (notes: `scripts/2026-09-30/cfm_step_profile.py`, `cfm_profile_raw.py`):
+- The flow is built as the pipeline builds it.
+- The CFM's inputs are captured from real chunks:
+  - 121-127105-0015's first chunk: bucket 256, 512 mel frames, 400 valid;
+  - 121-127105-0024's 100-token hop and a later chunk: buckets 384 and 512;
+  - 0015's final chunk: non-streaming, bucket 320.
+- Per geometry: five eager solves timed; then each step split into its parts, with a device sync between them;
+  then, for the streaming geometries, the same step traced and replayed.
+- In a separate process under the device profiler (`python -m tracy -r`): one eager step at the first chunk's
+  geometry, between signposts.
+
+**Wall time per Euler step** (median of 50 steps; batch 2, for classifier-free guidance):
+
+| geometry | mel frames | eager solve, 10 steps | eager step | of it, the host enqueueing the estimator | device busy after that | the step traced |
+|---|---|---|---|---|---|---|
+| first chunk, streaming, bucket 256 | 512 | 0.657–0.673 s | 64.7 ms | 62.6 ms | 0.07 ms | 49.2 ms |
+| a 100-token hop, streaming, bucket 384 | 768 | 0.856–0.880 s | 85.4 ms | 66.6 ms | 16.0 ms | 80.5 ms |
+| a later chunk, streaming, bucket 512 | 1,024 | 1.008–1.024 s | 102.2 ms | 72.9 ms | 25.7 ms | 94.9 ms |
+| 0015's final chunk, non-streaming, bucket 320 | 640 | 0.774–0.782 s | 77.6 ms | 62.7 ms | 12.6 ms | not traceable (a padded non-streaming mask) |
+
+- **The rest of a step takes 1.9–3.3 ms:** uploading x, the time embedding, downloading dphi, and the host's CFG blend
+  and update.
+- **At the first chunk's size, the step is host-bound.**
+  - The host takes 62.6 ms to enqueue the estimator's ops, and the device finishes 0.07 ms after the last one.
+  - Traced, with no host dispatch, the step takes 49.2 ms, and the solve 0.506 s against 0.66 s eager.
+- **From 768 frames up, the device dominates:** traced 80.5 and 94.9 ms against eager 85.4 and 102.2 ms.
+- **In the pipeline** the CFM call, which also uploads its conditioning, measured 68–74 ms per step at this size
+  ("Streaming RTF above 1.0").
+
+**On the device: one eager step at 512 frames, under the device profiler.**
+- 1,158 ops.
+- Device kernel time 47.8 ms. Firmware time is 59.0 ms, and the span 67.8 ms: the profiler slows dispatch, and the
+  host took 71.3 ms between the signposts.
+
+| op | calls | device kernel ms | what |
+|---|---|---|---|
+| reshape (`ReshapeViewDeviceOperation`) | 56 | 15.0 | merging the heads after attention (below) |
+| matmul | 255 | 11.0 | QKV 3.8, the feed-forward's two 2.8 and 2.2, the output projection 1.5, the rest 0.7 |
+| SDPA | 56 | 4.6 | 8 heads of 64, 512 × 512, with the streaming mask |
+| elementwise binary | 275 | 4.1 | |
+| transpose | 57 | 3.5 | 56 of them in the head merge |
+| unary | 100 | 3.4 | 2.9 of it the GELU on the feed-forward's `[2, 512, 1024]` |
+| layer norm | 141 | 2.5 | |
+| create heads | 56 | 2.4 | the QKV split |
+| conv, halo and their resharding | 155 | 1.2 | the resnet blocks' causal convs |
+
+- **The head merge is 39 % of the step's device time: 18.5 of 47.8 ms.**
+  - Each of the 56 transformer blocks transposes SDPA's `[2, 8, 512, 64]` to `[2, 512, 8, 64]`, then reshapes it to
+    `[2, 512, 512]` (`tt/flow/decoder.py`).
+  - In tile layout the 8 heads pad to a 32-row tile, so the reshape moves data: 0.27 ms per call.
+  - `ttnn.experimental.nlp_concat_heads` does the same merge in one op, as the QKV side already does with the fused
+    split. Not measured here.
+- **The host takes about 54 µs to enqueue each op, against about 41 µs of device time per op.** At the first chunk's
+  size, then, cutting device time alone does not shorten an eager step. The ops have to become fewer, or the step
+  traced.
+- **The CFM trace exists (`cfm_trace`) but is off in the pipeline.** A streaming chunk runs under the LLM's live
+  decode trace, and the CFM keeps one trace at a time (`TtCausalConditionalCFM`'s docstring).
+
+**For Stage 3:** at 10 Euler steps, the first chunk's CFM costs 0.66 s eager, or 0.51 s traced. The three levers are
+the step count, the head merge and the trace. The step sweep measures the first.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch
