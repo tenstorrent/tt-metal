@@ -697,18 +697,19 @@ def _build_relative_masks(context_window, brick):
 
 
 def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int]) -> tuple[int, int, int]:
-    """The largest chunk of bricks that still forms a single query group.
+    """The bricks one work item of the op attends for.
 
-    A chunk is the set of queries sharing one gather. One query group is exactly ``stride`` sites,
-    so the chunk is that measured in bricks; a stride that is not a whole number of bricks on an
-    axis gets one brick there.
+    With a stride, the chunk is one query group -- ``stride`` sites measured in bricks, one brick on
+    an axis the stride does not divide -- so its bricks share one window and one mask. At stride 1
+    two bricks along T share most of their gather: the chunk halves the work items and the K/V
+    reads, and each brick gets its own mask block, which the reader keeps resident across chunks.
+    ``DIFFVAE_NA_CHUNK_BRICKS=t,h,w`` forces the chunk.
     """
-    # DIFFVAE_NA_CHUNK_BRICKS forces the chunk, decoupling it from the stride. Only meaningful with
-    # DIFFVAE_NA_UNSAFE_CHUNK=1: at stride 1 the queries in a chunk do NOT share a window, so the
-    # broadcast mask and the output are wrong. It exists to measure the ceiling.
     forced = os.environ.get("DIFFVAE_NA_CHUNK_BRICKS")
     if forced:
         return tuple(int(part) for part in forced.split(","))
+    if tuple(stride) == (1, 1, 1):
+        return (2, 1, 1)
     return tuple(
         stride_extent // brick_extent if stride_extent % brick_extent == 0 else 1
         for stride_extent, brick_extent in zip(stride, brick)
