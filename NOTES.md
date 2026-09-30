@@ -18,3 +18,12 @@ Attempt 2b (2026-09-30): job 596 timed out at the 600s cap (pytest-timeout 580s)
 Root cause: all 10 DiT weight_load entries report CACHE MISS ("TT_DIT_CACHE_DIR unset or blocking key changed") although TT_DIT_CACHE_DIR=/tmp/t10-dit-cache-ltx25 is set and holds 72G.
 The cache dirs were rewritten 13:22-13:29 during job 596, so the cache key changes between runs (job 580 wrote, 596 missed). Load+convert ~7.5 min, text-encode ~1.5 min.
 Next: find why the key differs run to run (grep "blocking key" / cache key builder in models/tt_dit/utils/cache*.py; compare the key file written by 580 vs 596), fix, then rerun dv145.
+Task t26 (2026-09-30): the DiT cache key is NOT unstable. Job 580 was the prewarm kernel-capture pass
+(TT_METAL_KERNEL_CAPTURE_ONLY), which by design never writes the weight cache; 596 was the first real
+write. Paths/keys are identical in both logs. All 10 caches under /tmp/t10-dit-cache-ltx25 now carry a
+manifest that matches the tensorbins (checked offline). Commit f2ddefed262 makes each miss name its real
+reason (capture pass / absent / rejected) instead of "blocking key changed".
+Baselines: detached driver tmp/drive26.sh (log tmp/drive26.log, ends DRIVE_DONE) submits dv145 (job 605),
+then dv145_c211, dv153, conv145 one after another. It stops after dv145 if the transformer still misses.
+Next: when DRIVE_DONE, read baselines/ltx25_1080p_6s/<label>/run.log for per-stage times (LTX_TIME_STAGES),
+the walltime ledger (expect 10 HITs), the mp4 path; grab a still with ffmpeg; build the table.
