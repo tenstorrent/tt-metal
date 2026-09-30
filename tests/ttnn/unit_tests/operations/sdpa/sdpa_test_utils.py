@@ -1388,3 +1388,55 @@ def run_test_sdpa_decode_broadcast_mask_batch(
         f"batch=1 mask vs full-batch mask {out_pcc} (expected >=0.99). "
         f"Batches 1+ likely read OOB DRAM instead of mask[0]."
     )
+
+
+def run_sdpa_block_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, p_masked, bcast_heads):
+    torch.manual_seed(1234)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+    nq, nk = s // q_chunk_size, s // k_chunk_size
+    masked = torch.bernoulli(torch.full((b, 1 if bcast_heads else nh, nq, nk), p_masked))
+    masked[..., 0] = 0  # every row keeps a visible block
+    mask = masked.repeat_interleave(q_chunk_size, dim=2).repeat_interleave(k_chunk_size, dim=3) * -1e9
+    block_map = (masked == 0).to(torch.int32)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_map = ttnn.from_torch(block_map, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_Q, tt_K, tt_V = (
+        ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device) for x in (Q, K, V)
+    )
+    outs = []
+    for m in (None, tt_map):
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            is_causal=False,
+            attn_mask=tt_mask,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            attn_mask_block_map=m,
+        )
+        outs.append(ttnn.to_torch(out)[:, :, :s, :])
+    if nkv != nh:
+        K = K.reshape(b, nkv, 1, s, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, s, d)
+        V = V.reshape(b, nkv, 1, s, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, s, d)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
+    for out in outs:
+        out_pass, out_pcc = comp_pcc(gt, out, 0.994)
+        logger.debug(f"python vs pytorch: {out_pcc}")
+        assert out_pass
+    # skipped blocks contributed exact zeros, so the two device results should agree closely
+    assert (outs[0] - outs[1]).abs().max().item() < 0.02
