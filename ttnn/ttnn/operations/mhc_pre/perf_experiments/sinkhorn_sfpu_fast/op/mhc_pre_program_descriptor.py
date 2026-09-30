@@ -137,52 +137,11 @@ L1_SAFETY_MARGIN = 96 * 1024  # headroom below the allocator's unreserved L1 (ke
 # trip, y-mix and y stores (design perf lamp L1). Raise it to trade that overlap for fewer per-block
 # fixed costs.
 BLOCK_TOKEN_TILES_CAP = 1
-# Group-width selection (core-assignment knob, perf lamp L2; Refinement 4, re-derived in Perf 2 for the cross-block
-# pipeline). When token tile-rows fill the grid (Mt >= grid_y, one-row groups) and X is bf16, every group_w in
-# min(grid_x, Ct)..1 that fits L1 is a candidate and the plan with the lowest `_block_schedule_cost` wins, after
-# (1) any plan that can prefetch X (depth >= 2, or a single block): at depth 1 the X read of block b+1 waits for
-# block b's whole tail. (The Refinement 4 rule "fewest blocks, widest among those" ignored the per-core X load and
-# the depth: it picked group_w 2-3 with 30-60 % of the cores idle or a depth-1 fallback -- 1024x1792 152 us --
-# and missed that with the pipeline an extra block costs only its exposed round trip -- 640x7168 145 us at
-# group_w 5 / depth 1 vs 128 us at group_w 11 / 2 blocks.) False = always group_w = min(grid_x, Ct).
-# Measured (BH p150 11x10, bf16 X, device us, median of 3, Refinement 4 rule -> cost model):
-#   fp32 W: 640x7168 145.4 -> 128.2, 640x1792 43.9 -> 43.6 and 1280x4096 138.7 -> 138.6 (same plan),
-#     1024x1792 152.1 -> 68.1, 2048x4096 315.8 -> 241.6, 4096x6144 814.3 -> 703.7; over T in {512..4096} x
-#     C in {1792..7168} (42 cells) 32 faster by 2.5-55 %, 1280x5120 176.2 -> 175.4, 9 the same plan.
-#   bf16 W: 1024x4096 219.3 -> 140.4, 2048x1792 203.1 -> 130.1, 2048x6144 421.0 -> 353.4; one loss, 4096x4096
-#     455.9 -> 471.0 (Refinement 4 picked group_w 2 at depth 1, which the prefetch rule excludes); rest within +-1.5 %.
+# Group-width selection (core-assignment knob, perf lamp L2; Refinement 4). When token tile-rows fill the grid
+# (Mt >= grid_y, one-row groups) and X is bf16, pick group_w = the widest width with the fewest blocks per group
+# that fits L1, instead of always the full grid row: fewer ranks x more groups trades per-rank K work for fewer
+# serial gather/fold/mcast round trips. False = always group_w = min(grid_x, Ct) (the pre-Refinement-4 geometry).
 NARROW_GROUPS = True
-# `_block_schedule_cost` constants, in units of one X tile read by one core under full-grid DRAM contention (~0.55 us
-# on BH p150), calibrated on the sweep above (flat for RT_TILES_BASE 30-34 at TAIL_FRAC 0.35-0.45) and cross-checked
-# with the stage zones (640x1792, group_w 5 vs 11):
-RT_TILES_BASE = 32  # one block's round trip after its last X tile (partial -> gather -> mcast -> coef/pre, and the
-# owner's Sinkhorn): ~8 us gather / mcast / coefficients + ~7 us Sinkhorn
-RT_TILES_PER_RANK = 0.75  # the root's rank-ordered fold grows with group_cores (zones: ~0.45 us per partial)
-RT_TILES_UNSTREAMED_PROJ = 4  # bf16 W: the projection is one whole-block window, not streamed under the X read
-TAIL_FRAC = 0.4  # a block's own tail (coefficients + y-mix + y write) per K tile, relative to its X read
-SINKHORN_TILES = 12  # one-row groups (owner_fixed): OWNER_C_DISCOUNT takes the owner's Sinkhorn off the critical path
-
-
-def _block_schedule_cost(f, n, streamed_proj):
-    """Critical-path estimate of one group_h = 1 plan (`fit` result), in X-tile-read units (see NARROW_GROUPS).
-
-    stream        blocks * kmax          the rank's X blocks cross the NoC back to back (depth >= 2 prefetch)
-    last block    H + kmax / n           its round trip and y-mix / y write (y is 1/n of X) are always exposed
-    step b < B-1  pipelined (pipe_at):   max(0, H - TAIL_FRAC * kmax)        S(b+1)'s round trip under tail(b)
-                  serial:                max(0, H - (1 - TAIL_FRAC) * kmax)  S(b)'s round trip under the reader's
-                                                                             prefetch of X(b+1), minus tail(b)
-    H = RT_TILES_BASE + RT_TILES_PER_RANK * group_cores (+ RT_TILES_UNSTREAMED_PROJ); one-row groups drop
-    SINKHORN_TILES from the last block. pipe_at mirrors the kernels' block schedule (compute / writer).
-    """
-    B, d, k, G = f["blocks"], f["depth"], f["kmax"], f["group_cores"]
-    H = RT_TILES_BASE + RT_TILES_PER_RANK * G + (0 if streamed_proj else RT_TILES_UNSTREAMED_PROJ)
-    cost = B * k + H + k / n - (SINKHORN_TILES if max(f["core_token_tiles"]) <= 1 else 0)
-    for b in range(B - 1):
-        pipelined = b + 1 < B and (d >= 3 or b + d >= B)
-        cost += max(0.0, H - TAIL_FRAC * k) if pipelined else max(0.0, H - (1.0 - TAIL_FRAC) * k)
-    return cost
-
-
 # Regime R2 `W column broadcast` (op_design.md Regimes): W does not vary along the token-group split, so the
 # cores of one physical column (= one rank of every group row) need the same W slice. Column all-gather
 # (Refinement 4): each row reads only its 1/rows share of the slice from DRAM and multicasts it down the
@@ -461,18 +420,17 @@ def make_plan(device, x_tensor, w_tensor, n):
 
     chosen = None
     if Mt >= grid_y and NARROW_GROUPS and x_pieces(x_tensor.dtype) == 1:
-        # Group width = the core-assignment knob (design perf lamp L2): the plan that can prefetch X, then the
-        # lowest block-schedule cost (see NARROW_GROUPS), widest on a tie (min keeps the first), subject to the
-        # L1 fit. For bf16 X the one-time W prelude is spread over the column (W column all-gather) or absent,
-        # but the fp32-X W grid split needs the whole slice's max, so it grows with the slice: measured a loss
-        # there (1280x4096 415 -> 506 us, 4096x1792 634 -> 712 us), and fp32 X keeps the full-row width.
-        fits = [f for f in (fit(group_w, 1) for group_w in range(min(grid_x, Ct), 0, -1)) if f is not None]
-        if fits:
-            streamed = w_pieces(w_tensor.dtype) > 1  # bf16 X + fp32 W: the projection streams under the X read
-            chosen = min(
-                fits,
-                key=lambda f: (f["depth"] < 2 and f["blocks"] > 1, _block_schedule_cost(f, n, streamed)),
-            )
+        # Group width = the core-assignment knob (design perf lamp L2): fewest serial blocks per group
+        # (each block pays one gather -> fold -> mcast round trip), widest group among those (least
+        # per-rank K work), subject to the L1 fit. Total K work per core is ~independent of the width;
+        # what grows with the per-rank slice is the one-time W prelude. For bf16 X that is spread over the
+        # column (W column all-gather) or absent, but the fp32-X W grid split needs the whole slice's max,
+        # so it grows with the slice: measured a loss there (1280x4096 415 -> 506 us, 4096x1792 634 ->
+        # 712 us), and fp32 X keeps the full-row width.
+        for group_w in range(min(grid_x, Ct), 0, -1):
+            f = fit(group_w, 1)
+            if f is not None and (chosen is None or f["blocks"] < chosen["blocks"]):
+                chosen = f
     if chosen is None:
         group_w = min(grid_x, Ct)
         if Mt >= grid_y:

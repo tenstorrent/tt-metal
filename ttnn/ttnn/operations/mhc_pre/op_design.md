@@ -196,6 +196,18 @@ for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
 }
 ```
 
+**Perf 2 — group-width selection and Sinkhorn.**
+- **Group width (bf16 X, `Mt >= grid_y`).** The width is no longer "fewest blocks, widest among those".
+  - Every `group_w` that fits L1 is a candidate. A plan at depth < 2 with more than one block goes last, and the
+    rest are ranked by `_block_schedule_cost`, which models the critical path, pipeline included.
+  - The model counts three things: the rank's X blocks streaming back to back, one exposed round trip + y-mix /
+    y write for the last block, and each middle step's round trip minus what `pipe_at` hides under that block's K.
+  - Example (BH p150): 640×7168 bf16 now runs 11×1 groups with 2 blocks at depth 2 (it was 5×1, 1 block,
+    depth 1).
+- **Sinkhorn.** `sinkhorn_block`'s iterations are hand-scheduled `SFPLOADMACRO` passes. They are bit-identical to
+  the plain formulation with fused Newton MADs, and `c_owned` drops from 6.7 to 4.5 µs.
+- Measurements are in changelog Perf 2.
+
 **Perf 1 — cross-block pipeline (implemented schedule).** The loop above is the logical per-block order. The
 kernels now software-pipeline the step at block b when `pipe_at(b)` holds: `b + 1 < num_blocks` and
 (`x_block_depth ≥ 3` or `b + x_block_depth ≥ num_blocks`). At the default depth 2 only the last step is pipelined;

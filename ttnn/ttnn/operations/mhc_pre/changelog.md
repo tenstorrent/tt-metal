@@ -508,3 +508,166 @@ Every variant of both experiments is **bitwise identical** to the baseline outpu
 `ttnn/ttnn/operations/mhc_pre/perf_experiments/{prelude_off_critical_path,cross_block_pipeline}/` (README.md,
 graduation patches, bench tests, zone dumps). `perf_experiments/` has no `__init__.py`, so `import ttnn`'s package
 walker does not execute the benches. They import as a namespace package.
+
+## Perf 2 — perf tournament round 2 (measured breakdown, 2 experiments, 2 graduated)
+- Date: 2026-09-30. Perf only: nothing was added to SUPPORTED, and the precision contract (fp32_dest_acc_en, fidelity,
+  approx mode, dtypes) is unchanged.
+- **Focus config** (feature_spec `_PERF_FOCUS`, the `attention:` LOOSE_CASES): bf16 X TILE, fp32 W,
+  fp32_dest_acc_en=True, with T×C = 640×7168, 640×1792 and 1280×4096. All three are in SUPPORTED.
+- **How it was measured:** BH p150, 11×10 grid, 100 active cores. In-process `DEVICE KERNEL DURATION` via
+  `probes/perf_run.sh`, with one fresh run per setting. Medians of 3–7 calls are used only to beat the ±1–2 µs
+  noise. Zones come from the permanent `MaybeDeviceZoneScope` set (`KERNEL_PERF_ZONES`).
+  - Instrumentation is unchanged. Neither graduation added a stage. At most 78 of 250 markers are used, and the
+    last zone ends at 100% of each RISC's KERNEL span on the new plans.
+
+### Measured breakdown (before)
+Baseline (µs): 640×7168 146.4, 640×1792 43.4, 1280×4096 136.9. DRAM targets are 118.8 / 29.7 / 131.8.
+
+Cumulative ablation (µs; `MHC_ABLATE_*`):
+
+| arm | 640×1792 | 640×7168 | 1280×4096 |
+|---|---|---|---|
+| full | 43.4 | 146.4 | 136.9 |
+| − projection + Σx² | 41.1 | 130.0 | 139.7 |
+| − also coefficients / Sinkhorn | 39.8 | 128.4 | 138.3 |
+| − also y-mix (all compute) | 38.1 | 130.0 | 134.8 |
+| − also y write | 32.7 | 109.3 | 111.1 |
+| − also X read (everything) | 18.2 | 37.4 | 31.3 |
+| − X read and y write only (compute on) | 31.1 | 75.0 | 75.7 |
+
+Zone findings, ranked by measured headroom (per-core end-time tables from the zone CSV):
+1. **640×7168: one block per core at group_w = 5, depth 1.**
+   - The X read is at the DRAM roofline: X lands by ~98 µs on the slowest rows, ≈ 375–450 GB/s for X + 2× W.
+     Roofline-gated: no ideas were spent on the X read.
+   - The W column all-gather publishes at 79–91 µs on the left group column, so the ~25 µs projection runs after
+     X instead of under it.
+   - The whole-slice y-mix + y write (~20 µs) is exposed after the combine. With a single block nothing overlaps.
+   - Diagnostic knob run (not an idea): `fullrow` (w = 11, 2 blocks + the Perf 1 pipeline) measured 126.1 µs. But
+     it loses at 640×1792 (54.1 vs 43.5) and at 1280×4096 (148.3 vs 137.6). The Refinement 4 width rule predates
+     the pipeline.
+2. **Owner Sinkhorn on the critical path.** `c_owned` is 6.7 µs (SFPU).
+   - At 640×1792 the group roots own the only token row, and they end last (43.8 vs 38–41 µs).
+   - At 640×7168 under `fullrow`, the owner of block 1 ends ~6 µs after the rest.
+3. **640×1792: the tail after the X read (~25 µs) is ~18 µs.**
+   - Projection tail 3, round trip 4, coefficients 2.7, Sinkhorn 6.7, y-mix + y write ~4.
+   - The all-stubbed scaffolding floor is 18 µs. It is dominated by the W all-gather prelude.
+
+### Portfolio (cap: 2 experiments)
+- **Selected:**
+  - E1 `pipeline_aware_group_width`: re-derive the bf16-X width selection as a measured cost model, not an
+    allow-list.
+  - E2 `sinkhorn_sfpu_fast`: a faster SFPU Sinkhorn at identical fp32 precision (ILP, LREG residency, fewer DEST
+    round trips, `SFPLOADMACRO`, scaling-vector form).
+- **Floated, not tested:**
+  - W share priority / per-share K-ordered projection streaming. It conflicts with E1 at 640×7168.
+  - The owner's Sinkhorn after its y-mix.
+  - A tree / all-gather combine.
+  - Round 1's leftover `graduation_ab1f.patch` (early bias).
+
+### Verdicts
+- **E1 `pipeline_aware_group_width`: WIN (host-only).**
+  - **Candidates:** every group_w ≤ min(grid_x, Ct) that fits L1. A plan at depth < 2 with more than one block goes
+    last. Ties go to the widest group.
+  - **Cost:** `_block_schedule_cost`, in X-tile-read units ≈ 0.55 µs:
+    - `blocks·kmax` for the X stream,
+    - `+ H + kmax/n` for the exposed last round trip + y-mix / y write,
+    - `+ Σ middle steps max(0, H − 0.4·kmax)` if `pipe_at`, else `0.6·kmax`,
+    - where `H = 32 + 0.75·group_cores` (+4 for bf16 W's unstreamed projection), and −12 when groups have ≤ 1
+      token row (the owner discount already hides the Sinkhorn).
+    - The constants come from a decision fit over all group widths × 48 LOOSE cells. The fp32-W picks are stable
+      across base 30–34 × tail fraction 0.35–0.45.
+  - **Focus (µs):** 640×7168 145.4 → 128.2 (11/2/2 instead of 5/1/1). 640×1792 and 1280×4096 keep the same plan.
+  - **Across the 42 fp32-W cells with T ≥ 512:**
+    - 32 are 2.5–55% faster. Examples: 1024×1792 152.1 → 68.1, 2048×4096 315.8 → 241.6, 4096×7168 969.0 → 858.5.
+    - 9 keep the same plan, and 1280×5120 is flat (+1.6%, within noise).
+    - T = 256 never reaches the rule (Mt < grid_y).
+  - **bf16 W:** mostly faster (1024×4096 219.3 → 140.4, 2048×1792 203.1 → 130.1).
+    - One `measured-regression`: 4096×4096 bf16 W 455.9 → 471.0 (+3.3%, interleaved 3×3). The old w = 2 depth-1
+      plan happens to win there.
+  - **Domain:** bf16 X, both W dtypes. fp32 X is out of scope: it is full-row by design, with a measured loss
+    recorded in make_plan.
+  - **Precision:** only the K partition (summation order) changes. Golden passed 206/206 in the subagent's run.
+  - Artifacts: `perf_experiments/pipeline_aware_group_width/` (data/final_tables.md holds all 96 cells).
+- **E2 `sinkhorn_sfpu_fast`: WIN.**
+  - Option menu (one tile, 20 iterations, µs incl. ~0.11 copy):
+
+    | option | technique | µs | precision |
+    |---|---|---|---|
+    | v0 | current kernel | 4.97 | — |
+    | v1 | constants in L12/L13 | 4.70 | bitwise |
+    | v2 | + 4 interleaved sum/recip chains | 3.66 | bitwise |
+    | v3 | + cross-direction sums in each scaling pass | 3.53 | bitwise |
+    | v4 / v5 | + unrolled softmax / + SFPSWAP max | 3.49 | bitwise |
+    | **v6 (graduated)** | + hand-scheduled `SFPLOADMACRO` passes (raw TTI) | **2.73** | bitwise vs the plain formula with fused Newton MADs |
+    | v7 | scaling-vector form | 3.61 | not bitwise: ≤ 2.4e-7 (vs fp64 0.85–2.0e-7). Slower than v6, not taken |
+
+  - **The build flips `2 − x·y`.** In the previous binary, sfpi compiled the Newton residual `2 − x·y` either as a
+    fused MAD or as MUL + ADDI, depending on unrelated code; `KERNEL_PERF_ZONES` alone flips it. So comb differs
+    from the previous build by ≤ 2.4e-7 (≤ 12 ulp).
+    - v6 pins the fused form. An in-op lane-by-lane check against v0/v4/v5 ran on the real logits: 0 mismatches.
+    - Against fp64 on logits dumped from the op, max abs is 1.19–2.01e-7 (base 1.20–1.96e-7), and mean abs is
+      lower in all 6 cells.
+  - `c_owned` goes 6.7 → 4.5 µs.
+  - **Whole op, µs:**
+
+    | cell | before → after |
+    |---|---|
+    | 640×1792 bf16/fp32 W | 43.9 → 42.9 |
+    | 640×1792 fp32/fp32 | 118.7 → 113.7 |
+    | 64×4096 | 42.9 → 40.8 |
+    | 32×128 | 17.3 → 14.8 |
+    | 640×1792 bf16/bf16 | 44.2 → 41.1 |
+
+    - 640×7168 and 1280×4096 are flat: the owner is not binding there at the old geometry.
+  - `OWNER_C_DISCOUNT`: re-measured at 3–7 with the faster Sinkhorn, and 7 is kept. 640×7168 is best at 7
+    (143.98 vs 145.9+). 640×1792 is best at 6 by 0.8 µs, and that was not taken as a shape-specific value.
+  - **Domain:** everywhere the Sinkhorn runs, with no exceptions. n = 4 is static-asserted, and it is the op's only
+    n.
+  - Artifacts: `perf_experiments/sinkhorn_sfpu_fast/` (generator + rule checker `bench/gen_sinkhorn_lm.py`).
+
+### What graduated (one path each, the replaced code deleted)
+- **E1:** the width rule in `make_plan`. `_block_schedule_cost` replaces the "fewest blocks" key, with no dual
+  path, and `NARROW_GROUPS` keeps its meaning (False = full row).
+  - **Carve-outs:** none. The only measured regression is 4096×4096 bf16 W (+3.3%, not a focus cell). A structural
+    exception would have to drop the depth-1 exclusion for bf16 W, and that costs that path's larger wins
+    (−16 to −36%). A cell-keyed guard would be an allow-list. It is recorded here.
+- **E2:** `row_norm` / `col_norm` / the plain iteration loop are replaced by the scheduled passes inside
+  `sinkhorn()`. The softmax is kept as sfpi, restructured. There is no fallback.
+
+### Whole-op before → after (same card, HEAD via `git stash` of the two op files, medians of 3; µs)
+
+| shape | bf16X/fp32W | fp32X/fp32W | fp32X/bf16W | bf16X/bf16W |
+|---|---|---|---|---|
+| **640×7168 (focus)** | **145.4 → 123.8** | 407.0 → 404.1 | 347.4 → 342.8 | 148.0 → 144.3 |
+| **640×1792 (focus)** | **43.8 → 43.0** | 119.6 → 112.9 | 112.0 → 107.0 | 43.9 → 41.6 |
+| **1280×4096 (focus)** | **137.7 → 137.8** | 368.9 → 366.6 | 334.3 → 346.8* | 182.9 → 161.5 |
+| 4096×1792 | 227.3 → 228.5 | 560.5 → 517.3 | 516.1 → 505.5 | 261.6 → 227.2 |
+| 2048×5120 | 305.1 → 293.5 | 709.3 → 697.0 | 636.2 → 671.7* | 354.6 → 299.6 |
+| 2048×4096 | 320.0 → 252.9 | 572.8 → 565.9 | 525.1 → 512.3 | 288.0 → 256.2 |
+| 1024×2560 | 205.3 → 89.6 | 238.2 → 235.3 | 224.2 → 220.4 | 145.0 → 94.8 |
+| 1×7168 (decode) | 45.9 → 44.6 | 114.4 → 115.0 | 79.7 → 77.3 | 39.8 → 37.4 |
+| 64×4096 | 43.0 → 40.8 | 88.7 → 89.0 | 64.3 → 61.5 | 35.8 → 33.5 |
+| 32×128 | 17.3 → 14.8 | 23.1 → 20.6 | 19.8 → 17.3 | 14.5 → 12.0 |
+
+- Cells marked * were re-measured interleaved as 2 × (base, new) × 7 calls:
+  - 1280×4096 fp32X/bf16W: 351.7 / 344.3 → 351.4 / 344.8, **flat**.
+  - 2048×5120 fp32X/bf16W: 647.0 / 664.1 → 677.6 / 673.2, about +2.8% on the medians. The ranges are 636–686
+    before and 647–697 after, so they overlap heavily. This cell was already recorded as noisy in Perf 1.
+  - fp32 X does not take E1, and on this path E2 only makes a measured-faster Sinkhorn. It was not carved out;
+    revisit if it reproduces.
+- Re-check of the final tree on 640×7168 (5 calls): median 123.7 µs; with zones on, one call: 123.3 µs.
+- The new critical core at 640×7168 is the 11-rank group root: the block-1 gather wait (~11 µs) + fold (4.6 µs ×
+  2 blocks). That is the round-3 target (tree / all-gather combine).
+- **Summary:** 2 experiments measured, 2 graduated, 0 null.
+  - Focus 640×7168 is **−21.6 µs (−14.9%)**, 145.4 → 123.8. The DRAM target is 118.8.
+  - 640×1792 is −0.8 µs, and 1280×4096 is flat.
+- **Guard set:** no material regression on any focus cell. The worst is 2048×5120 fp32X/bf16W, about +2.8% and
+  within noise (above), plus E1's recorded 4096×4096 bf16W +3.3%.
+- Correctness:
+  - Golden `eval/golden_tests/mhc_pre/`: **206/206** on the combined tree.
+  - Unit `test_mhc_pre.py` + `test_mhc_pre_blocking.py`: 24/24.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (SFPU elementwise / sfpi family) | capability | No sfpi construct or kernel_lib helper can issue `SFPLOADMACRO`, which does a DEST load + a templated MAD (SFPMUL by a pinned LREG) + a delayed store-back in ONE issued instruction. There is also no way to pin LREGs outside the sfpi allocator (L0–L3 macro temps / accumulator, L4–L7 multipliers, L12/L13 = 2.0 / eps), and no API for the macro-config backdoor (`SFPCONFIG` InstructionTemplate / Misc). The sub-units have no interlocks, so the schedule must be static and rule-checked (generated by `perf_experiments/sinkhorn_sfpu_fast/bench/gen_sinkhorn_lm.py`). The best plain-sfpi form (v5) is 3.49 µs. | 3490 (best sfpi, v5) / 4970 (previous kernel) | 2730 | mhc_pre_compute.cpp:594 (`sinkhorn`), passes above it |
