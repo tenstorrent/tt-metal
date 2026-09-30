@@ -21,8 +21,9 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import comp_allclose
 
-from eval.golden_tests.mhc_pre.helpers import make_inputs, pytorch_mhc_pre, make_compute_config
-from ttnn.bringup.mhc_pre_ttnn import mhc_pre
+from ttnn.bringup.mhc_pre_ttnn.tests.golden.helpers import make_inputs, pytorch_mhc_pre, make_compute_config
+
+mhc_pre = ttnn.bringup.mhc_pre  # the C++ op (the Python builder is the parity reference)
 
 _MIX = 24
 
