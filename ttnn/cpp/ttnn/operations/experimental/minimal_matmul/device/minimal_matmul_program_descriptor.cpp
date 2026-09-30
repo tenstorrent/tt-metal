@@ -867,12 +867,19 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     uint32_t k_blocks_per_core =
         tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
 
+    // Never K block 0 when there is a later one: a writer waits for the previous output block before it reads (and,
+    // on an injector, forwards) the in1 of the K block it defers to, so deferring to K block 0 stalls the next block's
+    // first K block behind the previous block's last subblock and its write.
+    auto defer_write_k_block_for = [&](const CoreCoord& c) -> uint32_t {
+        const uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
+        return K_blocks > 1 ? std::max(dwk, 1u) : dwk;
+    };
+
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     uint32_t max_defer_write_k_block = 0;
     for (const auto& c : cores) {
-        uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
-        max_defer_write_k_block = std::max(max_defer_write_k_block, dwk);
+        max_defer_write_k_block = std::max(max_defer_write_k_block, defer_write_k_block_for(c));
     }
 
     uint32_t ternary_b_broadcast = 0u;
@@ -938,9 +945,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
-        // Defer write to K block with same coordinate as core
-        // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
+        // Defer write to K block with same coordinate as core (but not K block 0, see defer_write_k_block_for)
+        uint32_t defer_write_k_block = defer_write_k_block_for(core);
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
