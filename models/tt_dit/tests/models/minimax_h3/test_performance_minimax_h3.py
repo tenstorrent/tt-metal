@@ -219,8 +219,6 @@ def test_ref2va_performance(mesh_device, reset_seeds):
         weights_dir=weights,
         task="ref2va",
         dit_fsdp=True,
-        trace_denoise=True,
-        bucket_denoise=True,
         vae_output_type="yuv420",
     )
 

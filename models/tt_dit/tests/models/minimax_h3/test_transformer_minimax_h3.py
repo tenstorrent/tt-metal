@@ -782,43 +782,48 @@ def test_minimax_h3_attention(
         cfg_parallel=None,
     )
 
-    tt_model = MiniMaxH3Attention(
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_ATTENTION_HEADS,
-        head_dim=ATTENTION_HEAD_DIM,
-        rotary_dim=rotary_dim,
-        qk_norm_eps=QK_NORM_EPS,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-    )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-
     tt_spatial = bf16_tensor_2dshard(
         spatial_input.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
     )
     tt_rope_cos, tt_rope_sin = upload_rope(tt_rope_cos_t, tt_rope_sin_t, mesh_device=mesh_device, sp_axis=sp_axis)
     logger.info(f"tt_spatial {tt_spatial.shape}, tt_rope_cos {tt_rope_cos.shape}")
 
-    logger.info("Running TT model")
-    tt_out = tt_model(
-        tt_spatial,
-        logical_n=logical_length_tensor(mesh_device, seq_len),
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-    )
-
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
     concat_dims[tp_axis] = 3
-    tt_out = ttnn.to_torch(
-        tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
-    )
-    tt_out = tt_out[:, :, :seq_len, :]
 
+    def run(kv_gather_capacity):
+        tt_model = MiniMaxH3Attention(
+            hidden_size=HIDDEN_SIZE,
+            num_heads=NUM_ATTENTION_HEADS,
+            head_dim=ATTENTION_HEAD_DIM,
+            rotary_dim=rotary_dim,
+            qk_norm_eps=QK_NORM_EPS,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            kv_gather_capacity=kv_gather_capacity,
+        )
+        tt_model.load_torch_state_dict(torch_model.state_dict())
+        tt_out = tt_model(
+            tt_spatial,
+            logical_n=logical_length_tensor(mesh_device, seq_len),
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+        )
+        return tt_out[:, :, :seq_len, :]
+
+    logger.info("Running TT model")
+    tt_out = run(None)
     assert_quality(torch_out, tt_out, pcc=MIN_PCC)
+
+    # An oversized K/V gather buffer, as bucketed rungs share, must not change a single bit.
+    assert torch.equal(run(4 * seq_len), tt_out), "kv_gather_capacity changed the attention output"
 
 
 # ---- one transformer block ----

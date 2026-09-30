@@ -104,10 +104,12 @@ class MiniMaxH3Attention(Module):
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
         kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
+        self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -512,6 +514,7 @@ class MiniMaxH3Attention(Module):
                 self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
             ),
             force_transpose=False,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -631,6 +634,7 @@ class MiniMaxH3Attention(Module):
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)

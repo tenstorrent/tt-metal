@@ -91,6 +91,7 @@ from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
+    MINIMAX_H3_FRAMES_PER_CHUNK,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_TEXT_TAG,
@@ -119,9 +120,12 @@ from .packing_ref2va import (
     sample_reference_video_frames,
 )
 from .policy import (
+    MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES,
     MINIMAX_H3_MAX_KEYFRAME_TOKENS,
+    MINIMAX_H3_MAX_NUM_FRAMES,
     MINIMAX_H3_MAX_REFERENCE_PATCHES,
     MINIMAX_H3_MAX_TEXT_TOKENS,
+    MINIMAX_H3_MIN_NUM_FRAMES,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     align_num_frames,
     decodable_canvases,
@@ -195,6 +199,15 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 # ref2va ladder; the top rung must admit everything the ref2va arena caps do (326432 rows, aligned).
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 326656)
 
+# 4x8 ladders: SP=8 aligns to 256, so rungs sit at most ~15% apart. Same top-rung rule as above.
+MINIMAX_H3_BUCKET_LADDER_4X8 = (
+    18944, 22528, 26624, 31488, 37120, 43776, 51712, 60928, 71680, 84480, 99584, 117248, 120320
+)  # fmt: skip
+MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8 = (
+    24064, 28416, 33536, 39680, 46848, 55296, 65280, 76800, 90368, 106496, 125440, 147712, 173824,
+    204544, 240640, 283136, 326656,
+)  # fmt: skip
+
 # ref2va text-encoder pad targets below the prompt arena cap; the cap itself is always the top rung.
 MINIMAX_H3_REF2VA_PRESENTATION_RUNGS = (1024, 4096, 8192, 16384, 32768)
 
@@ -207,10 +220,6 @@ MINIMAX_H3_VISION_PATCH_LADDER = (
     48128, 52224, 56320, 61440, 66560, 71680, 77824, 83968, 90112, 97280, 104448, 112640,
     121856, 131072, 141312, 152576, 163840, 176128, 189440, 203776, 219136, 230400,
 )  # fmt: skip
-
-
-def default_bucket_ladder(task: str) -> tuple[int, ...]:
-    return MINIMAX_H3_REF2VA_BUCKET_LADDER if task == "ref2va" else MINIMAX_H3_BUCKET_LADDER
 
 
 def validate_bucket_ladder(ladder: tuple[int, ...], alignment: int) -> None:
@@ -230,7 +239,7 @@ def select_bucket(seq_len: int, ladder: tuple[int, ...]) -> int:
         if seq_len <= rung:
             return rung
     raise ValueError(
-        f"packed sequence length {seq_len} exceeds the top trace bucket {ladder[-1]} "
+        f"packed sequence length {seq_len} exceeds the top bucket {ladder[-1]} "
         f"(ladder {ladder}); shorten the request or deploy with a taller ladder"
     )
 
@@ -285,13 +294,22 @@ class _BucketState:
 # inter-host hop. TP=4 also fits the shapes -- 56 // 4 = 14 heads, 5376 % (32 * 4) == 0 for the norms.
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
     # One Blackhole Galaxy: the working point MiniMaxH3.md documents.
-    (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "coresident": True},
+    (4, 8): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        "coresident": True,
+        "bucket_denoise": True,
+        "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
+        "use_persistent_ccl_buffers": False,
+    },
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
     # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.
     #
     # `trace_denoise` is quad-only, mirroring Wan's `traced = mesh_shape == (4, 32)`: at SP=32 a step
     # is dispatch-bound, so the trace is what makes the extra devices pay. 4x8 has enough work per
-    # chip to not need it.
+    # chip to not need it. Both meshes bucket.
     (4, 32): {
         "tp_axis": 0,
         "sp_axis": 1,
@@ -301,6 +319,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         # (the padded-sequence zero rows), and rebuilding those inside a trace capture is a fatal write.
         "coresident": True,
         "trace_denoise": True,
+        "use_persistent_ccl_buffers": True,
+        "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER},
         "audio_t_shard": True,
         "audio_t_factor": 32,
     },
@@ -327,6 +347,8 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        "use_persistent_ccl_buffers": False,
+        "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
     },
 }
 
@@ -467,6 +489,7 @@ class MiniMaxH3Pipeline:
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
+        use_persistent_ccl_buffers: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
@@ -489,7 +512,17 @@ class MiniMaxH3Pipeline:
         )
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
-        self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
+        bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
+        self.bucket_denoise = self.trace_denoise or bucket_denoise
+        self.use_persistent_ccl_buffers = (
+            preset.get("use_persistent_ccl_buffers", True)
+            if use_persistent_ccl_buffers is None
+            else use_persistent_ccl_buffers
+        )
+        assert self.use_persistent_ccl_buffers or not self.trace_denoise, (
+            "use_persistent_ccl_buffers=False relies on a host sync before each all-gather-matmul, which a traced "
+            "denoise does not replay"
+        )
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
         self._force_bucket: int | None = None
@@ -532,7 +565,11 @@ class MiniMaxH3Pipeline:
             audio_t_factor, shape, self.tp_axis, self.sp_axis
         )
 
-        self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
+        if bucket_ladder is None:
+            if "bucket_ladder" not in preset:
+                raise ValueError(f"mesh shape {shape} has no preset bucket ladder; pass bucket_ladder explicitly")
+            bucket_ladder = preset["bucket_ladder"][task]
+        self.bucket_ladder = tuple(bucket_ladder)
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
         self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
@@ -556,7 +593,7 @@ class MiniMaxH3Pipeline:
                 admissible += caps.condition_audio_rows
             if admissible > self.bucket_ladder[-1]:
                 raise ValueError(
-                    f"the arena caps admit a packed length up to {admissible}, beyond the top trace "
+                    f"the arena caps admit a packed length up to {admissible}, beyond the top "
                     f"bucket {self.bucket_ladder[-1]}; raise the ladder or lower the caps"
                 )
         if adaln_slot_roles is None:
@@ -628,6 +665,8 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.encoder_ccl_manager,
             is_fsdp=True,
             load_weights=False,
+            kv_gather_capacity=padded_sequence_length(self.arena_caps.prompt, self.sp_factor),
+            use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
         self._transformer = self._build_transformer()
         yuv = self.vae_output_type == "yuv420"
@@ -681,6 +720,7 @@ class MiniMaxH3Pipeline:
         dit_fsdp: bool | None = None,
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
+        use_persistent_ccl_buffers: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
@@ -693,8 +733,8 @@ class MiniMaxH3Pipeline:
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH` / `_PRESETS_WH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
-        `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
-        default to the task's envelope.
+        `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
+        `arena_caps` and `adaln_slot_roles` default to the task's envelope.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -718,6 +758,7 @@ class MiniMaxH3Pipeline:
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
             bucket_denoise=bucket_denoise,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
             vae_output_type=vae_output_type,
@@ -1004,6 +1045,12 @@ class MiniMaxH3Pipeline:
                         sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
                     ),
                     ccl_manager=self.encoder_ccl_manager,
+                    kv_gather_capacity=(
+                        self.vision_patch_ladder[-1]
+                        if self.vision_patch_ladder is not None
+                        else padded_sequence_length(MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES, self.sp_factor)
+                    ),
+                    use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
                 )
             else:
                 self._host_log("building the Qwen3-VL vision tower (replicated)")
@@ -1288,8 +1335,9 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
-            # Traced rungs each pin their own K/V gather pair; size one at the top rung for all.
-            kv_gather_capacity=self.bucket_ladder[-1] if self.trace_denoise else None,
+            # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
+            kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
+            use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -2139,12 +2187,14 @@ class MiniMaxH3Pipeline:
         self._log_generation = False
         try:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
-            if self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
+
             if not self.bucket_denoise:
                 return
             natural = self.last_seq_len.padded
 
+            if self.vae_output_type == "yuv420":
+                self._warm_vae_decode()
+            self._warm_audio_decode()
             if self.task == "ref2va":
                 self._warm_ref2va_prompt_encoder_envelope()
             else:
@@ -2300,6 +2350,9 @@ class MiniMaxH3Pipeline:
             (_, y_lengths, _), (_, x_lengths, _) = self._vae.decode_tile_grid(height // ratio, width // ratio)
             return len(y_lengths) * len(x_lengths)
 
+        # A chunk wider than the wave asserts in the gather stitch (the 33-tile 4:1 and 1:4 canvases
+        # on 4x8); those stay unwarmed until the stitch splits a chunk across waves.
+        canvases = [canvas for canvas in canvases if tiles_per_chunk(*canvas) <= wave_size]
         tiles = [tiles_per_chunk(*canvas) for canvas in canvases]
         full = max(count for count in tiles if wave_size % count == 0)
         full_canvas = canvases[tiles.index(full)]
@@ -2322,6 +2375,30 @@ class MiniMaxH3Pipeline:
             latents = torch.zeros(1, config.latent_channels, num_latents, height // ratio, width // ratio)
             self._vae.decode(latents, output_type="yuv420")
         self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
+
+    def _warm_audio_decode(self) -> None:
+        """Compile the audio decode at every servable length, strictly before trace capture.
+
+        The vocoder's pad-masking slices bake in the T pad, which differs at every length, so each
+        servable length is decoded once.
+        """
+        decoder = self._prepare_audio_decoder()
+        channels = self.audio_config["latent_channels"]
+        lengths = range(MINIMAX_H3_MIN_NUM_FRAMES, MINIMAX_H3_MAX_NUM_FRAMES + 1, MINIMAX_H3_FRAMES_PER_CHUNK)
+
+        before = self.mesh_device.num_program_cache_entries()
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for num_frames in tqdm.tqdm(
+            lengths,
+            desc="Warming audio decode lengths",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
+            decoder(torch.zeros(2, channels, audio_latent_num_frames(num_frames)))
+        self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _warm_ref2va_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served ref2va request can reach, strictly before
