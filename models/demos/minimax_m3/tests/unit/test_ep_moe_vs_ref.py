@@ -32,6 +32,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.mlp import MLP
+from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
 from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
@@ -172,6 +173,35 @@ def test_ep_moe_shared_schedule(mesh_device, device_params, seq_len, overlap, fu
     for r in range(len(ref)):
         ok_ref, pcc_ref = comp_pcc(ref[r], scheduled[r], 0.95)
         ok_off, pcc_off = comp_pcc(unscheduled[r], scheduled[r], 0.999)
-        ok_rep, pcc_rep = comp_pcc(scheduled[r], again[r], 0.9999)
-        logger.info(f"prompt{r}: pcc vs ref={pcc_ref} vs off={pcc_off} repeat={pcc_rep}")
-        assert ok_ref and ok_off and ok_rep, f"prompt {r}: vs ref {pcc_ref}, vs off {pcc_off}, repeat {pcc_rep}"
+        same = torch.equal(scheduled[r], again[r])
+        _, pcc_rep = comp_pcc(scheduled[r], again[r])
+        logger.info(f"prompt{r}: pcc vs ref={pcc_ref} vs off={pcc_off} repeat equal={same} (pcc {pcc_rep})")
+        assert ok_ref and ok_off, f"prompt {r}: vs ref {pcc_ref}, vs off {pcc_off}"
+        assert same, f"prompt {r}: repeat differs from the first scheduled forward (pcc {pcc_rep})"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("seq_len", [128], ids=["s128"])
+def test_ep_moe_overlap_release_recreate(mesh_device, device_params, seq_len, reset_seeds, monkeypatch):
+    """shared_overlap.release() removes the mesh's overlap manager; a forward of the same MLP and a newly built
+    one on the same mesh re-create it and give bit-identical outputs."""
+    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "1")
+    monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "1")
+    mlp, x, ref = _build(mesh_device, seq_len)
+    assert mlp.overlap_shared
+    first = _run(mlp, mesh_device, x)
+    shared_overlap.release(mesh_device)
+    assert id(mesh_device) not in shared_overlap._MANAGERS
+    shared_overlap.release(mesh_device)  # idempotent
+    again = _run(mlp, mesh_device, x)
+    assert id(mesh_device) in shared_overlap._MANAGERS
+    shared_overlap.release(mesh_device)
+    rebuilt, _, _ = _build(mesh_device, seq_len)
+    fresh = _run(rebuilt, mesh_device, x)
+    shared_overlap.release(mesh_device)
+    assert id(mesh_device) not in shared_overlap._MANAGERS
+    for r in range(len(ref)):
+        ok_ref, pcc_ref = comp_pcc(ref[r], first[r], 0.95)
+        assert ok_ref, f"prompt {r}: vs ref {pcc_ref}"
+        assert torch.equal(first[r], again[r]), f"prompt {r}: forward after release differs"
+        assert torch.equal(first[r], fresh[r]), f"prompt {r}: rebuilt MLP differs"

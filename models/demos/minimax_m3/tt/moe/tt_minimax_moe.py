@@ -266,29 +266,34 @@ class TtMiniMaxMoE(LightweightModule):
 
         # Dispatch -> per-expert buffers. With a shared_fn, x (the shared expert reads it too) is freed only
         # after the shared expert is enqueued and, when overlapped, after the sub-device manager is cleared.
+        # Once loaded, the manager is cleared even if dispatch or the shared expert raises.
         overlap = self.overlap if shared_fn is not None else None
-        with zone("dispatch"):
-            if overlap is not None:
-                overlap.load()
-            self.dispatch_module.subdevice_id = overlap.dispatch_sd_id if overlap is not None else None
-            dispatched_buffer, metadata = self.dispatch_module(
-                x,
-                scores,
-                indices,
-                tt_expert_offsets,
-                self.tt_expert_dispatch_table,
-                padding_config=padding_config,
-            )
-            if shared_fn is None:
-                ttnn.deallocate(x)
-
         shared_partial = None
-        if shared_fn is not None:
-            keep_alive = [x]
-            with zone("shared_expert"):
-                shared_partial = shared_fn(overlap.shared_sub_device if overlap is not None else None, keep_alive)
-            if overlap is not None:
+        keep_alive = [x]
+        loaded = False
+        try:
+            with zone("dispatch"):
+                if overlap is not None:
+                    overlap.load()
+                    loaded = True
+                self.dispatch_module.subdevice_id = overlap.dispatch_sd_id if overlap is not None else None
+                dispatched_buffer, metadata = self.dispatch_module(
+                    x,
+                    scores,
+                    indices,
+                    tt_expert_offsets,
+                    self.tt_expert_dispatch_table,
+                    padding_config=padding_config,
+                )
+                if shared_fn is None:
+                    ttnn.deallocate(x)
+            if shared_fn is not None:
+                with zone("shared_expert"):
+                    shared_partial = shared_fn(overlap.shared_sub_device if overlap is not None else None, keep_alive)
+        finally:
+            if loaded:
                 overlap.clear()
+        if shared_fn is not None:
             for t in keep_alive:
                 ttnn.deallocate(t)
 

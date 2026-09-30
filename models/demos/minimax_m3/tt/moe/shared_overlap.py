@@ -15,6 +15,9 @@ shared expert's TP collective runs after the clear, or is fused into the routed 
 op of either sub-device still uses is freed in it. The caller collects those in a keep-alive list and frees
 them after the clear. Loading and clearing each drain the device.
 
+The manager is created once per mesh and shared by every MoE layer on it. ``release(mesh_device)`` removes it
+and must run before the mesh is closed (Model.release_sub_device_managers does it); a later load() re-creates it.
+
 Both schedules are on by default (like deepseek_v3_d_p's overlap); ``M3_MOE_OVERLAP_SHARED=0`` runs the shared
 expert before the MoE on the full grid, ``M3_MOE_FUSE_SHARED_RS=0`` gives it back its own TP collective.
 """
@@ -30,8 +33,9 @@ DEFAULT_FUSE_SHARED_RS = True
 # dispatch puts its senders in its sub-device's first row.
 DISPATCH_ROWS = 1
 
-# id(mesh device) -> (mesh device, manager id): one manager per mesh, shared by every MoE layer on it. The
-# mesh is held so its id cannot be reused by another mesh while the entry exists.
+# id(mesh device) -> _Manager: one manager per mesh, shared by every MoE layer on it. The mesh is held so its
+# id cannot be reused by another mesh while the entry exists; release() drops the entry (MeshDevice does not
+# support weak references).
 _MANAGERS = {}
 
 # Circular-buffer budget per core for the sub-device matmuls, in bf16 tiles (2 KiB): 768 KiB of Blackhole's
@@ -59,7 +63,8 @@ def overlap_shared_enabled():
 
 def fuse_shared_rs_enabled():
     """Add the shared expert's un-reduced partial to the routed output before the MoE's reduce-scatter instead
-    of running its own TP collective (exact: the reduce-scatter is linear). ``M3_MOE_FUSE_SHARED_RS=0|1``."""
+    of running its own TP collective. Mathematically equivalent (the reduce-scatter is linear); not
+    bit-identical, the added bf16 add rounds before the collective. ``M3_MOE_FUSE_SHARED_RS=0|1``."""
     return _flag("M3_MOE_FUSE_SHARED_RS", DEFAULT_FUSE_SHARED_RS)
 
 
@@ -141,6 +146,43 @@ def shared_expert_program_configs(cores, x, gate_proj, down_proj):
     return gate, gate, down
 
 
+class _Manager:
+    def __init__(self, mesh_device, manager_id):
+        self.mesh_device = mesh_device
+        self.manager_id = manager_id
+        self.loaded = False
+
+
+def _acquire(mesh_device, dispatch_cores, shared_cores):
+    """The mesh's overlap manager, created on first use."""
+    entry = _MANAGERS.get(id(mesh_device))
+    if entry is None:
+        manager_id = mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([dispatch_cores]), ttnn.SubDevice([shared_cores])], 0
+        )
+        entry = _MANAGERS[id(mesh_device)] = _Manager(mesh_device, manager_id)
+    return entry
+
+
+def release(mesh_device):
+    """Remove mesh_device's overlap manager, clearing it first if it is loaded. No-op if there is none. Call
+    before closing the mesh: a sub-device manager left registered at close can segfault the teardown."""
+    entry = _MANAGERS.get(id(mesh_device))
+    if entry is None:
+        return
+    if entry.loaded:
+        mesh_device.clear_loaded_sub_device_manager()
+        entry.loaded = False
+    mesh_device.remove_sub_device_manager(entry.manager_id)
+    del _MANAGERS[id(mesh_device)]
+
+
+def release_all():
+    """release() every mesh that has an overlap manager."""
+    for entry in list(_MANAGERS.values()):
+        release(entry.mesh_device)
+
+
 class SharedExpertOverlap:
     """The sub-device split and its load / clear."""
 
@@ -148,14 +190,16 @@ class SharedExpertOverlap:
         grid = mesh_device.compute_with_storage_grid_size()
         self.mesh_device = mesh_device
         self.dispatch_cores, self.shared_cores = split_grid(grid.x, grid.y, DISPATCH_ROWS)
-        if id(mesh_device) not in _MANAGERS:
-            manager = mesh_device.create_sub_device_manager(
-                [ttnn.SubDevice([self.dispatch_cores]), ttnn.SubDevice([self.shared_cores])], 0
-            )
-            _MANAGERS[id(mesh_device)] = (mesh_device, manager)
-        self.manager_id = _MANAGERS[id(mesh_device)][1]
+        _acquire(mesh_device, self.dispatch_cores, self.shared_cores)
         self.dispatch_sd_id = ttnn.SubDeviceId(0)
         self.shared_sd_id = ttnn.SubDeviceId(1)
+
+    def _entry(self):
+        return _acquire(self.mesh_device, self.dispatch_cores, self.shared_cores)
+
+    @property
+    def manager_id(self):
+        return self._entry().manager_id
 
     @property
     def shared_sub_device(self):
@@ -163,7 +207,12 @@ class SharedExpertOverlap:
         return self.shared_sd_id, self.shared_cores
 
     def load(self):
-        self.mesh_device.load_sub_device_manager(self.manager_id)
+        entry = self._entry()
+        self.mesh_device.load_sub_device_manager(entry.manager_id)
+        entry.loaded = True
 
     def clear(self):
         self.mesh_device.clear_loaded_sub_device_manager()
+        entry = _MANAGERS.get(id(self.mesh_device))
+        if entry is not None:
+            entry.loaded = False

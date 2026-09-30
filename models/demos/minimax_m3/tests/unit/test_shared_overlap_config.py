@@ -3,8 +3,8 @@
 
 """Device-free checks of the shared-expert / dispatch overlap (tt/moe/shared_overlap.py, TtMiniMaxMoE.forward):
 the sub-device split, the 2D matmul configs sized to it, the knobs (plus the routed-expert hybrid threshold), and
-the op order of the overlap window (every ttnn op the forward calls is replaced by a recorder). The device test is
-test_ep_moe_vs_ref.py test_ep_moe_shared_schedule.
+the op order of the overlap window (every ttnn op the forward calls is replaced by a recorder). The device tests are
+test_ep_moe_vs_ref.py test_ep_moe_shared_schedule and test_ep_moe_overlap_release_recreate.
 """
 
 import math
@@ -93,6 +93,7 @@ class _FakeMesh:
     def __init__(self):
         self.created = []
         self.loaded = []
+        self.removed = []
 
     def compute_with_storage_grid_size(self):
         return ttnn.CoreCoord(*GRID)
@@ -107,6 +108,9 @@ class _FakeMesh:
     def clear_loaded_sub_device_manager(self):
         self.loaded.append("clear")
 
+    def remove_sub_device_manager(self, mgr):
+        self.removed.append(mgr)
+
 
 def test_overlap_manager_shared_per_mesh(monkeypatch):
     monkeypatch.setattr(shared_overlap, "_MANAGERS", {})
@@ -118,6 +122,31 @@ def test_overlap_manager_shared_per_mesh(monkeypatch):
     a.load()
     a.clear()
     assert mesh.loaded == [a.manager_id, "clear"]
+
+
+def test_overlap_release_and_recreate(monkeypatch):
+    """release() clears a loaded manager, removes it and drops the entry; the next load re-creates it."""
+    monkeypatch.setattr(shared_overlap, "_MANAGERS", {})
+    mesh, other = _FakeMesh(), _FakeMesh()
+    a, _ = SharedExpertOverlap(mesh), SharedExpertOverlap(other)
+    first = a.manager_id
+    a.load()
+    shared_overlap.release(mesh)
+    assert mesh.loaded == [first, "clear"] and mesh.removed == [first]
+    assert id(mesh) not in shared_overlap._MANAGERS and id(other) in shared_overlap._MANAGERS
+    shared_overlap.release(mesh)  # idempotent
+    assert mesh.removed == [first]
+
+    # not loaded: no clear; an instance built before the release re-creates the manager on load
+    a.load()
+    assert len(mesh.created) == 2 and a.manager_id != first and mesh.loaded[-1] == a.manager_id
+    a.clear()
+    shared_overlap.release(mesh)
+    assert mesh.loaded[-1] == "clear" and mesh.loaded.count("clear") == 2 and mesh.removed[-1] == "mgr2"
+
+    shared_overlap.release_all()
+    assert other.removed == ["mgr1"] and other.loaded == []
+    assert shared_overlap._MANAGERS == {}
 
 
 def test_knobs(monkeypatch, expect_error):
@@ -283,3 +312,36 @@ def test_forward_window_order(monkeypatch, overlap, fuse):
         assert log[r][1] == "shared_partial" and shared is None and ("free", "shared_partial") in log[r:]
     else:
         assert log[r][1] is None and shared.name == "shared_partial"
+
+
+@pytest.mark.parametrize("fail_in", ["dispatch", "shared", "load"])
+def test_forward_window_clears_on_error(monkeypatch, fail_in, expect_error):
+    """Once load() succeeded, clear() runs exactly once even when dispatch or the shared expert raises, and no
+    keep-alive tensor is freed before it."""
+    moe, log = _moe_with_recorder(monkeypatch, overlap=True)
+
+    def boom(*a, **k):
+        log.append((fail_in,))
+        raise RuntimeError(fail_in)
+
+    if fail_in == "dispatch":
+        type(moe.dispatch_module).__call__ = lambda self, *a, **k: boom()
+    elif fail_in == "load":
+        moe.overlap.load = boom
+
+    def shared_fn(sub_device, keep_alive):
+        keep_alive.append(_T("shared_act"))
+        if fail_in == "shared":
+            boom()
+        return _T("shared_partial")
+
+    with expect_error(RuntimeError, fail_in):
+        moe.forward(_T("x"), topk_indices=_T("idx"), topk_weights=_T("wts"), shared_fn=shared_fn, fuse_shared=True)
+    if fail_in == "load":
+        assert not _names(log, "clear")
+    else:
+        (lo,) = _names(log, "load")
+        (cl,) = _names(log, "clear")
+        assert lo < _names(log, fail_in)[0] < cl
+        assert not any(e[0] == "free" for e in log[lo:cl])
+    assert not _names(log, "experts")

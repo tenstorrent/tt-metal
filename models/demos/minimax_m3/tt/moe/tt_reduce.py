@@ -68,8 +68,9 @@ class TtMiniMaxReduce(LightweightModule):
                 with `indices` this is what lets the kernel SKIP the ~3 of 4 slots belonging to other
                 dispatch groups, so the untouched slots are never read.
             addend: optional per-device partial [.., seq_len, emb_dim] added to the weighted sum before
-                the reduce-scatter (the shared expert's un-reduced down projection). Exact, because the
-                reduce-scatter is linear. The caller keeps ownership.
+                the reduce-scatter (the shared expert's un-reduced down projection). Mathematically
+                equivalent (the reduce-scatter is linear); not bit-identical, the added bf16 add rounds
+                before the collective. The caller keeps ownership.
 
         Returns:
             [seq_len, emb_dim / num_chips_in_cluster_axis]
