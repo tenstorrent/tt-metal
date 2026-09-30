@@ -164,7 +164,12 @@ class _Geometry:
         q_chunk, k_chunk = _largest_divisor_chunk(cl, sdpa_q_chunk()), _largest_divisor_chunk(cl, K_CHUNK)
         _, _, grid = _ring_ccl(mesh)
         self.sdpa_pc = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            # XING_MLA_EXP_APPROX=1: the online-softmax correction exp uses the fp32-accurate exp (the flag's True);
+            # default False (range-reduced polynomial) as before. The softmax exp itself is always the fast approx.
+            exp_approx_mode=os.environ.get("XING_MLA_EXP_APPROX", "0") == "1",
         )
 
     # ---- harness boundary (state load / read-back); never called from __call__
