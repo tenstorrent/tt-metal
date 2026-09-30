@@ -2,9 +2,11 @@
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "datacopy_tilize_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
 

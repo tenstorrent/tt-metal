@@ -2,12 +2,15 @@
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
   - name: "l1_acc_out"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
 

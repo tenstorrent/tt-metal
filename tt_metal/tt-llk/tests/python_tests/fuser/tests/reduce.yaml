@@ -4,13 +4,16 @@ dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [32, 32]
     format: "Float32"
   - name: "input_B"
+    tile_dims: all
     dims: [32, 32]
     format: "Float32"
     stimuli: 1.0
   - name: "reduced_output"
+    tile_dims: all
     dims: [32, 32]
     format: "Float32"
 

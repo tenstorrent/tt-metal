@@ -4,12 +4,15 @@ supported_archs: ["wormhole", "blackhole"]
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [32, 256]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [32, 256]
     format: "Float16_b"
   - name: "sub_bcast_col_custom_out"
+    tile_dims: all
     dims: [32, 256]
     format: "Float16_b"
 
