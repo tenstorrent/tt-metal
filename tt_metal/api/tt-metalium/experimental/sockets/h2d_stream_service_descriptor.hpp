@@ -18,7 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape.hpp>
 
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 
 namespace tt::tt_metal::distributed {
 

@@ -6,7 +6,9 @@
 
 #include <cstdint>
 
+#if defined(KERNEL_BUILD)
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+#endif
 
 // L1 record layouts shared across the dispatch kernels and the host program factory: the per-batch
 // route plan (worker reader -> worker writer) below, and the grouped route_info slot (worker writer
@@ -71,9 +73,16 @@ inline uint16_t unpack_k(uint32_t weight_k) { return (uint16_t)(weight_k >> 16);
 
 // ===== Sparse-multicast grouped route_info =====
 //
-// Destinations one grouped slot can carry is NOC_SPARSE_MCAST_WRITE_MAX_DESTS, taken straight from
-// the fabric packet header above: that is how many address slots the header holds, and one slot is
-// one sparse multicast. No local copy of the value — host and kernels both read the fabric macro.
+// Destinations one grouped slot can carry is NOC_SPARSE_MCAST_WRITE_MAX_DESTS: that is how many
+// address slots the fabric packet header holds, and one slot is one sparse multicast. The fabric
+// header is internal to tt_metal and only reachable from kernel builds, so the host sees a local
+// copy of the value; kernel builds pin it to the fabric macro.
+constexpr uint32_t GROUPED_ROUTE_MAX_DESTS = 4;
+#if defined(KERNEL_BUILD)
+static_assert(
+    GROUPED_ROUTE_MAX_DESTS == NOC_SPARSE_MCAST_WRITE_MAX_DESTS,
+    "GROUPED_ROUTE_MAX_DESTS must match the fabric packet header's NOC_SPARSE_MCAST_WRITE_MAX_DESTS");
+#endif
 
 // Grouped route_info slot, shared between the dispatch worker writer (producer) and the sender
 // writer (consumer). One direction-group: a single token fanned out to up to NOC_SPARSE_MCAST_WRITE_MAX_DESTS
@@ -96,11 +105,11 @@ inline uint16_t unpack_k(uint32_t weight_k) { return (uint16_t)(weight_k >> 16);
 // straddles a line. Host sizes the ring slot stride from this sizeof and hands it to both kernels.
 struct alignas(PLAN_L1_ALIGNMENT) GroupedRouteInfo {
     uint32_t direction;  // fabric direction shared by every destination in the group
-    uint32_t num_dests;  // live array entries (1 .. NOC_SPARSE_MCAST_WRITE_MAX_DESTS)
+    uint32_t num_dests;  // live array entries (1 .. GROUPED_ROUTE_MAX_DESTS)
     uint32_t token_idx;  // global token index; a per-token constant, shared by the whole group
-    uint32_t page_idx[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];  // destination DRAM page
-    uint32_t distance[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];  // hop count, ascending
-    uint32_t k[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];  // top-k slot (metadata field 2), the only per-destination field
+    uint32_t page_idx[GROUPED_ROUTE_MAX_DESTS];  // destination DRAM page
+    uint32_t distance[GROUPED_ROUTE_MAX_DESTS];  // hop count, ascending
+    uint32_t k[GROUPED_ROUTE_MAX_DESTS];         // top-k slot (metadata field 2), the only per-destination field
 };
 
 static_assert(sizeof(GroupedRouteInfo) == 64, "GroupedRouteInfo must be 15 u32 padded up to PLAN_L1_ALIGNMENT");

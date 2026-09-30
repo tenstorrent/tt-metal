@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <internal/service/named_shm.hpp>
+#include <internal/service/shm_resource_tracker.hpp>
 
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>

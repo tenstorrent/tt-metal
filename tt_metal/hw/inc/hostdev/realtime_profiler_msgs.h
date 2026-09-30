@@ -5,7 +5,7 @@
 // Real-time profiler L1 layout for the block carved by DispatchMemMap
 // (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG). Not part of mailboxes_t.
 //
-// Consumed by tt_metal/llrt/hal/codegen/codegen.sh (same rules as fabric_telemetry_msgs.h:
+// Consumed by tt_metal/llrt/hal/codegen/codegen.sh (same rules as hostdevcommon/fabric_telemetry_msgs.h:
 // structs, enums, constants, 1-D arrays only).
 
 #pragma once
