@@ -20,7 +20,9 @@ namespace ckernel
  * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply. Above LoFi the block is multiplied once per
  * fidelity phase and ADDR_MOD_6 carries the phase step: the last multiply of a phase advances the fidelity counter
  * (its SrcA and DEST steps do not matter, the SETRWC that opens the next phase resets both counters). At LoFi only
- * ADDR_MOD_7 is programmed, so a LoFi kernel is what it was before the fidelity template existed.
+ * ADDR_MOD_7 is programmed, so a LoFi kernel is what it was before the fidelity template existed. ADDR_MOD_6 is also
+ * programmed by the matmul and the SFPU inits, as ADDR_MOD_7 is by the SFPU init: a kernel that runs one of those
+ * between this init and the block multiply re-runs this init.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
