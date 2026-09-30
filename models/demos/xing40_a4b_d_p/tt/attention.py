@@ -269,6 +269,7 @@ class TtMlaAttention:
         self.sems, self.ccl_offset, _ = _ring_ccl(mesh)
         self._geoms: dict = {}
         self.geom: _Geometry | None = None
+        self.slot = None  # serving binding (bind_cache); None = the geometry's own single-sequence cache
 
     # ---- load time / harness boundary
     def setup(self, chunk: int, max_seq: int) -> _Geometry:
@@ -277,6 +278,22 @@ class TtMlaAttention:
             self._geoms[key] = _Geometry(self, chunk, max_seq)
         self.geom = self._geoms[key]
         return self.geom
+
+    def bind_cache(self, cache, slot: int, row: int, rows: int) -> None:
+        """Serving option: write / gather this layer's latent rows in an external multi-slot cache (the prefill
+        engine's, tt/runners/kv_contract.py) instead of the geometry's own. ``cache`` is laid out like the geometry's
+        (init_kvpe_cache, tp_axis None, same max_seq and chunk) with batch = slot * rows + row. ``unbind_cache``
+        (the default) restores the geometry cache at batch 0."""
+        assert tuple(cache.shape)[1:] == tuple(self.geom.cache.shape)[1:], (cache.shape, self.geom.cache.shape)
+        assert 0 <= row < rows and (slot + 1) * rows <= cache.shape[0], (slot, row, rows, cache.shape)
+        self.slot = (cache, int(slot), int(row), int(rows))
+
+    def unbind_cache(self) -> None:
+        self.slot = None
+
+    def _cache(self):
+        """(cache, slot_idx, layer_idx, num_layers) the chunk writes and gathers."""
+        return self.slot if self.slot is not None else (self.geom.cache, 0, 0, 1)
 
     def load_state(self, prefix: torch.Tensor | None) -> None:
         """Harness boundary: natural-order kv_latent [n, 576] into the current geometry's cache (zeros past n)."""
@@ -321,12 +338,13 @@ class TtMlaAttention:
         kvpe = ttnn.concat([nb, rr], dim=-1, memory_config=dram)  # [1, 1, S/4, 576] bf16 TILE
         ttnn.deallocate(nb)
         ttnn.deallocate(rr)
+        cache, slot, row, rows = self._cache()
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            self.geom.cache,
+            cache,
             kvpe,
-            slot_idx=0,
-            layer_idx=0,
-            num_layers=1,
+            slot_idx=slot,
+            layer_idx=row,
+            num_layers=rows,
             kv_actual_global=start,
             cluster_axis=self.sp_axis,
         )
@@ -371,9 +389,10 @@ class TtMlaAttention:
     def _ring_attend(self, q_abs, start: int):
         """ring_mla over axis 0 (ttMLA._chunked_attn): o [1, 16, S/4, 512]."""
         g = self.geom
+        cache, slot, row, rows = self._cache()
         o, stats = self.ring_mla(
             q_abs,
-            g.cache,
+            cache,
             persistent_output_buffer_kv=g.kv_buf,
             head_dim_v=self.lat,
             logical_n=min(start + g.chunk, g.max_seq),
@@ -389,7 +408,7 @@ class TtMlaAttention:
             ccl_core_grid_offset=self.ccl_offset,
             use_column_major_ccl=True,
             is_balanced=False,
-            kv_cache_batch_idx=0,
+            kv_cache_batch_idx=slot * rows + row,
             kv_actual_isl=start,
         )  # [1, 16, S/4, 512] bf16
         ttnn.deallocate(stats)
