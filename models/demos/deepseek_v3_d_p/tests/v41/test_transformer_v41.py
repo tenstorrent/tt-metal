@@ -88,10 +88,12 @@ PRODUCTION_SEQ = 2048
 PRODUCTION_CANDIDATE_BLOCKS = 96  # of 128 visible blocks at S=2048 (2048 would make every block a candidate)
 LONG_CHUNK = 5120
 # case -> (prompt tokens, chunk, candidate blocks; None = released 2048). Long cases: real weights only.
+# padded_8120: a full chunk and a partial one (3000 of 5120 rows; graph.md rule 8) at production dims.
 PRODUCTION_CASES = {
     "one_chunk": (PRODUCTION_SEQ, PRODUCTION_SEQ, PRODUCTION_CANDIDATE_BLOCKS),
     "two_chunks": (PRODUCTION_SEQ, PRODUCTION_SEQ // 2, PRODUCTION_CANDIDATE_BLOCKS),
     **{f"{n}x{LONG_CHUNK}": (n * LONG_CHUNK, LONG_CHUNK, None) for n in (2, 4, 11)},
+    "padded_8120": (LONG_CHUNK + 3000, LONG_CHUNK, None),
     "4x5120_scaled_fp8": (4 * LONG_CHUNK, LONG_CHUNK, None),
 }
 # cases whose compressed KV uses another format (test_block_v41 KV_FORMATS): the transformer's free-running prefill
@@ -113,6 +115,13 @@ MESH_4X2 = [  # LoudBox 4x2 (SP4 x TP2): production gate only (beads 8y7.20.*.2)
         id="fabric2d-mesh-4x2",
     )
 ]
+
+
+def last_chunk_rows(case: str) -> int | None:
+    """The valid rows of the last chunk of a long production ``case`` (the rows its ``chunk`` gate window covers);
+    None for the short cases (no chunk window)."""
+    seq, chunk, _ = PRODUCTION_CASES[case]
+    return seq - (seq - 1) // chunk * chunk if chunk == LONG_CHUNK else None
 
 
 def setup_small(mesh_device, case, schedule):
@@ -402,7 +411,7 @@ def setup_production(mesh_device, weights, case):
             embed,
             norm,
             head,
-            max_seq_len=seq,
+            max_seq_len=-(-seq // chunk) * chunk,  # whole chunks; a padded last chunk writes nothing past seq
             chunk=chunk,
             weight_cache_path=root,
         )
@@ -427,8 +436,8 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
     if setup is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     model, spec, tokens, reference = setup
-    seq, chunk, _ = PRODUCTION_CASES[chunks]
-    long = chunk == LONG_CHUNK
+    seq, _, _ = PRODUCTION_CASES[chunks]
+    last = last_chunk_rows(chunks)
     name = f"production {weights} chunks={chunks}"
     if chunks in KV_FORMAT_CASES:
         with _stage(f"{name} reference (cached unless precomputed)", "oracle"):
@@ -436,8 +445,8 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
         with _stage(f"{name} teacher-forced blocks", "compute"):
             _teacher_forced_last_chunk(model, clean, seq, name, KV_FORMATS[KV_FORMAT_CASES[chunks]], unrounded)
         return
-    _, clean = _check(model, spec, tokens, reference, name, last_chunk=chunk if long else None)
-    if long:
+    _, clean = _check(model, spec, tokens, reference, name, last_chunk=last)
+    if last:
         with _stage(f"{name} teacher-forced blocks", "compute"):
             _teacher_forced_last_chunk(model, clean, seq, name)
     logger.info(f"{name}: reference model built: {reference.built}")

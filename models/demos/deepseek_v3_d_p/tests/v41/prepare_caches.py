@@ -59,8 +59,7 @@ def _prepare(mesh, test: str, params: list[str]) -> str:
         if chunks in T.KV_FORMAT_CASES:
             T.kv_format_reference(spec, tokens, reference)
         else:
-            _, chunk, _ = T.PRODUCTION_CASES[chunks]
-            T.reference_data(spec, tokens, reference, chunk if chunk == T.LONG_CHUNK else None)
+            T.reference_data(spec, tokens, reference, T.last_chunk_rows(chunks))
         return f"reference built: {reference.built}"
     else:
         raise ValueError(f"no prepare step for {test}")
