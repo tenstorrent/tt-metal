@@ -1567,3 +1567,51 @@ sustained: chip 0 294.2 / 374.5 -> 293.5 / 373.8 ms, chip 1 296.7 / 382.4 -> 295
 matmul at M = 4096 vs M = 8192 with the same config: 7.5% of elements on every row, max 0.094, bfp8 rounding), while K /
 V in L1 alone and 2 chunks vs 1 are bit-identical and the eval is deterministic. Default at bs32
 (`QWEN_QKV_CHUNKS=4`, `QWEN_HEADS_KV_L1=1`); `QWEN_QKV_CHUNKS=2` restores the old path.
+
+## 67. NoC transaction ids for the custom ops: the heads op is compute-bound, not DRAM-bound; two bit-identical fixes, neutral e2e (landed) (2026-09-30)
+
+Question: would transaction-id (trid) pipelined reads / writes (as in `all_gather/.../multicast_reader.cpp`,
+`moe_compute/.../dm0.cpp`) pay in the model-local ops that looked data-movement-bound? 8× p150b host; standalone on
+chip 5, traced; e2e `sustained_run.sh`, 2 alternating rounds per batch on chips 1 / 2 / 0 (bs8 / 16 / 32).
+
+**Heads op at today's placement (`perf_tools/bench_heads_placement_ablate.py`: v3, QKV in L1, Q DRAM, K / V L1,
+preallocated outputs), µs per call:**
+
+| variant | bs16 | bs8 | bs32 quarter chunk (8 → 32) | bs16, Q in L1 |
+|---|---|---|---|---|
+| full | 216.2 | 120.5 | 120.0 | 215.2 |
+| compute only (no unit read / write) | 210.7 | 115.6 | 117.0 | 209.2 |
+| data movement only (copy compute) | 223.9 | 109.2 | 110.9 | 233.8 |
+| read only | 238.3 | 107.8 | 110.9 | 237.0 |
+| write only | 162.7 | 88.5 | 89.1 | 84.5 |
+| handshakes only | 63.8 | 38.8 | 39.7 | 64.2 |
+
+Compute-bound at every batch size: full is within 3-5 µs of compute only. Not DRAM-bound: Q's DRAM write is ~100 µs of
+writer time (write only 162.7 vs 84.5 with Q in L1) and all of it hidden (full 216.2 vs 215.2). The DM floor is close
+behind (read only ≈ compute at bs8 / bs32), so a faster compute would hit the reader next: it moves ~2 GB/s per core
+from L1 (26 KB units, one barrier per unit), which is where trid-pipelined reads would matter. Page → bank math is not
+the cost (constant-divisor multiply for the 120 L1 banks).
+§56's "sits at the DRAM floor" applied to the old DRAM-input placement only.
+
+**Heads op cos / sin double-buffered (landed, `QWEN_HEADS_ROT_DB=1` default in the op).** With v3 the cos / sin CBs
+held one unit (`cache_rot` is v2 only): the reader's next-unit cos / sin read waited for compute to pop this unit's,
+after the Q / K heads, and only the V copy covered it. Two tiles deep: bs16 214.7 / 214.8 → 208.7 / 209.2 µs, bs32
+chunk 121.4 / 120.1 → 117.8 / 118.7 (compute only drops by the same 5-6 µs: the old floor included the bubble);
+bit-identical Q / K / V at bs8 / 16; +16 KB CB per core, fits at bs8 / 16 / 32. E2e cold / sustained 76.9 / 99.1,
+143.5 / 193.6, 291.1 / 377.1 ms: within noise of the baseline (~0.1-0.2 ms expected).
+
+**Add+norm partial exchange on its own trid (landed, `QWEN_ADD_NORM_PART_TRID=1` default in the op).** The writer's
+`noc_async_write_barrier()` before the semaphore increments also waited for the wave's sum slice to be acked by DRAM;
+the partial writes now carry trid 1 (`noc_async_write_one_packet_with_trid`, then `noc_async_write_set_trid(0)`: the id
+stays in the command buffer's packet tag) and the barrier is `noc_async_write_barrier_with_trid(1)`. Bit-identical at
+bs8 / 16 / 32 (`perf_tools/bench_add_norm_placement.py`). Standalone 86.9 → 87.8, 130.5 → 128.0, 274.6 → 273.8 µs
+(bs8 / 16 / 32). E2e cold / sustained, off → on: bs8 76.7 / 98.7, 76.7 / 99.7 → 76.7 / 99.9, 76.8 / 99.3; bs16 143.4 /
+192.8, 143.2 / 194.9 → 143.3 / 194.7, 143.2 / 194.9; bs32 291.0 / 375.5, 291.7 / 382.0 → 291.6 / 379.0, 292.3 /
+379.9: neutral. The exchange latency was not the wave's cost. Every CB of the op holds one wave (a, b, sum, out), so
+the next wave's add waits for this wave's normalised writes to be acked: that serialisation is the next thing to try.
+
+**The hang that preceded these runs.** Every e2e run (and the committed HEAD) hung in the first warmup prefill.
+tt-triage (`tools/tt-triage.py --run=dump_callstacks`) put all cores in SDPA's `normalize_row_streaming`, pack thread in
+`scratch_cb.reserve_back(sbh)`: the installed `_ttnncpp.so` (00:19) predated 0458a990466 (20:08), which sized that CB to
+a row group in the program factory, so the JIT'd kernel reserved sbh tiles of a 1-tile CB. `./build_metal.sh` fixed it
+(STS-B bs8 0.8120 after). PERF_GUIDE §4 now says to rebuild after host-side changes.

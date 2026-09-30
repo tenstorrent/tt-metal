@@ -250,13 +250,17 @@ def nlp_create_qkv_heads_norm_headsplit(
             cb(3, 1, ttnn.bfloat16, _BF16_TILE),  # 1/head_dim scaler (resident)
             cb(4, 1, ttnn.bfloat16, _BF16_TILE),  # eps (resident)
         ]
+    # cos / sin double-buffered: the reader's cos / sin read for the next unit need not wait for compute to pop this
+    # unit's (it did, and only the V copy covered it). Bit-identical, bs16 214.7 -> 209.0 us (NEGATIVE_RESULTS 67).
+    # Opt out: QWEN_HEADS_ROT_DB=0.
+    rot_depth = 2 if cache_rot or os.getenv("QWEN_HEADS_ROT_DB", "1") == "1" else 1
     if fuse_rotary:
         if res_tensor is not None:
             cbs += [aliased(9, "cos", Wt), aliased(10, "sin", Wt), aliased(11, "trans", 1)]
         else:
             cbs += [
-                cb(9, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
-                cb(10, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # sin tiles
+                cb(9, Wt * rot_depth, ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
+                cb(10, Wt * rot_depth, ttnn.bfloat16, _BF16_TILE),  # sin tiles
                 cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
             ]
         cbs += [

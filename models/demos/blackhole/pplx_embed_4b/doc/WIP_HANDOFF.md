@@ -22,5 +22,9 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
    already the SFPLOADMACRO Schraudolph path at its rated speed. SDPA's remaining gap to its floors is each core's
    cold start on its first head's K / V (a next-head prefetch was negative).
 
+5. Trid pipelining in the custom ops (§67): the heads op is compute-bound (DRAM ruled out), cos / sin
+   double-buffered and the add+norm exchange on its own trid landed (bit-identical, e2e neutral). Next: double-buffer
+   the add+norm CBs (every CB holds one wave). Then refresh the profile artifact (heads op tagged compute-bound).
+
 `sustained_run.sh` reports AICLK / power over the sustained window and J/inference, but tt-smi samples swing 30-155 W
 within a window (host gaps), so J/inference is too noisy to rank variants yet.
