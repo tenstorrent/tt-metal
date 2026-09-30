@@ -72,8 +72,9 @@ class Misses:
 
 # Wormhole: N150, the board every figure so far comes from (docs/VALIDATION.md).
 WORMHOLE: dict = {
-    # Stage 1 protocol, 2026-09-28, chunked HiFT: warmup_buckets() first (195 s on a warm kernel cache), then the
-    # six distinct corpus utterances. RTF 0.433-0.628 each, aggregate 0.479; the perf test's own run, worst 0.621.
+    # Stage 1 protocol on the masked HiFT (2026-09-30): warmup_buckets() first (185 s on a warm kernel cache), then the
+    # six distinct corpus utterances. RTF 0.441-0.654 each, aggregate 0.483; the perf test's own run, worst 0.675.
+    # (09-28, silence padding: 0.433-0.628.)
     # Before bucketing, a distinct utterance ran at RTF 21-75 on a cold kernel cache.
     "rtf_nonstreaming": Meets(),
     # Teacher-forced top-1 (tests/e2e/test_token_accuracy.py), fp32-logit head: 95.94 % over 5,003 positions of
@@ -86,20 +87,21 @@ WORMHOLE: dict = {
     # enforced by a device test.
     "wer": Meets(),
     "speaker_similarity": Meets(),
-    # Streaming (demo.py --stream, 2026-09-29): warmup_buckets() and warmup_streaming() first, then the six distinct
-    # corpus utterances, two runs in fresh processes. The figure is the worst utterance, as for rtf_nonstreaming.
-    # Recorded from those runs, not yet enforced by a device test.
-    # Time to first packet: worst 1,455 and 1,479 ms (best 1,336). The first chunk is 0.37-0.47 s of text and LLM
-    # until its 25 or 32 tokens and 3 look-ahead, then the flow over the prompt and the chunk, 0.81-0.92 s, and HiFT,
-    # 0.12 s.
+    # Streaming (demo.py --stream): warmup_buckets() and warmup_streaming() first, then the six distinct corpus
+    # utterances, in fresh processes; two runs on 2026-09-29 and two on the masked HiFT on 2026-09-30. The figure is
+    # the worst utterance, as for rtf_nonstreaming. Not yet enforced by a device test.
+    # Time to first packet: worst 1,455 and 1,479 ms (09-29), 1,502 and 1,432 ms (09-30); best 1,313. The first chunk
+    # is 0.37-0.47 s of text and LLM until its 25 or 32 tokens and 3 look-ahead, then the flow over the prompt and the
+    # chunk, 0.81-0.92 s, and HiFT, 0.12-0.13 s.
     "ttfp_ms": Misses(
         1470.0,
         0.15,
         "the first chunk's flow: the CFM's 10 Euler steps (67-73 ms each) over the prompt plus the chunk; with a free "
         "flow, first audio would be 0.51-0.59 s (the LLM's first 28-35 tokens, then HiFT)",
     ),
-    # Streaming RTF: worst 1.057 and 1.122, both on the 3.8 s utterance (aggregate 0.853 and 0.843). Every chunk reruns
-    # the flow over the whole prefix, and the final chunk runs it non-streaming over every token, as upstream does.
+    # Streaming RTF: worst 1.057, 1.122, 1.121 and 1.103, each on the 3.8 s utterance (aggregate 0.836-0.853). Every
+    # chunk reruns the flow over the whole prefix, and the final chunk runs it non-streaming over every token, as
+    # upstream does.
     "rtf_streaming": Misses(
         1.09,
         0.2,

@@ -12,20 +12,21 @@ text-to-speech model, for [tenstorrent/tt-metal#54104](https://github.com/tensto
 The whole model runs on device, non-streaming: text → speech tokens (LLM) → mel (flow matching) → 24 kHz waveform
 (HiFT vocoder). **The four Stage 1 targets are met.** Streaming runs too: chunks of audio are produced while the LLM
 generates, on upstream's chunk schedule. That schedule, run over fixed tokens, matches upstream's own streaming run
-(`docs/VALIDATION.md`). It misses both Stage 3 targets: the first audio arrives after 1.34–1.48 s, and the worst
+(`docs/VALIDATION.md`). It misses both Stage 3 targets: the first audio arrives after 1.31–1.50 s, and the worst
 streaming RTF is 1.06–1.12.
 
 | target (#54104) | stage | measured | status |
 |---|---|---|---|
-| RTF < 1.0, non-streaming | 1 | worst **0.628**, aggregate 0.479, over six distinct utterances | met |
+| RTF < 1.0, non-streaming | 1 | worst **0.654**, aggregate 0.483, over six distinct utterances | met |
 | token accuracy > 95 % vs the PyTorch reference | 1 | **95.94 %**, teacher-forced over 5,003 positions (27 sequences, 4 speakers) | met |
 | WER < 5 % | 1 | **0.68 %** (1 error in 147 words) in each of five noise draws; the PyTorch reference also 0.68 % in each | met |
 | speaker similarity > 0.60 (cosine) | 1 | **0.959** (0.958–0.959 over five draws); the PyTorch reference 0.952 | met |
-| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | first audio **1.34–1.48 s**; streaming RTF worst **1.06–1.12**, aggregate 0.84–0.85 | missed |
+| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | first audio **1.31–1.50 s**; streaming RTF worst **1.10–1.12**, aggregate 0.84–0.85 | missed |
 
 - Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The non-streaming RTF and token-accuracy
   gates are enforced by tests; the two streaming figures are recorded there but not enforced yet.
-- A second N150 (2026-09-29) reproduced these figures, with the same tokens and scores.
+- A second N150 (2026-09-29) reproduced the 09-28 figures, with the same tokens and scores. The figures above are
+  its re-run of 2026-09-30, after HiFT's padded calls were masked to match upstream's endings.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) has the per-utterance tables and how each figure was produced.
 - [`PERF.md`](PERF.md) has the timing, including start-up.
 

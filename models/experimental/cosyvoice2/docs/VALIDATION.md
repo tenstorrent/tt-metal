@@ -6,11 +6,11 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 
 | target (#54104) | stage | status | enforced in |
 |---|---|---|---|
-| RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **met: worst 0.628, aggregate 0.479** over six distinct utterances after the bucket warm-up (3.2 min at a warm start; below); `Meets()` recorded | `tests/perf/test_pipeline_perf.py` |
+| RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **met: worst 0.654, aggregate 0.483** over six distinct utterances after the bucket warm-up, on the masked HiFT (2026-09-30; the perf test: worst 0.675, aggregate 0.481; below); `Meets()` recorded | `tests/perf/test_pipeline_perf.py` |
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **met: corpus WER 0.68 % in each of five noise draws**, the same as the PyTorch reference's (2026-09-30, masked HiFT; "WER and similarity over five noise draws" below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **met: 95.88 (95.84–95.92 over five noise draws)**, reference 95.22 (95.21–95.24) (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
-| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.34–1.48 s, worst streaming RTF 1.06–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups ("Streaming, measured" below); `Misses()` recorded, with the lever | not yet by a device test: `demo/demo.py --stream` |
+| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.31–1.50 s, worst streaming RTF 1.10–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups on the masked HiFT (2026-09-30; "Streaming, measured" below); `Misses()` recorded, with the lever | not yet by a device test: `demo/demo.py --stream` |
 
 ## How the figures are produced
 
@@ -745,6 +745,40 @@ offline over the same tokens. TT runs the masked HiFT (`ed1c3ad1c5`).
 - **Similarity varies by at most 0.3 between draws.**
 - **The "you" clip's regression test** (11 draws, "Masked end padding in HiFT") stays in the suite.
 
+## Stage 1 and streaming re-run on the masked HiFT (2026-09-30)
+
+Everything was re-run on `5317572d0c` on the second N150 (KMD 2.9.0), with nothing else on the host:
+- **The device suite:** 228 passed and 4 skipped (the opt-in tracker and three reference-venv tests), in 27 min. It
+  compiled 1,103 kernels.
+- **The Stage 1 perf test**, in its own process: worst RTF 0.675, aggregate 0.481. The warm-up took 184.5 s and
+  compiled nothing.
+- **The Stage 1 demo**, with the same tokens as 09-28 and 09-29: RTF 0.441–0.654, aggregate 0.483. HiFT against
+  09-29's run of the same tokens, with silence padding:
+
+  | case | mel frames → HiFT call | HiFT s, 09-29 / masked | RTF, 09-29 / masked |
+  |---|---|---|---|
+  | 121-127105-0003 | 426 → 512, padded | 0.280 / 0.382 | 0.438 / 0.441 |
+  | 121-127105-0015 | 190 → 256, padded | 0.145 / 0.215 | 0.588 / 0.606 |
+  | 121-127105-0024 | 694, chunked | 0.709 / 0.726 | 0.487 / 0.481 |
+  | 260-123286-0014 | 150 → 256, padded | 0.143 / 0.214 | 0.620 / 0.654 |
+  | 260-123440-0002 | 634, chunked | 0.697 / 0.707 | 0.449 / 0.451 |
+  | 260-123440-0010 | 404 → 512, padded | 0.277 / 0.378 | 0.436 / 0.457 |
+
+  The masked call costs 0.07 s at the 256-frame bucket and 0.10 s at 512: about 80 masks, and a host round trip of
+  the source. The chunked calls are unpadded and unchanged.
+- **WER and similarity:** "WER and similarity over five noise draws" above. 0.68 % in every draw; similarity 95.88.
+- **Streaming** (`demo.py --stream`, R5's protocol, two fresh processes, the Stage 1 tokens):
+
+  | | run 1 | run 2 | 09-29, silence padding (R5) |
+  |---|---|---|---|
+  | time to first audio | 1.353–1.502 s | 1.313–1.432 s | 1.336–1.479 s |
+  | streaming RTF, aggregate | 0.851 | 0.836 | 0.843–0.853 |
+  | streaming RTF, worst (the 3.8 s utterance) | 1.121 | 1.103 | 1.057–1.122 |
+
+  The warm-ups took 184.6 and 149.0 s, then 184.3 and 149.4 s, and compiled nothing. The final call's masks move
+  neither figure outside the spread of 09-29's runs. The first chunk: 0.37–0.47 s until it starts, flow
+  0.82–0.91 s (CFM 0.68–0.74 s), HiFT 0.12–0.13 s.
+
 ## Streaming, stage A: offline, from fixed tokens (2026-09-29)
 
 `tt/streaming.py` runs upstream's streaming schedule (`CosyVoice2Model.tts(stream=True)`, reproduced in its module
@@ -949,7 +983,7 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
   checks. Where the TILE-prepared weight is wrong, a ROW_MAJOR-prepared one usually isn't, and the checks keep it.
   A comment with our geometries is drafted, not posted.
 - **Streaming misses both Stage 3 targets** ("Streaming, measured"):
-  - first audio at 1.34–1.48 s against 0.5 s;
+  - first audio at 1.31–1.50 s against 0.5 s (four runs, 09-29 and 09-30);
   - a worst streaming RTF of 1.06–1.12 against 0.4.
 
   The first chunk's flow is the lever: its CFM alone takes 0.67–0.73 s. No device test enforces the two figures
