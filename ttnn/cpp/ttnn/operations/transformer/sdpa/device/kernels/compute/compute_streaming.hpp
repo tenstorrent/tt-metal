@@ -357,10 +357,9 @@ ALWI void sdpa_fill_tiles(uint32_t out_cb, uint32_t num_tiles, float value, uint
     }
 }
 
-// Fixed-offset softmax: publish chunk_cb's tiles (this chunk's row sums), L1-accumulate them onto the running
+// Fixed-offset softmax: L1-accumulate chunk_cb's tiles (this chunk's row sums, pushed by the caller) onto the running
 // total in sum_cb (absolute offsets, no push) and consume them. Leaves srcA on chunk_cb, math in datacopy state.
 ALWI void sdpa_fold_chunk_sum(uint32_t chunk_cb, uint32_t sum_cb, uint32_t num_tiles, uint32_t dst_size) {
-    CircularBuffer(chunk_cb).push_back(num_tiles);
     CircularBuffer(chunk_cb).wait_front(num_tiles);
     reconfig_data_format_srca(chunk_cb);
     copy_init(chunk_cb);
@@ -1974,6 +1973,14 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
+        // Fixed mode, exp at pack time: P and row sums were packed before their pushes, so PV need not wait on PACK:
+        // UNPACK takes the barrier before the last PV group only and the fold runs after group 0 (PV loop below).
+        const bool pv_early = fixed && dest_exp;
+        if constexpr (fixed) {
+            // Every row group's P is summed by now: publish this chunk's row sums for the fold.
+            CircularBuffer(chunk_sum_cb).push_back(Sq_chunk_t);
+        }
+
         // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
         // The drain runs sub_exp in-place on cb_qkt_im at the last q_subblock's positions
         // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
@@ -1982,16 +1989,22 @@ static void sdpa_inner_loop_step(
         {
             MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER", prof_win);
             PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            if (!pv_early) {
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            }
         }
 
-        if constexpr (fixed) {
+        [[maybe_unused]] auto fold_chunk_sum = [&]() {
             MaybeDeviceZoneScopedNWindow(profiling_enabled, "FOLD", prof_win);
-            // Every row group's P is summed by now: fold this chunk's row sums into the running total.
             sdpa_fold_chunk_sum(chunk_sum_cb, cur.sum, Sq_chunk_t, dst_size);
             reconfig_data_format_srca(cb_qkt_im);
             mm_no_mop_init_short<PV_MATH_FIDELITY>(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+        };
+        if constexpr (fixed) {
+            if (!pv_early) {
+                fold_chunk_sum();
+            }
         }
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
@@ -2095,6 +2108,14 @@ static void sdpa_inner_loop_step(
                 if (!acc_overwrite) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
+                if constexpr (fixed) {
+                    if (pv_early && q_subblock == total_v_row_groups - 1) {
+                        // UNPACK half of the PV_BARRIER rendezvous, after the setup above.
+                        MaybeDeviceZoneScopedNWindow(profiling_enabled, "PV_BARRIER_LAST", prof_win);
+                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    }
+                }
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
                     // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
@@ -2126,6 +2147,9 @@ static void sdpa_inner_loop_step(
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
             if constexpr (fixed) {
                 // In-place accumulation: nothing to rescale; the rows are published after the last K chunk.
+                if (pv_early && q_subblock == 0) {
+                    fold_chunk_sum();
+                }
             } else if (!is_first_iter) {
                 // Last main-loop iteration: hoist drain's sub_exp so both salads
                 // (current row and drain row) chain back-to-back with one FPU init.
