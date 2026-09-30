@@ -278,7 +278,7 @@ void kernel_main() {
          * dfb_recip_std_id
          */
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_var_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
