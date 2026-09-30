@@ -167,14 +167,14 @@ void kernel_main() {
         // bias_correction2 = 1 - pow(beta2, step);
         // dfb_tmp1_id = pow(beta2, step);
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::CopyTile<scalar_args_input, ckl::Dst::D0>{beta2_tile},
             ckl::PowerIterative<ckl::Dst::D0>{step},
             ckl::PackTile<tmp1_output>{});
 
         // dfb_tmp1_id = 1 / (1 - dfb_tmp1_id);
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, one_input, tmp1_input>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<tmp1_output>{});
@@ -182,7 +182,7 @@ void kernel_main() {
 #ifdef AMSGRAD
         // tmp_dfb_max_exp_avg_sq_id = max(dfb_max_exp_avg_sq_in_id, tmp_dfb_exp_avg_sq_id);
         ckl::binary_sfpu<ckl::BinaryMax<>, max_exp_avg_sq_input, exp_avg_sq_input, max_exp_avg_sq_output>(
-            ckl::IterationShape::tiles(onetile));
+            ckl::IterationShape::one_tile());
 
         // dfb_max_exp_avg_sq_out_id
         copy_tile_to_dfb<tmp_dfb_max_exp_avg_sq_id, dfb_max_exp_avg_sq_out_id>(first_tile, 0);
@@ -191,7 +191,7 @@ void kernel_main() {
         // dfb_tmp1_id = sqrt(exp_avg_sq / dfb_tmp1_id);
 #ifdef AMSGRAD
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
@@ -201,7 +201,7 @@ void kernel_main() {
             ckl::PackTile<tmp1_output>{});
 #else
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, exp_avg_sq_input, tmp1_input>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<tmp1_output>{});
@@ -209,7 +209,7 @@ void kernel_main() {
 
         // dfb_tmp1_id = 1 / (dfb_tmp1_id + eps)
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Add, tmp1_input, scalar_args_input>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<tmp1_output>{});

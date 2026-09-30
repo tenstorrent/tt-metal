@@ -190,7 +190,7 @@ void kernel_main() {
 
         // dfb_tmp1_id = 1 / (1 - dfb_beta2_exponent_id);
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, one_input, beta2_exponent_input>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<tmp1_output>{});
@@ -215,7 +215,7 @@ void kernel_main() {
         // dfb_tmp1_id = sqrt(exp_avg_sq / dfb_tmp1_id);
 #ifdef AMSGRAD
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
@@ -225,7 +225,7 @@ void kernel_main() {
             ckl::PackTile<tmp1_output>{});
 #else
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
@@ -236,7 +236,7 @@ void kernel_main() {
 
         // dfb_tmp1_id = 1 / (dfb_tmp1_id + eps)
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Add, tmp1_input, scalar_args_input>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<tmp1_output>{});

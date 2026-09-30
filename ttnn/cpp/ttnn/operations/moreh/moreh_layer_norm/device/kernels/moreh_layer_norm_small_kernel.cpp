@@ -233,7 +233,7 @@ void kernel_main() {
         dfb_xmm_obj.wait_front(num_inner);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(onetile),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, xmm_block_offset_input, xmm_block_offset_input>{
                     inner_idx, inner_idx},
                 ckl::PackTile<ckl::output(
@@ -272,7 +272,7 @@ void kernel_main() {
          * dfb_recip_std_id
          */
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_var_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),

@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Shared compute kernel: bound by moreh_layer_norm_backward's and moreh_group_norm_backward's
+// input_grad factories, on the small-algorithm path. Both bind the same resource names, so a change
+// to this kernel's binding vocabulary or argument schema has to land on both factories together.
+
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -107,7 +111,7 @@ void kernel_main() {
         // Compute dfb::recip_nrstd
         // rstd / n
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
@@ -160,9 +164,11 @@ void kernel_main() {
         }  // Wt loop
 
         // Copy dfb::dy to dfb::dycopy
+#ifdef GAMMA_HAS_VALUE
         constexpr auto gamma_bcast = is_groupnorm           ? ckl::BroadcastDim::Scalar
                                      : is_lastdim_layernorm ? ckl::BroadcastDim::Row
                                                             : ckl::BroadcastDim::None;
+#endif
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute dfb::dycopy
             // dycopy = dy * gamma and mask(optional)
@@ -220,7 +226,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute dfb_ydy_id
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(onetile),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(
@@ -273,7 +279,7 @@ void kernel_main() {
             // n * dy
             constexpr auto dfb_ndy_id = dfb::tmp1;
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(onetile),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(dfb::n_recip_n, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
@@ -300,13 +306,13 @@ void kernel_main() {
                     kDataFormatReconfig),
                 ckl::output(
                     dfb_ndymdysum_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(onetile));
+                ckl::IterationShape::one_tile());
 
             // Compute dfb_yydysum_id
             // y * Sum[y * dy]
             constexpr auto dfb_yydysum_id = dfb::tmp3;
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(onetile),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(
@@ -331,7 +337,7 @@ void kernel_main() {
                 ckl::input(dfb_ndymdysum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb_yydysum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::output(dfb::tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(onetile));
+                ckl::IterationShape::one_tile());
 
             // Compute dfb::dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
@@ -339,7 +345,7 @@ void kernel_main() {
                 ckl::input(dfb::tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb::recip_nrstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::output(dfb::dx, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(onetile));
+                ckl::IterationShape::one_tile());
         }  // Wt loop
         dfb_dycopy_obj.pop_front(Wt);
         dfb_y_obj.pop_front(Wt);
