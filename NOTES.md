@@ -16,3 +16,9 @@
 - 2026-09-30 14:50 UTC (attempt 4): 630/631 FAILED at mesh open — t22 lacked the `runtime` symlink (firmware .ld not found).
   Fixed: `ln -s ../t7/runtime runtime` (same as t14). Resubmitted via prewarm_and_submit.sh (-t 450):
   job 638 (noisepf), 639 (noisepf_ph). On resume: `bash tmp/cmp.sh noisepf 638`, `bash tmp/cmp.sh noisepf_ph 639`.
+- 2026-09-30 15:20 UTC (attempt 5): 638/639 FAILED on pytest's own 300 s timeout (pytest.ini) — kernel JIT cache
+  missed (0/818 hits; prewarm skipped t14's manifest entries as foreign-tree), so in-process compile ate the budget.
+  Fixed: e2e.sh passes --timeout=1500; resubmitted via prewarm_and_submit.sh with -c (capture for the t22 tree),
+  then noisepf_ph without -c. Submitter log tmp/submit_attempt5.log; `bash tmp/done.sh` exits 0 when both finish.
+  On resume: job IDs = `grep -oE 'Job [0-9]+ queued' tmp/submit_attempt5.log`, then `bash tmp/cmp.sh noisepf <id1>`,
+  `bash tmp/cmp.sh noisepf_ph <id2>` (read the log via /var/log/tt-device-broker/*_<id>.log if `logs` says not found).
