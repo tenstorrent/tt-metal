@@ -196,6 +196,20 @@ for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
 }
 ```
 
+**Perf 1 — cross-block pipeline (implemented schedule).** The loop above is the logical per-block order. The
+kernels now software-pipeline the step at block b when `pipe_at(b)` holds: `b + 1 < num_blocks` and
+(`x_block_depth ≥ 3` or `b + x_block_depth ≥ num_blocks`). At the default depth 2 only the last step is pipelined;
+holding X(b) longer on earlier steps delays the reader's prefetch of X(b+2), and that measured slower. Depth-1 plans
+are always serial (X(b+1) cannot be resident next to X(b)).
+- Compute, pipelined step: proj + Σx²(b+1), reading X(b+1) behind X(b) at a wrap-aware page offset; root: the fold
+  of b if not done yet; coefficients + Sinkhorn(b); root: the fold of b+1; y-mix(b).
+- Writer, pipelined step: [S(b)]; send P(b+1); root: gather + multicast S(b+1); y(b), post/comb(b); non-root:
+  receive S(b+1).
+- A rank sends P(b+1) only after S(b) landed, so the root has already folded gather slot b (slot-reuse invariant).
+- `cb_coef_in` holds 2 blocks, and the group multicast has no consumer-ready handshake (Flag data-ready; a Counter
+  hangs in the send's atomic barrier on the looped-back root copy).
+- Measured (BH p150): 1280×4096 bf16 X / fp32 W 147.5 → 138.4 µs (see changelog Perf 1).
+
 | Operation | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
 |-----------|-----------------------|--------------------|-----------------------------------|
 | `load_resident_constants` | `core_k_tiles × 1` (W), 1 tile (bias), 1 tile (scaler) | — | once per kernel |

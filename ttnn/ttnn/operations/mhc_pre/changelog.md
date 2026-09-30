@@ -340,3 +340,171 @@
   branches (noflip, W share on the writer, both) × {fp32 X / bf16 W, bf16 X / fp32 W}, with two alternating
   seeds. Without the fix it fails. `test_mhc_pre_perf_sweep.py`: new knob sets (bt / depth / y window / placement).
   Its unselected default is now a 5-setting smoke set; `MHC_PRE_PERF_KNOBS=all` runs every setting.
+
+## Perf 1 — perf tournament round 1 (measured breakdown, 2 experiments, 2 graduated)
+- Date: 2026-09-30. Perf only: nothing was added to SUPPORTED, and the precision contract is unchanged.
+- **Focus config** (feature_spec `_PERF_FOCUS`, the `attention:` LOOSE_CASES): bf16 X TILE, fp32 W, fp32_dest_acc_en=True,
+  with T×C = 640×7168, 640×1792 and 1280×4096. All three are in SUPPORTED.
+- **How it was measured:** BH p150, 100 cores, in-process `DEVICE KERNEL DURATION` (`ttnn.ReadDeviceProfiler`, via
+  `test_mhc_pre_perf_inproc.py`). Numbers are medians of 3–10 calls. There is no trial loop: device kernel time has no
+  warm-up transient.
+
+### Instrumentation (permanent)
+- `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` was missing from this tree, so it was restored (the same header
+  other ops' Perf 1 rounds added). `MaybeDeviceZoneScope` is opt-in: it records only when both `PROFILE_KERNEL` and
+  the `KERNEL_PERF_ZONES` define are set, and costs nothing otherwise.
+- Stage zones, one question per zone (the wait is split from the work):
+  - Reader: `r_w_issue`, `r_w_land`, `r_x_reserve`, `r_x_issue`, `r_x_barrier`.
+  - Writer: `w_w_share_wait`, `w_w_split_wait`, `w_w_send`, `w_w_recv`, `w_w_dram`, `w_bias`, `w_partial_wait`,
+    `w_partial_send`, `w_gather_wait`, `w_combined_wait`, `w_s_send`, `w_s_recv`, `w_coef_reserve`, `w_y_wait`,
+    `w_y_write`, `w_pc_wait`, `w_pc_write`.
+  - Compute: `c_w_split`, `c_w_publish`, `c_x_wait`, `c_proj`, `c_sumsq`, `c_sq_reduce`, `c_gather_wait`,
+    `c_combine`, `c_coef_wait`, `c_owned`, `c_pre`, `c_ymix`.
+- Marker budget: at most 78 of 250 markers are used, and the last zone ends at 100% of each RISC's KERNEL span.
+- Hooks:
+  - `MHC_PRE_KERNEL_DEFINES="A;B=1"` passes defines to all 3 kernels. Unset, the program is byte-identical to
+    production (measured: no change).
+  - Ablation switches `MHC_ABLATE_{PROJ,COEF,YMIX,XREAD,YWRITE}` stub a stage's payload and keep its sync
+    scaffolding.
+  - Tools: `probes/perf_run.sh` (card-pinned, per-card profiler dir) and `probes/zone_report.py` (per-RISC
+    per-zone p50 / max, critical-core timeline, marker-cap and coverage checks).
+
+### Measured breakdown (before)
+Baseline, bf16 X / fp32 W: 640×7168 145.6 µs, 640×1792 43.8, 1280×4096 147.2. DRAM targets are 118.8 / 29.7 / 131.8.
+
+Cumulative ablation (µs; columns 640×1792 / 640×7168 / 1280×4096):
+
+| arm | 640×1792 | 640×7168 | 1280×4096 |
+|---|---|---|---|
+| full | 43.6 | 146.0 | 147.9 |
+| − projection + Σx² | 40.9 | 133.5 | 137.6 |
+| − also coefficients / Sinkhorn | 39.8 | 130.5 | 136.2 |
+| − also y-mix (all compute) | 38.1 | 126.9 | 133.2 |
+| − also y write | 32.6 | 109.3 | 111.1 |
+| − also X read (everything) | 21.7 | 42.1 | 39.7 |
+| − X read and y write only (compute on) | 32.0 | 77.1 | 85.2 |
+
+The stages are balanced: neither the compute-only arm nor the DM-only arm reaches the full time. Even with every
+payload stubbed, 40–42 µs remain at the big shapes (half the op at 640×1792). That floor is the W column all-gather
+prelude plus the group combine scaffolding.
+
+Zone findings, ranked by measured headroom:
+1. **1280×4096: block-to-block serialization.**
+   - The X read is DRAM-bound: ~106–115 µs, ≈ 380 GB/s.
+   - Block 0 waits 28.6 µs for its group's S while X(1) has already landed and sits unprocessed.
+   - proj + Σx²(1) is ~15 µs of FPU work, and it then runs serially after y-mix(0).
+2. **640×7168: W all-gather gating.**
+   - On the critical core, X has landed by 62 µs, but the W column all-gather ends at ~90 µs, so the projection
+     cannot stream under the X burst.
+   - `w_w_share_wait` reaches 83 µs, because the reader hands the landed share over only after it has *issued* 2
+     X chunks (`r_x_issue` up to 85 µs).
+3. **640×1792: tail after the X read.**
+   - The writer prelude (W gather + `w_bias` 8.7–13.8 µs) runs before the partial send.
+   - The tail is then the root's gather wait, the fold (2 µs), the owner's coefficients + Sinkhorn (6.7 µs) and the
+     y-mix.
+
+### Portfolio (cap: 2 experiments)
+- **Selected:**
+  - E1 `prelude_off_critical_path`: hand the reader's W share over as soon as it lands (a poll of trid 15 in the X
+    issue loop), plus a writer twin that takes the bias load off the pre-partial path.
+  - E2 `cross_block_pipeline`: project block b+1 before coefficients / y-mix of block b.
+- **Floated, not tested:**
+  - Owner Sinkhorn after its y-mix, to hide it under the y writes.
+  - The Sinkhorn SFPU in scaling-vector form (r, c updates instead of renormalizing the full matrix).
+  - A group all-gather with a local fold instead of the root fold + multicast.
+  - 2 blocks per core at 640×*, so the y write overlaps the X read.
+
+### Verdicts
+Every variant of both experiments is **bitwise identical** to the baseline output.
+
+- **E1 `prelude_off_critical_path`: WIN for option f; the rest is recorded as options.**
+  - **f (graduated): a fast bias fill.** The coefficient-major tile is 16 contiguous 64-word blocks
+    (`slot_index(2j+e, l) = 64j + 2l + e`), so the fill becomes 1024 straight word stores (1.07 µs) instead of a NoC
+    zero fill plus 768 scattered stores (5.5 µs BRISC).
+    - Focus shapes: flat (145.3 → 145.4 µs, 43.4 → 43.6, and the 1280×4096 gain is E2's).
+    - Small shapes (before → after, µs): 32×128 bf16/bf16 19.0 → 14.5, 32×128 bf16/fp32 18.9 → 17.2, 64×4096
+      bf16/bf16 38.1 → 35.5.
+    - Domain: everywhere, no exceptions.
+  - **a (poll) alone: REGRESSION.** At 1280×4096 it goes 147.4–149.2 → 155.9–160.9 µs. The W exchange now finishes at
+    the X peak, and the bias read then queues behind the X burst.
+  - **a + early bias reads (option `graduation_ab1f.patch`): not graduated.**
+    - Wins: 640×7168 bf16 144.9 → 141.5 µs (−3.4), fp32 −7, 2048×5120 fp32 −8.5.
+    - Measured regressions: fp32X/fp32W 640×1792 122.6 → 129.3, fp32X/bf16W 640×1792 115.9 → 119.2, fp32X/fp32W
+      4096×1792 548 → 553–556, bf16X/fp32W 64×4096 43.0 → 44.1.
+    - Cause of the regressions: every core's t = 0 bias read hits the one DRAM bank that holds the bias tile. That
+      delays the W share reads from that bank.
+    - The split between the two groups of cells is not structural, so a carve-out would have been an allow-list of
+      the measured shapes. The patch is kept in the experiment dir for round 2.
+  - **Premise correction:** with the poll, the share itself lands late (50–72 µs on the NoC0 rows just below the
+    flip at 640×7168). The late token cost only ~10 µs of the ~28 µs W-gating.
+- **E2 `cross_block_pipeline`: WIN.** Focus 1280×4096 goes 147.7 → 136.8 µs in the subagent's bench.
+  - Menu (µs):
+
+    | option | µs |
+    |---|---|
+    | next projection early only | 146.0 |
+    | split around the tail | 147.8–150.0 |
+    | S(b+1) multicast ahead, with handshake | 142.8 |
+    | no handshake | 143.5 |
+    | root: coef(b) before fold(b+1), with handshake | 142.1 |
+    | **no handshake + root coef(b) before fold(b+1): graduated** | **136.8** |
+
+  - The full pipeline at depth 2 (every step) regresses the DRAM-bound multi-block cells: 1280×4096 fp32/fp32
+    378 → 400, 2048×5120 fp32/fp32 711 → 756.
+  - Depth 3 + full pipeline wins on small-slice fp32-X cells (4096×1792 541.8 → 523.8 fp32 W, 536.7 → 491.3 bf16 W)
+    but regresses 1280×4096 / 2048×5120 fp32 (377 → 394, 711 → 779). Both were recorded as options, not graduated.
+
+### What graduated (one path each, the replaced code deleted)
+- **Cross-block pipeline** (compute + writer + descriptor).
+  - `pipe_at(b) = b+1 < num_blocks && (x_block_depth ≥ 3 || b + x_block_depth ≥ num_blocks)`. This is the ONE
+    schedule. At depth 2 it pipelines the last step.
+  - Depth-1 plans cannot hold X(b+1) next to X(b), so they stay serial through the same predicate. This is an
+    `inexpressible` exception, not a guard, and in practice only bf16X/bf16W multi-block cells take depth 1.
+  - `cb_coef_in` is now 2 blocks (+8 KB at bt = 1, `COEF_IN_BLOCKS`).
+  - The group S multicast is handshake-free (Flag data-ready). A Counter hangs in the send's atomic barrier on the
+    looped-back root copy.
+  - fp32 X: `cb_grid` is popped right after the projection.
+- **Fast bias fill** (writer `load_bias`), everywhere.
+- **Carve-outs:** none. The only measured regression is fp32X/fp32W 4096×1792: 552.0 → 557.4 µs (+1.0%, 10-call
+  median, bimodal 540 / 557 modes in both), and the subagent measured 541.7 → 553.8 (+2.2%).
+  - It was not carved out. It is ~1% on a non-focus fp32 cell, and the same shape with bf16 W and every other
+    multi-block cell win.
+  - A dual schedule would double the pipeline's sync invariants.
+  - Revisit it in round 2 (the depth-3 option wins that cell).
+
+### Whole-op before → after (same session, µs medians of 5; HEAD via `git stash`, then the graduated tree)
+
+| shape | bf16X/fp32W | fp32X/fp32W | fp32X/bf16W | bf16X/bf16W |
+|---|---|---|---|---|
+| 640×7168 (focus) | 145.3 → 145.4 | 414.4 → 406.1 | 356.1 → 346.5 | 148.3 → 148.3 |
+| 640×1792 (focus) | 43.4 → 43.6 | 122.1 → 118.7 | 116.5 → 112.2 | 44.6 → 44.0 |
+| **1280×4096 (focus)** | **147.5 → 138.4** | 380.5 → 370.5 | 360.6 → 335.3 (noisy) | 183.2 → 183.1 |
+| 4096×1792 | 239.7 → 229.4 | 552.0 → 557.4 (10 calls) | 523.1 → 531.3 (bimodal 514 / 532 in both) | 260.7 → 261.1 |
+| 2048×5120 | 315.0 → 302.9 | 716.8 → 704.5 | 655.5 → 663.3 (noisy: 638–680 before, 635–665 after) | 352.0 → 353.3 |
+| 1×7168 (decode, R1 per-core W) | 46.3 → 46.5 | 119.6 → 114.7 | 80.0 → 80.6 | 40.7 → 40.0 |
+| 64×4096 | 43.0 → 42.9 | 91.9 → 88.6 | 64.6 → 64.0 | 38.1 → 35.5 |
+| 32×128 | 18.9 → 17.2 | 23.9 → 23.0 | 19.9 → 19.8 | 19.0 → 14.5 |
+
+- A re-check of the focus shapes after the stash pop gave 640×7168 145.5, 640×1792 43.8 and 1280×4096 138.3 µs.
+- Summary: 2 experiments measured; 2 graduated (E2 plus E1 option f); E1's poll alone is a measured regression, and
+  the poll + early bias reads were not graduated (measured regressions).
+- Focus 1280×4096 is **−9.1 µs (−6.2%)**, and 640×7168 and 640×1792 are flat. Only 1280×4096 moved, because the
+  pipeline needs ≥ 2 blocks per core, and the 640×* focus shapes are single-block with their bottleneck elsewhere.
+- After the change, 1280×4096 is X-read-bound on its slowest core (X(1) lands at ~102 µs; target 131.8 µs).
+- **Guard-set result:** there is no material regression. The worst cell is +1.0% (4096×1792 fp32X/fp32W, recorded
+  above).
+- Correctness:
+  - Golden `eval/golden_tests/mhc_pre/`: **206/206**.
+  - Unit `tests/ttnn/unit_tests/operations/mhc_pre/`: 91 passed, 1 skipped.
+  - Subagent stress: 11 shapes × 4 dtype pairs × alternating seeds, bitwise identical to base, with ragged and
+    ring-wrap shapes of 3–13 blocks.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| matmul_block | capability | `in0` is always read from the CB front with no tile-index base / offset, so it cannot project the next block, which sits *behind* the resident X(b) in the same CB (wrap-aware page offset). The pipelined proj(b+1) on the bf16 X / bf16 W path therefore uses the existing raw `project_block_pieces<1>` (bitwise identical DEST accumulation). The front-block projection keeps the helper. | n/a (inexpressible) | 104500 (1000×1792 bf16X/bf16W, vs 104200 serial helper schedule; flat) | mhc_pre_compute.cpp:1189 |
+
+### Artifacts
+`ttnn/ttnn/operations/mhc_pre/perf_experiments/{prelude_off_critical_path,cross_block_pipeline}/` (README.md,
+graduation patches, bench tests, zone dumps). `perf_experiments/` has no `__init__.py`, so `import ttnn`'s package
+walker does not execute the benches. They import as a namespace package.

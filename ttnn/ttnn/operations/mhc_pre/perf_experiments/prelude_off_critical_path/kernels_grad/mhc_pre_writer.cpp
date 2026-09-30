@@ -18,7 +18,7 @@
 //   the n*(n+2) <= 32 used columns, 2 x 64 B) -> cb_bias_coef in coefficient-major form (slot k, every lane =
 //   b[k]; zero elsewhere), written as 16 contiguous [b[2j], b[2j+1]] x 32 blocks (straight word stores).
 //
-// Per block:
+// Per block, in this mandatory order (gather-slot reuse invariant):
 //
 //   send_partial_block        cb_partial [mix rows | sumsq rows] -> root cb_gathered slot [rank]
 //                              (push model; slot layout [mix x block_token_tiles | sumsq x block_token_tiles]),
@@ -30,15 +30,6 @@
 //                              coefficient-major form are the compute's (in DEST); the writer only moves tiles.
 //   store_y_block              cb_y_out -> y DRAM, windows of y_chunk_tiles (wrap-aware on the CB ring).
 //   store_post_comb_block      owned rows: cb_comb_coef [post, comb] row-major tiles -> DRAM.
-//
-// Block schedule (Perf 1, cross-block pipeline; mirrors the compute step for step, same pipe_at rule):
-//   pipelined step: [S(b)]; P(b+1); root: gather + fold + multicast S(b+1); y(b), pc(b); non-root: S(b+1)
-//   serial step:    [S(b)]; y(b), pc(b); P(b+1)
-// Invariants: P(b+1) is sent only after S(b) landed, so the root has folded cb_gathered block b (slot reuse).
-// The group multicast has no consumer-ready handshake (Flag data ready): cb_coef_in holds 2 blocks, and the root
-// multicasts S(b+1) only after gathering every rank's P(b+1), which each rank sends after its tail(b-1) freed
-// S(b-1)'s slot (pipelined step) or its tail(b) freed S(b)'s (serial step) -- the landing is write-once; and it
-// sets round b+1's flag only after each rank consumed (reset) round b's (it received S(b) before sending P(b+1)).
 
 #include <stdint.h>
 
@@ -96,7 +87,6 @@ void kernel_main() {
     constexpr uint32_t cb_w_own_split = get_compile_time_arg_val(18);  // token: compute -> writer, share split
     constexpr bool w_presplit = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t cb_w_share_landed = get_compile_time_arg_val(20);  // token: reader -> writer, share landed
-    constexpr uint32_t x_block_depth = get_compile_time_arg_val(21);      // cb_x_resident depth (block schedule)
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto w_mc = McastArgs<mc.next_compile_time_args_offset(), mc.next_runtime_args_offset()>();
     constexpr auto y_args = TensorAccessorArgs<w_mc.next_compile_time_args_offset()>();
@@ -252,79 +242,75 @@ void kernel_main() {
 
     uint32_t y_ring_pos = 0;  // position (in pages) of cb_y_out's read pointer within its ring
 
-    auto extent_of = [&](uint32_t block_idx) {
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
-        return (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
-    };
+        const uint32_t extent =
+            (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
 
-    // ---- send_partial_block ----
-    auto send_partial = [&](uint32_t block_idx) {
-        const uint32_t extent = extent_of(block_idx);
+        // ---- send_partial_block ----
         {
             MaybeDeviceZoneScope("w_partial_wait");
             cb_wait_front(cb_partial, 2 * extent);
         }
         {
-            MaybeDeviceZoneScope("w_partial_send");
-            // cb_partial holds [mix rows | sumsq rows] (the compute projects first); the slot keeps
-            // [mix x block_token_tiles | sumsq x block_token_tiles] (one write when the block is full).
-            const uint32_t src = get_read_ptr(cb_partial);
-            if (extent == block_token_tiles) {
-                noc_async_write(src, root_slot_noc, 2 * extent * f_tile_bytes);
-            } else {
-                noc_async_write(src, root_slot_noc, extent * f_tile_bytes);
-                noc_async_write(
-                    src + extent * f_tile_bytes,
-                    root_slot_noc + block_token_tiles * f_tile_bytes,
-                    extent * f_tile_bytes);
-            }
-            noc_async_write_barrier();
-            noc_semaphore_inc(root_sem_noc, 1);
-        }
-        cb_pop_front(cb_partial, 2 * extent);
-    };
-
-    // ---- gather credit (root) + broadcast_combined_block: S -> every rank's cb_coef_in ----
-    // cb_coef_in advances identically on every rank of the group (same pushes / pops per block), so the
-    // root's write pointer IS every receiver's landing address; the root's own copy rides the multicast
-    // loopback (src cb_combined != dst cb_coef_in). Receivers reserve before they ack (PRE_HANDSHAKE).
-    auto recv_s = [&](uint32_t block_idx) {
-        {
-            MaybeDeviceZoneScope("w_coef_reserve");
-            cb_reserve_back(cb_coef_in, slot_tiles);
-        }
-        const uint32_t s_dst = get_write_ptr(cb_coef_in);
-        if (rank == 0) {
             {
-                MaybeDeviceZoneScope("w_gather_wait");
-                cb_reserve_back(cb_gathered, group_cores * slot_tiles);
-                noc_semaphore_wait_min(sem_ptr, group_cores * (block_idx + 1));
-            }
-            cb_push_back(cb_gathered, group_cores * slot_tiles);
-            {
-                MaybeDeviceZoneScope("w_combined_wait");
-                cb_wait_front(cb_combined, slot_tiles);
-            }
-            const uint32_t s_src = get_read_ptr(cb_combined);
-            MaybeDeviceZoneScope("w_s_send");
-            if constexpr (group_cores > 1) {
-                sender.send(s_src, s_dst, slot_tiles * f_tile_bytes);
-            } else {
-                noc_async_write(s_src, get_noc_addr(s_dst), slot_tiles * f_tile_bytes);
+                MaybeDeviceZoneScope("w_partial_send");
+                // cb_partial holds [mix rows | sumsq rows] (the compute projects first); the slot keeps
+                // [mix x block_token_tiles | sumsq x block_token_tiles] (one write when the block is full).
+                const uint32_t src = get_read_ptr(cb_partial);
+                if (extent == block_token_tiles) {
+                    noc_async_write(src, root_slot_noc, 2 * extent * f_tile_bytes);
+                } else {
+                    noc_async_write(src, root_slot_noc, extent * f_tile_bytes);
+                    noc_async_write(
+                        src + extent * f_tile_bytes,
+                        root_slot_noc + block_token_tiles * f_tile_bytes,
+                        extent * f_tile_bytes);
+                }
                 noc_async_write_barrier();
+                noc_semaphore_inc(root_sem_noc, 1);
             }
-            cb_pop_front(cb_combined, slot_tiles);
-        } else {
-            MaybeDeviceZoneScope("w_s_recv");
-            receiver.receive();
+            cb_pop_front(cb_partial, 2 * extent);
         }
-        cb_push_back(cb_coef_in, slot_tiles);
-    };
 
-    // ---- store_y_block + store_post_comb_block ----
-    auto store_block = [&](uint32_t block_idx) {
-        const uint32_t row0 = block_idx * block_token_tiles;
-        const uint32_t extent = extent_of(block_idx);
+        // ---- gather credit (root) + broadcast_combined_block: S -> every rank's cb_coef_in ----
+        // cb_coef_in advances identically on every rank of the group (same pushes / pops per block), so the
+        // root's write pointer IS every receiver's landing address; the root's own copy rides the multicast
+        // loopback (src cb_combined != dst cb_coef_in). Receivers reserve before they ack (PRE_HANDSHAKE).
+        {
+            {
+                MaybeDeviceZoneScope("w_coef_reserve");
+                cb_reserve_back(cb_coef_in, slot_tiles);
+            }
+            const uint32_t s_dst = get_write_ptr(cb_coef_in);
+            if (rank == 0) {
+                {
+                    MaybeDeviceZoneScope("w_gather_wait");
+                    cb_reserve_back(cb_gathered, group_cores * slot_tiles);
+                    noc_semaphore_wait_min(sem_ptr, group_cores * (block_idx + 1));
+                }
+                cb_push_back(cb_gathered, group_cores * slot_tiles);
+                {
+                    MaybeDeviceZoneScope("w_combined_wait");
+                    cb_wait_front(cb_combined, slot_tiles);
+                }
+                const uint32_t s_src = get_read_ptr(cb_combined);
+                MaybeDeviceZoneScope("w_s_send");
+                if constexpr (group_cores > 1) {
+                    sender.send(s_src, s_dst, slot_tiles * f_tile_bytes);
+                } else {
+                    noc_async_write(s_src, get_noc_addr(s_dst), slot_tiles * f_tile_bytes);
+                    noc_async_write_barrier();
+                }
+                cb_pop_front(cb_combined, slot_tiles);
+            } else {
+                MaybeDeviceZoneScope("w_s_recv");
+                receiver.receive();
+            }
+            cb_push_back(cb_coef_in, slot_tiles);
+        }
+
+        // ---- store_y_block ----
         for (uint32_t t = 0; t < extent; ++t) {
             const uint32_t y_row_page = (t_start + row0 + t) * tensor_c_tiles + c_start;
             uint32_t c = 0;
@@ -359,7 +345,7 @@ void kernel_main() {
             }
         }
 
-        // owned rows: cb_comb_coef [post, comb], already row-major tiles
+        // ---- store_post_comb_block (owned rows): cb_comb_coef [post, comb], already row-major tiles ----
         for (uint32_t t = 0; t < extent; ++t) {
             if (((row0 + t) % group_cores) != rank) {
                 continue;
@@ -374,36 +360,6 @@ void kernel_main() {
             noc_async_write_page(t_start + row0 + t, comb_acc, pc + f_tile_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_comb_coef, 2);
-        }
-    };
-
-    auto pipe_at = [&](uint32_t b) {
-        return b + 1 < num_blocks && (x_block_depth >= 3 || b + x_block_depth >= num_blocks);
-    };
-    bool s_landed = false;  // S(b) already landed (in the previous, pipelined step)
-    if (num_blocks > 0) {
-        send_partial(0);
-    }
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        if (!s_landed) {
-            recv_s(block_idx);
-        }
-        if (pipe_at(block_idx)) {
-            send_partial(block_idx + 1);
-            if (rank == 0) {
-                recv_s(block_idx + 1);  // the compute folds b+1 before its y-mix of b
-            }
-            store_block(block_idx);
-            if (rank != 0) {
-                recv_s(block_idx + 1);  // no handshake: the root does not wait for this rank to be here
-            }
-            s_landed = true;
-        } else {
-            store_block(block_idx);
-            if (block_idx + 1 < num_blocks) {
-                send_partial(block_idx + 1);
-            }
-            s_landed = false;
         }
     }
     noc_async_atomic_barrier();

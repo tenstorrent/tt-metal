@@ -22,16 +22,6 @@
 //                        post / comb row-major tiles (subvector scatter + transpose_dest), in one DEST window
 //                        -> cb_comb_coef; the coefficient tile -> cb_coef_keep (the pre tiles reload it)
 //
-// Block schedule (Perf 1, cross-block pipeline). Step b (proj(b) done on entry):
-//   pipelined step (pipe_at(b)): proj(b+1) (X(b+1) sits behind X(b) in cb_x_resident, XView), the root's fold of
-//     b (if not yet) and -- after the coefficients of b -- of b+1, then tail(b) = coefficients + y-mix of b. The
-//     group's round trip for b+1 thus overlaps every rank's tail(b), and proj(b+1) runs while S(b) is in flight.
-//   serial step: [fold b]; tail(b); proj(b+1).
-//   pipe_at(b) = b+1 < num_blocks and (x_block_depth >= 3, or b + x_block_depth >= num_blocks): holding X(b) past
-//   proj(b+1) delays the reader's X(b+depth); with depth 2 only the last step (nothing left to prefetch) pipelines.
-//   depth 1 is always serial. Measured (BH, bf16 X / fp32 W): 1280x4096 148.3 -> 138.2 us, 2048x5120 313 -> 302,
-//   4096x1792 238 -> 228.
-//
 // fp32 X (x_pieces == 3, Refinement 2; compile-time gated, the bf16-X path is unchanged):
 //   w_grid_split_block  ONCE: max|W| -> grid; W -> [W0 on a 2^-W_GRID_BITS grid, W - W0] (bf16, in place)
 //   x_stats_block       per token row-tile: exact SFPU lane-wise sum x^2 -> cb_sq_acc (reduced as before) and
@@ -55,9 +45,6 @@
 //     K-chunk DEST windows so it streams under the X burst, the fp32 running mix reloaded exactly between
 //     windows (UnpackToDestFp32 copy, as project_block_split); matmul_block has no exact partial reload.
 //     Its sum x^2 half is the sumsq_row chain + the reduce helper (one partial tile per chunk).
-//   * project_block_pieces<1> (bf16 X / bf16 W, pipelined proj(b+1) only): matmul_block reads in0 from the CB
-//     front and has no tile-index base, so it cannot project a block that sits behind the resident X(b)
-//     (bitwise identical to the helper's DEST accumulation; the front-block projection keeps the helper).
 //   * w_split_block: copy_tile (UnpackToDestFp32) -> SFPU bit mask / subtract -> two packs per tile; the
 //     chain has one pack terminal per element, and the in-place alias rewrite needs explicit page indices.
 //   * combine_block: reduce<AccumulateViaAdd> reads the fp32 partials through the FPU (tf32 truncation);
@@ -169,7 +156,6 @@ constexpr bool w_presplit = get_compile_time_arg_val(40) != 0;
 // bf16 X / fp32 W: projection and sum x^2 stream together over this many K chunks per token row (the reader's
 // X_STREAM_CHUNKS publish granularity); 1 = the whole row in one window each.
 constexpr uint32_t x_stream_chunks = get_compile_time_arg_val(41);
-constexpr uint32_t x_block_depth = get_compile_time_arg_val(42);                // cb_x_resident ring depth (blocks)
 constexpr uint32_t x_window_pages = x_pieces * x_chunk_k_tiles * x_piece_rows;  // nominal push per window
 constexpr bool x_grid_split = x_pieces > 1;
 // fp32 X + fp32 W: the W hi/lo split is replaced by the W grid split (same 2 bf16 pieces, same alias).
@@ -649,19 +635,11 @@ ALWI void w_publish_split(uint32_t core_k_tiles) {
     cb_wait_front(cb_weight_split, 2 * core_k_tiles);  // resident for the whole kernel, never popped
 }
 
-// A block's view into cb_x_resident (and its fp32 alias): `wait0` pages sit at the front ahead of it (the
-// current block, when the next one is projected), `off` is added to every tile index -- modular: the next block
-// may sit at the ring's start, BEHIND the read pointer (the unpacker's uint32 address arithmetic wraps).
-struct XView {
-    uint32_t wait0;
-    uint32_t off;
-};
-
 // project_block_pieces: mix[t] = sum_k sum_p X[t][k] @ Wp[k] (Wp page k*PIECES + p), every product of an
 // output sub-block accumulated in one DEST window, then packed once (fp32) to cb_partial. Piece 0 (W_hi, or
 // the bf16 W itself) runs at MATH_FIDELITY; pieces >= 1 (W_lo) at w_lo_fidelity (math re-init only; same DEST).
 template <uint32_t PIECES>
-ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h, XView v = {0, 0}) {
+ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h) {
     // The reader publishes the block in K chunks: wait per K tile (cumulative, never popped here — the block is
     // retained for sumsq and the y-mix), so the projection runs under the rest of the X burst.
     uint32_t waited = 0;
@@ -677,13 +655,13 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
             }
         }
         for (uint32_t k = 0; k < core_k_tiles; ++k) {
-            const uint32_t need = v.wait0 + (r0 + sb_h - 1) * core_k_tiles + k + 1;
+            const uint32_t need = (r0 + sb_h - 1) * core_k_tiles + k + 1;
             if (need > waited) {
                 cb_wait_front(cb_x_resident, need);
                 waited = need;
             }
             for (uint32_t r = 0; r < sb_h; ++r) {
-                const uint32_t x_idx = v.off + (r0 + r) * core_k_tiles + k;
+                const uint32_t x_idx = (r0 + r) * core_k_tiles + k;
                 matmul_tiles(cb_x_resident, cb_w_matmul, x_idx, k * PIECES, r);
                 if constexpr (!lo_reinit) {
                     for (uint32_t p = 1; p < PIECES; ++p) {
@@ -696,7 +674,7 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
             MATH((llk_math_matmul_init<w_lo_fidelity, MM_THROTTLE>(cb_x_resident, cb_w_matmul)));
             for (uint32_t k = 0; k < core_k_tiles; ++k) {
                 for (uint32_t r = 0; r < sb_h; ++r) {
-                    const uint32_t x_idx = v.off + (r0 + r) * core_k_tiles + k;
+                    const uint32_t x_idx = (r0 + r) * core_k_tiles + k;
                     for (uint32_t p = 1; p < PIECES; ++p) {
                         UNPACK((llk_unpack_AB_matmul(cb_x_resident, cb_w_matmul, x_idx, k * PIECES + p)));
                         MATH((llk_math_matmul<w_lo_fidelity, MM_THROTTLE>(r)));
@@ -713,7 +691,7 @@ ALWI void project_block_pieces(uint32_t extent, uint32_t core_k_tiles, uint32_t 
         tile_regs_release();
         cb_push_back(cb_partial, sb_h);
     }
-    cb_wait_front(cb_x_resident, v.wait0 + extent * core_k_tiles);  // whole block landed (no-op after the last)
+    cb_wait_front(cb_x_resident, extent * core_k_tiles);  // whole block landed (no-op after the last sub-block)
 }
 
 #ifdef TRISC_MATH
@@ -840,9 +818,9 @@ ALWI void w_grid_split_block(uint32_t core_k_tiles) {
 // x_stats_block (fp32 X, per block, before the projection): per token row-tile t, ONE pass over its K slice
 // gives the exact lane-wise sum x^2 (-> cb_sq_acc, reduced after the projection) and max|x| (-> the x grid
 // constant, cb_grid page t).
-ALWI void x_stats_block(uint32_t extent, uint32_t core_k_tiles, uint32_t xoff) {
+ALWI void x_stats_block(uint32_t extent, uint32_t core_k_tiles) {
     for (uint32_t t = 0; t < extent; ++t) {
-        stats_pass<cb_x_fp32, true>(xoff + t * core_k_tiles, core_k_tiles);
+        stats_pass<cb_x_fp32, true>(t * core_k_tiles, core_k_tiles);
         grid_block<static_cast<int>(x_grid_bits), true>();
     }
     cb_wait_front(cb_grid, extent);
@@ -851,7 +829,7 @@ ALWI void x_stats_block(uint32_t extent, uint32_t core_k_tiles, uint32_t xoff) {
 // x_split_window: the bf16 pieces of X rows [r0, r0 + rows) x K tiles [k0, k0 + kc) -> one cb_x_pieces
 // window, page (r * kc + kk) * x_pieces + q. Recomputed per K chunk from the resident fp32 block (read via
 // the UnpackToDestFp32 alias), so the pieces never exist as a second resident copy of the block.
-ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, uint32_t core_k_tiles, uint32_t xoff) {
+ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, uint32_t core_k_tiles) {
     static_assert(compute_kernel_lib::DEST_AUTO_LIMIT >= 4, "x split uses DEST tiles 0..3");
     cb_reserve_back(cb_x_pieces, x_window_pages);
     reconfig_data_format_srca(cb_x_fp32);
@@ -861,7 +839,7 @@ ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, u
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t kk = 0; kk < kc; ++kk) {
             tile_regs_acquire();
-            copy_tile(cb_x_fp32, xoff + (r0 + r) * core_k_tiles + k0 + kk, 0);
+            copy_tile(cb_x_fp32, (r0 + r) * core_k_tiles + k0 + kk, 0);
             copy_tile(cb_grid, r0 + r, 3);
             MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::x_split_grid, 0, VectorMode::None)));
             tile_regs_commit();
@@ -881,7 +859,7 @@ ALWI void x_split_window(uint32_t r0, uint32_t rows, uint32_t k0, uint32_t kc, u
 // reloads the fp32 running partial exactly (UnpackToDestFp32 copy; an FPU reload would truncate it),
 // accumulates the chunk's piece products on top (all at MATH_FIDELITY: the remainder pieces carry up to 8
 // bits), and packs the new running partial (cb_mix_run) or, on the last chunk, the mix partial (cb_partial).
-ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h, uint32_t xoff) {
+ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t sb_h) {
     static_assert(!x_grid_split || x_pieces == 3, "the fp32-X grid split is [x0, x1_hi, x1_mid]");
     constexpr uint32_t sb_max = block_token_tiles < compute_kernel_lib::DEST_AUTO_LIMIT
                                     ? block_token_tiles
@@ -893,7 +871,7 @@ ALWI void project_block_split(uint32_t extent, uint32_t core_k_tiles, uint32_t s
             const uint32_t kc = (core_k_tiles - k0) < x_chunk_k_tiles ? (core_k_tiles - k0) : x_chunk_k_tiles;
             const bool first = k0 == 0;
             const bool last = k0 + kc >= core_k_tiles;
-            x_split_window(r0, sb_h, k0, kc, core_k_tiles, xoff);
+            x_split_window(r0, sb_h, k0, kc, core_k_tiles);
 
             cb_wait_front(cb_x_pieces, x_window_pages);
             tile_regs_acquire();
@@ -1011,14 +989,13 @@ ALWI void sumsq_row(uint32_t core_k_tiles, uint32_t base) {
 // Then (all mix rows pushed first: cb_partial is [mix rows | sumsq rows]) per row: reduce<SUM, REDUCE_ROW> over
 // its x_stream_chunks partial tiles -> cb_partial [sumsq rows].
 template <uint32_t PIECES>
-ALWI void project_sumsq_streamed(uint32_t extent, uint32_t core_k_tiles, XView v) {
+ALWI void project_sumsq_streamed(uint32_t extent, uint32_t core_k_tiles) {
     using namespace compute_kernel_lib;
     constexpr bool lo_reinit = PIECES > 1 && w_lo_fidelity != w_main_fidelity;
     const uint32_t kc_len = (core_k_tiles + x_stream_chunks - 1) / x_stream_chunks;
     uint32_t num_chunks = 0;
     for (uint32_t t = 0; t < extent; ++t) {
-        const uint32_t base = v.off + t * core_k_tiles;
-        const uint32_t wbase = v.wait0 + t * core_k_tiles;
+        const uint32_t base = t * core_k_tiles;
         num_chunks = 0;
         for (uint32_t k0 = 0; k0 < core_k_tiles; k0 += kc_len, ++num_chunks) {
             const uint32_t kc = (core_k_tiles - k0) < kc_len ? (core_k_tiles - k0) : kc_len;
@@ -1026,7 +1003,7 @@ ALWI void project_sumsq_streamed(uint32_t extent, uint32_t core_k_tiles, XView v
             const bool last = k0 + kc >= core_k_tiles;
             {
                 MaybeDeviceZoneScope("c_x_wait");
-                cb_wait_front(cb_x_resident, wbase + k0 + kc);
+                cb_wait_front(cb_x_resident, base + k0 + kc);
             }
             {
                 MaybeDeviceZoneScope("c_proj");
@@ -1135,15 +1112,11 @@ void kernel_main() {
         w_split_block(core_k_tiles);
     }
 
-    auto extent_of = [&](uint32_t block_idx) {
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
-        return (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
-    };
+        const uint32_t extent =
+            (core_token_tiles - row0) < block_token_tiles ? (core_token_tiles - row0) : block_token_tiles;
 
-    // ---- proj phase: everything of block `block_idx` that needs only its own X (projection + sum x^2 ->
-    // cb_partial [mix rows | sumsq rows]); v = its view into cb_x_resident ----
-    auto proj_phase = [&](uint32_t block_idx, XView v) {
-        const uint32_t extent = extent_of(block_idx);
         // projection out sub-block height = largest divisor of the extent <= DEST
         uint32_t sb_h = 1;
         for (uint32_t h = DEST_AUTO_LIMIT; h > 1; --h) {
@@ -1162,17 +1135,16 @@ void kernel_main() {
             // reader's data is guaranteed by the cb_x_resident wait).
             cb_reserve_back(cb_x_fp32, x_block_pages);
             cb_push_back(cb_x_fp32, x_block_pages);
-            cb_wait_front(cb_x_resident, v.wait0 + extent * core_k_tiles);
-            cb_wait_front(cb_x_fp32, v.wait0 + x_block_pages);
-            x_stats_block(extent, core_k_tiles, v.off);
+            cb_wait_front(cb_x_resident, extent * core_k_tiles);
+            cb_wait_front(cb_x_fp32, x_block_pages);
+            x_stats_block(extent, core_k_tiles);
         }
         {
             // ---- project_block (first: it waits per K tile, so it streams under the X burst; the longest
             // per-block compute phase must not start only after the last X tile): mix partial = X_blk @ W_slice
             // -> cb_partial [mix rows] ----
             if constexpr (x_grid_split) {
-                project_block_split(extent, core_k_tiles, sb_h, v.off);
-                cb_pop_front(cb_grid, extent);  // the grid is read only by the projection's x split
+                project_block_split(extent, core_k_tiles, sb_h);
             } else if constexpr (w_pieces > 1) {
                 if constexpr (w_presplit) {
                     if (block_idx == 0) {
@@ -1181,12 +1153,7 @@ void kernel_main() {
                     }
                 }
                 // sum x^2 streams with it (pushes cb_partial [mix rows | sumsq rows] itself)
-                project_sumsq_streamed<w_pieces>(extent, core_k_tiles, v);
-            } else if (v.wait0 != 0) {
-                // the next block sits behind the current one: indexed tile reads (matmul_block reads the front).
-                // The bf16 W slice is waited here (the helper's in1 wait did it): cumulative, never popped.
-                cb_wait_front(cb_weight, core_k_tiles);
-                project_block_pieces<1>(extent, core_k_tiles, sb_h, v);
+                project_sumsq_streamed<w_pieces>(extent, core_k_tiles);
             } else {
                 matmul_block<
                     false,
@@ -1209,8 +1176,8 @@ void kernel_main() {
             for (uint32_t t = 0; t < extent; ++t) {
                 const uint32_t base = t * core_k_tiles;
                 if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
-                    cb_wait_front(cb_x_resident, v.wait0 + base + core_k_tiles);  // no-op: the projection waited
-                    sumsq_row<WaitPolicy::None, TileAddressing::Offset>(core_k_tiles, v.off + base);
+                    cb_wait_front(cb_x_resident, base + core_k_tiles);  // no-op: the projection waited
+                    sumsq_row<WaitPolicy::None, TileAddressing::Offset>(core_k_tiles, base);
                 }
                 reduce<
                     PoolType::SUM,
@@ -1223,10 +1190,7 @@ void kernel_main() {
                     ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
             }
         }
-    };
-
-    // ---- combine_block (root only; a no-op on the other ranks) ----
-    auto combine_phase = [&]() {
+        // ---- combine_block (root only) ----
         if (rank == 0) {
             {
                 MaybeDeviceZoneScope("c_gather_wait");
@@ -1235,87 +1199,82 @@ void kernel_main() {
             MaybeDeviceZoneScope("c_combine");
             combine_block();
         }
-    };
-
-    // ---- coefficients_block: S (landed row-major in cb_coef_in, block b at its front) -> pre-column tiles ----
-    //   transpose S -> gather into coefficient-major -> coefficients (r, pre) -> pre_i into T-layout row 0
-    //   of its own tile -> transpose -> column 0 = pre_i per token row -> cb_pre_cols.
-    // ---- owned_block (owned rows), fused in front of it: coefficients (post, logits) + Sinkhorn + the
-    //   post / comb row-major tiles in ONE DEST window -> cb_comb_coef [post, comb] (the writer stores both
-    //   pages as they are); the coefficient tile itself -> cb_coef_keep, reloaded exactly for the pre tiles.
-    auto coef_phase = [&](uint32_t block_idx) {
-        const uint32_t row0 = block_idx * block_token_tiles;
-        const uint32_t extent = extent_of(block_idx);
         {
             MaybeDeviceZoneScope("c_coef_wait");
             cb_wait_front(cb_coef_in, 2 * block_token_tiles);
         }
-        cb_wait_front(cb_bias_coef, 1);  // resident constant (writer-produced): waited, never popped
-        cb_reserve_back(cb_pre_cols, n_streams * extent);
-        for (uint32_t t = 0; t < extent; ++t) {
-            const bool owned = ((row0 + t) % group_cores) == rank;
-            if (owned) {
-                MaybeDeviceZoneScope("c_owned");
-                cb_reserve_back(cb_comb_coef, 2);
-                cb_reserve_back(cb_coef_keep, 1);
-                pack_reconfig_data_format(cb_comb_coef);  // cb_coef_keep: same (fp32) format
-                tile_regs_acquire();
-                load_coef_major(t, coef_scalars);
+
+        // ---- coefficients_block: S (landed row-major in cb_coef_in) -> pre-column tiles, all in DEST ----
+        //   transpose S -> gather into coefficient-major -> coefficients (r, pre) -> pre_i into T-layout row 0
+        //   of its own tile -> transpose -> column 0 = pre_i per token row -> cb_pre_cols.
+        // ---- owned_block (owned rows), fused in front of it: coefficients (post, logits) + Sinkhorn + the
+        //   post / comb row-major tiles in ONE DEST window -> cb_comb_coef [post, comb] (the writer stores both
+        //   pages as they are); the coefficient tile itself -> cb_coef_keep, reloaded exactly for the pre tiles.
+        {
+            cb_wait_front(cb_bias_coef, 1);  // resident constant (writer-produced): waited, never popped
+            cb_wait_front(cb_coef_in, 2 * block_token_tiles);
+            cb_reserve_back(cb_pre_cols, n_streams * extent);
+            for (uint32_t t = 0; t < extent; ++t) {
+                const bool owned = ((row0 + t) % group_cores) == rank;
+                if (owned) {
+                    MaybeDeviceZoneScope("c_owned");
+                    cb_reserve_back(cb_comb_coef, 2);
+                    cb_reserve_back(cb_coef_keep, 1);
+                    pack_reconfig_data_format(cb_comb_coef);  // cb_coef_keep: same (fp32) format
+                    tile_regs_acquire();
+                    load_coef_major(t, coef_scalars);
 #ifndef MHC_ABLATE_COEF
-                MATH((_llk_math_eltwise_unary_sfpu_params_(
-                    mhc_sfpu::sinkhorn, 0, VectorMode::None, eps_bits, sinkhorn_iters)));
-                MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::post_comb_tiles, 0, VectorMode::None)));
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(
+                        mhc_sfpu::sinkhorn, 0, VectorMode::None, eps_bits, sinkhorn_iters)));
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::post_comb_tiles, 0, VectorMode::None)));
+#endif
+                    transpose_dest_init<true, true>();
+                    transpose_dest<true, true>(2);
+                    transpose_dest<true, true>(3);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(2, cb_comb_coef);
+                    pack_tile(3, cb_comb_coef);
+                    pack_tile(0, cb_coef_keep);
+                    tile_regs_release();
+                    cb_push_back(cb_comb_coef, 2);
+                    cb_push_back(cb_coef_keep, 1);
+                    cb_wait_front(cb_coef_keep, 1);
+                }
+                MaybeDeviceZoneScope("c_pre");
+                pack_reconfig_data_format(cb_pre_cols);
+                tile_regs_acquire();
+                if (owned) {
+                    reconfig_data_format_srca(cb_coef_keep);
+                    copy_tile_to_dst_init_short(cb_coef_keep);
+                    copy_tile(cb_coef_keep, 0, 0);
+                    custom_sfpu_init();
+                } else {
+                    load_coef_major(t, coef_scalars);
+                }
+#ifndef MHC_ABLATE_COEF
+                MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::pre_tiles, 0, VectorMode::None)));
 #endif
                 transpose_dest_init<true, true>();
-                transpose_dest<true, true>(2);
-                transpose_dest<true, true>(3);
+                for (uint32_t i = 0; i < n_streams; ++i) {
+                    transpose_dest<true, true>(mhc_sfpu_tiles::pre_tile_index(i));
+                }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(2, cb_comb_coef);
-                pack_tile(3, cb_comb_coef);
-                pack_tile(0, cb_coef_keep);
+                for (uint32_t i = 0; i < n_streams; ++i) {
+                    pack_tile(mhc_sfpu_tiles::pre_tile_index(i), cb_pre_cols);
+                }
                 tile_regs_release();
-                cb_push_back(cb_comb_coef, 2);
-                cb_push_back(cb_coef_keep, 1);
-                cb_wait_front(cb_coef_keep, 1);
+                if (owned) {
+                    cb_pop_front(cb_coef_keep, 1);
+                }
             }
-            MaybeDeviceZoneScope("c_pre");
-            pack_reconfig_data_format(cb_pre_cols);
-            tile_regs_acquire();
-            if (owned) {
-                reconfig_data_format_srca(cb_coef_keep);
-                copy_tile_to_dst_init_short(cb_coef_keep);
-                copy_tile(cb_coef_keep, 0, 0);
-                custom_sfpu_init();
-            } else {
-                load_coef_major(t, coef_scalars);
-            }
-#ifndef MHC_ABLATE_COEF
-            MATH((_llk_math_eltwise_unary_sfpu_params_(mhc_sfpu::pre_tiles, 0, VectorMode::None)));
-#endif
-            transpose_dest_init<true, true>();
-            for (uint32_t i = 0; i < n_streams; ++i) {
-                transpose_dest<true, true>(mhc_sfpu_tiles::pre_tile_index(i));
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < n_streams; ++i) {
-                pack_tile(mhc_sfpu_tiles::pre_tile_index(i), cb_pre_cols);
-            }
-            tile_regs_release();
-            if (owned) {
-                cb_pop_front(cb_coef_keep, 1);
-            }
+            cb_push_back(cb_pre_cols, n_streams * extent);
         }
-        cb_push_back(cb_pre_cols, n_streams * extent);
-    };
-
-    // ---- ymix_block: y[c] = sum_i x[i][c] * bcast_col(pre_i), n-deep DEST accumulation per output; frees X(b)
-    // (the reader may load block b + depth) and S(b) ----
-    auto ymix_phase = [&](uint32_t block_idx) {
-        const uint32_t extent = extent_of(block_idx);
         cb_wait_front(cb_pre_cols, n_streams * extent);
         {
+            // ---- ymix_block: y[c] = sum_i x[i][c] * bcast_col(pre_i), n-deep DEST accumulation per output ----
+            cb_wait_front(cb_pre_cols, n_streams * extent);
             MaybeDeviceZoneScope("c_ymix");
             for (uint32_t t = 0; t < extent; ++t) {
 #ifdef MHC_ABLATE_YMIX
@@ -1361,49 +1320,13 @@ void kernel_main() {
                         TileAddressing::Direct,
                         DestAccumulation::PerRow)>{});
             }
+            cb_pop_front(cb_pre_cols, n_streams * extent);
+            if constexpr (x_grid_split) {
+                cb_pop_front(cb_grid, extent);
+                cb_pop_front(cb_x_fp32, x_block_pages);  // alias kept in lockstep
+            }
+            cb_pop_front(cb_x_resident, x_block_pages);  // X block freed: the reader may load block+2
         }
-        cb_pop_front(cb_pre_cols, n_streams * extent);
-        if constexpr (x_grid_split) {
-            cb_pop_front(cb_x_fp32, x_block_pages);  // alias kept in lockstep
-        }
-        cb_pop_front(cb_x_resident, x_block_pages);       // X block freed: the reader may load block + depth
         cb_pop_front(cb_coef_in, 2 * block_token_tiles);  // S consumed
-    };
-
-    // ---- block schedule (see the header): mirrored step for step by the writer ----
-    auto pipe_at = [&](uint32_t b) {
-        return b + 1 < num_blocks && (x_block_depth >= 3 || b + x_block_depth >= num_blocks);
-    };
-    bool combined = false;  // the root folded block b already (in the previous, pipelined step)
-    if (num_blocks > 0) {
-        proj_phase(0, XView{0, 0});
-    }
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        if (pipe_at(block_idx)) {
-            // X(b+1) ring slot relative to X(b) at the front: the next slot, or the ring start (wrap)
-            const uint32_t slot = block_idx % x_block_depth;
-            const uint32_t next_off =
-                slot + 1 < x_block_depth ? x_block_pages : static_cast<uint32_t>(0u - slot * x_block_pages);
-            proj_phase(block_idx + 1, XView{x_block_pages, next_off});
-            if (!combined) {
-                combine_phase();  // b
-            }
-            // root: the coefficients / Sinkhorn of b while the group's partials of b+1 arrive, the fold of b+1
-            // (its S then multicasts under everyone's tail(b)), then the y-mix of b
-            coef_phase(block_idx);
-            combine_phase();  // b+1
-            ymix_phase(block_idx);
-            combined = true;
-        } else {
-            if (!combined) {
-                combine_phase();
-            }
-            coef_phase(block_idx);
-            ymix_phase(block_idx);
-            if (block_idx + 1 < num_blocks) {
-                proj_phase(block_idx + 1, XView{0, 0});  // X(b) popped: X(b+1) is at the front
-            }
-            combined = false;
-        }
     }
 }

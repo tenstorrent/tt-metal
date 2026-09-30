@@ -16,7 +16,7 @@
 //   W rides the writer's NoC1 so it never queues behind the reader's X stream on NoC0.
 // load_bias (once, after the W fill; only the coefficient phase needs it): the bias row (row 0 of faces 0/1:
 //   the n*(n+2) <= 32 used columns, 2 x 64 B) -> cb_bias_coef in coefficient-major form (slot k, every lane =
-//   b[k]; zero elsewhere), written as 16 contiguous [b[2j], b[2j+1]] x 32 blocks (straight word stores).
+//   b[k]; zero elsewhere).
 //
 // Per block:
 //
@@ -140,6 +140,7 @@ void kernel_main() {
 
     Noc noc;
 
+    CircularBuffer bias_cb(cb_bias_coef);
     cb_reserve_back(cb_bias_coef, 1);
 
     // ---- load_w ----
@@ -152,7 +153,7 @@ void kernel_main() {
     };
     auto load_bias = [&]() {
         // Row 0 of faces 0 and 1 (cols 0..15, 16..31) lands at its row-major offsets of the bias tile itself;
-        // the values are picked up, then the whole tile is overwritten in coefficient-major form.
+        // the values are picked up, then the tile is zeroed (unused slots / lanes must be 0) and filled.
         static_assert(mix_cols <= 32, "bias row must fit one tile row");
         constexpr uint32_t face_row_bytes = 16 * sizeof(float);
         const uint32_t bias_l1 = get_write_ptr(cb_bias_coef);
@@ -162,26 +163,17 @@ void kernel_main() {
             bias_l1 + rc_index(0, 16) * sizeof(float),
             face_row_bytes);
         noc_async_read_barrier();
-        // Coefficient-major fill (slot k, every lane = b[k]; slots >= mix_cols = 0). The tile is 16 contiguous
-        // 64-word blocks: slot_index(2j + e, l) = 64j + 2l + e, i.e. block j = [b[2j], b[2j+1]] x 32 lanes. So the
-        // fill is 1024 straight word stores (incl. the zero slots): no NoC zero fill + barrier, no per-datum index
-        // arithmetic (the scattered slot_index fill measured ~5.5 us on BRISC, this ~1 us; bit-identical tile).
-        static_assert(
-            slot_index(2, 0) == 64 && slot_index(1, 0) == 1 && slot_index(0, 1) == 2 && slot_index(0, 8) == 16,
-            "coefficient-major block structure");
-        volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bias_l1);
-        uint32_t bv[32];
-#pragma GCC unroll 32
-        for (uint32_t k = 0; k < 32; ++k) {
-            bv[k] = k < mix_cols ? words[rc_index(0, k)] : 0u;
+        float bvals[mix_cols];
+        float* dst = reinterpret_cast<float*>(bias_l1);
+        for (uint32_t k = 0; k < mix_cols; ++k) {
+            bvals[k] = dst[rc_index(0, k)];
         }
-        for (uint32_t j = 0; j < 16; ++j) {
-            const uint32_t even = bv[2 * j], odd = bv[2 * j + 1];
-            volatile tt_l1_ptr uint32_t* q = words + 64 * j;
-#pragma GCC unroll 32
-            for (uint32_t i = 0; i < 32; ++i) {
-                q[2 * i] = even;
-                q[2 * i + 1] = odd;
+        noc.async_write_zeros(bias_cb, f_tile_bytes);
+        noc.write_zeros_l1_barrier();
+        for (uint32_t k = 0; k < mix_cols; ++k) {
+#pragma GCC unroll 8
+            for (uint32_t l = 0; l < 32; ++l) {
+                dst[slot_index(k, l)] = bvals[k];
             }
         }
         cb_push_back(cb_bias_coef, 1);

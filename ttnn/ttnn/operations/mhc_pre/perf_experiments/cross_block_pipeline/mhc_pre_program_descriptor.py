@@ -90,9 +90,6 @@ SEM_W_READY = 3  # W column broadcast: data-ready Counter (one event per W chunk
 # ---- host constants (tunable knobs, single source) ----
 GROUP_CORES_CAP = 32  # flat-root gather cap (cb_gathered grows with group_cores)
 X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of the combine round trip)
-# Blocks of S held in cb_coef_in (Perf 1, cross-block pipeline): the root multicasts S(b+1) while every rank still
-# holds S(b), with no consumer-ready handshake. Must be 2 (the writer's write-once landing argument).
-COEF_IN_BLOCKS = 2
 # Each X block is read as one NoC burst but published to the compute in this many K-ordered chunks (one NoC
 # transaction id each), so the projection runs under the rest of the burst instead of after it (Refinement 4).
 # 1 = one publish per block (the pre-Refinement-4 behaviour); at most 14 (NoC transaction ids; 15 is the W column share's).
@@ -216,6 +213,31 @@ def _reader_noc_of(group_y0, flip_rows):
 # shapes, so a rank's reads walk banks (c_start + c) mod banks; discounts that make two ranks' c_start collide
 # mod banks measure slower (640x1792: 4 -> 48.7, 8 -> 45.4 us). 0 = even split.
 OWNER_C_DISCOUNT = 7
+# ---- cross-block pipeline (perf_experiments/cross_block_pipeline) ----
+# PIPELINE: the projection + sum x^2 of block b+1 runs before block b's combine wait / coefficients / y-mix
+# (compute), and P(b+1) is sent right after S(b) landed (writer). Needs x_block_depth >= 2 (X(b), X(b+1) both
+# resident); a depth-1 plan keeps the serial schedule.
+PIPELINE = False
+# root: combine(b) before proj(b+1) (instead of after it)
+PIPE_ROOT_COMBINE_FIRST = False
+# bf16 X / fp32 W (streamed projection) only: this many (row, K chunk) windows of proj(b+1) run before tail(b),
+# the rest after it (0 = all before). The writer then sends P(b+1) after storing y(b).
+PIPE_SPLIT_CHUNKS = 0
+# S-ahead: S(b+1) combined / multicast right after proj(b+1), before tail(b) (cb_coef_in holds 2 blocks)
+PIPE_S_AHEAD = False
+# ... with the group multicast fire-and-forget (Counter data ready, no consumer-ready handshake; see the writer)
+PIPE_S_NOHS = False
+# S-ahead root: coefficients / Sinkhorn of block b before waiting for the gather of b+1 (y-mix of b after it)
+PIPE_ROOT_COEF_FIRST = False
+# S-ahead: pipeline only the steps b with b + x_block_depth >= num_blocks (the X prefetch of b+depth is then not
+# delayed by holding X(b) past proj(b+1)); earlier steps keep the serial order
+PIPE_TAIL_ONLY = False
+# S-ahead root: the whole tail(b) before the fold of b+1 (instead of the coefficients only)
+PIPE_ROOT_TAIL_FIRST = False
+# (ablation) the S-ahead machinery (cb_coef_in x2, schedule, mcast mode) with every step serial
+PIPE_NONE = False
+# cb_x_resident depth (blocks) when the pipeline is on (None = X_BLOCK_DEPTH_DEFAULT); falls back as the default.
+PIPE_X_DEPTH = None
 W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
 W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
 
@@ -292,6 +314,10 @@ class Plan:
     y_depth: int
 
 
+def _coef_depth():
+    return 2 if (PIPELINE and PIPE_S_AHEAD) else 1
+
+
 def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype, w_dtype, y_dtype):
     """THE per-core CB inventory: [(cb_index, num_pages, page_bytes, data_format, aliases)].
 
@@ -321,9 +347,7 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_PARTIAL, 2 * bt, fT, f32),
         (CB_GATHERED, G * 2 * bt, fT, f32),
         (CB_COMBINED, 2 * bt, fT, f32),
-        # landed S blocks [mix x bt | sum(x^2) x bt] (group multicast): 2 blocks, S(b+1) lands while S(b) is held
-        # (Perf 1 cross-block pipeline; the handshake-free multicast relies on the second slot, see the writer)
-        (CB_COEF_IN, COEF_IN_BLOCKS * 2 * bt, fT, f32),
+        (CB_COEF_IN, _coef_depth() * 2 * bt, fT, f32),  # landed S block [mix x bt | sum(x^2) x bt] (group multicast)
         (CB_COMB_COEF, 2 * bt, fT, f32),  # owned rows: [post, comb] row-major output tiles
         (CB_COEF_KEEP, 1, fT, f32),  # owned row: coefficient-major tile, packed then reloaded in place
         (CB_PRE_COLS, n * bt, fT, f32),
@@ -395,7 +419,10 @@ def make_plan(device, x_tensor, w_tensor, n):
             )
 
         bt_cap = min(ctt_max, BLOCK_TOKEN_TILES_CAP)
-        for depth in (X_BLOCK_DEPTH_DEFAULT, 1):  # depth-1 fallback only if the default does not fit
+        depths = (X_BLOCK_DEPTH_DEFAULT, 1)
+        if PIPELINE and PIPE_X_DEPTH is not None:
+            depths = tuple(dict.fromkeys((PIPE_X_DEPTH, X_BLOCK_DEPTH_DEFAULT, 1)))
+        for depth in depths:  # depth-1 fallback only if the default does not fit
             fixed = l1_at(0, depth)  # the footprint is affine in bt
             per_bt = l1_at(1, depth) - fixed
             bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
@@ -569,16 +596,32 @@ def create_program_descriptor(
     # fp32 W hi/lo split done per column share (bf16 X only: the fp32-X grid split needs the whole slice's max).
     w_presplit = bool(w_mcast) and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
 
+    # ---- cross-block pipeline schedule (mirrors the compute's split_chunks gate) ----
+    pipe = PIPELINE and plan.x_block_depth >= 2
+    pipe_s_ahead = pipe and PIPE_S_AHEAD
+    pipe_nohs = pipe_s_ahead and PIPE_S_NOHS
+    pipe_split = (
+        pipe
+        and not pipe_s_ahead
+        and PIPE_SPLIT_CHUNKS > 0
+        and w_pieces(w_tensor.dtype) > 1
+        and x_pieces(x_tensor.dtype) == 1
+    )
+
     # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
     helpers = {}
     mcast_ct = {}  # reader NoC of the kernel set -> the group-mcast CT wire (identical within a set)
     if G > 1:
         for g, gx0, gy0 in groups:
             rnoc = _reader_noc_of(gy0, flip_rows)
-            # No consumer-ready handshake (Perf 1): cb_coef_in holds 2 blocks and the root multicasts S(b+1) only after
-            # gathering every P(b+1), so the landing slot is free and the Flag was reset (see the writer). A Counter
-            # data-ready signal hangs here (its non-posted multicast atomic also waits for the looped-back root's ack).
-            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), handshake=False, sem_ids=[SEM_MCAST_READY])
+            if pipe_nohs:
+                # Flag data ready without the consumer-ready ack. A Counter signal hangs here: its non-posted
+                # multicast atomic waits for an ack from the looped-back root as well (measured: root BRISC stuck
+                # in the send's atomic barrier). Flag reuse is safe: the root sets round b+1's flag only after
+                # gathering every P(b+1), which each rank sends after it consumed (reset) round b's flag.
+                mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), handshake=False, sem_ids=[SEM_MCAST_READY])
+            else:
+                mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
             rect = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -657,7 +700,15 @@ def create_program_descriptor(
         CB_W_OWN_SPLIT,
         int(w_presplit),
         X_STREAM_CHUNKS,
-        plan.x_block_depth,  # block schedule (cross-block pipeline)
+        int(pipe),
+        plan.x_block_depth,
+        int(PIPE_ROOT_COMBINE_FIRST),
+        0 if pipe_s_ahead else PIPE_SPLIT_CHUNKS,
+        int(pipe_s_ahead),
+        int(pipe_s_ahead and PIPE_ROOT_COEF_FIRST),
+        int(pipe_s_ahead and PIPE_TAIL_ONLY),
+        int(pipe_s_ahead and PIPE_ROOT_TAIL_FIRST),
+        int(pipe_s_ahead and PIPE_NONE),
     ]
 
     writer_ct = [
@@ -683,7 +734,14 @@ def create_program_descriptor(
         CB_W_OWN_SPLIT,
         int(w_presplit),
         CB_W_SHARE_LANDED,
-        plan.x_block_depth,  # block schedule (cross-block pipeline; mirrors the compute)
+        # block schedule | x_block_depth << 8 | tail_only << 16
+        (((4 if pipe_nohs else 3) if pipe_s_ahead else 2 if pipe_split else 1) if pipe else 0)
+        | (plan.x_block_depth << 8)
+        | (int(pipe_s_ahead and PIPE_TAIL_ONLY) << 16)
+        | (int(pipe_s_ahead and PIPE_ROOT_TAIL_FIRST) << 17)
+        | (
+            int(pipe_s_ahead and PIPE_NONE) << 18
+        ),  # SCHED_SERIAL 0 / PIPE 1 / PIPE_LATE_P 2 / S_AHEAD 3 / S_AHEAD_NOHS 4
     ]
     assert len(writer_ct) == 22  # MCAST_CT_BASE in the writer
     writer_tail_ct = []

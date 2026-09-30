@@ -25,6 +25,7 @@
 
 // Stage zones (permanent; opt-in via the KERNEL_PERF_ZONES define, see perf_instrumentation.hpp):
 //   r_w_issue / r_w_land     W column share issue / its barrier (trid 15)
+//   r_w_land_poll            the share's token pushed from the X issue loop (non-blocking trid-15 poll hit)
 //   r_x_reserve              cb_x_resident back-pressure (the compute has not freed block b-2)
 //   r_x_issue / r_x_barrier  per X chunk: address generation + issue / waiting for its reads to land
 // Ablation (perf tournaments only): MHC_ABLATE_XREAD skips the X DRAM reads (pushes unchanged).
@@ -76,6 +77,17 @@ void kernel_main() {
             w_share_pending = false;
         }
     };
+    // Hand the share over the moment its reads landed: a non-blocking poll of trid 15's outstanding-read counter
+    // (one NIU status read) after every X page issue, so the token is not held back by the back-pressured X issue
+    // loop (land_w_share stays the blocking fallback before the first X chunk is waited for).
+    auto poll_w_share = [&]() {
+        if (w_share_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, w_share_trid)) {
+            MaybeDeviceZoneScope("r_w_land_poll");
+            cb_reserve_back(cb_w_share_landed, 1);
+            cb_push_back(cb_w_share_landed, 1);
+            w_share_pending = false;
+        }
+    };
     auto load_x_block = [&](uint32_t block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
         const uint32_t extent =
@@ -99,6 +111,7 @@ void kernel_main() {
 #ifndef MHC_ABLATE_XREAD
                 noc_async_read_page(row_page + i * tensor_c_tiles + c, x_acc, base + p * x_tile_bytes);
 #endif
+                poll_w_share();
                 if (++i == n_streams) {
                     i = 0;
                     if (++c == core_c_tiles) {

@@ -1,0 +1,123 @@
+diff --git a/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_reader.cpp b/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_reader.cpp
+index 6cf4489bbbe..2948f638702 100644
+--- a/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_reader.cpp
++++ b/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_reader.cpp
+@@ -25,6 +25,7 @@
+ 
+ // Stage zones (permanent; opt-in via the KERNEL_PERF_ZONES define, see perf_instrumentation.hpp):
+ //   r_w_issue / r_w_land     W column share issue / its barrier (trid 15)
++//   r_w_land_poll            the share's token pushed from the X issue loop (non-blocking trid-15 poll hit)
+ //   r_x_reserve              cb_x_resident back-pressure (the compute has not freed block b-2)
+ //   r_x_issue / r_x_barrier  per X chunk: address generation + issue / waiting for its reads to land
+ // Ablation (perf tournaments only): MHC_ABLATE_XREAD skips the X DRAM reads (pushes unchanged).
+@@ -76,6 +77,17 @@ void kernel_main() {
+             w_share_pending = false;
+         }
+     };
++    // Hand the share over the moment its reads landed: a non-blocking poll of trid 15's outstanding-read counter
++    // (one NIU status read) after every X page issue, so the token is not held back by the back-pressured X issue
++    // loop (land_w_share stays the blocking fallback before the first X chunk is waited for).
++    auto poll_w_share = [&]() {
++        if (w_share_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, w_share_trid)) {
++            MaybeDeviceZoneScope("r_w_land_poll");
++            cb_reserve_back(cb_w_share_landed, 1);
++            cb_push_back(cb_w_share_landed, 1);
++            w_share_pending = false;
++        }
++    };
+     auto load_x_block = [&](uint32_t block_idx) {
+         const uint32_t row0 = block_idx * block_token_tiles;
+         const uint32_t extent =
+@@ -99,6 +111,7 @@ void kernel_main() {
+ #ifndef MHC_ABLATE_XREAD
+                 noc_async_read_page(row_page + i * tensor_c_tiles + c, x_acc, base + p * x_tile_bytes);
+ #endif
++                poll_w_share();
+                 if (++i == n_streams) {
+                     i = 0;
+                     if (++c == core_c_tiles) {
+diff --git a/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_writer.cpp b/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_writer.cpp
+index 87a1df48220..e1c137e3b9c 100644
+--- a/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_writer.cpp
++++ b/ttnn/ttnn/operations/mhc_pre/kernels/mhc_pre_writer.cpp
+@@ -14,9 +14,9 @@
+ //                     Mcast1D(PerColumn), Counter, write-once landing => no handshake), lands the other rows'
+ //                     w_events shares, and publishes the whole slice at once.
+ //   W rides the writer's NoC1 so it never queues behind the reader's X stream on NoC0.
+-// load_bias (once, after the W fill; only the coefficient phase needs it): the bias row (row 0 of faces 0/1:
+-//   the n*(n+2) <= 32 used columns, 2 x 64 B) -> cb_bias_coef in coefficient-major form (slot k, every lane =
+-//   b[k]; zero elsewhere).
++// load_bias (once, after the W fill; only the coefficient phase needs it; its 2 DRAM reads are issued at kernel
++//   start): the bias row (row 0 of faces 0/1: the n*(n+2) <= 32 used columns, 2 x 64 B) -> cb_bias_coef in coefficient-major form (slot k, every lane =
++//   b[k]; zero elsewhere), written as 16 contiguous [b[2j], b[2j+1]] x 32 blocks (straight word stores).
+ //
+ // Per block, in this mandatory order (gather-slot reuse invariant):
+ //
+@@ -130,7 +130,6 @@ void kernel_main() {
+ 
+     Noc noc;
+ 
+-    CircularBuffer bias_cb(cb_bias_coef);
+     cb_reserve_back(cb_bias_coef, 1);
+ 
+     // ---- load_w ----
+@@ -141,10 +140,13 @@ void kernel_main() {
+             noc_async_read_page(i * tensor_c_tiles + c_start + c, w_acc, w_base + p * w_tile_bytes);
+         }
+     };
+-    auto load_bias = [&]() {
++    // The bias row's 2 x 64 B DRAM reads go out at kernel start, before the X burst congests the banks (issued
++    // late they queue behind it: measured up to ~18 us once the W exchange finishes early); any later read
++    // barrier of this writer covers them.
++    static_assert(mix_cols <= 32, "bias row must fit one tile row");
++    auto issue_bias_reads = [&]() {
+         // Row 0 of faces 0 and 1 (cols 0..15, 16..31) lands at its row-major offsets of the bias tile itself;
+-        // the values are picked up, then the tile is zeroed (unused slots / lanes must be 0) and filled.
+-        static_assert(mix_cols <= 32, "bias row must fit one tile row");
++        // the values are picked up, then the whole tile is overwritten in coefficient-major form.
+         constexpr uint32_t face_row_bytes = 16 * sizeof(float);
+         const uint32_t bias_l1 = get_write_ptr(cb_bias_coef);
+         noc_async_read(b_acc.get_noc_addr(0, rc_index(0, 0) * sizeof(float)), bias_l1, face_row_bytes);
+@@ -152,18 +154,31 @@ void kernel_main() {
+             b_acc.get_noc_addr(0, rc_index(0, 16) * sizeof(float)),
+             bias_l1 + rc_index(0, 16) * sizeof(float),
+             face_row_bytes);
+-        noc_async_read_barrier();
+-        float bvals[mix_cols];
+-        float* dst = reinterpret_cast<float*>(bias_l1);
+-        for (uint32_t k = 0; k < mix_cols; ++k) {
+-            bvals[k] = dst[rc_index(0, k)];
++    };
++    issue_bias_reads();
++    auto load_bias = [&]() {
++        const uint32_t bias_l1 = get_write_ptr(cb_bias_coef);
++        noc_async_read_barrier();  // the reads were issued at kernel start (issue_bias_reads)
++        // Coefficient-major fill (slot k, every lane = b[k]; slots >= mix_cols = 0). The tile is 16 contiguous
++        // 64-word blocks: slot_index(2j + e, l) = 64j + 2l + e, i.e. block j = [b[2j], b[2j+1]] x 32 lanes. So the
++        // fill is 1024 straight word stores (incl. the zero slots): no NoC zero fill + barrier, no per-datum index
++        // arithmetic (the scattered slot_index fill measured ~5.5 us on BRISC, this ~1 us; bit-identical tile).
++        static_assert(
++            slot_index(2, 0) == 64 && slot_index(1, 0) == 1 && slot_index(0, 1) == 2 && slot_index(0, 8) == 16,
++            "coefficient-major block structure");
++        volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bias_l1);
++        uint32_t bv[32];
++#pragma GCC unroll 32
++        for (uint32_t k = 0; k < 32; ++k) {
++            bv[k] = k < mix_cols ? words[rc_index(0, k)] : 0u;
+         }
+-        noc.async_write_zeros(bias_cb, f_tile_bytes);
+-        noc.write_zeros_l1_barrier();
+-        for (uint32_t k = 0; k < mix_cols; ++k) {
+-#pragma GCC unroll 8
+-            for (uint32_t l = 0; l < 32; ++l) {
+-                dst[slot_index(k, l)] = bvals[k];
++        for (uint32_t j = 0; j < 16; ++j) {
++            const uint32_t even = bv[2 * j], odd = bv[2 * j + 1];
++            volatile tt_l1_ptr uint32_t* q = words + 64 * j;
++#pragma GCC unroll 32
++            for (uint32_t i = 0; i < 32; ++i) {
++                q[2 * i] = even;
++                q[2 * i + 1] = odd;
+             }
+         }
+         cb_push_back(cb_bias_coef, 1);

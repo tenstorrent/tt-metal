@@ -16,9 +16,9 @@
 //   W rides the writer's NoC1 so it never queues behind the reader's X stream on NoC0.
 // load_bias (once, after the W fill; only the coefficient phase needs it): the bias row (row 0 of faces 0/1:
 //   the n*(n+2) <= 32 used columns, 2 x 64 B) -> cb_bias_coef in coefficient-major form (slot k, every lane =
-//   b[k]; zero elsewhere), written as 16 contiguous [b[2j], b[2j+1]] x 32 blocks (straight word stores).
+//   b[k]; zero elsewhere).
 //
-// Per block:
+// Per block, in this mandatory order (gather-slot reuse invariant):
 //
 //   send_partial_block        cb_partial [mix rows | sumsq rows] -> root cb_gathered slot [rank]
 //                              (push model; slot layout [mix x block_token_tiles | sumsq x block_token_tiles]),
@@ -30,15 +30,6 @@
 //                              coefficient-major form are the compute's (in DEST); the writer only moves tiles.
 //   store_y_block              cb_y_out -> y DRAM, windows of y_chunk_tiles (wrap-aware on the CB ring).
 //   store_post_comb_block      owned rows: cb_comb_coef [post, comb] row-major tiles -> DRAM.
-//
-// Block schedule (Perf 1, cross-block pipeline; mirrors the compute step for step, same pipe_at rule):
-//   pipelined step: [S(b)]; P(b+1); root: gather + fold + multicast S(b+1); y(b), pc(b); non-root: S(b+1)
-//   serial step:    [S(b)]; y(b), pc(b); P(b+1)
-// Invariants: P(b+1) is sent only after S(b) landed, so the root has folded cb_gathered block b (slot reuse).
-// The group multicast has no consumer-ready handshake (Flag data ready): cb_coef_in holds 2 blocks, and the root
-// multicasts S(b+1) only after gathering every rank's P(b+1), which each rank sends after its tail(b-1) freed
-// S(b-1)'s slot (pipelined step) or its tail(b) freed S(b)'s (serial step) -- the landing is write-once; and it
-// sets round b+1's flag only after each rank consumed (reset) round b's (it received S(b) before sending P(b+1)).
 
 #include <stdint.h>
 
@@ -96,7 +87,26 @@ void kernel_main() {
     constexpr uint32_t cb_w_own_split = get_compile_time_arg_val(18);  // token: compute -> writer, share split
     constexpr bool w_presplit = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t cb_w_share_landed = get_compile_time_arg_val(20);  // token: reader -> writer, share landed
-    constexpr uint32_t x_block_depth = get_compile_time_arg_val(21);      // cb_x_resident depth (block schedule)
+    // Block schedule (cross-block pipeline; mirrors the compute's order):
+    //   SCHED_SERIAL        per block: P(b) -> S(b) -> y(b) -> pc(b)
+    //   SCHED_PIPE          P(0); per block: S(b) -> P(b+1) -> y(b) -> pc(b)   (compute: proj(b+1) before tail(b))
+    //   SCHED_PIPE_LATE_P   P(0); per block: S(b) -> y(b) -> pc(b) -> P(b+1)   (compute: part of proj(b+1) after
+    //                       tail(b), so P(b+1) is complete only after y(b))
+    // P(b+1) is always sent after S(b) landed: the root has then folded cb_gathered block b (slot reuse).
+    //   SCHED_S_AHEAD       P(0), S(0); per block: P(b+1) -> S(b+1) -> y(b) -> pc(b)   (cb_coef_in holds 2 blocks;
+    //                       the root folds b+1 before its tail(b))
+    //   SCHED_S_AHEAD_NOHS  as SCHED_S_AHEAD, but the group multicast has no consumer-ready handshake (Flag data
+    //                       ready, no ack): the root has gathered every P(b+1), so every rank finished tail(b-1) and
+    //                       freed S(b-1)'s cb_coef_in slot -- the landing is write-once. Non-roots then take S(b+1)
+    //                       after storing y(b) (the root no longer waits for their ack).
+    constexpr uint32_t SCHED_SERIAL = 0, SCHED_PIPE = 1, SCHED_PIPE_LATE_P = 2, SCHED_S_AHEAD = 3;
+    constexpr uint32_t SCHED_S_AHEAD_NOHS = 4;
+    constexpr uint32_t sched_word = get_compile_time_arg_val(21);  // schedule | x_block_depth << 8 | tail_only << 16
+    constexpr uint32_t schedule = sched_word & 0xFF;
+    constexpr uint32_t x_block_depth = (sched_word >> 8) & 0xFF;
+    constexpr bool pipe_tail_only = ((sched_word >> 16) & 0x1) != 0;
+    constexpr bool root_tail_first = ((sched_word >> 17) & 0x1) != 0;  // root folds b+1 after its tail(b)
+    constexpr bool pipe_none = ((sched_word >> 18) & 0x1) != 0;        // (ablation) every step serial
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto w_mc = McastArgs<mc.next_compile_time_args_offset(), mc.next_runtime_args_offset()>();
     constexpr auto y_args = TensorAccessorArgs<w_mc.next_compile_time_args_offset()>();
@@ -140,6 +150,7 @@ void kernel_main() {
 
     Noc noc;
 
+    CircularBuffer bias_cb(cb_bias_coef);
     cb_reserve_back(cb_bias_coef, 1);
 
     // ---- load_w ----
@@ -152,7 +163,7 @@ void kernel_main() {
     };
     auto load_bias = [&]() {
         // Row 0 of faces 0 and 1 (cols 0..15, 16..31) lands at its row-major offsets of the bias tile itself;
-        // the values are picked up, then the whole tile is overwritten in coefficient-major form.
+        // the values are picked up, then the tile is zeroed (unused slots / lanes must be 0) and filled.
         static_assert(mix_cols <= 32, "bias row must fit one tile row");
         constexpr uint32_t face_row_bytes = 16 * sizeof(float);
         const uint32_t bias_l1 = get_write_ptr(cb_bias_coef);
@@ -162,26 +173,17 @@ void kernel_main() {
             bias_l1 + rc_index(0, 16) * sizeof(float),
             face_row_bytes);
         noc_async_read_barrier();
-        // Coefficient-major fill (slot k, every lane = b[k]; slots >= mix_cols = 0). The tile is 16 contiguous
-        // 64-word blocks: slot_index(2j + e, l) = 64j + 2l + e, i.e. block j = [b[2j], b[2j+1]] x 32 lanes. So the
-        // fill is 1024 straight word stores (incl. the zero slots): no NoC zero fill + barrier, no per-datum index
-        // arithmetic (the scattered slot_index fill measured ~5.5 us on BRISC, this ~1 us; bit-identical tile).
-        static_assert(
-            slot_index(2, 0) == 64 && slot_index(1, 0) == 1 && slot_index(0, 1) == 2 && slot_index(0, 8) == 16,
-            "coefficient-major block structure");
-        volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bias_l1);
-        uint32_t bv[32];
-#pragma GCC unroll 32
-        for (uint32_t k = 0; k < 32; ++k) {
-            bv[k] = k < mix_cols ? words[rc_index(0, k)] : 0u;
+        float bvals[mix_cols];
+        float* dst = reinterpret_cast<float*>(bias_l1);
+        for (uint32_t k = 0; k < mix_cols; ++k) {
+            bvals[k] = dst[rc_index(0, k)];
         }
-        for (uint32_t j = 0; j < 16; ++j) {
-            const uint32_t even = bv[2 * j], odd = bv[2 * j + 1];
-            volatile tt_l1_ptr uint32_t* q = words + 64 * j;
-#pragma GCC unroll 32
-            for (uint32_t i = 0; i < 32; ++i) {
-                q[2 * i] = even;
-                q[2 * i + 1] = odd;
+        noc.async_write_zeros(bias_cb, f_tile_bytes);
+        noc.write_zeros_l1_barrier();
+        for (uint32_t k = 0; k < mix_cols; ++k) {
+#pragma GCC unroll 8
+            for (uint32_t l = 0; l < 32; ++l) {
+                dst[slot_index(k, l)] = bvals[k];
             }
         }
         cb_push_back(cb_bias_coef, 1);
@@ -377,33 +379,65 @@ void kernel_main() {
         }
     };
 
-    auto pipe_at = [&](uint32_t b) {
-        return b + 1 < num_blocks && (x_block_depth >= 3 || b + x_block_depth >= num_blocks);
-    };
-    bool s_landed = false;  // S(b) already landed (in the previous, pipelined step)
-    if (num_blocks > 0) {
-        send_partial(0);
-    }
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        if (!s_landed) {
-            recv_s(block_idx);
+    if constexpr (schedule == SCHED_S_AHEAD_NOHS || schedule == SCHED_S_AHEAD) {
+        // Mirrors the compute's S-ahead loop step for step (pipe_at is the same rule):
+        //   pipelined step: P(b+1); [root, or handshake: S(b+1)]; y(b), pc(b); [non-root, no handshake: S(b+1)]
+        //   serial step:    y(b), pc(b); P(b+1); (S(b+1) at the start of the next step)
+        auto pipe_at = [&](uint32_t b) {
+            return !pipe_none && b + 1 < num_blocks &&
+                   (!pipe_tail_only || x_block_depth >= 3 || b + x_block_depth >= num_blocks);
+        };
+        bool s_landed = false;
+        if (num_blocks > 0) {
+            send_partial(0);
         }
-        if (pipe_at(block_idx)) {
-            send_partial(block_idx + 1);
-            if (rank == 0) {
-                recv_s(block_idx + 1);  // the compute folds b+1 before its y-mix of b
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            if (!s_landed) {
+                recv_s(block_idx);
             }
-            store_block(block_idx);
-            if (rank != 0) {
-                recv_s(block_idx + 1);  // no handshake: the root does not wait for this rank to be here
-            }
-            s_landed = true;
-        } else {
-            store_block(block_idx);
-            if (block_idx + 1 < num_blocks) {
+            if (pipe_at(block_idx)) {
                 send_partial(block_idx + 1);
+                const bool early = (rank == 0 && !root_tail_first) || (rank != 0 && schedule == SCHED_S_AHEAD);
+                if (early) {
+                    recv_s(block_idx + 1);
+                }
+                store_block(block_idx);
+                if (!early) {
+                    recv_s(block_idx + 1);
+                }
+                s_landed = true;
+            } else {
+                store_block(block_idx);
+                if (block_idx + 1 < num_blocks) {
+                    send_partial(block_idx + 1);
+                }
+                s_landed = false;
             }
-            s_landed = false;
+        }
+    } else if constexpr (schedule == SCHED_SERIAL) {
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            send_partial(block_idx);
+            recv_s(block_idx);
+            store_block(block_idx);
+        }
+    } else {
+        if (num_blocks > 0) {
+            send_partial(0);
+        }
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const bool has_next = block_idx + 1 < num_blocks;
+            recv_s(block_idx);
+            if constexpr (schedule == SCHED_PIPE) {
+                if (has_next) {
+                    send_partial(block_idx + 1);
+                }
+            }
+            store_block(block_idx);
+            if constexpr (schedule == SCHED_PIPE_LATE_P) {
+                if (has_next) {
+                    send_partial(block_idx + 1);
+                }
+            }
         }
     }
     noc_async_atomic_barrier();

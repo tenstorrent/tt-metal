@@ -71,8 +71,9 @@ def test_mhc_pre_perf_inproc(device, monkeypatch):
                         )
                         ttnn.synchronize_device(device)
                         ns += _read_ns(device)
-                    for t in (y, post, comb):
-                        assert torch.isfinite(ttnn.to_torch(t)).all()
+                    if "ABLATE" not in os.environ.get("MHC_PRE_KERNEL_DEFINES", ""):  # ablated outputs are garbage
+                        for t in (y, post, comb):
+                            assert torch.isfinite(ttnn.to_torch(t)).all()
                 rows.append((f"{x_shape[-2]}x{x_shape[-1] // 4}", dt_name, knob, ns))
     for r in rows:
         med = sorted(r[3])[len(r[3]) // 2] / 1000 if r[3] else float("nan")

@@ -1,0 +1,76 @@
+generated/dev1/profiler/.logs/profile_log_device.csv run 2048: wall 142.8 us, critical core (1, 2)
+-- BRISC: KERNEL p50 129.1 max 142.3 us (100 cores)
+   w_w_recv         exec    1  p50   37.69  max   59.27  crit   56.11  cores 100
+   w_w_share_wait   exec    1  p50   24.77  max   71.77  crit   10.24  cores 100
+   w_partial_wait   exec    1  p50   20.89  max   38.01  crit   12.63  cores 100
+   w_gather_wait    exec    1  p50   11.38  max   15.15  crit   11.44  cores 20
+   w_y_write        exec    6  p50   10.55  max   25.14  crit   20.12  cores 100
+   w_s_recv         exec    1  p50    6.89  max   15.60  crit    0.00  cores 80
+   w_y_wait         exec    6  p50    6.81  max   14.20  crit   11.69  cores 100
+   w_w_split_wait   exec    1  p50    6.27  max    6.35  crit    5.05  cores 100
+   w_bias           exec    1  p50    6.13  max   24.79  crit    8.93  cores 100
+   w_combined_wait  exec    1  p50    2.28  max    2.29  crit    2.28  cores 20
+   w_w_send         exec    1  p50    1.57  max    7.81  crit    1.61  cores 100
+   w_s_send         exec    1  p50    0.50  max    0.61  crit    0.38  cores 20
+   w_pc_write       exec    1  p50    0.44  max    1.45  crit    0.41  cores 20
+   w_partial_send   exec    1  p50    0.31  max    3.44  crit    0.20  cores 100
+   w_coef_reserve   exec    1  p50    0.04  max    0.04  crit    0.04  cores 100
+   w_pc_wait        exec    1  p50    0.03  max    0.03  crit    0.03  cores 20
+   max markers 46/250 on (6, 11); last zone end at 100% of its KERNEL span
+-- NCRISC: KERNEL p50 81.6 max 98.8 us (100 cores)
+   r_x_issue        exec    4  p50   35.67  max   88.32  crit   14.81  cores 100
+   r_x_barrier      exec    4  p50   20.88  max   75.56  crit   29.77  cores 100
+   r_w_land         exec    1  p50    3.23  max   37.91  crit    0.38  cores 26
+   r_w_issue        exec    1  p50    0.72  max    3.99  crit    0.85  cores 100
+   r_w_land_poll    exec    1  p50    0.06  max    0.06  crit    0.00  cores 74
+   r_x_reserve      exec    1  p50    0.04  max    0.04  crit    0.04  cores 100
+   max markers 22/250 on (14, 11); last zone end at 100% of its KERNEL span
+-- TRISC_0: KERNEL p50 127.1 max 141.0 us (100 cores)
+   c_w_publish      exec    1  p50   40.78  max   61.13  crit   58.11  cores 100
+   c_w_split        exec    1  p50   30.43  max   77.83  crit   15.13  cores 100
+   c_proj           exec    4  p50   14.21  max   14.29  crit   11.39  cores 100
+   c_gather_wait    exec    1  p50   12.12  max   15.87  crit   12.17  cores 20
+   c_ymix           exec    1  p50   12.08  max   27.52  crit   23.68  cores 100
+   c_sumsq          exec    4  p50   10.92  max   10.97  crit    8.49  cores 100
+   c_owned          exec    1  p50    6.64  max    6.66  crit    6.64  cores 20
+   c_coef_wait      exec    1  p50    4.48  max   16.45  crit    0.61  cores 100
+   c_combine        exec    1  p50    2.06  max    2.06  crit    2.05  cores 20
+   c_sq_reduce      exec    1  p50    0.88  max    0.89  crit    0.88  cores 100
+   c_pre            exec    1  p50    0.59  max    0.60  crit    0.23  cores 100
+   c_x_wait         exec    4  p50    0.12  max   19.57  crit    0.13  cores 100
+   max markers 42/250 on (6, 11); last zone end at 100% of its KERNEL span
+-- TRISC_1: KERNEL p50 127.2 max 141.4 us (100 cores)
+   c_proj           exec    4  p50   55.75  max   74.47  crit   68.65  cores 100
+   c_w_split        exec    1  p50   30.63  max   78.02  crit   15.68  cores 100
+   c_combine        exec    1  p50   13.98  max   17.74  crit   14.03  cores 20
+   c_ymix           exec    1  p50   12.32  max   27.76  crit   23.93  cores 100
+   c_sumsq          exec    4  p50   11.62  max   11.69  crit    9.20  cores 100
+   c_owned          exec    1  p50    7.07  max    7.17  crit    6.94  cores 20
+   c_pre            exec    1  p50    5.94  max   17.91  crit    0.92  cores 100
+   c_sq_reduce      exec    1  p50    1.22  max    1.23  crit    1.22  cores 100
+   c_x_wait         exec    4  p50    0.06  max    0.07  crit    0.06  cores 100
+   c_w_publish      exec    1  p50    0.02  max    0.03  crit    0.02  cores 100
+   c_gather_wait    exec    1  p50    0.01  max    0.01  crit    0.01  cores 20
+   c_coef_wait      exec    1  p50    0.01  max    0.01  crit    0.01  cores 100
+   max markers 42/250 on (6, 11); last zone end at 100% of its KERNEL span
+-- TRISC_2: KERNEL p50 127.1 max 140.9 us (100 cores)
+   c_sumsq          exec    4  p50   48.19  max   67.87  crit   63.56  cores 100
+   c_w_split        exec    1  p50   30.44  max   77.84  crit   15.07  cores 100
+   c_proj           exec    4  p50   15.61  max   28.58  crit   12.33  cores 100
+   c_combine        exec    1  p50   13.84  max   17.60  crit   13.89  cores 20
+   c_ymix           exec    1  p50   12.18  max   27.62  crit   23.79  cores 100
+   c_owned          exec    1  p50    8.16  max    8.26  crit    8.03  cores 20
+   c_pre            exec    1  p50    6.87  max   18.84  crit    0.91  cores 100
+   c_sq_reduce      exec    1  p50    2.99  max    2.99  crit    2.38  cores 100
+   c_w_publish      exec    1  p50    0.16  max    0.17  crit    0.16  cores 100
+   c_x_wait         exec    4  p50    0.06  max    0.07  crit    0.06  cores 100
+   c_gather_wait    exec    1  p50    0.01  max    0.01  crit    0.01  cores 20
+   c_coef_wait      exec    1  p50    0.01  max    0.01  crit    0.01  cores 100
+   max markers 42/250 on (6, 11); last zone end at 100% of its KERNEL span
+per core-row latest KERNEL end: y2:143 y3:142 y4:139 y5:133 y6:135 y7:133 y8:129 y9:129 y10:129 y11:129
+== timeline core (1, 2) (start/dur us) ==
+ NCRISC [0.4..47.1] r_w_issue@0.8+0.8 r_x_issue@1.7+4.3 r_x_issue@6.1+4.4 r_w_land@10.5+0.4 r_x_barrier@10.9+11.8 r_x_issue@22.7+1.5 r_x_barrier@24.3+4.2 r_x_issue@28.5+4.7 r_x_barrier@33.2+9.6 r_x_barrier@42.9+4.1
+ BRISC [0.5..142.8] w_w_share_wait@0.7+10.2 w_w_split_wait@11.0+5.1 w_w_send@16.0+1.6 w_w_recv@17.7+56.1 w_bias@73.8+8.9 w_partial_wait@82.9+12.6 w_gather_wait@95.8+11.4 w_combined_wait@107.3+2.3 w_s_send@109.6+0.4 w_y_wait@110.0+9.9 w_y_write@120.0+16.6 w_y_write@136.7+1.5 w_y_write@138.3+1.0 w_y_wait@139.4+1.0 w_y_write@140.4+0.6 w_y_wait@141.0+0.7 w_y_write@141.7+0.5 w_pc_write@142.3+0.4
+ TRISC_0 [0.4..141.4] c_w_split@0.6+15.1 c_w_publish@15.7+58.1 c_proj@73.9+2.7 c_sumsq@76.7+2.1 c_proj@78.9+2.9 c_sumsq@81.8+2.1 c_proj@84.0+2.9 c_sumsq@86.9+2.1 c_proj@89.1+2.9 c_sumsq@92.1+2.1 c_sq_reduce@94.2+0.9 c_gather_wait@95.1+12.2 c_combine@107.3+2.1 c_coef_wait@109.4+0.6 c_owned@110.1+6.6 c_ymix@117.7+23.7
+ TRISC_1 [0.1..141.5] c_w_split@0.2+15.7 c_proj@16.1+60.4 c_sumsq@76.5+2.3 c_proj@78.8+2.7 c_sumsq@81.6+2.3 c_proj@84.0+2.7 c_sumsq@86.8+2.3 c_proj@89.1+2.8 c_sumsq@91.9+2.3 c_sq_reduce@94.2+1.2 c_combine@95.5+14.0 c_owned@109.6+6.9 c_pre@116.6+0.9 c_ymix@117.5+23.9
+ TRISC_2 [0.5..141.4] c_w_split@0.6+15.1 c_sumsq@16.3+60.5 c_proj@76.8+5.1 c_proj@82.2+4.9 c_proj@87.3+2.1 c_sumsq@89.4+2.7 c_sq_reduce@92.2+2.4 c_combine@94.6+13.9 c_owned@108.6+8.0 c_pre@116.7+0.9 c_ymix@117.6+23.8

@@ -48,6 +48,8 @@ void kernel_main() {
     constexpr bool w_share_before_x = get_compile_time_arg_val(12) != 0;  // land the share before any X read
     constexpr auto x_args = TensorAccessorArgs<13>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_bias_coef = get_compile_time_arg_val(b_args.next_compile_time_args_offset());
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t t_start = get_arg_val<uint32_t>(1);
@@ -59,6 +61,7 @@ void kernel_main() {
     const bool w_share_on_reader = get_arg_val<uint32_t>(7) != 0;  // W_ROLE_SPREAD: this core reads its share
     const uint32_t own_p0 = get_arg_val<uint32_t>(8);              // share [own_p0, own_p1) of the slice
     const uint32_t own_p1 = get_arg_val<uint32_t>(9);
+    const uint32_t b_addr = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t tensor_k_tiles = n_streams * tensor_c_tiles;
     constexpr uint32_t x_block_pages = block_token_tiles * core_k_tiles_max;  // nominal push per block
@@ -75,6 +78,20 @@ void kernel_main() {
             cb_push_back(cb_w_share_landed, 1);
             w_share_pending = false;
         }
+    };
+    // PRELUDE_A (prelude_off_critical_path): hand the share over the moment its reads landed -- a non-blocking
+    // poll of trid 15's outstanding-read counter (one NIU status read) between X page issues, so the token is
+    // not held back by the back-pressured X issue loop (r_x_issue up to 85 us under the full-grid burst).
+    auto poll_w_share = [&]() {
+#ifdef PRELUDE_A
+        if (w_share_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, w_share_trid)) {
+            MaybeDeviceZoneScope("r_w_land_poll");
+            invalidate_l1_cache();
+            cb_reserve_back(cb_w_share_landed, 1);
+            cb_push_back(cb_w_share_landed, 1);
+            w_share_pending = false;
+        }
+#endif
     };
     auto load_x_block = [&](uint32_t block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
@@ -99,6 +116,7 @@ void kernel_main() {
 #ifndef MHC_ABLATE_XREAD
                 noc_async_read_page(row_page + i * tensor_c_tiles + c, x_acc, base + p * x_tile_bytes);
 #endif
+                poll_w_share();
                 if (++i == n_streams) {
                     i = 0;
                     if (++c == core_c_tiles) {
@@ -160,6 +178,18 @@ void kernel_main() {
             const uint32_t i = p - c * n_streams;
             noc_async_read_page(i * tensor_c_tiles + c_start + c, w_acc, w_base + p * w_tile_bytes);
         }
+#ifdef PRELUDE_B_READER
+        // PRELUDE_B_READER: the bias row (row 0 of faces 0 / 1, 2 x 64 B) rides the share's trid 15 on this NoC,
+        // BEHIND the share's reads, into the writer-owned cb_bias_coef (its base: one page, the writer reserves it
+        // at start and pushes it once); the share token then covers it too and the writer only does the fill.
+        {
+            const auto b_acc = TensorAccessor(b_args, b_addr, get_tile_size(cb_bias_coef));
+            const uint32_t bias_l1 = get_write_ptr(cb_bias_coef);
+            constexpr uint32_t face_row_bytes = 16 * sizeof(float);
+            noc_async_read(b_acc.get_noc_addr(0, 0), bias_l1, face_row_bytes);
+            noc_async_read(b_acc.get_noc_addr(0, 256 * sizeof(float)), bias_l1 + 256 * sizeof(float), face_row_bytes);
+        }
+#endif
         noc_async_read_set_trid(0);
         if constexpr (w_share_before_x) {
             land_w_share();

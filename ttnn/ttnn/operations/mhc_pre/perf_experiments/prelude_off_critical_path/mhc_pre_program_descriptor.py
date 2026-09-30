@@ -90,9 +90,6 @@ SEM_W_READY = 3  # W column broadcast: data-ready Counter (one event per W chunk
 # ---- host constants (tunable knobs, single source) ----
 GROUP_CORES_CAP = 32  # flat-root gather cap (cb_gathered grows with group_cores)
 X_BLOCK_DEPTH_DEFAULT = 2  # prefetch depth of cb_x_resident (stall shadow of the combine round trip)
-# Blocks of S held in cb_coef_in (Perf 1, cross-block pipeline): the root multicasts S(b+1) while every rank still
-# holds S(b), with no consumer-ready handshake. Must be 2 (the writer's write-once landing argument).
-COEF_IN_BLOCKS = 2
 # Each X block is read as one NoC burst but published to the compute in this many K-ordered chunks (one NoC
 # transaction id each), so the projection runs under the rest of the burst instead of after it (Refinement 4).
 # 1 = one publish per block (the pre-Refinement-4 behaviour); at most 14 (NoC transaction ids; 15 is the W column share's).
@@ -224,8 +221,16 @@ W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive Mca
 # as MHC_PRE_KERNEL_DEFINES="A=1;B". Unset = no defines (the production program). KERNEL_PERF_ZONES turns on the
 # permanent per-stage MaybeDeviceZoneScope zones (with TT_METAL_DEVICE_PROFILER=1); MHC_ABLATE_* stub a stage's
 # payload for ablation runs (outputs are then garbage).
+# prelude_off_critical_path bench: variant defines (PRELUDE_A / PRELUDE_B_EARLY / PRELUDE_B), "" = baseline.
+PRELUDE_DEFINES = ""
+# bench knob: the W share rides the reader (its X NoC) only on the flipped rows; the other rows read it on the writer.
+PRELUDE_SHARE_FLIPPED_ONLY = False
+# bench knob: callable flip_rows -> set of logical rows that read no W share (None = even split)
+PRELUDE_SHARE_SKIP_ROWS = None
+
+
 def _kernel_defines():
-    defines = []
+    defines = [(d, "1") for d in PRELUDE_DEFINES.split(";") if d]
     for item in os.environ.get("MHC_PRE_KERNEL_DEFINES", "").split(";"):
         if item.strip():
             name, _, value = item.partition("=")
@@ -321,9 +326,7 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_PARTIAL, 2 * bt, fT, f32),
         (CB_GATHERED, G * 2 * bt, fT, f32),
         (CB_COMBINED, 2 * bt, fT, f32),
-        # landed S blocks [mix x bt | sum(x^2) x bt] (group multicast): 2 blocks, S(b+1) lands while S(b) is held
-        # (Perf 1 cross-block pipeline; the handshake-free multicast relies on the second slot, see the writer)
-        (CB_COEF_IN, COEF_IN_BLOCKS * 2 * bt, fT, f32),
+        (CB_COEF_IN, 2 * bt, fT, f32),  # landed S block [mix x bt | sum(x^2) x bt] (group multicast)
         (CB_COMB_COEF, 2 * bt, fT, f32),  # owned rows: [post, comb] row-major output tiles
         (CB_COEF_KEEP, 1, fT, f32),  # owned row: coefficient-major tile, packed then reloaded in place
         (CB_PRE_COLS, n * bt, fT, f32),
@@ -575,10 +578,7 @@ def create_program_descriptor(
     if G > 1:
         for g, gx0, gy0 in groups:
             rnoc = _reader_noc_of(gy0, flip_rows)
-            # No consumer-ready handshake (Perf 1): cb_coef_in holds 2 blocks and the root multicasts S(b+1) only after
-            # gathering every P(b+1), so the landing slot is free and the Flag was reset (see the writer). A Counter
-            # data-ready signal hangs here (its non-posted multicast atomic also waits for the looped-back root's ack).
-            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), handshake=False, sem_ids=[SEM_MCAST_READY])
+            mcast_cfg = ttnn.McastConfig(noc=_other_noc(rnoc), sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
             rect = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -613,6 +613,8 @@ def create_program_descriptor(
     assert len(reader_ct) == 13  # TensorAccessorArgs base in the reader
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
+    reader_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()  # PRELUDE_B_READER: the bias row
+    reader_ct += [CB_BIAS_COEF]
 
     compute_ct = [
         CB_X_RESIDENT,
@@ -657,7 +659,6 @@ def create_program_descriptor(
         CB_W_OWN_SPLIT,
         int(w_presplit),
         X_STREAM_CHUNKS,
-        plan.x_block_depth,  # block schedule (cross-block pipeline)
     ]
 
     writer_ct = [
@@ -683,7 +684,7 @@ def create_program_descriptor(
         CB_W_OWN_SPLIT,
         int(w_presplit),
         CB_W_SHARE_LANDED,
-        plan.x_block_depth,  # block schedule (cross-block pipeline; mirrors the compute)
+        0,  # CT 21 unused
     ]
     assert len(writer_ct) == 22  # MCAST_CT_BASE in the writer
     writer_tail_ct = []
@@ -730,14 +731,24 @@ def create_program_descriptor(
                     w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0, 0], [0, 0, 0, 0]
                 else:
                     # Column share: row y of the column reads / splits / multicasts W tiles [own0, own1).
-                    sizes, starts = _split(n * cc, active_rows)
+                    if PRELUDE_SHARE_SKIP_ROWS:  # bench: the listed rows read no share (the others split it)
+                        live = [r for r in range(active_rows) if r not in PRELUDE_SHARE_SKIP_ROWS(flip_rows)]
+                        lsz, _ = _split(n * cc, len(live))
+                        sizes = [0] * active_rows
+                        for r, sz in zip(live, lsz):
+                            sizes[r] = sz
+                        starts = [sum(sizes[:r]) for r in range(active_rows)]
+                    else:
+                        sizes, starts = _split(n * cc, active_rows)
                     own = [starts[y], starts[y] + sizes[y]]
                     events = sum(1 for sz in sizes if sz > 0) - (1 if sizes[y] > 0 else 0)
-                    share_on_reader = int(W_SHARE_ON_READER and levers)
+                    share_on_reader = int(
+                        W_SHARE_ON_READER and levers and (not PRELUDE_SHARE_FLIPPED_ONLY or rnoc != READER_NOC)
+                    )
                     w_rt = [W_ROLE_SPREAD] + own + [events, share_on_reader]
                     w_mc_rt = list(w_mcast[rnoc].runtime_args(ttnn.CoreCoord(x, y)))
                 reader_rt[rnoc][x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks] + (
-                    [w_tensor.buffer_address(), share_on_reader] + own
+                    [w_tensor.buffer_address(), share_on_reader] + own + [b_tensor.buffer_address()]
                 )
                 mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
                 writer_rt[rnoc][x][y] = (
