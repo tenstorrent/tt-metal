@@ -19,6 +19,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/metal-api.instructions.md @tenstorrent/metalium-api-owners
 .github/instructions/metal-dispatch.instructions.md @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @anashTT @abhullar-tt
 .github/instructions/metal-runtime.instructions.md @tenstorrent/metalium-runtime
+.github/instructions/metal2-host-api.instructions.md @tenstorrent/metalium-api-owners
 .github/instructions/models.instructions.md @uaydonat @yieldthought @cglagovichTT @esmalTT @mtairum
 .github/instructions/nanobind.instructions.md @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra

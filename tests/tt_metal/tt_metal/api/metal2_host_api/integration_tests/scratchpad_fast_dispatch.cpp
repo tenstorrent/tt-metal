@@ -8,7 +8,7 @@
 // program's execution lifetime. These tests use the fast-dispatch UnitMeshCQSingleCardFixture and the
 // MeshWorkload enqueue path (mirror of test_single_dm_l1_write.cpp); the slow-dispatch LaunchProgram
 // counterpart of the first one is ProgramSpecHWTest.ScratchpadWriteReadback in
-// test_program_spec_hw.cpp.
+// integration_tests/scratchpad.cpp.
 //
 // Tests in this file:
 //   - ScratchpadWriteReadback: the scratchpad is real, writable L1 and the framework delivered its
@@ -55,7 +55,7 @@ namespace {
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 
-    // Gen1 only (mirrors test_program_spec_hw.cpp's guard). The scratchpad feature works on both
+    // Gen1 only (mirrors ProgramSpecHWTest's guard). The scratchpad feature works on both
     // gens, but the device-side kernel here uses the Gen1 L1-readback idiom (plain volatile L1
     // write, host-visible after a blocking enqueue).
     if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
