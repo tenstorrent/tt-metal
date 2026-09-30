@@ -559,6 +559,184 @@ _BITEXACT = [
     GoldenSpec("unarypower-fresh", _unary_power, note="x**2"),
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# laneMT corpus extension (2026-09-30): the remaining 32-bit unary rows of
+# sweep_2x2_ops.tsv, so `--golden <op>` is live for every op the streamer can
+# actually drive instead of only the 31 first-wave ones.
+#
+# Most of these are `kind=semantic` rows: ONE node, the production body, no
+# separate hand leg. The equivalence half of the leg is vacuous for them; the
+# ULP-vs-golden half is the entire reason they are here.
+#
+# `domain` stays the MATHEMATICAL domain, as everywhere above -- not the fit
+# range. Setting erf's domain to its [-3, 3] fit range would have suppressed the
+# real erf sign inversion found at x = 11. The kernels' claimed accuracy ranges
+# are separate, reporting-only data: see CLAIMED_ACCURACY_DOMAIN below.
+# ─────────────────────────────────────────────────────────────────────────────
+_CORPUS_UNARY = [
+    # -- bounded / squashing: an out-of-range input must saturate to a finite
+    #    bound. Both the erf and the sigmoid-LUT defects are this class.
+    GoldenSpec("erf", _erf, note="torch.erf; all reals; production generic-sweep row"),
+    GoldenSpec("erfc", _erfc, note="torch.erfc; all reals"),
+    GoldenSpec(
+        "erfinv",
+        _erfinv,
+        domain=(-1.0, 1.0),
+        note="torch.erfinv; DOMAIN (-1,1) -- |x|>=1 is out-of-domain, +-inf/nan expected",
+    ),
+    GoldenSpec("sigmoid", _sigmoid, note="torch.sigmoid; typed production body"),
+    GoldenSpec("sigmoid-fresh", _sigmoid, note="torch.sigmoid; fresh_cpp arm"),
+    GoldenSpec("softsign", _softsign, note="x/(1+|x|); bounded on (-1,1)"),
+    GoldenSpec(
+        "tanhderivative",
+        _tanh_derivative_true,
+        note="TRUE sech^2; the fitted tanh_bw row, not the LUT row",
+    ),
+    GoldenSpec(
+        "tanhderivative-lut",
+        _tanh_derivative_lut,
+        note=(
+            "LICENSED LUT contract 1-t_lut^2 (NOT accurate sech^2) -- the golden IS "
+            "the production table, so a more accurate kernel would fail it"
+        ),
+    ),
+    GoldenSpec("heaviside", _heaviside, note="0/0.5/1; EXACT"),
+    # -- fitted polynomial / series: the erf mechanism (a fit evaluated where it
+    #    has no meaning, with a clamp turning garbage into a plausible constant).
+    GoldenSpec("digamma", _digamma, note="torch.digamma; kernel LUT fit on [0.01, 102]"),
+    GoldenSpec("digamma-fresh", _digamma, note="torch.digamma; fresh_cpp arm"),
+    GoldenSpec("lgamma", _lgamma, note="torch.lgamma; single-tile Stirling, x >= ~0.5"),
+    GoldenSpec(
+        "polygamma",
+        _polygamma,
+        note=f"torch.polygamma(n={POLYGAMMA_ORDER}, x); trigamma",
+    ),
+    GoldenSpec("i0", _i0, note="torch.special.i0; kernel poly valid |x| <= 3.75"),
+    GoldenSpec("i1", _i1, note="torch.special.i1; kernel poly valid |x| <= 3.75"),
+    GoldenSpec("i1-fresh", _i1, note="torch.special.i1; fresh_cpp arm"),
+    GoldenSpec("expm1", _expm1, note="torch.expm1"),
+    GoldenSpec("expm1-fresh", _expm1, note="torch.expm1; fresh_cpp arm"),
+    GoldenSpec("expm1cw", _expm1, note="torch.expm1; the CW refit row"),
+    GoldenSpec("cbrt", _cbrt, note="sign(x)|x|^(1/3)"),
+    GoldenSpec("mish", _mish, note="x*tanh(softplus(x))"),
+    GoldenSpec("selu", _selu, note="selu with the default scale/alpha"),
+    GoldenSpec("softplus", _softplus, note="softplus beta=1 thr=20"),
+    GoldenSpec("xielu", _xielu, note="xielu beta=0.5 alpha_p=alpha_n=1"),
+    # -- setexp/addexp exponent-field writes: the rpow mechanism, where the 8-bit
+    #    field WRAPS instead of saturating and an overflow becomes a finite value.
+    GoldenSpec("unarypower", _unary_power, note="x**2"),
+    GoldenSpec(
+        "sqrtcustom",
+        _sqrt,
+        domain=(0.0, float("inf")),
+        note="torch.sqrt; DOMAIN [0, inf) -- x<0 is out-of-domain (nan)",
+    ),
+    GoldenSpec(
+        "rsqrtcompat",
+        _rsqrt,
+        domain=(0.0, float("inf")),
+        note="torch.rsqrt; DOMAIN (0, inf) -- 0 is the pole, x<0 out-of-domain",
+    ),
+    GoldenSpec("fmod", _fmod, note="fmod(x,2.0)"),
+    GoldenSpec("remainder", _remainder, note="remainder(x,2.0)"),
+    # -- LUT / piecewise.
+    GoldenSpec("clamp", _clamp, note="clamp(x,-1,1); EXACT piecewise-linear"),
+    GoldenSpec("clamp-fresh", _clamp, note="clamp(x,-1,1); fresh_cpp arm"),
+    GoldenSpec("hardtanh", _hardtanh, note="clamp(x,-1,1); EXACT piecewise-linear"),
+    GoldenSpec("hardmish", _hardmish, note="x*clamp(0.5x+1,0,1)"),
+    GoldenSpec("hardshrink", _hardshrink, note="hardshrink lambda=0.5"),
+    GoldenSpec("softshrink", _softshrink, note="softshrink lambda=0.5"),
+    GoldenSpec("prelu", _prelu, note=f"x if x>=0 else {PRELU_SLOPE}*x; EXACT"),
+    # -- exact.
+    GoldenSpec("identity", _identity, note="x; EXACT (expect 0 ULP)"),
+]
+
+# The kernels' CLAIMED accuracy ranges, lifted from helpers/sfpu_domains.py
+# _OP_DOMAIN_REGISTRY (the stimulus interval the harness itself grades each op
+# over) and the kernel headers. REPORTING ONLY -- nothing in the ULP path reads
+# it, and it is deliberately NOT GoldenSpec.domain.
+#
+# It exists so a stratum can be attributed honestly. Two of the five strata
+# (+11.0 and +3.1965e38) sit outside almost every one of these intervals, and
+# sfpu_domains.py says plainly of the gamma family that a probe at their
+# boundary "produces a failure that is neither a bug nor fixable". A fit
+# degrading where it never claimed anything is OUT-OF-CLAIM, not a defect; a
+# wrong sign, a wrong constant, or a wrapped exponent is a defect wherever it
+# lands -- which is why the erf finding at x = 11 was real.
+CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
+    "erf": (-3.0, 3.0),
+    "erfc": (-3.0, 3.0),
+    "erfinv": (-0.99, 0.99),
+    "sigmoid": (-8.0, 8.0),
+    "sigmoid-fresh": (-8.0, 8.0),
+    "sigmoidlut-fresh": (-8.0, 8.0),
+    "softsign": (-5.0, 5.0),
+    "tanhderivative": (-5.0, 5.0),
+    "tanhderivative-lut": (-3.0, 3.0),
+    "tanhderivlut-fresh": (-3.0, 3.0),
+    "heaviside": (-5.0, 5.0),
+    "digamma": (0.1, 50.0),
+    "digamma-fresh": (0.1, 50.0),
+    "lgamma": (1.0, 15.0),
+    "polygamma": (0.5, 10.0),
+    "i0": (-3.75, 3.75),
+    "i1": (-3.75, 3.75),
+    "i1-fresh": (-3.75, 3.75),
+    "expm1": (-5.0, 5.0),
+    "expm1-fresh": (-5.0, 5.0),
+    "expm1cw": (-5.0, 5.0),
+    "expm1cw-fresh": (-5.0, 5.0),
+    "cbrt": (-27.0, 27.0),
+    "cbrt-fresh": (-27.0, 27.0),
+    "mish": (-5.0, 5.0),
+    "selu": (-5.0, 5.0),
+    "softplus": (-5.0, 30.0),
+    "softplus-fresh": (-5.0, 30.0),
+    "xielu": (-5.0, 5.0),
+    "xielu-fresh": (-5.0, 5.0),
+    "unarypower": (-4.0, 4.0),
+    "unarypower-fresh": (-4.0, 4.0),
+    "sqrtcustom": (0.0, 100.0),
+    "rsqrtcompat": (1e-2, 100.0),
+    "fmod": (-5.0, 5.0),
+    "fmod-fresh": (-5.0, 5.0),
+    "remainder": (-5.0, 5.0),
+    "remainder-fresh": (-5.0, 5.0),
+    "clamp": (-2.0, 2.0),
+    "clamp-fresh": (-2.0, 2.0),
+    "hardtanh": (-2.0, 2.0),
+    "hardtanh-fresh": (-2.0, 2.0),
+    "hardmish": (-4.0, 4.0),
+    "hardmish-fresh": (-4.0, 4.0),
+    "hardshrink": (-4.0, 4.0),
+    "hardshrink-fresh": (-4.0, 4.0),
+    "softshrink": (-5.0, 5.0),
+    "softshrink-fresh": (-5.0, 5.0),
+    "softsign-fresh": (-5.0, 5.0),
+    "prelu": (-5.0, 5.0),
+    "identity": (-10.0, 10.0),
+    "geluappx-fresh": (-5.0, 5.0),
+    "rpow": (-10.0, 10.0),
+    "rdiv": (-10.0, 10.0),
+    "erf-fresh": (-3.0, 3.0),
+    "erfc-fresh": (-3.0, 3.0),
+    "erfinv-fresh": (-0.99, 0.99),
+}
+
+
+def claim_status(op: str, x: float) -> str:
+    """Is `x` inside the kernel's DOCUMENTED accuracy range? Reporting only.
+
+    'no-claim' means no interval is recorded for the op -- which is a statement
+    about this table, not a licence.
+    """
+    claim = CLAIMED_ACCURACY_DOMAIN.get(op)
+    if claim is None:
+        return "no-claim"
+    lo, hi = claim
+    return "in-claim" if lo <= x <= hi else "out-of-claim"
+
+
 # Ops with no honest single torch reference on this streamer config (stated, not faked).
 _UNSUPPORTED = {
     "absint32": "integer abs on the int32 view — golden is exact-int, not a float ULP; "
@@ -570,10 +748,15 @@ _UNSUPPORTED = {
     "unarycomp-fresh": "unary compare predicate (0/1) — exact boolean; no ULP surface",
     "castfp32tofp16a": "Float32/dest_acc=Yes cast (fp32 dst, distinct format path) — "
     "bit-lattice cast proven exact by laneCT 2^32; not a torch-ULP surface",
+    # laneMT corpus extension: same reasons as their -fresh siblings above.
+    "unarycomp": "UnaryGe predicate (0/1) — exact boolean; no ULP surface",
+    "logicalnot": "LogicalNotUnary predicate (0/1) — exact boolean; no ULP surface",
+    "isinfisnan": "Isinf predicate (0/1) — exact boolean; no ULP surface",
+    "unaryshift": "integer LeftShift on the int32 view — exact-int, not float ULP",
 }
 
 REGISTRY: dict[str, GoldenSpec] = {}
-for _s in _DIVERGENT + _BITEXACT:
+for _s in _DIVERGENT + _BITEXACT + _CORPUS_UNARY:
     REGISTRY[_s.op] = _s
 for _op, _why in _UNSUPPORTED.items():
     REGISTRY[_op] = GoldenSpec(

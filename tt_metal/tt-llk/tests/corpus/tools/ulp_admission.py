@@ -11,7 +11,19 @@ _CLASS_RE = re.compile(r"[a-z][a-z0-9_]*")
 IEEE_BF16_CLASSES = frozenset(
     {"nan", "pos_inf", "neg_inf", "pos_zero", "neg_zero", "pos_subnormal", "neg_subnormal"}
 )
-UNARY_DOMAIN_PARTITION_OPS = frozenset({"erfinv-fresh"})
+# Ops whose GOLDEN carries a MATHEMATICAL domain, so their class partition gains the
+# three domain classes. Not fit ranges -- a fit range here would license a real defect
+# outside it (the erf sign inversion at x = 11 would have been silenced). The kernels'
+# documented accuracy ranges live in threeway_golden.CLAIMED_ACCURACY_DOMAIN and are
+# reporting-only.
+UNARY_DOMAIN_PARTITION_OPS = frozenset(
+    {
+        "erfinv-fresh",
+        "erfinv",  # |x| >= 1 undefined
+        "sqrtcustom",  # x < 0 undefined
+        "rsqrtcompat",  # x <= 0 undefined / pole
+    }
+)
 
 
 def unary_class_names(domain_partition: bool) -> frozenset[str]:

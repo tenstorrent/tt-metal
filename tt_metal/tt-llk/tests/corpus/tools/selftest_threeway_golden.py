@@ -117,7 +117,57 @@ def case_faithful():
         "softsign-fresh": MathOperation.Softsign,
         "softplus-fresh": MathOperation.Softplus,
         "xielu-fresh": MathOperation.Xielu,
+        # laneMT corpus extension: EVERY newly registered checkable op, so the
+        # extension is proven against the in-repo scalar oracle rather than
+        # reviewed by eye. A new GoldenSpec that is not in this map fails
+        # `corpus-coverage` below.
+        "erf": MathOperation.Erf,
+        "erfc": MathOperation.Erfc,
+        "erfinv": MathOperation.Erfinv,
+        "sigmoid": MathOperation.Sigmoid,
+        "sigmoid-fresh": MathOperation.Sigmoid,
+        "softsign": MathOperation.Softsign,
+        "tanhderivative": MathOperation.TanhDerivative,
+        "tanhderivative-lut": MathOperation.TanhDerivativeLut,
+        "heaviside": MathOperation.Heaviside,
+        "digamma": MathOperation.Digamma,
+        "digamma-fresh": MathOperation.Digamma,
+        "lgamma": MathOperation.Lgamma,
+        "polygamma": MathOperation.Polygamma,
+        "i0": MathOperation.I0,
+        "i1": MathOperation.I1,
+        "i1-fresh": MathOperation.I1,
+        "expm1": MathOperation.Expm1,
+        "expm1-fresh": MathOperation.Expm1,
+        "expm1cw": MathOperation.Expm1Cw,
+        "cbrt": MathOperation.Cbrt,
+        "mish": MathOperation.Mish,
+        "selu": MathOperation.Selu,
+        "softplus": MathOperation.Softplus,
+        "xielu": MathOperation.Xielu,
+        "unarypower": MathOperation.UnaryPower,
+        "sqrtcustom": MathOperation.SqrtCustom,
+        "rsqrtcompat": MathOperation.RsqrtCompat,
+        "fmod": MathOperation.Fmod,
+        "remainder": MathOperation.Remainder,
+        "clamp": MathOperation.Clamp,
+        "clamp-fresh": MathOperation.Clamp,
+        "hardtanh": MathOperation.Hardtanh,
+        "hardmish": MathOperation.Hardmish,
+        "hardshrink": MathOperation.Hardshrink,
+        "softshrink": MathOperation.Softshrink,
+        "prelu": MathOperation.Prelu,
+        "identity": MathOperation.Identity,
     }
+    # Every op registered by the laneMT corpus extension must be checked here.
+    # Without this a new GoldenSpec could ship unverified, which is exactly the
+    # failure mode the module's soundness argument rules out.
+    corpus_ops = {spec.op for spec in tg._CORPUS_UNARY}
+    check(
+        "corpus-coverage",
+        corpus_ops <= set(op_to_mathop),
+        f"unverified corpus specs: {sorted(corpus_ops - set(op_to_mathop))}",
+    )
     u = _edge_tile()
     for op, mathop in op_to_mathop.items():
         spec = tg.get_spec(op)
