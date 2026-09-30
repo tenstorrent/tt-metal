@@ -132,20 +132,30 @@ implementation.
 | mean seconds per task | 163.9 |
 | serving duration | 9 h 20 m |
 
-The accuracy check passes, and so does acceptance. This is the first external accuracy result
-for this mesh: unlike the per-layer PCC and the qualitative suite it compares against a
-published number rather than against a local reference implementation, so it bounds the
-end-to-end quality cost of bfloat4_b projections and a bfloat8_b decode collective at roughly
-five percent of the published GPQA score.
+The harness recorded the accuracy check as a pass and acceptance as a pass. **That pass does
+not hold, and this run does not establish an accuracy result.** The threshold is 0.95 x 89.2 =
+84.74 and the score is 84.8485, a margin of 0.11 points against an `exact_match_stderr` of 2.56
+points, so it sits 0.04 standard errors above the line. Three of the 168 credited samples commit
+no answer at all, and excluding any one of them fails the check: 0.9456 at one, 0.9399 at two,
+0.9342 at three. Earlier preserved full runs of this model on this mesh scored 81.31 and 81.82.
+A single stochastic run at temperature 1.0 cannot settle this gate in either direction.
 
 Three things about the run were checked rather than assumed, because an earlier run in this
 project reported a passing score of 35.0 while the server was dead for 33 of 40 prompts, its
 error sentinels letter-matched into spurious credit:
 
-- No sample carries `__INFERENCE_ERROR__` or `__PARTIAL_OUTPUT__`. Seven of the 198 lack a
-  closed `</think>`, but those are reasoning traces that ran into the 65536-token generation
-  cap at 74k to 104k characters; five still carry an earlier `\boxed` and score 1, two score 0,
-  and one of those has no `\boxed` at all. They are graded honestly rather than credited.
+- No sample carries `__INFERENCE_ERROR__` or `__PARTIAL_OUTPUT__`, so the sentinel guard that
+  exists because of that earlier run reports zero failures. **The guard does not cover this
+  run's actual defect.** Searching instead for the answer form `boxed{`, five of the 198
+  responses commit no answer, and three of those five are scored correct: doc_ids 48 and 71,
+  cap-truncated mid-sentence at 92,758 and 103,840 characters, and doc_id 127 at 11,218
+  characters. The task extractor synthesises the choice text as an alternative to the letter,
+  which is how a trace with no committed answer earns one. The generation cap is 32768 tokens,
+  set in tt-inference-server `f81066cc`. Two of the seven responses lacking a closed `</think>`
+  do carry a real `boxed{` answer, doc_ids 99 and 107, and both score-0 responses, 79 and 147,
+  lack one. An earlier revision of this section reported these counts wrongly because it matched
+  the bare substring `boxed`, which also occurs in the prompt instruction echoed inside the
+  reasoning text.
 - The `tt_triage` capture is routine, not a hang record. Its only matches for timeout, fatal
   error or engine death are an unknown-environment-variable warning for `VLLM_RPC_TIMEOUT` and
   `EngineCore loop active`; the log ends on `EngineCore waiting for work` one second before the
@@ -157,8 +167,10 @@ The intermittent `binary_ng` device hang that ended three earlier serving runs d
 nine hours of continuous serving. That is consistent with the fabric-and-topology mismatch
 having been the cause of those hangs rather than a separate defect, though it does not prove it.
 
-The run produced no benchmark, spec-test or agentic block, so it is an accuracy and stability
-result only; the throughput figures below remain local measurements.
+The run produced no benchmark, spec-test or agentic block. What it does establish is
+stability: nine hours of continuous serving at TP=8 with the engine alive and idle at the end.
+It does not establish accuracy. The mandatory text-LLM gates `meta_ifeval` and `meta_gpqa_cot`
+were not run and no linked issue covers their absence.
 
 The report metadata labels the implementation `qwen36` and the model id
 `id_qwen36_Qwen3.8-27B_t3k`. That is a stale `impl:` key on the spec entry, not a wrong code
