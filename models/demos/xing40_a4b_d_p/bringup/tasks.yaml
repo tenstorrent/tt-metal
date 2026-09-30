@@ -1800,18 +1800,20 @@ tasks:
   - models/demos/xing40_a4b_d_p/bringup/hooks.py
   - ttnn/ttnn/bringup
   brief:
-    details: 'Baseline (X.1, rung last, chunk 51200->56320, 40 layers, 4x2): 1735.1 ms device; attention 1104.2 ms (64%). Owner pick: run the SDPA (ttnn.bringup.ring_mla
-      fork, tt/attention.py) matmuls at MathFidelity.HiFi2 instead of HiFi4; this is an explicit owner exception to rule 7 for the SDPA only (every other
-      matmul stays HiFi4). Keep fp32 dest / the streaming path as now. With HiFi2 re-tune the SDPA program config (q_chunk / k_chunk, L1 fit) if it now
-      allows larger chunks, and measure. Frozen tests must pass unchanged (never edit a frozen test or its limits); if the change cannot pass them, stop
-      and report the measured numbers. A fork change goes behind an option whose default keeps the current behaviour (skill bringup-fork-op), with fork
-      test cases for the new option. Keep the old path selectable behind a switch. Report the measured before/after per op (BRINGUP_PROFILE_OPS=1 profile).'
+    details: 'Baseline (X.1, rung last, chunk 51200->56320, 40 layers, 4x2): 1735.1 ms device; attention 1104.2 ms (64%). Owner pick (final, 19:30): HiFi2
+      only, no other fidelity; the frozen C.moe.attention test is dropped from this gate by the owner on end-to-end numbers (HiFi2 fails its layer-2 row-norm
+      limit). Owner pick: run the SDPA (ttnn.bringup.ring_mla fork, tt/attention.py) matmuls at MathFidelity.HiFi2 instead of HiFi4; this is an explicit
+      owner exception to rule 7 for the SDPA only (every other matmul stays HiFi4). Keep fp32 dest / the streaming path as now. With HiFi2 re-tune the SDPA
+      program config (q_chunk / k_chunk, L1 fit) if it now allows larger chunks, and measure. Frozen tests must pass unchanged (never edit a frozen test
+      or its limits); if the change cannot pass them, stop and report the measured numbers. A fork change goes behind an option whose default keeps the
+      current behaviour (skill bringup-fork-op), with fork test cases for the new option. Keep the old path selectable behind a switch. Report the measured
+      before/after per op (BRINGUP_PROFILE_OPS=1 profile).'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attention.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attention.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
-      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1
+      TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_attention: < 1050
       device_ms_total: < 1700
