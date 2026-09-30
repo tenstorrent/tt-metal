@@ -30,9 +30,7 @@ constexpr uint32_t FACE_ELEMS = FACE_HW * FACE_HW;
 // Half-tile column-broadcast expansion: every element (rho, gamma) of half `half` (gamma in
 // [16*half, 16*half + 16)) of the fp32 tile at dst_tile_addr becomes raw(rho, col) (col < 32).
 // The half is two contiguous faces (2*fh + half, fh = row half), each 16 rows x 16 words; one raw load per
-// row feeds 16 unrolled word stores (no per-element address math, no per-row helper call). Software-pipelined
-// (Perf 2, coef_prefetch): the load of face row r+1 is issued before the 16 stores of row r, so the stores do not
-// stall on every row's load-use (measured 13.3 -> 11.6 us per n = 4 set on Blackhole).
+// row feeds 16 unrolled word stores (no per-element address math, no per-row helper call).
 FORCE_INLINE void expand_half(uint32_t raw_tile_addr, uint32_t col, uint32_t dst_tile_addr, uint32_t half) {
 #pragma GCC unroll 1
     for (uint32_t fh = 0; fh < 2; ++fh) {
@@ -40,20 +38,14 @@ FORCE_INLINE void expand_half(uint32_t raw_tile_addr, uint32_t col, uint32_t dst
                                                  (2 * fh + col / FACE_HW) * FACE_ELEMS + (col % FACE_HW);
         volatile tt_l1_ptr uint32_t* dst =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile_addr) + (2 * fh + half) * FACE_ELEMS;
-        uint32_t bits = src[0];
 #pragma GCC unroll 1
-        for (uint32_t r = 1; r < FACE_HW; ++r) {
-            const uint32_t next_bits = src[r * FACE_HW];
+        for (uint32_t r = 0; r < FACE_HW; ++r) {
+            const uint32_t bits = src[r * FACE_HW];
 #pragma GCC unroll 16
             for (uint32_t w = 0; w < FACE_HW; ++w) {
                 dst[w] = bits;
             }
             dst += FACE_HW;
-            bits = next_bits;
-        }
-#pragma GCC unroll 16
-        for (uint32_t w = 0; w < FACE_HW; ++w) {
-            dst[w] = bits;
         }
     }
 }

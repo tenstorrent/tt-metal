@@ -46,6 +46,7 @@ FORCE_INLINE void sem_write(uint32_t addr, uint32_t v) { *reinterpret_cast<volat
 
 struct Blk {
     uint32_t row, col_start, valid;
+    bool first_of_segment;
 };
 
 // Block sequence of one core's unit range (segments -> blocks of B columns), same derivation on every RISC.
@@ -63,7 +64,7 @@ struct BlockIter {
             idx = 0;
         }
         const uint32_t b = idx++;
-        return Blk{seg.row, seg.col0 + b * B, mhc_post::block_valid_col_tiles(seg.col_tiles, B, b)};
+        return Blk{seg.row, seg.col0 + b * B, mhc_post::block_valid_col_tiles(seg.col_tiles, B, b), b == 0};
     }
 };
 }  // namespace
@@ -183,19 +184,15 @@ void kernel_main() {
             coefs(post_acc, comb_acc);
         const uint8_t help_noc = 1 - noc_index;  // the reader's NoC (dynamic-NoC mode when read_help)
 
-        // Coefficient loads (Perf 2, coef_prefetch: EAGER look-ahead): segment 0's set up front, then segment s+1's
-        // as soon as set s's job is finished and cb_coef_bcast has room for a whole set (non-blocking check — the
-        // event loop never blocks on a reserve; COEF_DEPTH = 2 sets in flight). The former schedule started set
-        // s+1 only after writing segment s's first output block, which stalled row-straddling cores on their second
-        // set (measured compute_wait_coef 7.8 us at T640 C1792, 15.3 us on the slowest T1280 C4096 core; eager:
-        // T512 C2560 83.3 -> 71.5 us, T1024 C1792 113.8 -> 108.5 us). The look-ahead walker has the same derivation.
-        // With read help the set is expanded one term per event-loop pass; without, in one go (it then has nothing
-        // to interleave with, and a set that lands sooner feeds short segments sooner).
-        constexpr uint32_t num_coef_tiles = n * coef_tiles_per_stream;
-        mhc_post::SegmentWalker ahead = walker;  // non-empty: the host gives every core >= 1 unit
-        auto coef_pending = [&]() { return coefs.active() || !ahead.done(); };
+        // Coefficient loads: segment 0's set up front, segment s+1's right after segment s's first output block
+        // (look-ahead walker, same derivation). With read help the set is expanded one term per event-loop pass;
+        // without,
+        // in one go (it then has nothing to interleave with, and a set that lands sooner feeds short segments sooner).
+        mhc_post::SegmentWalker ahead = walker;
+        uint32_t loads_pending = 1;  // walker is non-empty: the host gives every core >= 1 unit
         auto coef_progress = [&]() {
-            if (!coefs.active() && !ahead.done() && cb_pages_reservable_at_back(cb_coef_bcast, num_coef_tiles)) {
+            if (!coefs.active() && loads_pending > 0) {
+                --loads_pending;
                 MaybeDeviceZoneScope("writer_coef_start");  // raw post / comb read + barrier
                 coefs.start(ahead.next().row);
             }
@@ -219,7 +216,7 @@ void kernel_main() {
         }
         uint32_t helped_k = help_from;  // next helped block index
         const uint32_t f_base = get_write_ptr(cb_f);
-        while (!wr.done() || (read_help && !rh.done()) || coef_pending()) {
+        while (!wr.done() || (read_help && !rh.done()) || coefs.active() || loads_pending) {
             if constexpr (read_help) {
                 if (!rh.done() && sem_read(rd_go) >= helped_k + 1) {
                     {
@@ -250,8 +247,11 @@ void kernel_main() {
                     noc_async_write_barrier();
                 }
                 cb_pop_front(cb_out, n * B);
+                if (p.first_of_segment && !ahead.done()) {
+                    ++loads_pending;  // next segment's set, ahead of compute
+                }
             }
-            if (coef_pending()) {
+            if (coefs.active() || loads_pending) {
                 coef_progress();
             }
         }

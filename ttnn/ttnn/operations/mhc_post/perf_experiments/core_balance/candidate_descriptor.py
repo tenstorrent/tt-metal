@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""mhc_post — ProgramDescriptor (regime `flat_stream`, see op_design.md Blocking Model).
+"""core_balance candidate: mhc_post ProgramDescriptor + dynamic tail pool.
+
+Original doc: mhc_post — ProgramDescriptor (regime `flat_stream`, see op_design.md Blocking Model).
 
 Flattened (token-tile row r, column tile c) units, r-major, split contiguously over the full compute
 grid (`split_work_to_cores(..., row_wise=True)`). Per core: segments (one token row each), blocks of
@@ -59,24 +61,35 @@ HELP_FP32_STREAMS = False
 HELP_FROM_BLOCK = 1  # help from block 0 measured slower (it delays the writer's first coefficient set)
 SEM_RD_GO = 0  # reader -> helper: window of block k reserved (monotonic block counter)
 SEM_RD_DONE = 1  # helper -> reader: F of block k landed
-# Row-weighted work split (Perf 2, core_balance): per-core DRAM service is uneven by logical grid row (the
-# first-block reads of the low rows land up to ~40 us later than the high rows'; measured per-core walls at T640
-# C7168 bf16 ~210 us on rows 0-1 vs ~175 us on row 9), so the uniform split left the high rows idle at the end.
-# Weight 1 + ROW_WEIGHT * (y - y_mid) / (rows - 1) per core; measured (Blackhole p150, 110 cores, bf16, 3 cards):
-# T640 C1792 67.3 -> 63.2 us, T1280 C4096 245.4 -> 232.1 us, T1024 C7168 381 -> 346 us, T640 C4096 149 -> 135 us,
-# flat at worst (T256 C1792 +1%, T2048 C4096 +0.3%). 0.08 / 0.12 / 0.20 / 0.24 measured worse overall than 0.16.
-# Dynamic balancing (NoC-atomic tail claiming, work stealing) and ramped first blocks measured slower.
-ROW_WEIGHT = 0.16
-# Carve-out (narrow, measured): float32 residual streams with a bfloat16 sublayer keep the uniform split. Measured
-# with the Perf-2 kernels (Blackhole p150, 2 runs each, uniform -> weighted): X fp32 / F bf16 T1000 C7168 679.5 ->
-# 705.1 us (+3.8%; +9.4% in the core_balance session), T1000 C1792 178.1 -> 185.9 us (+4.4%). The same dtype pair
-# gains at T640 (C1792 -6.8%, C7168 -1.8%), but no predicate separates those cells from the regressions, so the
-# pair keeps the uniform split. fp32 / fp32 takes the weighted split (-6.5% T640 C1792, -1.3..-1.6% C7168, T1000
-# C1792 +0.2% flat), and so does X bf16 / F fp32 (T640 C7168 264.9 -> 260.1 us).
-ROW_WEIGHT_MIXED_FP32_STREAMS = 0.0
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
+CB_META_C = 4  # dynamic pool: claimed chunk ids, reader -> compute (one uint32 per chunk, 0 = end)
+CB_META_W = 5  # dynamic pool: claimed chunk ids, reader -> writer
+SEM_CLAIM = 2  # global chunk counter (only the copy on the counter core is used)
+SEM_RET = 3  # local landing slot of the atomic's returned old value
+META_PAGE = 16
+META_DEPTH = 4
+CB_SCAN = 6  # pool_mode 2: reader-private scratch, one 16 B slot per queue (counter scan)
 
-# The writer loads segment s+1's set while compute still holds segment s's (eager look-ahead): two sets in flight.
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class BalanceConfig:
+    pool_frac: float = 0.0  # mode 1: fraction of all units in the global pool; mode 2: fraction of each core's range
+    pool_mode: int = 1  # 1 = one global tail pool, 2 = per-core tail queues (owner first, then stealing)
+    help_dynamic: bool = True  # the BRISC read help also covers claimed chunks
+    stride: int | None = None  # mode 2 victim stride (coprime with the core count); None = auto
+    steal_min: int = 2  # mode 2: a victim queue must have >= this many chunks left
+    chunk_cols: int | None = None  # columns per claimed chunk (<= B); None = B
+    coef_depth: int = COEF_DEPTH  # coefficient sets in flight
+    weights: object = None  # optional callable (device, logical core) -> static weight (position-aware static split)
+    min_pool_chunks: int = 1
+    claim_ahead: bool = False  # claim chunk d+1 when starting chunk d (coef set lead time)
+    ramp0: int | None = None  # first block width of the ramped walk (x2 per block up to B); None = B (op's walk)
+
+
+# The writer loads segment s+1's set while compute still holds segment s's: two sets in flight.
 assert COEF_DEPTH >= 2, "writer-side expansion needs COEF_DEPTH >= 2"
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
 
@@ -88,28 +101,24 @@ def _tensor_token_tiles(shape) -> int:
     return lead * math.ceil(shape[-2] / TILE_HW)
 
 
-def _work_assignment(grid_size, total_units, row_weight):
-    """Contiguous flattened split over the cores `split_work_to_cores(..., row_wise=True)` selects, in split order:
-    [(core, start_unit, num_units), ...]. Core i gets 1 unit plus its largest-remainder share of the other
-    total - num_cores units, weighted w = 1 + row_weight * (y - y_mid) / (rows - 1) by its logical grid row y
-    (see ROW_WEIGHT). row_weight = 0 is the uniform split. Every core keeps >= 1 unit (the kernels need a
-    non-empty range)."""
-    (_, all_cores, core_group_1, core_group_2, _, _) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
-    cores = []
-    for group in (core_group_1, core_group_2):
-        cores.extend(ttnn.corerange_to_cores(group, None, True))
-    rows = grid_size.y
-    weights = [1.0 + row_weight * (c.y - (rows - 1) / 2.0) / max(1, rows - 1) for c in cores]
-    extra = total_units - len(cores)
-    exact = [extra * w / sum(weights) for w in weights]
-    counts = [math.floor(e) for e in exact]
-    by_remainder = sorted(range(len(cores)), key=lambda i: exact[i] - counts[i], reverse=True)
-    for i in by_remainder[: extra - sum(counts)]:
-        counts[i] += 1
-    assignment, start = [], 0
-    for core, count in zip(cores, counts):
-        assignment.append((core, start, count + 1))
-        start += count + 1
+def _work_assignment(grid_size, total_units):
+    """Contiguous flattened split: [(core, start_unit, num_units), ...] in split order."""
+    (
+        _,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_g1,
+        units_per_core_g2,
+    ) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
+    assignment = []
+    start = 0
+    for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            assignment.append((core, start, per_core))
+            start += per_core
     assert start == total_units
     return all_cores, assignment
 
@@ -154,6 +163,46 @@ def _cb(index, dtype, page_bytes, num_pages, cores):
     )
 
 
+def _static_assignment(assignment, static_units, weights, device=None):
+    """Re-split [0, static_units) over the SAME cores (split order): uniform (+-1) or by weights(x, y)."""
+    cores = [core for core, _, _ in assignment]
+    if weights is None:
+        base, extra = divmod(static_units, len(cores))
+        counts = [base + (1 if i < extra else 0) for i in range(len(cores))]
+    else:
+        w = [float(weights(device, c)) for c in cores]
+        tot = sum(w)
+        exact = [static_units * wi / tot for wi in w]
+        counts = [int(math.floor(e)) for e in exact]
+        rem = static_units - sum(counts)
+        order = sorted(range(len(cores)), key=lambda i: exact[i] - counts[i], reverse=True)
+        for i in order[:rem]:
+            counts[i] += 1
+    out, start = [], 0
+    for core, cnt in zip(cores, counts):
+        out.append((core, start, cnt))
+        start += cnt
+    assert start == static_units
+    return out
+
+
+def _queue(params, v):
+    n1, g1, g2, q = params
+    start = v * g1 if v < n1 else n1 * g1 + (v - n1) * g2
+    qe = start + (g1 if v < n1 else g2)
+    return qe - q, qe
+
+
+def _queue_chunks(params, v, ct, chunk_cols):
+    """Chunks of queue v (kernel mirror: PoolParams::queue_chunks)."""
+    qs, qe = _queue(params, v)
+    if qe <= qs:
+        return 0
+    cpr = math.ceil(ct / chunk_cols)
+    aligned = lambda u: (u // ct) * cpr + (u % ct) // chunk_cols
+    return aligned(qe - 1) - aligned(qs) + 1
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     residual: ttnn.Tensor,
@@ -161,7 +210,9 @@ def create_program_descriptor(
     comb: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     compute_kernel_config: ttnn.ComputeConfigDescriptor,
+    bal: BalanceConfig | None = None,
 ) -> ttnn.ProgramDescriptor:
+    bal = bal or BalanceConfig()
     device = input_tensor.device()
 
     n = post.shape[-1]
@@ -171,8 +222,10 @@ def create_program_descriptor(
     post_tiles_per_row = math.ceil(n / TILE_HW)
     comb_tiles_per_row = math.ceil(n * n / TILE_HW)
     num_raw_tiles = post_tiles_per_row + comb_tiles_per_row
-    coef_tiles_per_stream = math.ceil((n + 1) / 2)  # two coefficient terms per tile (mhc_post_common.hpp)
+    coef_tiles_per_stream = math.ceil((n + 1) / 2)
     num_coef_tiles = n * coef_tiles_per_stream
+    coef_depth = bal.coef_depth
+    assert coef_depth >= 2
 
     sublayer_page = input_tensor.buffer_page_size()
     residual_page = residual.buffer_page_size()
@@ -181,16 +234,16 @@ def create_program_descriptor(
     assert comb.buffer_page_size() == coef_page
     assert output_page == residual_page
 
-    # ---- work split + block size ----
+    # ---- work split + block size: IDENTICAL policy to the op (full uniform split decides B and the help) ----
     grid_size = device.compute_with_storage_grid_size()
-    row_weight = ROW_WEIGHT
-    if residual.dtype == ttnn.float32 and input_tensor.dtype == ttnn.bfloat16:
-        row_weight = ROW_WEIGHT_MIXED_FP32_STREAMS  # carve-out (measured regression, see ROW_WEIGHT_MIXED_FP32_STREAMS)
-    all_cores, assignment = _work_assignment(grid_size, total_units, row_weight)
+    all_cores, assignment = _work_assignment(grid_size, total_units)
+    coef_bytes_extra = (coef_depth - COEF_DEPTH) * num_coef_tiles * coef_page + 2 * META_DEPTH * META_PAGE
     block_col_tiles_fit = _block_col_tiles_fit(
         n, sublayer_page, residual_page, coef_page, num_coef_tiles, num_raw_tiles
     )
-    assert block_col_tiles_fit >= 1, "mhc_post: coefficient set + one column block does not fit L1_BUDGET_BYTES"
+    per_col = DEPTH_IN * (sublayer_page + n * residual_page) + DEPTH_OUT * n * residual_page
+    block_col_tiles_fit -= math.ceil(coef_bytes_extra / per_col) if coef_bytes_extra > 0 else 0
+    assert block_col_tiles_fit >= 1
     block_col_tiles = min(block_col_tiles_fit, _max_segment_col_tiles(assignment, col_tiles_per_row))
     max_units_per_core = max(count for _, _, count in assignment)
     block_col_tiles = min(block_col_tiles, math.ceil(max_units_per_core / MIN_BLOCKS_PER_CORE))
@@ -198,24 +251,58 @@ def create_program_descriptor(
         block_col_tiles = min(block_col_tiles, MAX_BLOCK_COL_TILES)
     block_col_tiles = max(1, block_col_tiles)
 
-    # ---- circular buffers ----
-    cbs = [
-        _cb(CB_SUBLAYER_TILES, input_tensor.dtype, sublayer_page, DEPTH_IN * block_col_tiles, all_cores),
-        _cb(CB_RESIDUAL_TILES, residual.dtype, residual_page, DEPTH_IN * n * block_col_tiles, all_cores),
-        _cb(CB_COEF_RAW, post.dtype, coef_page, num_raw_tiles, all_cores),
-        _cb(CB_COEF_BCAST, post.dtype, coef_page, COEF_DEPTH * num_coef_tiles, all_cores),
-        _cb(CB_OUTPUT_TILES, output_tensor.dtype, output_page, DEPTH_OUT * n * block_col_tiles, all_cores),
-    ]
-
-    # ---- read help (see HELP_MIN_BLOCKS) ----
     max_blocks_per_core = max(
         _core_blocks(start, count, col_tiles_per_row, block_col_tiles) for _, start, count in assignment
     )
     read_help = HELP_MIN_BLOCKS is not None and max_blocks_per_core >= HELP_MIN_BLOCKS
     if residual.dtype == ttnn.float32 and not HELP_FP32_STREAMS:
-        read_help = False  # carve-out: compute-bound datapath (see HELP_FP32_STREAMS)
+        read_help = False
 
-    # ---- data movement: one source (mhc_post_dm.cpp), role 0 = reader (NCRISC), role 1 = writer (BRISC) ----
+    # ---- run-time claimed tail queues (see mhc_post_common.hpp PoolParams) ----
+    chunk_cols = min(bal.chunk_cols or block_col_tiles, block_col_tiles)
+    ramp0 = max(1, min(bal.ramp0 or block_col_tiles, block_col_tiles))
+    num_cores = len(assignment)
+    pool_mode = 0
+    pool_rt = [0, 0, 0, 0, 1]  # n1, g1, g2, q, maxq
+    if bal.pool_frac > 0:
+        if bal.pool_mode == 1:
+            q = int(round(bal.pool_frac * total_units))
+            params = (1, total_units, 0, q)
+            nqueues = 1
+        else:
+            counts = [c for _, _, c in assignment]
+            g1 = counts[0]
+            n1 = sum(1 for c in counts if c == g1)
+            g2 = counts[-1] if n1 < len(counts) else g1
+            q = min(int(round(bal.pool_frac * g2)), g2)
+            params = (n1, g1, g2, q)
+            nqueues = num_cores
+        chunks = [_queue_chunks(params, v, col_tiles_per_row, chunk_cols) for v in range(nqueues)]
+        if q > 0 and sum(chunks) >= bal.min_pool_chunks:
+            pool_mode = bal.pool_mode
+            pool_rt = list(params) + [max(chunks)]
+            if pool_mode == 1:
+                assignment = _static_assignment(assignment, total_units - q, bal.weights, device)
+            else:
+                assignment = [(core, start, count - q) for core, start, count in assignment]
+    if pool_mode == 0 and bal.weights is not None:
+        assignment = _static_assignment(assignment, total_units, bal.weights, device)
+    dynamic = pool_mode != 0
+    stride = bal.stride or next(s for s in range(max(1, num_cores // 3), num_cores + 1) if math.gcd(s, num_cores) == 1)
+
+    cbs = [
+        _cb(CB_SUBLAYER_TILES, input_tensor.dtype, sublayer_page, DEPTH_IN * block_col_tiles, all_cores),
+        _cb(CB_RESIDUAL_TILES, residual.dtype, residual_page, DEPTH_IN * n * block_col_tiles, all_cores),
+        _cb(CB_COEF_RAW, post.dtype, coef_page, num_raw_tiles, all_cores),
+        _cb(CB_COEF_BCAST, post.dtype, coef_page, coef_depth * num_coef_tiles, all_cores),
+        _cb(CB_OUTPUT_TILES, output_tensor.dtype, output_page, DEPTH_OUT * n * block_col_tiles, all_cores),
+    ]
+    if dynamic:
+        cbs.append(_cb(CB_META_C, ttnn.uint32, META_PAGE, META_DEPTH, all_cores))
+        cbs.append(_cb(CB_META_W, ttnn.uint32, META_PAGE, META_DEPTH, all_cores))
+        if pool_mode == 2:
+            cbs.append(_cb(CB_SCAN, ttnn.uint32, 16, num_cores, all_cores))
+
     def dm_ct(role):
         ct = [
             n,
@@ -239,12 +326,20 @@ def create_program_descriptor(
             SEM_RD_GO,
             SEM_RD_DONE,
             TILE_HW,
+            pool_mode,
+            chunk_cols,
+            CB_META_C,
+            CB_META_W,
+            SEM_CLAIM,
+            SEM_RET,
+            int(bal.help_dynamic),
+            ramp0,
+            CB_SCAN,
         ]
         for t in (input_tensor, residual, output_tensor, post, comb):
             ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
         return ct
 
-    # ---- compute ----
     compute_ct = [
         n,
         col_tiles_per_row,
@@ -254,6 +349,10 @@ def create_program_descriptor(
         CB_COEF_BCAST,
         CB_OUTPUT_TILES,
         coef_tiles_per_stream,
+        int(dynamic),
+        chunk_cols,
+        CB_META_C,
+        ramp0,
     ]
 
     dm_rt = ttnn.RuntimeArgs()
@@ -261,11 +360,27 @@ def create_program_descriptor(
     f_addr, x_addr = input_tensor.buffer_address(), residual.buffer_address()
     p_addr, m_addr = post.buffer_address(), comb.buffer_address()
     o_addr = output_tensor.buffer_address()
-    for core, start, count in assignment:
-        dm_rt[core.x][core.y] = [f_addr, x_addr, o_addr, p_addr, m_addr, start, count]
-        compute_rt[core.x][core.y] = [start, count]
 
-    # UnpackToDestFp32 on every Float32 CB compute reads with copy_tile (derived from the CB format).
+    def packed(core, nq):
+        v = device.worker_core_from_logical_core(core)
+        assert v.x < 256 and v.y < 256 and nq < (1 << 16)
+        return (nq << 16) | (v.x << 8) | v.y
+
+    if pool_mode == 1:
+        homes = [packed(ttnn.CoreCoord(0, 0), chunks[0])]
+    elif pool_mode == 2:
+        homes = [packed(core, chunks[v]) for v, (core, _, _) in enumerate(assignment)]
+    else:
+        homes = []
+    for idx, (core, start, count) in enumerate(assignment):
+        dm_rt[core.x][core.y] = (
+            [f_addr, x_addr, o_addr, p_addr, m_addr, start, count]
+            + pool_rt
+            + [idx, num_cores, stride | (bal.steal_min << 16)]
+            + homes
+        )
+        compute_rt[core.x][core.y] = [start, count] + pool_rt
+
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
     for index, dtype in (
         (CB_SUBLAYER_TILES, input_tensor.dtype),
@@ -309,6 +424,64 @@ def create_program_descriptor(
         config=compute_cfg,
     )
     semaphores = [
-        ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0) for sem in (SEM_RD_GO, SEM_RD_DONE)
+        ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0)
+        for sem in (SEM_RD_GO, SEM_RD_DONE, SEM_CLAIM, SEM_RET)
     ]
     return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+
+
+def wall_calibration(json_path, shape_key, alpha=1.0):
+    """weights(device, core) = (wall of the core in a profiled `orig` run, cycles)^-alpha — a PER-BOARD calibration
+    (calib_walls.json: physical "x,y" -> kernel end, from the p3 session on card 0)."""
+    import json as _json
+
+    wall = {tuple(int(v) for v in k.split(",")): t for k, t in _json.load(open(json_path))[shape_key].items()}
+    # profiler coords are physical; the logical grid is the sorted physical columns / rows (harvesting removed)
+    xs = sorted({c[0] for c in wall})
+    ys = sorted({c[1] for c in wall})
+
+    def weights(device, core):
+        return wall[(xs[core.x], ys[core.y])] ** (-alpha)
+
+    return weights
+
+
+def row_gradient(beta):
+    """Model weight: linear in the logical grid row, weight = 1 + beta * (y - y_mid) / (rows - 1), rows = grid height.
+    beta > 0 gives the higher rows (larger y, measured faster DRAM service on Blackhole p150) more work."""
+
+    def weights(device, core):
+        rows = device.compute_with_storage_grid_size().y
+        return 1.0 + beta * (core.y - (rows - 1) / 2.0) / max(1, rows - 1)
+
+    return weights
+
+
+def row_weighted_work_assignment(beta):
+    """DROP-IN for the op's `_work_assignment(grid_size, total_units)` (mhc_post_program_descriptor.py):
+    same cores, same contiguous r-major order, but core i gets 1 + its largest-remainder share of the other
+    total - num_cores units by weight w = 1 + beta * (y - y_mid) / (rows - 1) (y = logical grid row).
+    Every core keeps >= 1 unit (the kernels assume a non-empty range)."""
+
+    def _work_assignment(grid_size, total_units):
+        (_, all_cores, core_group_1, core_group_2, _, _) = ttnn.split_work_to_cores(
+            grid_size, total_units, row_wise=True
+        )
+        cores = []
+        for group in (core_group_1, core_group_2):
+            cores.extend(ttnn.corerange_to_cores(group, None, True))
+        rows = grid_size.y
+        w = [1.0 + beta * (c.y - (rows - 1) / 2.0) / max(1, rows - 1) for c in cores]
+        extra = total_units - len(cores)
+        exact = [extra * wi / sum(w) for wi in w]
+        counts = [int(math.floor(e)) for e in exact]
+        for i in sorted(range(len(cores)), key=lambda i: exact[i] - counts[i], reverse=True)[: extra - sum(counts)]:
+            counts[i] += 1
+        assignment, start = [], 0
+        for core, cnt in zip(cores, counts):
+            assignment.append((core, start, cnt + 1))
+            start += cnt + 1
+        assert start == total_units
+        return all_cores, assignment
+
+    return _work_assignment

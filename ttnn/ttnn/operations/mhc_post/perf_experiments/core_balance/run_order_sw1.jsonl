@@ -1,0 +1,16 @@
+{"shape": "T256_C1792_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T256_C1792_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T256_C7168_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T256_C7168_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T512_C5120_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T512_C5120_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T640_C2560_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T640_C2560_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T640_C4096_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T640_C4096_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T1024_C2560_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1024_C2560_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T1024_C5120_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1024_C5120_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T1024_C7168_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1024_C7168_bf16", "variant": "ow16", "rep": "0"}

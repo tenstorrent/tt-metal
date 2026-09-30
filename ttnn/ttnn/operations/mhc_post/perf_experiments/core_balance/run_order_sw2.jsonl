@@ -1,0 +1,12 @@
+{"shape": "T1280_C6144_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1280_C6144_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T2048_C1792_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T2048_C1792_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T2048_C4096_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T2048_C4096_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T2560_C6144_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T2560_C6144_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T4096_C1792_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T4096_C1792_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T4096_C2560_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T4096_C2560_bf16", "variant": "ow16", "rep": "0"}

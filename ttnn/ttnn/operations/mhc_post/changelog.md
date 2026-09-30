@@ -222,3 +222,106 @@
 
 ### Helper bypasses — none
 The new DM kernel uses dataflow_api only: noc_async_*, CB sync, L1 semaphores. There is no raw LLK. The compute kernel is unchanged; its R2 `WeightedSum` justification still stands.
+
+## Perf 2 — perf tournament round 2 (2 experiments, both graduated)
+- Date: 2026-09-30. Box: Blackhole p150, 110 cores. All numbers are DEVICE KERNEL DURATION.
+- Focus: feature_spec `_PERF_FOCUS`, all bf16 streams, fp32_dest_acc_en = True, TILE, DRAM interleaved. All three are in SUPPORTED: T640 C7168, T640 C1792, T1280 C4096.
+- Instrumentation: the Perf 1 zones were reused unchanged. No new stage was added: the eager load reuses `writer_coef_start` / `writer_coef_expand`, and the split is host-only.
+- Artifacts: `perf_experiments/r2_breakdown/` holds the ablation reports, the per-core tools `coretl.py` / `coregrid.py`, and the whole-op before/after CSVs with `final_table.txt`.
+
+### Measured breakdown (op at Perf 1; focus T640 C7168 / T640 C1792 / T1280 C4096, µs)
+| cut | µs |
+|---|---|
+| full | 213.7 / 67.8 / 246.3 |
+| compute stubbed (CB handshakes and coefficient expansion kept) | 223.0 / 66.0 / 247.7 |
+| NoC stubbed (compute kept) | 183.5 / 60.0 / 207.9 |
+| SFPU stubbed, rest full | 246.9 / 72.8 / 280.5 |
+| compute + NoC stubbed at once (sync + expansion floor) | 43.7 / 28.1 / 43.7 |
+| DRAM target (0.8 × 512 GB/s) | 201.7 / 50.4 / 230.5 |
+
+Per-core timelines give the model: wall = head + compute + second-set stall.
+- **Head:** the core waits for its first block's reads. This is 6 µs on the fast cores and up to 45 µs on the slow ones (T640 C7168 core (1,3): the block-0 barrier alone is 43 µs).
+- **Compute:** back to back, 32.5 µs per 8-column block, never starved after the head. At that pace the 110 cores demand ~95% of DRAM peak.
+- **Second-coefficient-set stall:** hits cores that straddle two token rows. It is 7.8 µs at T640 C1792, and 15.3 µs on the slowest T1280 core. The cause: the writer started set s+1 only after writing segment s's first output block.
+- The head depends on grid position: rows y = 2–3 run ~205–214 µs and row y = 11 ~173–182 µs. So the fast cores sit idle for up to 40 µs at the end.
+
+Ranked bottleneck:
+1. **Makespan imbalance across cores** (head skew). Compute alone is not the limiter: faster compute measured slower, because DRAM service gets less fair.
+2. **Second-set stall on straddling cores.** It dominates at C1792 and on the slowest T1280 core.
+
+The whole-op DM and compute stages are balanced: the wall equals the compute-stubbed floor, and both sit above the compute-only run.
+
+### Portfolio (cap: 2 experiments)
+- **Selected:**
+  1. **coef_prefetch**: eager look-ahead of the next coefficient set, a cheaper expansion loop, and an optional NCRISC share of the expansion.
+  2. **core_balance**: equalize per-core finish times, either by NoC-atomic dynamic tail claiming or work stealing, or by a static position-weighted split.
+- **Floated, not selected** (with the measured reason):
+  - Coefficient-stationary DEST (8 → 5 copies per output tile) and an SFPLOADMACRO `WeightedSum`: compute pace already equals steady-state DRAM pace, and faster compute measured slower (SFPU stub 246.9 vs 213.7 µs).
+  - A small first block: steady-state DRAM is saturated, so the starvation just moves to block 1. It was folded into core_balance as a candidate and measured a regression.
+
+### Verdicts
+- **coef_prefetch — WIN over the domain; flat on the focus shapes in isolation.**
+  - Bit-exact on 22 shapes (n = 1/2/3/5, fp32, both mixed pairs, non-aligned, T32, batch, rank 4).
+  - Medians, µs:
+
+    | variant | T640 C7168 | T640 C1792 | T1280 C4096 |
+    |---|---|---|---|
+    | base | 213.7 | 67.7 | 246.9 |
+    | eager | 212.8 | 67.0 | 244.8 |
+    | eager_fast | 214.9 | 67.1 | 244.3 |
+    | eager_share_fast | 214.5 | 66.8 | 245.7 |
+
+  - Domain, base → eager_fast: T512 C2560 83.3 → 71.6 (−14%), T1024 C1792 113.8 → 108.5, T256 C1792 37.6 → 36.3, T2560 C6144 901 → 879, T640 C4096 148 → 145. All other cells are flat within ±1.1%, including fp32 and mixed.
+  - The share variant beats eager_fast only at T256 C1792 (33.8 µs). It was not graduated: it needs two more semaphores and ~n(n+1)/2 NCRISC zones per set, which puts the marker budget at risk on many-segment cores.
+  - Measured regression: HELP_NB (polling the help flush) +2–8%.
+  - Domain: everywhere, with no exceptions.
+- **core_balance — WIN for the static row-weighted split (ow16).** Every run-time balancing candidate was a REGRESSION:
+  - NoC-atomic tail pool: +4…+28%.
+  - Per-core queues with stealing: +2…+56%.
+  - Ramped first blocks: +1…+28%.
+  - Why the run-time options lose: each stolen chunk needs a new ~13 µs coefficient set, claims and scans cost 4–30 µs, and the final writes stall.
+  - ow16 weights each core 1 + 0.16·(y − y_mid)/(rows − 1) by logical grid row, host only. Bit-exact on 40 shapes; helped on cards 0, 2 and 3. 0.08 / 0.12 / 0.20 / 0.24 measured worse overall.
+  - Focus: 213.2 → 211.2 / 67.3 → 63.2 / 245.4 → 232.1 µs. Domain bf16: −3…−10%.
+  - fp32-X in isolation: T1000 C7168 X fp32 / F bf16 +9.4%.
+
+### What graduated (one unified path each; the replaced code was deleted)
+1. **Eager coefficient look-ahead** (`mhc_post_dm.cpp`). The writer starts set s+1 as soon as set s's job ends and `cb_pages_reservable_at_back(cb_coef_bcast, n·P)` is true. The check is non-blocking; COEF_DEPTH = 2.
+   - Deleted: `loads_pending`, the bump on the first output block, and `Blk::first_of_segment`.
+2. **Software-pipelined `expand_half`** (`mhc_post_coef_expand.hpp`). The load of row r+1 is issued ahead of row r's 16 stores. A set now takes 11.6 µs instead of 13.3 µs.
+   - The old loop was deleted.
+3. **Row-weighted work split** (`_work_assignment(grid, units, row_weight)`, `ROW_WEIGHT = 0.16`). It keeps the same cores and the same contiguous r-major order, and every core still gets at least 1 unit. The block policy and read-help carve-out derive from the returned assignment.
+   - **One carve-out**, earned by a measured regression: X float32 with F bfloat16 keeps the uniform split (`ROW_WEIGHT_MIXED_FP32_STREAMS = 0.0`).
+     - Re-measured on the graduated kernels, uniform vs weighted, 2 runs each: T1000 C7168 679.5 vs 705.1 µs (+3.8%), T1000 C1792 178.1 vs 185.9 µs (+4.4%).
+     - The same dtype pair gains at T640 (−6.8% / −1.8%), but no predicate separates those cells from the regressions.
+   - The subagent had proposed carving out all fp32 X. With the graduated kernels, fp32 / fp32 measured −6.5% (T640 C1792), −1.3…−1.6% (C7168) and +0.2% (T1000 C1792, flat). So fp32 / fp32 takes the weighted split, and the carve-out was narrowed to the mixed pair.
+
+### Whole op, before (Perf 1 op, 3 runs) → after (graduated), same session
+Medians in µs. bf16 cells use 8 runs of the identical bf16 program; fp32 cells use the 2 final runs. Full table: `r2_breakdown/whole_op/final_table.txt`.
+- **Focus bf16:**
+  - T640 C7168: 213.1 → 205.5 (−3.6%).
+  - T640 C1792: 67.1–72.5 → 62.3 (−7…−14%).
+  - T1280 C4096: 245.6 → 230.4 (−6.2%; one 253 µs outlier in 8 runs).
+  - Remaining gap to the DRAM target: +1.9% / +24% / −0.04% (T1280 now meets its 230.5 µs target).
+- **fp32 perf cells:** T640 C7168 449.7 → 445.4, T640 C1792 134.3 → 115.4 (−14%), T1280 C4096 532.4 → 509.7 (−4.3%).
+- **Guard set** (fp32 / bf16 / mixed × T640 / T1000 × C1792 / C7168): every cell is faster or flat. No regression.
+  - C1792 T640: 132.9 / 67.1 / 133.4 → 117.5 / 62.7 / 121.8.
+  - C1792 T1000: 193.3 / 115.0 / 196.8 → 191.5 / 98.3 / 178.8.
+  - C7168 T640: 448.8 / 214.2 / 429.7 → 438.1 / 206.0 / 427.1.
+  - C7168 T1000: 712.7 / 380.3 / 678.1 → 708.8 / 354.7 / 677.2.
+- **Domain bf16** (15 cells): −1.6% to −13%.
+  - T1024 C2560 149.9 → 130.4, T256 C7168 111.4 → 97.4, T2048 C1792 184.2 → 169.0, T640 C4096 150.3 → 136.7, T1024 C7168 382.7 → 357.6.
+  - T2048 C4096 431.1 → 430.5 is flat.
+- **Correctness:**
+  - Golden `eval/golden_tests/mhc_post/`: 208/208, run after each graduation step.
+  - `test_regression.py`: 12/12.
+  - Unit tests: acceptance 42, streams 16, dataflow knobs 36, precision baseline 16.
+  - Precision is unchanged: the arithmetic is the same kernel, and outputs are bit-exact against the Perf 1 op.
+
+### Findings (not follow-ups)
+- The low grid rows' first-block service is a Blackhole p150 property, seen on 3 cards. The row weighting is untested on Wormhole and on other harvesting patterns. It applies there too, because untested is not excluded.
+- Remaining headroom:
+  - C1792 is bound by head latency plus the per-set expansion (~11.6 µs per set on BRISC). The NCRISC share measured another −7% only at T256 C1792.
+  - Big-C bf16 cells are within ~2% of the DRAM target. The residual is per-core DRAM service skew.
+
+### Helper bypasses — none
+The graduated changes use dataflow_api only (`cb_pages_reservable_at_back`, L1 word stores) plus a host-side split. There is no raw LLK. The compute kernel is unchanged, and its R2 `WeightedSum` justification still stands.

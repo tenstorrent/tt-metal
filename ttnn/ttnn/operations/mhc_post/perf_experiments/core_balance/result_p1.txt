@@ -1,0 +1,6 @@
+# p1 (card 0): global tail pool, claim at window reserve, reader-only F for claimed chunks (earlier kernel revision;
+# variant names d* = pool_frac, h = chunk 4). Re-expressible in the current kernel as pool_mode=1, help_dynamic=False.
+shape                                        orig                     c0                    d05                    d10                    d15                    d20                    d30                   d10h                   d15h                   d20h
+T640_C7168_bf16                      213.4(1.000)           216.2(1.013)           221.7(1.039)           226.8(1.062)           260.2(1.219)           261.2(1.224)           253.6(1.188)           237.8(1.114)           234.3(1.098)           234.2(1.097)
+T640_C1792_bf16                       66.8(1.000)            66.9(1.002)            74.8(1.119)            77.9(1.166)            81.0(1.212)            70.7(1.058)            69.5(1.040)            74.5(1.115)            81.2(1.215)            72.0(1.078)
+T1280_C4096_bf16                     247.1(1.000)           246.6(0.998)           247.9(1.003)           268.6(1.087)           269.4(1.090)           277.4(1.123)           273.3(1.106)           256.2(1.037)           262.7(1.063)           259.2(1.049)

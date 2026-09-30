@@ -1,0 +1,16 @@
+{"shape": "T1000_C1792_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1000_C1792_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T1000_C7168_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1000_C7168_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T1280_C4096_n3_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1280_C4096_n3_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T640_C7168_n5_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T640_C7168_n5_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T640_C1792_n5_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T640_C1792_n5_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "B2_T640_C4096_bf16", "variant": "orig", "rep": "0"}
+{"shape": "B2_T640_C4096_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T32_C32_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T32_C32_bf16", "variant": "ow16", "rep": "0"}
+{"shape": "T100_C224_fp32", "variant": "orig", "rep": "0"}
+{"shape": "T100_C224_fp32", "variant": "ow16", "rep": "0"}

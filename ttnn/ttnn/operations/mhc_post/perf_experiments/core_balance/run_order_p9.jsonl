@@ -1,0 +1,16 @@
+{"shape": "T640_C7168_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q20", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q30", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q30h", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q50h", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q30s3", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q50s3", "rep": "0"}
+{"shape": "T640_C7168_bf16", "variant": "q30h1", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "orig", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q20", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q30", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q30h", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q50h", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q30s3", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q50s3", "rep": "0"}
+{"shape": "T1280_C4096_bf16", "variant": "q30h1", "rep": "0"}

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import ttnn
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+KERNEL_DIR = Path(__file__).parent / "baseline_kernels"
 
 TILE_HW = 32
 
@@ -59,24 +59,9 @@ HELP_FP32_STREAMS = False
 HELP_FROM_BLOCK = 1  # help from block 0 measured slower (it delays the writer's first coefficient set)
 SEM_RD_GO = 0  # reader -> helper: window of block k reserved (monotonic block counter)
 SEM_RD_DONE = 1  # helper -> reader: F of block k landed
-# Row-weighted work split (Perf 2, core_balance): per-core DRAM service is uneven by logical grid row (the
-# first-block reads of the low rows land up to ~40 us later than the high rows'; measured per-core walls at T640
-# C7168 bf16 ~210 us on rows 0-1 vs ~175 us on row 9), so the uniform split left the high rows idle at the end.
-# Weight 1 + ROW_WEIGHT * (y - y_mid) / (rows - 1) per core; measured (Blackhole p150, 110 cores, bf16, 3 cards):
-# T640 C1792 67.3 -> 63.2 us, T1280 C4096 245.4 -> 232.1 us, T1024 C7168 381 -> 346 us, T640 C4096 149 -> 135 us,
-# flat at worst (T256 C1792 +1%, T2048 C4096 +0.3%). 0.08 / 0.12 / 0.20 / 0.24 measured worse overall than 0.16.
-# Dynamic balancing (NoC-atomic tail claiming, work stealing) and ramped first blocks measured slower.
-ROW_WEIGHT = 0.16
-# Carve-out (narrow, measured): float32 residual streams with a bfloat16 sublayer keep the uniform split. Measured
-# with the Perf-2 kernels (Blackhole p150, 2 runs each, uniform -> weighted): X fp32 / F bf16 T1000 C7168 679.5 ->
-# 705.1 us (+3.8%; +9.4% in the core_balance session), T1000 C1792 178.1 -> 185.9 us (+4.4%). The same dtype pair
-# gains at T640 (C1792 -6.8%, C7168 -1.8%), but no predicate separates those cells from the regressions, so the
-# pair keeps the uniform split. fp32 / fp32 takes the weighted split (-6.5% T640 C1792, -1.3..-1.6% C7168, T1000
-# C1792 +0.2% flat), and so does X bf16 / F fp32 (T640 C7168 264.9 -> 260.1 us).
-ROW_WEIGHT_MIXED_FP32_STREAMS = 0.0
 NUM_CIRCULAR_BUFFERS = 64  # length of ComputeConfigDescriptor.unpack_to_dest_mode
 
-# The writer loads segment s+1's set while compute still holds segment s's (eager look-ahead): two sets in flight.
+# The writer loads segment s+1's set while compute still holds segment s's: two sets in flight.
 assert COEF_DEPTH >= 2, "writer-side expansion needs COEF_DEPTH >= 2"
 assert BLOCK_TOKEN_TILES == 1, "flat_stream realizes block_token_tiles through segments; only 1 is built"
 
@@ -88,28 +73,24 @@ def _tensor_token_tiles(shape) -> int:
     return lead * math.ceil(shape[-2] / TILE_HW)
 
 
-def _work_assignment(grid_size, total_units, row_weight):
-    """Contiguous flattened split over the cores `split_work_to_cores(..., row_wise=True)` selects, in split order:
-    [(core, start_unit, num_units), ...]. Core i gets 1 unit plus its largest-remainder share of the other
-    total - num_cores units, weighted w = 1 + row_weight * (y - y_mid) / (rows - 1) by its logical grid row y
-    (see ROW_WEIGHT). row_weight = 0 is the uniform split. Every core keeps >= 1 unit (the kernels need a
-    non-empty range)."""
-    (_, all_cores, core_group_1, core_group_2, _, _) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
-    cores = []
-    for group in (core_group_1, core_group_2):
-        cores.extend(ttnn.corerange_to_cores(group, None, True))
-    rows = grid_size.y
-    weights = [1.0 + row_weight * (c.y - (rows - 1) / 2.0) / max(1, rows - 1) for c in cores]
-    extra = total_units - len(cores)
-    exact = [extra * w / sum(weights) for w in weights]
-    counts = [math.floor(e) for e in exact]
-    by_remainder = sorted(range(len(cores)), key=lambda i: exact[i] - counts[i], reverse=True)
-    for i in by_remainder[: extra - sum(counts)]:
-        counts[i] += 1
-    assignment, start = [], 0
-    for core, count in zip(cores, counts):
-        assignment.append((core, start, count + 1))
-        start += count + 1
+def _work_assignment(grid_size, total_units):
+    """Contiguous flattened split: [(core, start_unit, num_units), ...] in split order."""
+    (
+        _,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        units_per_core_g1,
+        units_per_core_g2,
+    ) = ttnn.split_work_to_cores(grid_size, total_units, row_wise=True)
+    assignment = []
+    start = 0
+    for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            assignment.append((core, start, per_core))
+            start += per_core
     assert start == total_units
     return all_cores, assignment
 
@@ -183,10 +164,7 @@ def create_program_descriptor(
 
     # ---- work split + block size ----
     grid_size = device.compute_with_storage_grid_size()
-    row_weight = ROW_WEIGHT
-    if residual.dtype == ttnn.float32 and input_tensor.dtype == ttnn.bfloat16:
-        row_weight = ROW_WEIGHT_MIXED_FP32_STREAMS  # carve-out (measured regression, see ROW_WEIGHT_MIXED_FP32_STREAMS)
-    all_cores, assignment = _work_assignment(grid_size, total_units, row_weight)
+    all_cores, assignment = _work_assignment(grid_size, total_units)
     block_col_tiles_fit = _block_col_tiles_fit(
         n, sublayer_page, residual_page, coef_page, num_coef_tiles, num_raw_tiles
     )
