@@ -106,6 +106,9 @@ public:
         return num_used_receiver_channels_per_vc[vc_id];
     }
 
+    // One past the last byte of the local channel buffers.
+    size_t get_channel_buffers_end_address() const;
+
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
         return get_sender_channel_number_of_slots(0, channel_id);

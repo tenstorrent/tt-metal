@@ -953,6 +953,68 @@ void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
     }
 }
 
+// The address of every host_cleared region under `node`.
+void collect_host_cleared(const json& node, std::multiset<size_t>& addresses) {
+    if (!node.is_object()) {
+        return;
+    }
+    if (node.value("host_cleared", false)) {
+        addresses.insert(node.at("address").get<size_t>());
+    }
+    for (const auto& [_, child] : node.items()) {
+        collect_host_cleared(child, addresses);
+    }
+}
+
+// Blackhole routers have the notify word. The leftover span runs from past every ring to the end of unreserved
+// L1, and the host_cleared regions are exactly the addresses the host clears.
+void check_router_memory(const std::vector<RouterEntry>& routers) {
+    using tt::tt_metal::HalL1MemAddrType;
+    using tt::tt_metal::HalProgrammableCoreType;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool blackhole = hal.get_arch() == tt::ARCH::BLACKHOLE;
+    constexpr auto eth = HalProgrammableCoreType::ACTIVE_ETH;
+    const uint64_t unreserved_end = hal.get_dev_addr(eth, HalL1MemAddrType::UNRESERVED) +
+                                    hal.get_dev_size(eth, HalL1MemAddrType::UNRESERVED);
+    const auto addresses_to_clear = builder_context().get_fabric_router_addresses_to_clear();
+    const std::multiset<size_t> expected_cleared(addresses_to_clear.begin(), addresses_to_clear.end());
+
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& published = *entry.published;
+        const auto& channels = entry.router->at("channels");
+
+        ASSERT_EQ(published.channels.notify_worker_src.has_value(), blackhole);
+        std::set<std::string> channel_keys{"senders", "receivers"};
+        if (blackhole) {
+            channel_keys.insert("notify_worker_src");
+            expect_region(channels.at("notify_worker_src"), *published.channels.notify_worker_src);
+            EXPECT_EQ(channels.at("notify_worker_src").at("schema"), "u32");
+        }
+        EXPECT_EQ(keys_of(channels), channel_keys);
+
+        const auto& leftover = entry.router->at("leftover_l1");
+        EXPECT_EQ(keys_of(leftover), (std::set<std::string>{"address", "size"}));
+        EXPECT_EQ(leftover.at("address"), published.leftover_l1.address);
+        EXPECT_EQ(leftover.at("size"), published.leftover_l1.size);
+        const auto leftover_start = leftover.at("address").get<uint64_t>();
+        EXPECT_EQ(leftover_start + leftover.at("size").get<uint64_t>(), unreserved_end);
+        for (const char* kind : {"senders", "receivers"}) {
+            for (const auto& [vc_key, vc_channels] : channels.at(kind).items()) {
+                for (const auto& [ch_key, channel] : vc_channels.items()) {
+                    const auto& ring = channel.at("ring_buffer");
+                    EXPECT_LE(ring.at("address").get<uint64_t>() + ring.at("size").get<uint64_t>(), leftover_start)
+                        << kind << "/" << vc_key << "/" << ch_key;
+                }
+            }
+        }
+
+        std::multiset<size_t> cleared;
+        collect_host_cleared(*entry.router, cleared);
+        EXPECT_EQ(cleared, expected_cleared);
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -1058,5 +1120,8 @@ TEST_F(Fabric2DManifestFixture, RouterLifecycle) { check_router_lifecycle(router
 
 TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterMemory) { check_router_memory(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterMemory) { check_router_memory(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
