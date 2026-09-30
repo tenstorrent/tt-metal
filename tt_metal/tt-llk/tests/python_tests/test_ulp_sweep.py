@@ -466,6 +466,12 @@ def test_an_entry_no_lane_of_which_disagrees_is_stale():
     # On a cell the entry does not name there is nothing to go stale.
     other = (fmt, fmt, ApproximationMode.No, DestAccumulation.Yes)
     assert stale_excuses(MathOperation.Celu, src, golden, fixed, *other) == []
+    # An entry another exclusion already covers is stale too: against a NaN golden the
+    # same inf answers are excused before the entry is consulted, so it buys nothing.
+    nan_golden = torch.full_like(golden, float("nan"))
+    assert stale_excuses(MathOperation.Celu, src, nan_golden, still_broken, *cell) == [
+        _known_lanes()[MathOperation.Celu][0]
+    ]
 
 
 def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():

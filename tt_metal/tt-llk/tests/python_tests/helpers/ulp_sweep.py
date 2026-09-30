@@ -422,17 +422,27 @@ def stale_excuses(
     approx_mode,
     dest_acc,
 ) -> List[KnownNonfiniteLanes]:
-    """The entries that apply to this cell but excuse nothing: no lane they name
-    disagrees with the golden about being finite any more. The gate fails on one, so
-    the defect being fixed retires the entry rather than leaving its lanes excused."""
-    from .ulp import nonfinite_mismatches
-
-    disagreeing = nonfinite_mismatches(golden, result)
+    """The entries that apply to this cell but excuse nothing: without them, no lane
+    they name would be a non-finite failure -- because the lanes agree with the golden
+    again, or because another exclusion already covers them. The gate fails on one, so
+    a defect being fixed, or a rule that subsumes the entry, retires it rather than
+    leaving dead excuses in the list."""
+    without = nonfinite_failures(
+        op,
+        src,
+        golden,
+        result,
+        input_format,
+        output_format,
+        approx_mode,
+        dest_acc,
+        known_lanes=False,
+    )
     return [
         entry
         for entry in _known_lanes().get(op, ())
         if entry.applies_to(input_format, output_format, approx_mode, dest_acc)
-        and not bool((entry.lanes(src) & disagreeing).any())
+        and not bool((entry.lanes(src) & without).any())
     ]
 
 
@@ -445,13 +455,15 @@ def nonfinite_failures(
     output_format: DataFormat,
     approx_mode=None,
     dest_acc=None,
+    known_lanes: bool = True,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
     non-question: the two sides disagreeing about being non-finite where the output
     format could have held the answer.
 
     *approx_mode* and *dest_acc* name the cell for :data:`_KNOWN_NONFINITE_LANES`; left
-    unset, only an entry that pins neither can apply.
+    unset, only an entry that pins neither can apply. *known_lanes* False leaves those
+    entries out altogether, which is how :func:`stale_excuses` asks what they buy.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
@@ -515,8 +527,12 @@ def nonfinite_failures(
         & ~flushed_inputs(src, input_format)
         & ~excused
         & _claimed(op, src, input_format)
-        & ~known_nonfinite_lanes(
-            op, src, input_format, output_format, approx_mode, dest_acc
+        & ~(
+            known_nonfinite_lanes(
+                op, src, input_format, output_format, approx_mode, dest_acc
+            )
+            if known_lanes
+            else torch.zeros_like(src, dtype=torch.bool)
         )
         & ~padding_lanes(src, input_format)
     )
