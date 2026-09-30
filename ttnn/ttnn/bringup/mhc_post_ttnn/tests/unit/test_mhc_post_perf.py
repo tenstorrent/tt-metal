@@ -9,8 +9,8 @@ import pytest
 import torch
 import ttnn
 
-import ttnn.bringup.mhc_post.mhc_post_program_descriptor as pd
-from ttnn.bringup.mhc_post import mhc_post
+import ttnn.bringup.mhc_post_ttnn.mhc_post_program_descriptor as pd
+from ttnn.bringup.mhc_post_ttnn import mhc_post
 
 N = 4
 
