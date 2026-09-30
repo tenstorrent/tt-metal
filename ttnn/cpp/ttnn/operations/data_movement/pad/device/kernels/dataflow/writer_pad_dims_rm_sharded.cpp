@@ -15,7 +15,7 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
-    for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
+    for (uint32_t i = 0; i < (num_bytes_risc + sizeof(uint32_t) - 1) / sizeof(uint32_t); ++i) {
         ptr[i] = val;
     }
 
