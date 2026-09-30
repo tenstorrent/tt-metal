@@ -10234,6 +10234,7 @@ from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
 from .commands.optimize import cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
 from .commands.publish_hf import cmd_publish_hf  # noqa: F401
+from .commands.run_demo import cmd_run_demo  # noqa: F401
 from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
 
 
@@ -11727,6 +11728,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
     pph.add_argument("--publish", action="store_true", help="push public AND list in the catalog")
     pph.set_defaults(func=cmd_publish_hf)
+
+    prd = sub.add_parser(
+        "run-demo",
+        help="Run a model's OWN on-device demo on real inputs and collect the batch of real "
+        "outputs (audio/images/text) as a manifest the dashboard renders.",
+    )
+    prd.add_argument(
+        "target",
+        nargs="?",
+        help="HF model_id of a planner demo, or a demo dir (default: newest run).",
+    )
+    prd.add_argument("--run", dest="run", help="explicit run id or run directory path")
+    prd.add_argument("--out", help="dir to write the demo outputs + manifest.json into")
+    prd.add_argument("--batch", type=int, help="samples to generate (default: the demo's own batch)")
+    prd.add_argument("--timeout", type=int, default=7200, help="seconds before the demo run is killed")
+    prd.add_argument(
+        "--plan",
+        action="store_true",
+        help="only print what WOULD run (discovered demo module + flags), without using the device",
+    )
+    prd.set_defaults(func=cmd_run_demo)
 
     pao = sub.add_parser(
         "auto-onboard",
