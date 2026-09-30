@@ -845,7 +845,7 @@ docstring) over a fixed token list, as if the LLM had finished.
 | HiFT, mechanism (upstream's mel, F0 and noise per call): each chunk's emitted audio | PCC 0.99921–0.99985 | ≥ 0.999 |
 | HiFT, mechanism: each seam (the crossfade ±40 ms) | PCC 0.99900–0.99989 | ≥ 0.998 |
 | HiFT, the utterance's last 20 ms: level against upstream's (the masked final call, 2026-09-30) | within 0.2–0.5 dB | within 3 dB, no floor (D41) |
-| HiFT, the final chunk's last 0.4 s: difference below the signal (masked) | 21–27 dB | at least 20 dB, no floor |
+| HiFT, the final chunk's last 0.4 s: difference below the signal (masked) | 21–27 dB; 19.5–27.5 dB over six noise draws | at least 15 dB, no floor |
 | HiFT, own F0: log-mel L1 vs upstream's streamed audio | 0.069–0.088 | ≤ 0.13 |
 
 - **The final chunk's end.** Until 2026-09-30 the final call was padded with silence. Its last ~25 ms went silent
@@ -855,6 +855,24 @@ docstring) over a fixed token list, as if the LLM had finished.
     0.99921–0.99979.
   - Over the whole of 121-127105-0015's 13-token final chunk, PCC is 0.9970, and 0.9975 with the call at its exact
     length. The chunk ends near −71 dBFS, where PCC measures the port's own noise floor, so it is not gated.
+- **The last 0.4 s's threshold is 15 dB** (2026-09-30; notes: `scripts/2026-09-30/tail_margin.py`). It was 20 dB,
+  set from the six final chunks above. Over 36 final chunks (these six utterances under the suite's reference and
+  D43's five noise draws), the masked call's margin is 19.5–27.5 dB, so at 20 dB one draw already failed.
+  - **All five lowest are 121-127105-0015** (19.5–23.6 dB). Its last 0.4 s is near-silent (−71 dBFS), except for one
+    20 ms burst at −58 dBFS, 0.38–0.36 s before the end. The burst holds 85–87 % of the window's signal energy.
+  - **That burst sets the margin.** It also holds 81–94 % of the difference's energy, and in every draw the window's
+    margin is the burst's own within 1 dB (19–24 dB).
+    - Quieter frames, some with the difference only 13–19 dB below them, carry too little energy to move it.
+    - The last 40 ms are at 22–24 dB.
+  - **It is the port's own error on that burst, not the padding.** The same call unpadded, at its exact length
+    (compiled for each length), scores 19.9–24.0 dB. The burst's difference is the same within about 1 dB (−78 dBFS
+    both ways on the lowest draw).
+  - **The headroom:** 15 dB is 4.5 dB below the lowest margin, and about 4.5 standard deviations below 0015's mean
+    (21.6 ± 1.5 dB).
+  - **What this criterion catches of the old silence padding:** 4 of the 6 utterances on its own (−1.9 to 10.9 dB).
+    260-123286-0014 (17.8 dB) and 260-123440-0002 (23.4–24.8) pass it. The padding's effect reaches back 120–200 ms,
+    and their last 0.4 s is dominated by louder speech before that. Their last 20 ms fail the level check by 75 and
+    32 dB, so the end gate as a whole still fails the old padding on every utterance.
 - **WER and SIM** (`scripts/eval_wer_sim.py`) of our offline-streamed audio (our flow, our HiFT, own F0), against
   upstream's streaming of the same tokens:
   - WER 1.36 % vs 0.68 %; SIM 95.83 vs 95.90.
