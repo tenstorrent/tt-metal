@@ -155,7 +155,8 @@ struct WorkerToFabricEdmSenderBase {
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        return WorkerToFabricEdmSenderBase(
+
+        auto result = WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
             edm_worker_y,
@@ -172,6 +173,7 @@ struct WorkerToFabricEdmSenderBase {
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
             write_at_cmd_buf);
+        return result;
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
@@ -308,7 +310,25 @@ struct WorkerToFabricEdmSenderBase {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        while (true) {
+            if constexpr (IS_WORKER && VC_ID == 0) {
+                if (this->stop_flag != 0u) {
+                    const uint64_t erisc_ack_noc_addr = get_noc_addr(
+                        this->edm_noc_x,
+                        this->edm_noc_y,
+                        static_cast<uint32_t>(this->edm_worker_location_info_addr) +
+                            offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, erisc_ack));
+                    noc_inline_dw_write<InlineWriteDst::L1>(
+                        erisc_ack_noc_addr, this->get_num_free_write_slots() + 1u, 0xf, get_fabric_worker_noc());
+                    while (this->stop_flag != 0u) {
+                        invalidate_l1_cache();
+                    }
+                }
+            }
+            if (this->edm_has_space_for_packet<1>()) {
+                break;
+            }
+        }
         WAYPOINT("FWSD");
     }
 
@@ -504,6 +524,16 @@ struct WorkerToFabricEdmSenderBase {
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
+        // Write our local stop flag address to ERISC's worker_stop_flag_address
+        if constexpr (IS_WORKER && VC_ID == 0) {
+            const uint64_t stop_flag_slot_addr =
+                dest_noc_addr_coord_only |
+                static_cast<uint64_t>(
+                    edm_worker_location_info_addr +
+                    offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_stop_flag_address));
+            noc_inline_dw_write<InlineWriteDst::L1, posted>(
+                stop_flag_slot_addr, reinterpret_cast<uint32_t>(&this->stop_flag), 0xf, WORKER_HANDSHAKE_NOC);
+        }
     }
 
     // Advanced usage API:
@@ -644,6 +674,7 @@ struct WorkerToFabricEdmSenderBase {
     uint32_t local_producer_cursor_addr;
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
+    volatile uint32_t stop_flag = 0u;
     size_t edm_buffer_base_addr;
 
     BufferIndex buffer_slot_index;

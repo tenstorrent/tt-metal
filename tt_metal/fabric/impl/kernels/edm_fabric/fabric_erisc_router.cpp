@@ -1547,19 +1547,45 @@ void run_routing_without_noc_sync_coordinated_as_master(
             // L1, unaffected by the down eth link. Bounded spin: if no sender is connected (ACK never comes) or one
             // died, we time out and proceed rather than wedging recovery. Retrain (run_routing_without_noc_sync below)
             // is held off until this returns.
-            constexpr uint32_t HANDSHAKE_ACK_TIMEOUT_ITERS = 200000000u;
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // STOP = 1 (word[10])
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) = 0u;       // ACK = 0 (word[3])
-            for (uint32_t k = 0; k < HANDSHAKE_ACK_TIMEOUT_ITERS; ++k) {
-                if (*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) != 0u) {
-                    break;  // sender acknowledged: channel is quiescent
+            // [#45872 ADAPTER STOP/ACK] Use adapter-driven handshake via EDMChannelWorkerLocationInfo.
+            // Channel 0 worker_location_info lives at the CT-constant L1 address for ch0.
+            auto* worker_loc = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+                local_sender_channel_0_connection_info_addr);
+            worker_loc->erisc_ack = 0u;  // zero ACK before raising STOP
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) =
+                1u;  // STOP = 1 (word[10], debug slot)
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) = 0u;  // legacy ACK = 0 (word[3])
+            const uint32_t stop_flag_addr = worker_loc->worker_stop_flag_address;
+            if (stop_flag_addr != 0u) {
+                // Adapter registered: NOC-write STOP=1 to worker L1.
+                const uint32_t worker_noc_x = static_cast<uint32_t>(worker_loc->worker_xy.x);
+                const uint32_t worker_noc_y = static_cast<uint32_t>(worker_loc->worker_xy.y);
+                const uint64_t worker_stop_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, stop_flag_addr);
+                noc_inline_dw_write<InlineWriteDst::L1>(worker_stop_noc_addr, 1u, 0xf, worker_handshake_noc);
+                noc_async_writes_flushed();
+                constexpr uint32_t HANDSHAKE_ACK_TIMEOUT_ITERS = 200000000u;
+                for (uint32_t k = 0; k < HANDSHAKE_ACK_TIMEOUT_ITERS; ++k) {
+                    if (worker_loc->erisc_ack != 0u) {
+                        break;  // adapter ACKed: channel is quiescent
+                    }
+                }
+            } else {
+                // No adapter registered: fall back to legacy ERISC-L1 ACK poll.
+                constexpr uint32_t HANDSHAKE_ACK_TIMEOUT_ITERS = 200000000u;
+                for (uint32_t k = 0; k < HANDSHAKE_ACK_TIMEOUT_ITERS; ++k) {
+                    if (*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) != 0u) {
+                        break;  // legacy sender acknowledged
+                    }
                 }
             }
-            // Quiescent (or timed out). Seed the measurements from the SETTLED register + occupancy -- re-read here,
-            // after the handshake, so w11/w12/w9 reflect the no-in-flight state (not the instant of the down edge).
+            // Quiescent (or timed out). Extract exact_free from adapter ACK or fall back to word[8].
+            const uint32_t erisc_ack_val = worker_loc->erisc_ack;
             const uint32_t fs22_q =
                 static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
-            const uint32_t exact_free_q = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // w8
+            const uint32_t exact_free_q =
+                (stop_flag_addr != 0u && erisc_ack_val != 0u)
+                    ? (erisc_ack_val - 1u)
+                    : *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // w8 fallback
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) =
                 exact_free_q;  // w9 EXACT_FREE_MIN seed
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) =
@@ -1623,6 +1649,21 @@ void run_routing_without_noc_sync_coordinated_as_master(
             // The block holds absolute running totals, so one push repairs any number of lost updates and
             // is a no-op if nothing was lost.
             resync_receiver_to_sender_credits();
+            // [#45872 ADAPTER STOP/ACK] Clear the worker stop flag (STOP=0) so the worker resumes.
+            // Re-read worker_loc from the same CT-constant address used in the DOWN block.
+            {
+                auto* w_loc = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+                    local_sender_channel_0_connection_info_addr);
+                const uint32_t sf_addr = w_loc->worker_stop_flag_address;
+                if (sf_addr != 0u) {
+                    const uint32_t resume_noc_x = static_cast<uint32_t>(w_loc->worker_xy.x);
+                    const uint32_t resume_noc_y = static_cast<uint32_t>(w_loc->worker_xy.y);
+                    const uint64_t resume_noc_addr = get_noc_addr(resume_noc_x, resume_noc_y, sf_addr);
+                    noc_inline_dw_write<InlineWriteDst::L1>(resume_noc_addr, 0u, 0xf, worker_handshake_noc);
+                    noc_async_writes_flushed();
+                }
+            }
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 0u;  // STOP = 0 (word[10])
             // run_post_retrain_handshake(
             //     reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE),
             //     termination_signal_ptr);

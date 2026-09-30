@@ -70,8 +70,8 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_2{};
 
     uint32_t worker_teardown_semaphore_address{};
-    uint32_t align_pad_3{};  // Padding added for safe reading over noc
-    uint32_t align_pad_4{};
+    uint32_t worker_stop_flag_address{};  // ERISC NOC-writes STOP=1/0 to worker L1 here
+    uint32_t erisc_ack{};                 // worker NOC-writes free_slots+1 as ACK
     uint32_t align_pad_5{};
 
     WorkerXY worker_xy{0, 0};

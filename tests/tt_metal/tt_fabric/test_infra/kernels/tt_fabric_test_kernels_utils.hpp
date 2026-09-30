@@ -1231,6 +1231,14 @@ struct SenderKernelTrafficConfig {
         // NOTE word[22] (not w20): w20 is still written every iter by the KEPT set_next_slot_content (SLOT_ADDR).
         noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 88u, rnoc), reg, 0xf, rnoc);
         noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 32u, rnoc), occ_free, 0xf, rnoc);
+        // [#45872 THEORY PROBE] W and CB at quiesce (post-flush, post-stabilize). F = rp_begin = word[13].
+        // true_occ = W - F should be in [0,32]. CB = W - (32 - occ_free).
+        const uint32_t W_quiesce = sc->buffer_slot_write_counter.counter;
+        const uint32_t CB_quiesce = W_quiesce - (32u - occ_free);
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 80u, rnoc), W_quiesce, 0xf, rnoc);  // word[20] = W
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 84u, rnoc), CB_quiesce, 0xf, rnoc);  // word[21] = CB
         noc_async_writes_flushed();
         // (4) ACK the router (word[3]) -> it proceeds to retrain.
         noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 12u, rnoc), 1u, 0xf, rnoc);
@@ -1243,14 +1251,7 @@ struct SenderKernelTrafficConfig {
     // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
     bool send_one_packet() {
-        // [#45872 QUIESCE HANDSHAKE] Poll the router STOP flag every 32 sends. When the router raises it (at the
-        // link-down edge) we flush, ACK, and go quiescent so all measurement happens with no packets in flight.
-        // NOTE: this only fires while we are actively sending; the blocked-in-wait-for-space case is handled by
-        // the STOP check inside STEP 2 below.
-        if ((num_packets_processed & 0x1Fu) == 0u && payload_buffer_ != nullptr && stop_flag_is_set()) {
-            quiesce_and_measure();
-            return false;
-        }
+        // [#45872] Adapter wait_for_empty_write_slot() now handles STOP/ACK automatically.
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
             if (!credit_manager_.has_credits_available(num_packets_processed)) {
@@ -1269,20 +1270,8 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            // [#45872 QUIESCE HANDSHAKE] STOP-aware wait for space. During the down window the router stops
-            // forwarding, the buffer fills, and we would otherwise park in a plain blocking wait -- never noticing
-            // STOP and deadlocking the router's ACK-wait. So spin on free slots, and every 1024 idle spins check
-            // STOP; if it fired while we were blocked, quiesce + ACK here instead of waiting forever.
-            {
-                auto* wsc = static_cast<EdmSenderT*>(connection_ptr_);
-                uint32_t wspins = 0;
-                while (wsc->get_num_free_write_slots() == 0u) {
-                    if (((++wspins) & 0x3FFu) == 0u && payload_buffer_ != nullptr && stop_flag_is_set()) {
-                        quiesce_and_measure();
-                        return false;
-                    }
-                }
-            }
+            // STEP 2 (non-benchmark): adapter wait_for_empty_write_slot handles STOP/ACK automatically.
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
@@ -1322,6 +1311,16 @@ struct SenderKernelTrafficConfig {
             auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
             const uint32_t exact_free = sc->get_num_free_write_slots();  // counter-based, EXACT
             noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 32u), exact_free);  // word[8]
+            // [#45872 THEORY PROBE] Sender write counter W (word[20]) and credit-back count CB (word[21]).
+            // true_occ = W - F where F = ERISC fwd count = rp_begin = word[13].
+            // If true_occ == 32-exact_free (snd-occ): credit-back race (use fs22_q for init_ptr_val).
+            // If true_occ == 32-R1 (occ_reg): decrement race (use exact_free for init_ptr_val).
+            noc_inline_dw_write(
+                get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 80u),
+                sc->buffer_slot_write_counter.counter);  // word[20] = W
+            noc_inline_dw_write(
+                get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 84u),
+                static_cast<uint32_t>(*sc->edm_buffer_local_free_slots_read_ptr));  // word[21] = CB
             noc_async_writes_flushed();
         }
         num_packets_processed += 1;  // Always increment by 1
