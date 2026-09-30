@@ -35,6 +35,8 @@ struct p_gpr_unpack
     constexpr static std::uint32_t L1_BUFFER_ADDR          = 17; // Holds address of fixed l1 buffer used for reduce in1
     constexpr static std::uint32_t TMP_LO                  = 18; // Temp data. Upper 16-bits always 0
     constexpr static std::uint32_t TMP_HI                  = 19; // Temp data. Lower 16-bits always 0
+    constexpr static std::uint32_t UNPACK_AB_STRIDE_A      = 20; // Tile stride of operand A for the SrcDvalid::PerTile form of _llk_unpack_AB_ (written to SCRATCH_SEC0)
+    constexpr static std::uint32_t UNPACK_AB_STRIDE_B      = 21; // Tile stride of operand B for the same (written to SCRATCH_SEC1)
     constexpr static std::uint32_t PERF_FIRST_UNP_LO       = 32; // timestamp for first-unpack-instruction (low 32b)
     constexpr static std::uint32_t PERF_FIRST_UNP_HI       = 33; // timestamp for first-unpack-instruction (high 32b)
     constexpr static std::uint32_t TILE_SIZE_A             = 36; // Holds tile size for unpacker 0

@@ -47,6 +47,8 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @param tile_dvalid: Dest-reuse form only: one UNPACR of the whole tile for the L1 operand and one dummy publication
+ *     for the reused source per tile instead of one of each per face (see @ref unpack_A_tile_dvalid).
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -54,7 +56,11 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_mop_config_(
-    const bool transpose_of_faces, const ckernel::TensorShape tensor_shape, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
+    const bool transpose_of_faces,
+    const ckernel::TensorShape tensor_shape,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format = 0,
+    const bool tile_dvalid                = false)
 {
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
@@ -219,10 +225,28 @@ inline void _llk_unpack_A_mop_config_(
                         ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCB>()
                         : unpack_srcb;
 
-                const std::uint32_t outerloop     = num_faces;
-                constexpr std::uint32_t innerloop = 1;
-                ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srcb_reuse);
-                tmp.program();
+                if (tile_dvalid)
+                {
+                    // Dest reuse, whole tile per publication: the L1 operand is one UNPACR of every face (the datum
+                    // count programmed by the init) into rows 0 to 16 x num_faces - 1 of its bank, and the reused
+                    // source gets one dummy publication; the math thread fills that bank from DEST and releases
+                    // both once per tile.
+                    static constexpr std::uint32_t unpack_srca_tile =
+                        TT_OP_UNPACR(SrcA, 0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    static constexpr std::uint32_t unpack_srcb_tile =
+                        TT_OP_UNPACR(SrcB, 0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    static constexpr std::uint32_t srca_op = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? unpack_srca_reuse : unpack_srca_tile;
+                    static constexpr std::uint32_t srcb_op = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? unpack_srcb_reuse : unpack_srcb_tile;
+                    ckernel_template tmp(1, 1, srca_op, srcb_op);
+                    tmp.program();
+                }
+                else
+                {
+                    const std::uint32_t outerloop     = num_faces;
+                    constexpr std::uint32_t innerloop = 1;
+                    ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srcb_reuse);
+                    tmp.program();
+                }
             }
             else
             {
@@ -237,6 +261,20 @@ inline void _llk_unpack_A_mop_config_(
 }
 
 /**
+ * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank holding the whole tile.
+ *
+ * True for @ref SrcDvalid::PerTile on the dest-reuse form (acc_to_dest with a reused source) without broadcast,
+ * without transpose and with full 16-row faces; every other form keeps the per-face program. The dest-reuse math
+ * init (@ref _llk_math_eltwise_binary_init_) applies the same rule to the same tensor shape.
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, SrcDvalid src_dvalid>
+inline constexpr bool unpack_A_tile_dvalid(const ckernel::TensorShape tensor_shape, const bool transpose_of_faces, const bool within_face_16x16_transpose)
+{
+    return src_dvalid == SrcDvalid::PerTile && acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && BType == BroadcastType::NONE &&
+           !transpose_of_faces && !within_face_16x16_transpose && tensor_shape.face_r_dim == FACE_R_DIM;
+}
+
+/**
  * @brief Initialize the unpacker for a single-operand (A) unpack.
  *
  * Configures the within-face transpose register and per-unpacker datum count, then programs
@@ -246,6 +284,9 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @tparam src_dvalid: Source bank hand-off of the dest-reuse form, values = <PerFace/PerTile>; PerTile unpacks the
+ *     L1 operand with one UNPACR and publishes both sources once per tile (see @ref unpack_A_tile_dvalid for when it
+ *     applies) and must be paired with the same value on the math init; ignored by the other forms
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
@@ -260,7 +301,8 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -280,6 +322,9 @@ inline void _llk_unpack_A_init_(
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+
+    const bool tile_dvalid =
+        unpack_A_tile_dvalid<BType, acc_to_dest, binary_reuse_dest, src_dvalid>(tensor_shape, transpose_of_faces > 0, within_face_16x16_transpose > 0);
 
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
@@ -308,11 +353,20 @@ inline void _llk_unpack_A_init_(
         constexpr bool reads_srca       = (BType == BroadcastType::NONE) && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA);
         constexpr bool reads_srcb       = (BType != BroadcastType::NONE) || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB);
         constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
-        config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        if (tile_dvalid)
+        {
+            // The L1 operand is read with one UNPACR of every face: the datum count is the whole tile.
+            const std::uint32_t x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+            TT_SETADCXX(UNP_SEL, x_end, 0x0);
+        }
+        else
+        {
+            config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        }
     }
 
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
+        transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format, tile_dvalid);
 }
 
 /**
