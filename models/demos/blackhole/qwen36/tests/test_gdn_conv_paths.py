@@ -21,6 +21,10 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 K = 4  # conv kernel width; the carry holds K-1 = 3 rows
 PCC_VS_REF = 0.999
 PCC_KDA_VS_NATIVE = 0.9999
+# The first K-1 rows are the only ones that read the carry, and 3 rows in 2048 do not move a whole-chunk PCC (a
+# dropped carry still scores 0.9996), so their max-abs error is held to a multiple of the other rows' (measured:
+# 0.016 vs 0.045 with the carry, 2.45 without).
+CARRY_ROWS_HEADROOM = 4
 
 # (T, kd, vd, native_chunks, fir) per device: the 27B TP-4 production shape (C = 2560), the 35B-A3B TP-4
 # shape (C = 2048; its native conv needs the layer's two channel chunks, one call overflows L1), the 9B
@@ -142,15 +146,21 @@ def _check_contract(name, q, k, v, new_state, T, kd, vd, x):
 
 
 def _compare(name, got, ref):
-    """PCC (asserted) and max-abs (logged) of q/k/v against the reference triple. got/ref: fp32 torch."""
+    """PCC (asserted) and max-abs (logged) of q/k/v against the reference triple, and the carry-dependent rows
+    (the first K-1) held to CARRY_ROWS_HEADROOM x the max-abs of the other rows. got/ref: fp32 torch."""
     pccs = [_pcc(r, g) for r, g in zip(ref, got)]
     mads = [(g - r).abs().max().item() for r, g in zip(ref, got)]
+    head = max((g[:, : K - 1] - r[:, : K - 1]).abs().max().item() for r, g in zip(ref, got))
+    tail = max((g[:, K - 1 :] - r[:, K - 1 :]).abs().max().item() for r, g in zip(ref, got))
     logger.info(
         f"{name:7s}: pcc q/k/v {pccs[0]:.6f} {pccs[1]:.6f} {pccs[2]:.6f} | max-abs q/k/v "
-        f"{mads[0]:.3e} {mads[1]:.3e} {mads[2]:.3e}"
+        f"{mads[0]:.3e} {mads[1]:.3e} {mads[2]:.3e} | carry rows {head:.3e} vs rest {tail:.3e}"
     )
     for label, p in zip("qkv", pccs):
         assert p >= PCC_VS_REF, f"{name} {label}: pcc {p:.6f} < {PCC_VS_REF}"
+    assert (
+        head <= CARRY_ROWS_HEADROOM * tail
+    ), f"{name}: carry rows max-abs {head:.3e} > {CARRY_ROWS_HEADROOM} x the other rows' {tail:.3e}"
     return pccs, mads
 
 
