@@ -64,6 +64,8 @@ runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (128), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = p
 ``DEEPSEEK_V4_DECODE_LAYERS`` (bring-up: first N layers in both models; the text is then gibberish, the flow is not),
 ``DEEPSEEK_V4_PREFILL_PROMPT`` (another prompt file), ``DEEPSEEK_V4_PREFILL_HEARTBEAT`` / ``_STALL_SECS``,
 ``DEEPSEEK_V4_PREFILL_TRACED`` (1, the default: the traced, pipelined prefill; 0: eager),
+``DEEPSEEK_V4_E2E_MAX_INPUT`` (0 = off: keep only a prompt's first N tokens),
+``DEEPSEEK_V4_E2E_TRACE_CHECK`` (1: prefill the first prompt traced, then eagerly, compare, and stop),
 ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only and compare the next-token logits),
 ``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces; unset keeps the ttnn default -- set it,
 e.g. 500000000, if a capture reports the trace region too small).
@@ -378,6 +380,94 @@ def _free_states(states: list[PrefillAttentionState]) -> None:
                 setattr(state, name, None)
 
 
+def _shards(host: ttnn.Tensor) -> list[torch.Tensor]:
+    return [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(host)]
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.reshape(-1).double(), b.reshape(-1).double()
+    if a.std() == 0 or b.std() == 0:
+        return 1.0 if torch.equal(a, b) else float("nan")
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def _check_traced_against_eager(prefill, prompt, result, traced_row, traced_parked, chunk_size, tokenizer) -> None:
+    """``DEEPSEEK_V4_E2E_TRACE_CHECK=1``: prefill the first prompt again eagerly (the traces are released by now, so
+    it may allocate) and log, per layer and state tensor, how far the traced run's result is from the eager one."""
+    aligned = result.prefilled
+    traced = prefill._traced
+    last_start = (aligned - 1) // chunk_size * chunk_size
+    sent = traced._packet(torch.tensor(prompt.ids[last_start:aligned]), last_start).reshape(-1)
+    for stage in traced.stages:
+        for rank, shard in enumerate(_shards(ttnn.from_device(stage.pkt))):
+            got = shard.reshape(-1).to(torch.int64)
+            wrong = (got != sent.to(torch.int64)).nonzero().flatten()
+            logger.info(
+                f"[trace check] stage {stage.index} rank {rank} packet: {wrong.numel()}/{sent.numel()} int32 slots "
+                "differ" + (f", slots {int(wrong[0])}..{int(wrong[-1])}" if wrong.numel() else "")
+            )
+    if aligned == chunk_size:  # one chunk: stage k's received streams must be the eager output of its first layer - 1
+        outs = {}
+
+        def on_layer(li, out, dev):
+            outs[li] = _shards(ttnn.from_device(out))[0].float()
+
+        ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
+        ttnn.deallocate(prefill._stack(prefill._host_ids(ids), prefill.new_state(), on_layer=on_layer))
+        for stage in traced.stages[1:]:
+            before = stage.layers[0] - 1
+            got = _shards(ttnn.from_device(stage.io.streams_in))[0].float().reshape(outs[before].shape)
+            rows = (got - outs[before]).abs().reshape(aligned, -1).amax(dim=-1)
+            bad = (rows > 0.05 * outs[before].abs().max()).nonzero().flatten()
+            logger.info(
+                f"[trace check] stage {stage.index} streams_in vs eager layer {before} out: PCC "
+                f"{_pcc(got, outs[before]):.5f}, {bad.numel()}/{aligned} token rows off (first {bad[:6].tolist()}, "
+                f"last {bad[-3:].tolist()}); nonfinite {int((~torch.isfinite(got)).sum())}"
+            )
+    logger.info(f"[trace check] eager prefill of {prompt.name}'s {aligned} tokens, to compare with the traced run")
+    ids = torch.tensor(prompt.ids[:aligned], dtype=torch.long).unsqueeze(0)
+    logits, states = prefill.prefill(ids, chunk_size=chunk_size)
+    eager_row = prefill.to_host(logits, prefill.head_device).reshape(-1).float()
+    eager_parked = _park_states(states)
+    del states, logits
+    gc.collect()
+    _log_top5(tokenizer, "[trace check] eager  next token", eager_row)
+    _log_top5(tokenizer, "[trace check] traced next token", traced_row.float())
+    logger.info(f"[trace check] logits PCC {_pcc(traced_row.float(), eager_row):.5f}")
+    for li, (t_entry, e_entry) in enumerate(zip(traced_parked, eager_parked)):
+        parts = []
+        for name in _STATE_TENSORS:
+            if (name in t_entry) != (name in e_entry):
+                parts.append(f"{name}: traced {'has' if name in t_entry else 'lacks'} it, eager does not")
+                continue
+            if name not in t_entry:
+                continue
+            ts, es = _shards(t_entry[name][0]), _shards(e_entry[name][0])
+            if [t.shape for t in ts] != [e.shape for e in es]:
+                parts.append(f"{name}: shape {tuple(ts[0].shape)} vs {tuple(es[0].shape)}")
+                continue
+            pccs = [_pcc(t, e) for t, e in zip(ts, es)]
+            diff = max(float((t - e).abs().max()) for t, e in zip(ts, es))
+            zero = all(float(t.abs().max()) == 0 for t in ts)
+            parts.append(
+                f"{name} {min(pccs):.4f}{' ZERO' if zero else ''} (max|d| {diff:.3g}; |traced| max "
+                f"{max(float(t.abs().max()) for t in ts):.3g}, |eager| max {max(float(e.abs().max()) for e in es):.3g})"
+            )
+            if min(pccs) < 0.99:
+                logger.info(
+                    f"[trace check] layer {li:2d} {name} per rank: PCC {[round(p, 4) for p in pccs]}, "
+                    f"|traced| max {[float(t.abs().max()) for t in ts]}"
+                )
+            if min(pccs) < 0.99 and ts[0].dim() >= 2:
+                t, e = ts[0].reshape(-1, ts[0].shape[-1]), es[0].reshape(-1, es[0].shape[-1])
+                bad = ((t - e).abs().amax(dim=-1) > 0.5 * e.abs().amax(dim=-1).clamp(min=1e-3)).nonzero().flatten()
+                logger.info(
+                    f"[trace check] layer {li:2d} {name}: {bad.numel()}/{t.shape[0]} rows off; "
+                    f"first bad rows {bad[:12].tolist()}, last {bad[-4:].tolist()}"
+                )
+        logger.info(f"[trace check] layer {li:2d}: " + ", ".join(parts))
+
+
 def _log_top5(tokenizer, what: str, row: torch.Tensor) -> None:
     top = row.topk(5)
     logger.info(
@@ -417,11 +507,16 @@ def _run(
     if isinstance(pad_id, list):
         pad_id = pad_id[0]
     prompts = make_prompts(tokenizer, max_new)
-    indexer_on = (
-        lightning_indexer
-        if lightning_indexer is not None
-        else os.environ.get("DEEPSEEK_V4_PREFILL_INDEXER", "0") == "1"
-    )
+    max_input = _env_int("DEEPSEEK_V4_E2E_MAX_INPUT", 0)
+    if max_input > 0:
+        for prompt in prompts:
+            if len(prompt.ids) > max_input:
+                logger.info(f"{prompt.name}: truncated to its first {max_input} of {len(prompt.ids)} tokens")
+                prompt.ids = prompt.ids[:max_input]
+    if "DEEPSEEK_V4_PREFILL_INDEXER" in os.environ:
+        indexer_on = os.environ["DEEPSEEK_V4_PREFILL_INDEXER"] == "1"
+    else:
+        indexer_on = bool(lightning_indexer)
     results = []
     for prompt in prompts:
         real_len = len(prompt.ids)
@@ -515,6 +610,9 @@ def _run(
                 )
         # Keep only the parked states; every prefill tensor goes before decode allocates.
         prefill.release_traced_prefill()  # a no-op when eager
+        if traced and os.environ.get("DEEPSEEK_V4_E2E_TRACE_CHECK", "0") == "1" and results[0].prefilled:
+            _check_traced_against_eager(prefill, prompts[0], results[0], rows[0], parked[0], chunk_size, tokenizer)
+            pytest.skip("DEEPSEEK_V4_E2E_TRACE_CHECK=1: traced vs eager prefill compared; decode not run")
         bias_slots = prefill_bias_slots(prefill)  # the one thing the commit needs of the prefill model
         prefill.synchronize("before release")
         del prefill
