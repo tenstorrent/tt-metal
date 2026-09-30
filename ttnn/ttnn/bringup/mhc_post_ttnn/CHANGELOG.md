@@ -26,3 +26,5 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
      bit-identical device outputs incl. a program-cache hit on moved buffers); the unit suite runs on the C++ op
      (the knob tests stay on the Python builder, the only one with the knobs): 110 passed.
    - Needed by: glm53_flash_d_p.
+3. The eval golden suite ships in `tests/golden/` (from tt_ops_code_gen `mstaletovic/mhc-goldens`; imports pointed at
+   this folder, dispatching the C++ op): passes.

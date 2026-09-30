@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.bringup.mhc_pre_ttnn import mhc_pre
+mhc_pre = ttnn.bringup.mhc_pre  # the C++ op (the Python builder is the parity reference)
 
 PERF_SHAPES = [
     (1, 1, 640, 4 * 7168),
