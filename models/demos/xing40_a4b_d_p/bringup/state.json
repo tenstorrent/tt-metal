@@ -29,6 +29,122 @@
   "started": "2026-09-30T03:14:13",
   "status": "PASS"
  },
+ "R.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ef6917af-3507-4b69-9259-57c5d7604494"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/R.2.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/R.2.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 496.5,
+    "session_id": "ef6917af-3507-4b69-9259-57c5d7604494",
+    "t": "2026-09-30T03:24:27"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 234.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T03:16:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:28:26"
+   }
+  ],
+  "last_run": "2026-09-30T03:28:26",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/R.2.log",
+  "metrics": {
+   "parity_layers": 40,
+   "pcc_hidden_L00": 1.0000000000000213,
+   "pcc_hidden_L01": 0.9999999999999012,
+   "pcc_hidden_L02": 0.9999999999998352,
+   "pcc_hidden_L03": 0.9999999999997519,
+   "pcc_hidden_L04": 0.9999999999997179,
+   "pcc_hidden_L05": 0.9999999999996482,
+   "pcc_hidden_L06": 0.999999999999586,
+   "pcc_hidden_L07": 0.9999999999995218,
+   "pcc_hidden_L08": 0.9999999999994811,
+   "pcc_hidden_L09": 1.0000000000000044,
+   "pcc_hidden_L10": 0.9999999999999046,
+   "pcc_hidden_L11": 0.9999999999997317,
+   "pcc_hidden_L12": 0.9999999999997973,
+   "pcc_hidden_L13": 0.9999999999997381,
+   "pcc_hidden_L14": 0.9999999999996092,
+   "pcc_hidden_L15": 1.0000000000000415,
+   "pcc_hidden_L16": 1.000000000000049,
+   "pcc_hidden_L17": 1.0,
+   "pcc_hidden_L18": 0.999999999999963,
+   "pcc_hidden_L19": 0.9999999999998989,
+   "pcc_hidden_L20": 0.9999999999998036,
+   "pcc_hidden_L21": 0.9999999999997569,
+   "pcc_hidden_L22": 0.9999999999996907,
+   "pcc_hidden_L23": 0.9999999999992919,
+   "pcc_hidden_L24": 0.9999999999998498,
+   "pcc_hidden_L25": 0.9999999999997471,
+   "pcc_hidden_L26": 0.999999999999593,
+   "pcc_hidden_L27": 0.9999999999996773,
+   "pcc_hidden_L28": 0.9999999999995942,
+   "pcc_hidden_L29": 0.9999999999994981,
+   "pcc_hidden_L30": 0.9999999999994124,
+   "pcc_hidden_L31": 0.9999999999993169,
+   "pcc_hidden_L32": 0.9999999999990745,
+   "pcc_hidden_L33": 0.999999999998968,
+   "pcc_hidden_L34": 0.9999999999987388,
+   "pcc_hidden_L35": 0.9999999999986385,
+   "pcc_hidden_L36": 0.9999999999984102,
+   "pcc_hidden_L37": 0.9999999999983238,
+   "pcc_hidden_L38": 0.9999999999982574,
+   "pcc_hidden_L39": 0.9999999999982846,
+   "pcc_logits": 0.9999999999977935,
+   "text_next_token_acc": 0.7459697127342224,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "reference",
+  "started": "2026-09-30T03:24:32",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-30T03:05:24",
