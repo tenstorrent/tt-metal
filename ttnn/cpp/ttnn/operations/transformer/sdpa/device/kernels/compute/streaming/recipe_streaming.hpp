@@ -1829,6 +1829,14 @@ static void sdpa_inner_loop_step(
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+#ifdef SDPA_TRISC2_SPIN
+            // Perf research: RISC-only busy time on the pack thread, where TRISC2 RVV column math would run.
+            PACK({
+                const uint32_t spin_start = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                while (reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - spin_start < SDPA_TRISC2_SPIN) {
+                }
+            })
+#endif
             const uint32_t cur_h = pv_rows(q_subblock);
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;

@@ -67,7 +67,7 @@ def build(device, inputs, variant, q_tiles, k_tiles, jobs, chunks):
     # Perf research (not for merge): SDPA_KO="SDPA_KO_EXP,..." adds knockout defines to the compute kernel.
     extra = [d for d in os.getenv("SDPA_KO", "").split(",") if d]
     if extra:
-        compute.defines = list(compute.defines) + [(d, "1") for d in extra]
+        compute.defines = list(compute.defines) + [tuple(d.split("=", 1)) if "=" in d else (d, "1") for d in extra]
     fp32 = compute.config.fp32_dest_acc_en
     output = ttnn.allocate_tensor_on_device(
         inputs[0].shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
