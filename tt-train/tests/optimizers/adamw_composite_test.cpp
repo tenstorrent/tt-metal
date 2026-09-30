@@ -10,6 +10,7 @@
 #include <array>
 #include <core/ttnn_all_includes.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <umd/device/cluster.hpp>
 #include <variant>
 
 #include "autograd/auto_context.hpp"
@@ -119,9 +120,11 @@ ttnn::Tensor make_mislabelled_grad(ttnn::distributed::MeshDevice* device, uint32
 }
 
 // Two steps against a mislabelled gradient (re-set before each step): the parameter and every tensor leaf of the
-// optimizer state must still carry the parameter's original topology afterwards. Before the composites restored
-// the topology after set_value, the N-D parameter came back labelled Shard(3) (a checkpoint would then gather it
-// as a 2x-wide tensor) and the 1-D one lost its label to the union's rank-mismatch fallback.
+// optimizer state must still carry the parameter's original topology afterwards. Without the pin, the union rule
+// (ttnn::device_operation::detail::compute_output_placements_and_shape) hands both back with the gradient's
+// {1, 2} / [Replicate, Shard(3)] label: the N-D parameter picks up the Shard (a checkpoint would then gather it as
+// a 2x-wide tensor), and so does the collapsed 1-D one, because a fully replicated input of lower rank is ignored
+// whenever a higher-rank sharded input is present -- a rank change plus a wrong Shard, not a fallback to a default.
 template <class Optimizer, class Config>
 void expect_step_keeps_topology(const Config& config, bool collapsed_1d_label) {
     auto* device = &ttml::autograd::ctx().get_device();
@@ -159,15 +162,25 @@ void expect_step_keeps_topology(const Config& config, bool collapsed_1d_label) {
     }
 }
 
+// An N300 opens a (1, 2) mesh natively; every other board needs a mesh graph descriptor (as in comm_ops_test.cpp).
+bool check_board_is_n300() {
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
+}
+
 }  // namespace
 
 // Needs a (1, 2) mesh: guarded on the available chip count rather than the board type so it also runs on larger
-// meshes (the mesh graph descriptor comes from TT_MESH_GRAPH_DESC_PATH there, as for the Python tp_mesh fixture).
+// meshes. Off an N300 the mesh comes from TT_MESH_GRAPH_DESC_PATH (a 1x2 descriptor, as the Python tp_mesh fixture
+// sets); get_mgd_path has no built-in default for two chips, so skip rather than let open_device fail.
 class AdamWCompositeMeshTopologyTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
             GTEST_SKIP() << "Skipping: a (1, 2) mesh needs at least two chips";
+        }
+        if (!check_board_is_n300() && !ttml::ttnn_fixed::distributed::get_mgd_path(2U).has_value()) {
+            GTEST_SKIP() << "Skipping: a (1, 2) mesh on this board needs TT_MESH_GRAPH_DESC_PATH to name a 1x2 mesh "
+                            "graph descriptor";
         }
         ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));

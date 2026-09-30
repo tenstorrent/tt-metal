@@ -269,17 +269,20 @@ class TestTP:
         gathers by that label. Every parameter here is replicated; every gradient has the parameter's per-device
         shape but is labelled ``Shard(3)`` on the tp axis with the N-D distribution shape ``[1, 2]``.
 
-        ``nd``: the parameter carries the N-D label ``[1, 2] / (Replicate, Replicate)``; the union would turn it
-        into the gradient's ``Shard(3)`` label. ``collapsed_1d``: the parameter carries the default mappers' 1-D
-        label ``[2] / (Replicate,)``; the union of labels of different rank drops to the framework default. Two
-        steps, re-setting the mislabelled gradient each time, so the SGD momentum "first update" branch and the
-        Muon step-0 buffer aliasing are followed by a regular step.
+        ``nd``: the parameter carries the N-D label ``[1, 2] / (Replicate, Replicate)``; the union overlays the
+        gradient's ``Shard(3)`` on it. ``collapsed_1d``: the parameter carries the default mappers' 1-D label
+        ``[2] / (Replicate,)``; the union ignores a fully replicated input of lower rank whenever a higher-rank
+        sharded input is present (``compute_output_placements_and_shape`` in
+        ``ttnn/core/device_operation_detail.cpp`` folds in only the sharded inputs of maximum rank), so the
+        parameter would take the gradient's ``[1, 2] / (Replicate, Shard(3))`` label outright -- a rank change plus
+        a wrong ``Shard``, not a fallback to a default. Two steps, re-setting the mislabelled gradient each time, so
+        the SGD momentum "first update" branch and the Muon step-0 buffer aliasing are followed by a regular step.
 
-        Negative control: before the composites restored the parameter's topology, ``MorehAdamW``,
-        ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` reported the parameter (and the
-        moments, which are computed from the gradient) as ``Shard(3)`` after the first step of the ``nd`` case,
-        and dropped the label in the ``collapsed_1d`` case; the fused kernels pass by their device op's
-        ``compute_output_topologies``."""
+        Negative control (by the union rule above; the pin cannot be switched off from a test): without it,
+        ``MorehAdamW``, ``AdamWComposite`` (all variants), ``SGDComposite`` and ``MuonComposite`` hand back the
+        parameter (and the moments, which are computed from the gradient) labelled
+        ``[1, 2] / (Replicate, Shard(3))`` after the first step in both cases; the fused kernels pass either way
+        through their device op's ``compute_output_topologies``."""
         tp_axis = tp_mesh.axis_index("tp")
         device = ttml.autograd.AutoContext.get_instance().get_device()
         if param_label == "nd":
@@ -332,9 +335,9 @@ class TestTP:
             after = {name: _layout(t) for name, t in params.items()}
             assert after == before, f"step {step} relabelled parameters:\n  before {before}\n  after  {after}"
             moments_after = {(path, name): _layout(m) for path, name, m in _state_tensors(opt.get_state_dict())}
-            assert moments_after == moments_before, (
-                f"step {step} relabelled optimizer state:\n  before {moments_before}\n  after  {moments_after}"
-            )
+            assert (
+                moments_after == moments_before
+            ), f"step {step} relabelled optimizer state:\n  before {moments_before}\n  after  {moments_after}"
 
 
 # --- FSDP -----------------------------------------------------------------------------------------------------
