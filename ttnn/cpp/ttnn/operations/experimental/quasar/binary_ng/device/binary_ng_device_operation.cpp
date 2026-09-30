@@ -355,9 +355,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& tensor_b = tensor_args.input_tensor_b;
     const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
-    const int rank_a = input_shape_a.rank();
-    const int rank_b = input_shape_b.rank();
-    const int larger_rank = std::max(rank_a, rank_b);
     auto output_dtype = attributes.get_dtype();
 
     // Integer division results in FP32 outputs.
@@ -379,7 +376,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 }
             }
             const auto& larger_shape = shape_a.rank() > shape_b.rank() ? shape_a : shape_b;
-            for (int i = smaller_rank; i < larger_rank; ++i) {
+            for (int i = smaller_rank; i < larger_shape.rank(); ++i) {
                 auto dim = -1 - i;
                 if (larger_shape[dim] != 1) {
                     return false;

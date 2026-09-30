@@ -470,16 +470,33 @@ Tensor remainder(
 Tensor remainder(
     const Tensor& input,
     unary::ScalarVariant scalar,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // The unary SFPU fast path takes none of these arguments and does not support INT32.
+    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
+        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
+        float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
+        return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    }
+    return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
+        input,
+        scalar,
+        binary::BinaryOpType::REMAINDER,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -550,8 +567,9 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
  *   by running reshape.
  */
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const ttnn::Shape& s_a = input_a.logical_shape();
-    const ttnn::Shape& s_b = input_b.logical_shape();
+    // The checks and reshapes below index dims 0..3; view lower-rank inputs (e.g. 1-D vectors) as 4-D.
+    const ttnn::Shape s_a = input_a.logical_shape().to_rank(4);
+    const ttnn::Shape s_b = input_b.logical_shape().to_rank(4);
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) {
@@ -564,8 +582,10 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
     TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
 
-    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
-    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
+    const bool skip_reshape_a =
+        input_a.logical_shape().rank() == 4 && (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
+    const bool skip_reshape_b =
+        input_b.logical_shape().rank() == 4 && (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
 
     Tensor a_slim = input_a;
     Tensor b_slim = input_b;
