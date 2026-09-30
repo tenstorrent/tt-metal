@@ -1772,9 +1772,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         "unsafe with an active trace" warning for its own scratch; the cache buffers
         themselves are untouched by it.)
 
-        ``prev_gate`` is refilled with ``_MASK_NEG`` rather than 0, matching how
-        :func:`build_static_layer_cache` allocates it: it gates window 0's absent Ca half,
+        ``prev_gate`` / ``idx_prev_gate`` are refilled with ``_MASK_NEG`` rather than 0, matching
+        how :func:`build_static_layer_cache` allocates them: they gate window 0's absent Ca half,
         which a 0 fill would give real softmax weight instead of none.
+
+        ``idx_page_table`` is left alone: it is the constant identity mapping the indexer
+        traces read ``idx_key_cache`` / ``comp_kv`` through, not per-sequence state, and
+        zeroing it points every block at block 0.
 
         The KV caches live in the block pools; use :meth:`reset_session` to rewind one
         session.
@@ -1784,9 +1788,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sm in self.submeshes_io:
             for scache in sm["scaches"].values():
                 for name in _StaticLayerCache.__slots__:
+                    if name == "idx_page_table":
+                        continue
                     buf = getattr(scache, name)
                     if buf is not None:
-                        ttnn.fill(buf, _MASK_NEG if name == "prev_gate" else 0.0, output_tensor=buf)
+                        ttnn.fill(buf, self._empty_compressor_fill(name), output_tensor=buf)
 
     def prepare_static_decode(
         self,
@@ -3787,6 +3793,8 @@ class TracedPrefill:
         alignment = active_system_config().pipeline.pcie_alignment
         self._pkt_page_bytes = math.ceil(offset * 4 / alignment) * alignment
         self._pkt_w = self._pkt_page_bytes // 4
+        # The widest row of at most 4 KB that tiles the packet, for the broadcast over the TP ranks.
+        self._pkt_bcast_width = max(d for d in range(1, min(self._pkt_w, 1024) + 1) if self._pkt_w % d == 0)
 
     def _packet(self, chunk_ids: torch.Tensor, start: int) -> torch.Tensor:
         """The host packet ``[1, 1, 1, W]`` INT32 of the chunk ``chunk_ids`` (``t <= C`` ints) starting at
@@ -4021,7 +4029,11 @@ class TracedPrefill:
             # Parks on the socket until the host pushes this chunk's packet (it may well have already).
             ttnn.experimental.recv_async_h2d(stage.pkt, self._pkt_socket)
             if stage.device.get_num_devices() > 1:
-                pkt = ttnn.broadcast(stage.pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                # ``broadcast`` corrupts a row-major page larger than one fabric packet (~4.3 KB): send rows of <= 4 KB.
+                width = self._pkt_bcast_width
+                rows = ttnn.reshape(stage.pkt, [1, 1, self._pkt_w // width, width])
+                sent = ttnn.broadcast(rows, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                pkt = ttnn.reshape(sent, [1, 1, 1, self._pkt_w])
         else:
             ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)
             ttnn.experimental.recv_direct_async(stage.pkt, stage.recv)
