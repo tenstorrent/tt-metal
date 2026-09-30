@@ -17,7 +17,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/distributed/host_rdma_window.hpp"
-#include "tt_metal/distributed/host_uva_frame.hpp"
+#include "hostdevcommon/uva_frame.h"
 
 using namespace tt::tt_metal::experimental;
 namespace mh = tt::tt_metal::distributed::multihost;
