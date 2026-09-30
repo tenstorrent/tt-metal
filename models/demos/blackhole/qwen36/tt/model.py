@@ -3463,12 +3463,12 @@ class Qwen36Model:
         # slot u with a new recurrent row and stale taps. The exception propagates to the caller; the slot must not be
         # decoded before it is admitted again (a re-admission rewrites the recurrent row, every tap and the packed
         # history of that slot, so it repairs the state).
-        # Served determinism (lane S2, profiles/opt_round5/FASTSLOT.md): the M1 rider probe drifted run to run with this
-        # knob on and not with it off, but the slot write is exact (decode bucketing off: knob 1 and knob 0 servers give
-        # identical streams and logprob gaps, 45/45). The cause was decode bucketing: the SDPA-decode KV split depends on
-        # the step's width, and the faster hand-off moved request arrivals across step boundaries, so the width of some
-        # decode steps changed from run to run. QWEN36_DECODE_SDPA_PIN_MIN_WIDTH (attention/tp.py) removes that for
-        # widths >= 16.
+        # Served determinism (lane S2, profiles/opt_round5/FASTSLOT.md): the M1 rider probe drifted run to run with
+        # this knob on and not with it off, but the slot write is exact (decode bucketing off: knob 1 and knob 0
+        # servers give identical streams and logprob gaps, 45/45). The cause was decode bucketing: the SDPA-decode KV
+        # split depends on the step's width, and the faster hand-off moved request arrivals across step boundaries, so
+        # the width of some decode steps changed from run to run. QWEN36_DECODE_SDPA_PIN_MIN_WIDTH (attention/tp.py)
+        # removes that for widths >= 16.
         _fsenv = os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST")
         _fast_slot = (not _dev_copy) and ((self.num_devices == 2) if _fsenv is None else (_fsenv == "1"))
         lens = [int(valid_lens[u]) if valid_lens is not None else int(token_ids_list[u].shape[1]) for u in range(N)]
