@@ -188,6 +188,22 @@ inline void reset_config_context()
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
 }
 
+// Same as switch_config_context, but from the caller's copy of the context it used. A call that keeps the context
+// in a local does not reload the global after its volatile config and semaphore stores, which the compiler would
+// otherwise force (the stores go through pointers it cannot prove distinct from the global).
+inline void switch_config_context_from(const std::uint32_t context_used)
+{
+    unp_cfg_context = 1 - context_used;
+    if (context_used == 0)
+    {
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+    }
+    else
+    {
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+    }
+}
+
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
 {
@@ -964,9 +980,17 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     }
 }
 
+// Wait for the math thread to publish the DEST slot of this tile, then consume the publication. The math thread
+// posts MATH_DONE from its instruction stream once every earlier math instruction has completed and the section
+// acquire before this tile has passed (math_unpack_to_dest_math_ready), so the UNPACRs of the MOP, held by the
+// unpack stall, cannot write DEST before that point; the sync stall keeps the SEMGET behind the wait. The semaphore
+// has max 1, so the math thread cannot publish a second tile before this one is consumed, and the unpack thread
+// cannot post UNPACK_TO_DEST twice before the math thread has taken the first post (that post needs the MOP, which
+// needs this wait).
 inline void wait_for_dest_available()
 {
-    t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
+    TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);
+    TTI_SEMGET(semaphore::t6_sem(semaphore::MATH_DONE));
 }
 
 // Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.

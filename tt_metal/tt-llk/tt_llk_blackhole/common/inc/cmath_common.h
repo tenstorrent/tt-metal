@@ -241,14 +241,16 @@ inline void set_math_semaphores()
     t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
 }
 
+// Publish the DEST slot of the next unpack-to-dest tile to the unpack thread. The post leaves this thread's
+// instruction stream only after every earlier math and SFPU instruction has completed (the section acquire before
+// this tile included), and the unpack thread waits for it in its own stream before the MOP that writes DEST
+// (wait_for_dest_available). The wait on max (the semaphore has max 1) keeps this thread from publishing a
+// second tile before the unpack thread has consumed the first; the DEST address itself travels through the
+// mailbox, whose write is held by the hardware while its four entries are full.
 inline void math_unpack_to_dest_math_ready()
 {
     t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);
     t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
-    while (semaphore_read(semaphore::MATH_DONE) == 0)
-    {
-    }
-    semaphore_get(semaphore::MATH_DONE);
 }
 
 inline void math_unpack_to_dest_tile_ready()
