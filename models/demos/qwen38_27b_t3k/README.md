@@ -47,11 +47,10 @@ gaps.
 
 ## Evaluation
 
-Evaluation results:
-
-- GPQA Diamond: 9/10 (90%).
-- Terminal-Bench 2.1: 4/5 (80%).
-- SWE-bench Verified: 3/5 (60%).
+No accuracy result has been established on this mesh. GPQA Diamond has been served end to end
+once, scoring 84.85 over 198 samples against a published 89.2, but three credited samples commit
+no answer and excluding any one of them fails the 0.95 ratio check. See the end-to-end eval
+section of `doc/multichip_evidence.md`. Terminal-Bench and SWE-bench have not been run here.
 
 ## Run the demo
 
