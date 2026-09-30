@@ -55,3 +55,48 @@ for 4000 programs (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`), since a 6-la
 4. **Do the test agents' mistake checks on the CPU,** not with 4-6 device runs per review.
 5. Small items: dashboards now exceed the repo's 500 KB large-file hook (Hy4's are published but not committed);
    the rms_norm fork's C++ path does not refuse `memory_config` under `inplace` (test skipped, see its CHANGELOG).
+
+## Recipe: F56, component tests without a review agent
+
+Follow what F49 did for swap tests. Its commits (search `git log --grep "\[F49\]"`) and `dev/BREADCRUMBS.md`
+section F49 are the worked example.
+
+**Build (CPU only until step 6)**
+1. `testing/component.py`: add `run_component_test(..., checks=None | "auto")`. `None` keeps today's behaviour, so
+   existing frozen tests do not change. `"auto"` picks checks by the output's kind:
+   - float tensor: PCC (as now) plus relative error, worst-row error, row-size ratio, finite values (reuse the helpers
+     F49 added for swap steps);
+   - integer top-k indices: per-row set overlap (the `topk_overlap` mode in `testing/harness.py`), no future
+     positions, no repeats;
+   - expert routing (indices + weights): expert overlap and weights summing to 1 per token.
+   Take the limits from the spec (`thresholds.*`, add new ones with defaults like F49's `swap_step_*`).
+2. **Mistake tests at freeze** (`core/runs.py: freeze_task`, which today runs the test with `BRINGUP_IMPL=reference`,
+   must PASS, and `stub`, must FAIL): also run it with each `BRINGUP_IMPL=mutate:<kind>` from `testing/mutate.py`
+   (CPU, no device) and require FAIL for every kind that applies to the output. Record which kinds were caught.
+3. **"Can the test see it?"** (new, `testing/sensitivity.py`): on the CPU, scale each input and each weight of the
+   step by 1.02 one at a time and measure the change of the tested output. If a change stays below the test's
+   tolerance, the test is blind to that part: add a comparison of the intermediate that depends on it (the reference
+   records every step output as `L{i}.<name>`) or a second input (another layer, or random data at a different
+   scale). Report the blind parts in the freeze log.
+4. `testing/templates.py`: component template gets `CHECKS = "auto"`.
+5. `orchestrator.py`: component tasks skip the test-role agent unless `agents.component_review` (new, like
+   `agents.swap_review`) names the block type, or step 3 found a blind spot it could not close, or the output kind is
+   unknown.
+
+**Prove before switching it on**
+6. Copy `dev/f49_mutation_proof.py` to `dev/f56_mutation_proof.py` and point it at component tests: for a sample of
+   Hy4's 42 reviewed component tests (at least one per output kind: attn_hc, attention, indexer, router, experts,
+   a residual), run each injected mistake and compare: caught by the reviewed test / by the old plain test / by
+   `checks="auto"`. Requirement: `auto` catches everything the reviewed test catches, and the unmutated reference
+   passes. Hy4 goldens are in `/localdev/dnijemcevic/bringup/hy4_preview_d_p/golden` (CPU reference, run with
+   `mesh=None`). Include the known hard cases from `knowledge/known_issues.md`: a wrong norm epsilon (invisible at large
+   row RMS), iHC pre gates at layer 0, top-k compared by position.
+7. Device check: a small pytest (like `generated/f49_device/test_f49_device.py`) that runs `checks="auto"` on the
+   device for one component per output kind; it must pass (no false alarms from device rounding).
+8. Selftests in `selftest/` (fixture model): `checks=None` unchanged, `auto` passes in reference mode, fails in stub
+   mode and on each mistake kind, the review skip and `agents.component_review` work. Run
+   `scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/`.
+9. Write BREADCRUMBS F56 with the proof table, and ask the owner before making the skip the default.
+
+Expected saving: most of the ~4 h of component-test review per bring-up; the agent stays for new output kinds and
+unresolved blind spots.
