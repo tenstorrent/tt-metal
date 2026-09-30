@@ -661,6 +661,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Compile the device-side slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2: fill_cache + masked where) and
             # upload the per-slot row masks now, so the first real request does not pay ~450 ms for it.
             model.warmup_gdn_slot_write()
+            # Same for the fast GDN slot remap (QWEN36_GDN_REMAP_FAST): a first-seen remap program costs ~300 ms of JIT.
+            model.warmup_gdn_remap()
         # Steady-state view: weights + KV pool + GDN slot state + the persistent prefill buffers are all allocated
         # (the decode traces are captured earlier by warmup_model_decode). The free DRAM here, minus a margin for
         # the transient prefill activations, is the headroom QWEN36_MAX_TOKENS_ALL_USERS can grow into.

@@ -312,6 +312,12 @@ def test_remap_fast_model(mesh_device, reset_seeds, ensure_gc):
         model._unbind_gdn_prefill_scratch(prev)
     model.warmup_gdn_slot_write()
     model.sync_gdn_decode_state()
+    d0 = _row_digests(model)
+    model.warmup_gdn_remap()  # compiles the fast-path programs (knob on); its 4 remaps compose to the identity
+    d1 = _row_digests(model)
+    warm_diff = sum(d0[k] != d1[k] for k in d0)
+    logger.info(f"[remap_model] warmup_gdn_remap left {warm_diff} of {len(d0)} row digests changed")
+    assert warm_diff == 0
     traces = {}
     for w in widths:
         host = model.prepare_decode_inputs_host(

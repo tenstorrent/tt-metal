@@ -3920,6 +3920,24 @@ class Qwen36Model:
             if ctx is not None:
                 ctx.close()
 
+    def warmup_gdn_remap(self):
+        """Compile every QWEN36_GDN_REMAP_FAST program before the first request (no-op when the knob is off or the
+        batched GDN state is B <= 1): a full cyclic shift (every source slot, all cross parity), its inverse, and a
+        same-parity pair swap twice. The programs have one shape each (only the slice start varies, one per slot), so
+        this covers every served remap; the four remaps compose to the identity, so the state is left as it was."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import gdn_remap_fast_enabled
+
+        dns = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        if not dns or dns[0].rec_state is None or dns[0].B <= 1 or not gdn_remap_fast_enabled(self.mesh_device):
+            return
+        B = dns[0].B
+        t0 = time.perf_counter()
+        pair = [i ^ 2 if (i ^ 2) < B else i for i in range(B)]
+        for remap in ([(i + 1) % B for i in range(B)], [(i - 1) % B for i in range(B)], pair, pair):
+            self._remap_gdn_slots(remap)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"[decode] warmed the fast GDN slot-remap programs (B={B}) in {time.perf_counter() - t0:.1f} s")
+
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op
         (``fused_recurrent_gated_delta_rule``) when ``enabled``, else the composite op chain.
