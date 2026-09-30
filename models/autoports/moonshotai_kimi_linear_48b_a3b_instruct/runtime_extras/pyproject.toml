@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kimi-linear-runtime-extras"
+version = "0.1.0"
+description = "Runtime dependencies of the Kimi-Linear tiktoken tokenizer that vLLM does not pull in itself (tiktoken.load reads the local vocab through blobfile)."
+requires-python = ">=3.10"
+dependencies = ["blobfile>=3", "tiktoken>=0.6.0"]
+
+[tool.setuptools]
+packages = ["kimi_linear_runtime_extras"]

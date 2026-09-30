@@ -1,0 +1,28 @@
+[
+ {
+  "name": "bfp4_kvbfp8",
+  "experts": "bfp4",
+  "kv": "bfp8",
+  "top1": 0.95,
+  "top5": 1.0,
+  "top100": 1.0,
+  "decode_ms": 89.8,
+  "prefill_s": 0.65,
+  "degenerate": false,
+  "paris": true,
+  "meets_bars": true
+ },
+ {
+  "name": "bfp8_kvbfp8",
+  "experts": "bfp8",
+  "kv": "bfp8",
+  "top1": 0.96,
+  "top5": 1.0,
+  "top100": 1.0,
+  "decode_ms": 91.2,
+  "prefill_s": 0.67,
+  "degenerate": false,
+  "paris": true,
+  "meets_bars": true
+ }
+]
