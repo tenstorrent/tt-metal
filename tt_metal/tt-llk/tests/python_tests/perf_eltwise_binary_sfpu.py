@@ -463,7 +463,9 @@ def test_perf_eltwise_binary_sfpu_int_extended(
         # Pre-existing: with TT_LLK_DISABLE_ASSERTS=1, which every perf run sets, the
         # BH div_int32 kernels do not compile ("too few lregs to hold live values");
         # test_eltwise_binary_sfpu.py fails the same way under that flag.
-        pytest.skip("BH div_int32 does not compile with TT_LLK_DISABLE_ASSERTS=1")
+        pytest.skip(
+            "BH div_int32 does not compile with TT_LLK_DISABLE_ASSERTS=1; see tt-metal#58598"
+        )
     if (
         get_chip_architecture() == ChipArchitecture.BLACKHOLE
         and mathop == MathOperation.SfpuLcm
