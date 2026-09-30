@@ -1354,40 +1354,16 @@ def test_every_exact_op_is_driven_by_a_gate():
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
-#: metric, with what was measured there; the test below keeps the list from growing
-#: unnoticed, and fails when an entry is no longer needed. (Abs/Neg/Identity's 512-step
-#: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce, and
-#: Floor/Ceil's Float32 -> Float16 dest_acc=No cells were inputs a Float16 Dest flushes;
-#: both are measured correctly now, at 0.)
-#:
-#: What is left is one lane on a block-float input. Each cell measures exactly the rank
-#: of 1.0 on its output with the subnormal band flushed -- one predicate or integer
-#: flipping between 0 and 1 -- and only where the golden block-quantizes the input
-#: itself. That fits the sweep's -0.0 lane, which the golden's quantization, in its block
-#: of subnormals, turns non-zero (log/sqrt/ceil read it as +inf or ~6e-39 there): the
-#: golden, not the kernel. The 16-bit inputs of the same ops gate at 0.
-_ONE_FLIP_STEPS = {
-    DataFormat.Float16_b: 16129,
-    DataFormat.Float16: 14337,
-    DataFormat.Float32: 1056964609,
-}
-
-_EXACT_OP_DEMOTIONS = {
-    (op, in_fmt, out_fmt, dest): f"{steps} ULP measured, the -0.0 lane"
-    for op in (
-        MathOperation.Floor,
-        MathOperation.Signbit,
-        MathOperation.EqualZero,
-        MathOperation.NotEqualZero,
-        MathOperation.LessThanZero,
-        MathOperation.GreaterThanEqualZero,
-    )
-    for in_fmt in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
-    for out_fmt, steps in _ONE_FLIP_STEPS.items()
-    for dest in (
-        (DestAccumulation.Yes,) if out_fmt == DataFormat.Float16 else DestAccumulation
-    )
-}
+#: metric, with what was measured there. Each would be a real deviation on an op that
+#: should be exact, with no cause established yet; the test below keeps the list from
+#: growing unnoticed, and fails when an entry is no longer needed. Empty today. Every
+#: class it used to hold was the sweep's, not the ops': Abs/Neg/Identity's 512-step
+#: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce;
+#: Floor/Ceil's Float32 -> Float16 dest_acc=No cells were the fp16 Dest's flush of the
+#: strided lanes below 2**-14; and the one-flip Bfp8_b/Bfp4_b cells of Floor and the
+#: predicates were the sweep's -0.0 lane, which the block quantizer turns into
+#: -2**-127 for the golden (``ulp_sweep._normal_input``). All of them measure 0.
+_EXACT_OP_DEMOTIONS: dict = {}
 
 
 def _swept_exact_ops():
@@ -1894,6 +1870,190 @@ def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
     problems = _budgets_past_their_measurement(path)
     assert len(problems) == 1 and "the emitter writes 7" in problems[0], problems
     assert _measured_budget_rows(path)[0][4] is True, "the emitted row read as sampled"
+
+
+# ── A gated cell is not quietly parked ────────────────────────────────────────
+#
+# The emitter writes `not measurable` for a cell in which one lane disagrees with the
+# golden about being finite, and the sweep gates no tolerance row -- so an overflow a
+# later emit introduces into a gated cell would take the whole cell off the gate with
+# nothing to notice. Exact ops are held by _EXACT_OP_DEMOTIONS; this holds the rest.
+
+#: Swept cells on a gateable output that the table holds as ``not measurable``, keyed
+#: ``(op, in, out, approx, dest)`` with ``None`` for an axis the cause does not depend
+#: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
+#: handful of inputs does not belong here: name the inputs in
+#: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
+_GOLDEN_IN_INPUT_FORMAT = (
+    "the golden is tilized and untilized in the input format, so an fp16 input's "
+    "reference overflows at 65504 where the kernel's 32-bit Dest holds the answer "
+    "(exp2(16) reads inf against an exact 65536); #58590 fixes the golden"
+)
+_NO_INFINITY_IN_A_16BIT_DEST = (
+    "a 16-bit Dest has no infinity: where the answer overflows, the kernel's result "
+    "reads as the Dest's largest magnitude (-130560 for sinh(-65504)), a finite answer "
+    "to an infinite golden"
+)
+_UNMEASURABLE_CELLS_ACKNOWLEDGED = {
+    **{
+        (MathOperation.Tan, DataFormat.Float16, out, None, None): (
+            _GOLDEN_IN_INPUT_FORMAT
+            + "; tan(177.5) is -66347, which fp16 has no room for"
+        )
+        for out in (DataFormat.Float16_b, DataFormat.Float32)
+    },
+    # -- the golden, not the kernel -----------------------------------------------
+    **{
+        (
+            op,
+            DataFormat.Float16,
+            out,
+            None,
+            DestAccumulation.Yes,
+        ): _GOLDEN_IN_INPUT_FORMAT
+        for op in (
+            MathOperation.Cosh,
+            MathOperation.Exp,
+            MathOperation.Exp2,
+            MathOperation.Expm1,
+            MathOperation.Selu,
+            MathOperation.Sinh,
+            MathOperation.Square,
+            MathOperation.UnaryPower,
+            MathOperation.Xielu,
+        )
+        for out in (DataFormat.Float16_b, DataFormat.Float32)
+    },
+    (
+        MathOperation.Cbrt,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        None,
+        DestAccumulation.Yes,
+    ): (
+        "the golden is rounded to the bfloat16 input format, so cbrt(2.8e14) = 65439 "
+        "reads 65536 -> inf against the kernel's correct 65440; #58590 fixes the golden"
+    ),
+    # -- the store or the Dest, not the op ------------------------------------------
+    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): (
+        _NO_INFINITY_IN_A_16BIT_DEST
+    ),
+    # -- the approximation's own shortfall at the fp16 overflow edge ----------------
+    (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): (
+        "approximate exp answers 64256..65408 for x in 11.09..11.12, where exp(x) is "
+        "past 65504: the approximation's own shortfall at the overflow edge, which no "
+        "store or golden fix removes"
+    ),
+    (
+        MathOperation.Exp,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): ("the same shortfall from a strided Float32 input, one lane"),
+    # -- kernel behaviour over a wide band of the format, not yet triaged -----------
+    # Each is what the sweep found and the row records; none is a golden or store
+    # artefact, and none is a handful of lanes an issue could name. They hold their
+    # cells on tolerance until the kernel is looked at.
+    (MathOperation.Digamma, None, None, None, None): (
+        "non-finite of the wrong sign for |x| above ~1e36, and a finite -61312 where a "
+        "block-quantized input lands on the pole at 0"
+    ),
+    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): (
+        "past the overflow point the approximate kernel returns x itself instead of "
+        "inf, and NaN for large negative x where the answer is 0"
+    ),
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        None,
+        ApproximationMode.No,
+        DestAccumulation.Yes,
+    ): (_GOLDEN_IN_INPUT_FORMAT),
+    (MathOperation.Expm1Cw, None, None, None, None): (
+        "past the overflow point (x >= 90) the kernel returns -1, the x -> -inf limit, "
+        "instead of inf"
+    ),
+    (MathOperation.I0, None, None, None, None): (
+        "saturates at 6.05e37 where i0 overflows fp32: a finite answer to an infinite "
+        "golden from |x| ~ 90 up"
+    ),
+    (MathOperation.I1, None, None, None, None): (
+        "saturates at -1.16e37 where i1 overflows fp32, half the format"
+    ),
+    (MathOperation.Lgamma, None, None, None, None): (
+        "saturates at 3.32e38 where lgamma overflows fp32"
+    ),
+    (MathOperation.Polygamma, None, None, None, None): (
+        "0 for |x| above ~1e36 where the golden is inf, and inf near x = -7 where the "
+        "golden is 1.8e31"
+    ),
+    (MathOperation.Rpow, None, None, None, None): (
+        "NaN where the answer is 0 and 1 where it is inf, for |x| above ~8e31"
+    ),
+}
+
+
+def _not_measurable_cells(path=_TABLE_PATH):
+    """``(op, in, out, approx_or_None, dest_or_None)`` for every ``not measurable`` row
+    on an output a step budget could gate."""
+    from helpers.ulp_sweep import _row_fields
+
+    cells, op = [], None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            op = line.split(":")[0].strip()
+        if "not measurable" not in line or not line.lstrip().startswith("- "):
+            continue
+        fields = _row_fields(line)
+        out_fmt = DataFormat[fields["out"]]
+        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
+            continue  # a block output is never gated from this sweep
+        cells.append(
+            (
+                MathOperation[op],
+                DataFormat[fields["in"]],
+                out_fmt,
+                ApproximationMode[fields["approx"]] if "approx" in fields else None,
+                DestAccumulation[fields["dest"]] if "dest" in fields else None,
+            )
+        )
+    return cells
+
+
+def _acknowledges(key, cell) -> bool:
+    return all(k is None or k == c for k, c in zip(key, cell))
+
+
+def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
+    cells = _not_measurable_cells()
+    unacknowledged = [
+        cell
+        for cell in cells
+        if not any(_acknowledges(key, cell) for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED)
+    ]
+    assert not unacknowledged, (
+        "not-measurable cells with no acknowledged cause (a tracked defect on a few "
+        "inputs belongs in ulp_sweep._KNOWN_NONFINITE_LANES; anything else, here):\n"
+        + "\n".join(
+            f"  {op.name} {i.name}->{o.name} approx={a and a.name} dest={d and d.name}"
+            for op, i, o, a, d in unacknowledged
+        )
+    )
+    stale = [
+        key
+        for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED
+        if not any(_acknowledges(key, cell) for cell in cells)
+    ]
+    assert not stale, "acknowledgements no row needs any more: " + ", ".join(
+        f"{op.name} {i.name}->{o.name}" for op, i, o, _, _ in stale
+    )
 
 
 def test_every_unary_op_is_enrolled_or_excused():
