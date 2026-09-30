@@ -276,78 +276,20 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
 }
 
 /**
- * @brief One row of a matmul call in config context CTX: program the two base addresses, unpack the held tile, stream the other operand.
- *
- * The base addresses travel in the instruction stream: two SETDMAREG per address into a GPR, one STALLWAIT for the
- * GPR writes, one WRCFG per base address register and one NOP for the two cycle config write (the race free form
- * for a value a Tensix instruction consumes, ISA Scalar Unit). Every instruction of the row is ordered behind the
- * UNPACRs of the previous row by the thread's Wait Gate, so a register is never rewritten under an UNPACR that has
- * not sampled it yet: no RISC-side register write, no semaphore read and no second config context are needed
- * inside a call.
- *
- * @tparam CTX: The config context (0 or 1) the call runs in.
- * @param reuse_a: Operand A (in0, SrcB, unpacker 1) is held and operand B (in1, SrcA, unpacker 0) streamed.
- * @param address_a: L1 address of the in0 tile of the row (16-byte words).
- * @param address_b: L1 address of the first in1 tile of the row.
- * @param rut_dim: Streamed tiles of the row.
- * @param held_partial_face: Whether the held operand is unpacked face-by-face.
- */
-template <std::uint32_t CTX>
-inline void _llk_unpack_AB_matmul_row_(
-    const bool reuse_a, const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t rut_dim, const bool held_partial_face)
-{
-    // unpacker 0 (SrcA) reads in1 at address_b, unpacker 1 (SrcB) reads in0 at address_a
-    constexpr std::uint32_t REG_UNP0 = (CTX == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-    constexpr std::uint32_t REG_UNP1 = (CTX == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
-
-    TT_SETDMAREG(0, LOWER_HALFWORD(address_b), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(address_b), 0, HI_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, LOWER_HALFWORD(address_a), 0, LO_16(p_gpr_unpack::TMP1));
-    TT_SETDMAREG(0, UPPER_HALFWORD(address_a), 0, HI_16(p_gpr_unpack::TMP1));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, REG_UNP0);
-    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, REG_UNP1);
-    // The config write takes two cycles; the UNPACR must see the new base address.
-    TTI_NOP;
-
-    if (reuse_a)
-    {
-        _llk_unpack_AB_matmul_held_tile_<SrcB>(held_partial_face);
-    }
-    else
-    {
-        _llk_unpack_AB_matmul_held_tile_<SrcA>(held_partial_face);
-    }
-
-    // Stream the other operand; a set zmask bit selects the replay copy of context 1. The mask covers the 16
-    // iterations a full-sync block can have.
-    if (rut_dim == 1)
-    {
-        TTI_MOP(0, 0, (CTX == 0) ? 0 : 0xffff);
-    }
-    else
-    {
-        TT_MOP(0, rut_dim - 1, (CTX == 0) ? 0 : 0xffff);
-    }
-}
-
-/**
  * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
  * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
  * for each row while streaming the other operand through the MOP.
  *
- * The call runs in the current config context and switches to the other one at the end, as every unpack
- * operation does; it posts the UNPACK_SYNC token before its first instruction and takes it back with the SEMGET
- * after its last, so the next operation's RISC-side address writes stay off this context until the call's
- * UNPACRs have been accepted. Unlike the other unpack operations it writes no unpacker register from the RISC and
- * therefore does not read the semaphore before a row: the base addresses of every row travel in the instruction
- * stream (SETDMAREG, WRCFG), ordered behind the previous row's UNPACRs by the Wait Gate, and the streamed tile
- * stride (SCRATCH_SEC0) is copied from the tile size GPRs when it changes, so a data format reconfig between calls
- * is honoured without a re-init. A row costs the RISC about ten instruction pushes and no round trip; the
- * instruction FIFO bounds how far the RISC runs ahead, so at most a handful of tokens are outstanding and the
- * semaphore never saturates.
+ * Every row follows the protocol of the other unpack operations: wait until at most one earlier row is still being
+ * unpacked (the UNPACK_SYNC semaphore counts them), write the row's two base addresses into the free config context
+ * from the RISC, post the token, hold the UNPACRs until the writes have landed, unpack the held tile, stream the other
+ * operand through the MOP, take the token back and switch context. The semaphore is read before the row's address
+ * arithmetic so that the read's latency overlaps it, and a row of one streamed tile issues its MOP as an immediate.
+ * The streamed tile stride (SCRATCH_SEC0), which the replay's CFGSHIFTMASK adds after every tile, is copied from the
+ * tile size GPRs when it differs from the one programmed, so a data format reconfig between calls is honoured
+ * without a re-init.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -383,20 +325,14 @@ inline void _llk_unpack_AB_matmul_(
     // In0/InA -> srcB (unpacker 1; supports partial face)
     // In1/InB -> srcA (unpacker 0)
 
+    volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim; // rows of the block, one held tile each
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // streamed tiles per row
 
     // Tile stride of the streamed operand in 16-byte words: in1 tiles are consecutive, in0 rows are kt_dim tiles apart.
     const std::uint32_t stream_stride = reuse_a ? tile_size_b : (tile_size_a * kt_dim);
-
-    // Take the context token for this call (see the function description).
-    semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
-
-    // Hold this call's register writes and UNPACRs until the RISC-side configuration writes of the preceding
-    // hw_configure or reconfig have been processed; this call issues none itself, so in the steady state the wait
-    // is one cycle.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::TRISC_CFG);
 
     // The replay's CFGSHIFTMASK adds SCRATCH_SEC0_val to the streamed base address after every tile. Reload it from
     // the tile size GPRs (TILE_SIZE_A is the in1 tile size, TILE_SIZE_B the in0 tile size) when the stride differs
@@ -421,6 +357,10 @@ inline void _llk_unpack_AB_matmul_(
     const bool held_partial_face = reuse_a ? unpB_partial_face : unpA_partial_face;
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
+        // Read the context semaphore first: the read takes a dozen cycles to return and the row's address arithmetic
+        // runs in its shadow. The value can only fall until this row posts, so a free context stays free.
+        std::uint32_t busy_contexts = semaphore_read(semaphore::UNPACK_SYNC);
+
         std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
         std::uint32_t offset_address_b = tile_size_b * (tile_index_b + (reuse_a ? (0) : (t)));
         if constexpr (kernel_broadcast_a > 0)
@@ -435,22 +375,52 @@ inline void _llk_unpack_AB_matmul_(
         const std::uint32_t address_a = base_address_a + offset_address_a;
         const std::uint32_t address_b = base_address_b + offset_address_b;
 
-        LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
-        LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
-
-        if (unp_cfg_context == 0)
+        // Wait for a free context: at most one earlier row may still be unpacking, so the context written next has
+        // been consumed (the same wait as wait_for_next_context(2)).
+        while (busy_contexts >= 2)
         {
-            _llk_unpack_AB_matmul_row_<0>(reuse_a, address_a, address_b, rut_dim, held_partial_face);
+            busy_contexts = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+
+        // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
+        _llk_unpack_configure_addresses_(address_b, address_a, cfg);
+
+        semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        if (reuse_a)
+        {
+            _llk_unpack_AB_matmul_held_tile_<SrcB>(held_partial_face);
         }
         else
         {
-            _llk_unpack_AB_matmul_row_<1>(reuse_a, address_a, address_b, rut_dim, held_partial_face);
+            _llk_unpack_AB_matmul_held_tile_<SrcA>(held_partial_face);
         }
+
+        // Stream the other operand; a set zmask bit selects the replay copy of context 1. The mask covers the 16
+        // iterations a full-sync block can have.
+        if (rut_dim == 1)
+        {
+            if (unp_cfg_context == 0)
+            {
+                TTI_MOP(0, 0, 0);
+            }
+            else
+            {
+                TTI_MOP(0, 0, 0xffff);
+            }
+        }
+        else
+        {
+            TT_MOP(0, rut_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
+        }
+
+        // T6::SEMGET for context release
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        // Switch unpacker config context
+        switch_config_context(unp_cfg_context);
     }
-
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
 }
