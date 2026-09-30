@@ -500,6 +500,7 @@ json erisc_features_json(const std::vector<manifest::EriscFeatures>& erisc_featu
         erisc["context_switch_enabled"] = features.context_switch_enabled;
         erisc["interrupts_enabled"] = features.interrupts_enabled;
         erisc["teardown_check_iterations"] = features.teardown_check_iterations;
+        erisc["telemetry_stats_mask"] = features.telemetry_stats_mask;
     }
     return out;
 }
@@ -532,6 +533,20 @@ json lifecycle_json(const manifest::Lifecycle& lifecycle) {
     }
     out["erisc_features"] = erisc_features_json(lifecycle.erisc_features);
     out["kernel_params"] = kernel_params_json(lifecycle.kernel_params);
+    return out;
+}
+
+json diagnostics_json(const manifest::Diagnostics& diagnostics) {
+    json out = json::object();
+    if (diagnostics.perf_telemetry.has_value()) {
+        out["perf_telemetry"] = l1_region_json(*diagnostics.perf_telemetry);
+    }
+    if (diagnostics.code_profiling.has_value()) {
+        out["code_profiling"] = l1_region_json(*diagnostics.code_profiling);
+    }
+    if (diagnostics.channel_trimming.has_value()) {
+        out["channel_trimming"] = l1_region_json(*diagnostics.channel_trimming);
+    }
     return out;
 }
 
@@ -572,6 +587,7 @@ json make_router_json(
     out["channels"]["senders"] = senders_json(router, control_plane, node);
     out["channels"]["receivers"] = receivers_json(router, peer_path, control_plane, node);
     out["lifecycle"] = lifecycle_json(router.lifecycle);
+    out["diagnostics"] = diagnostics_json(router.diagnostics);
     return out;
 }
 

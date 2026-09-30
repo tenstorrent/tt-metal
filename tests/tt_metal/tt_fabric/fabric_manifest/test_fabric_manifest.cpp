@@ -840,7 +840,8 @@ void check_router_lifecycle(const std::vector<RouterEntry>& routers) {
                 json({{"handshake_enabled", expected.handshake_enabled},
                       {"context_switch_enabled", expected.context_switch_enabled},
                       {"interrupts_enabled", expected.interrupts_enabled},
-                      {"teardown_check_iterations", expected.teardown_check_iterations}}));
+                      {"teardown_check_iterations", expected.teardown_check_iterations},
+                      {"telemetry_stats_mask", expected.telemetry_stats_mask}}));
         }
 
         const auto& params = published.kernel_params;
@@ -856,6 +857,39 @@ void check_router_lifecycle(const std::vector<RouterEntry>& routers) {
                     {"completion_ack", params.txq_spin_wait.completion_ack}}},
                   {"txq_accept_ahead", params.txq_accept_ahead},
                   {"risc_cpu_data_cache", params.risc_cpu_data_cache}}));
+    }
+}
+
+// Each diagnostics buffer is present exactly when the builder's buffer map has it.
+void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
+    const auto map = builder_context().get_telemetry_and_metadata_buffer_map();
+    const std::array<std::tuple<const char*, const FabricRouterDiagnosticBufferMap::BufferRegion*>, 3> buffers = {{
+        {"perf_telemetry", &map.perf_telemetry},
+        {"code_profiling", &map.code_profiling},
+        {"channel_trimming", &map.channel_trimming_capture},
+    }};
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& diagnostics = entry.router->at("diagnostics");
+        const auto& published = entry.published->diagnostics;
+        const std::array<const std::optional<manifest::L1Region>*, 3> published_buffers = {
+            &published.perf_telemetry, &published.code_profiling, &published.channel_trimming};
+
+        std::set<std::string> keys;
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            const auto& [name, allocated] = buffers[i];
+            SCOPED_TRACE(name);
+            const auto& expected = *published_buffers[i];
+            ASSERT_EQ(expected.has_value(), allocated->is_enabled());
+            if (!expected.has_value()) {
+                continue;
+            }
+            keys.insert(name);
+            expect_region(diagnostics.at(name), *expected);
+            EXPECT_EQ(expected->address, allocated->l1_address);
+            EXPECT_EQ(expected->size, allocated->size_bytes);
+        }
+        EXPECT_EQ(keys_of(diagnostics), keys);
     }
 }
 
@@ -958,5 +992,8 @@ TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manife
 
 TEST_F(Fabric1DManifestFixture, RouterLifecycle) { check_router_lifecycle(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterLifecycle) { check_router_lifecycle(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

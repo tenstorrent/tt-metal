@@ -219,6 +219,8 @@ struct EriscFeatures {
     bool context_switch_enabled = false;
     bool interrupts_enabled = false;
     uint32_t teardown_check_iterations = 0;
+    // The FabricTelemetryStatistic bits this ERISC collects; 0 when its telemetry is off.
+    FabricTelemetryStatisticMask telemetry_stats_mask = 0;
 };
 
 // How the router's ERISCs context switch.
@@ -259,10 +261,9 @@ struct Lifecycle {
     RouterKernelParams kernel_params;
 };
 
-// Each buffer is present only when its diagnostic is enabled.
+// Each buffer is present when the builder allocated it. Blackhole always reserves perf telemetry, even when
+// it is off.
 struct Diagnostics {
-    // FABRIC_TELEMETRY_STATS_MASK. The enabled telemetry statistics that are being collected.
-    FabricTelemetryStatisticMask telemetry_stats_mask = 0;
     std::optional<L1Region> perf_telemetry;
     std::optional<L1Region> code_profiling;
     std::optional<L1Region> channel_trimming;
