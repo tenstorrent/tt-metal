@@ -12,7 +12,7 @@ import torch
 
 from models.demos.qwen38_27b_t3k.tt import generator_vllm as adapter_module
 from models.demos.qwen38_27b_t3k.tt.generator import Qwen38Generator
-from models.demos.qwen38_27b_t3k.tt.generator_vllm import Qwen38ForCausalLM, _shared_pool_ceiling
+from models.demos.qwen38_27b_t3k.tt.generator_vllm import MAX_SERVING_BATCH, Qwen38ForCausalLM, _shared_pool_ceiling
 
 
 class KVPoolConfigurationTests(unittest.TestCase):
@@ -47,6 +47,24 @@ class KVPoolConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "525312"}):
             with self.assertRaises(ValueError):
                 Qwen38ForCausalLM.get_max_tokens_all_users(262144, num_devices=4)
+
+
+class ServingBatchContractTests(unittest.TestCase):
+    """Batch 32 decodes to per-user PCC 0.019, so serving must refuse it before weights load."""
+
+    def test_the_bound_is_the_widest_measured_batch(self):
+        self.assertEqual(MAX_SERVING_BATCH, 16)
+
+    def test_batches_above_the_measured_width_are_refused(self):
+        # The refusal cannot depend on QWEN_DECODE_BUCKETS: the served spec leaves it unset,
+        # which is exactly the configuration that returns wrong results instead of raising.
+        for buckets in ("0", "1"):
+            for batch in (17, 24, 32):
+                with self.subTest(buckets=buckets, batch=batch), patch.dict(
+                    os.environ, {"QWEN_DECODE_BUCKETS": buckets}
+                ), patch.object(adapter_module, "resolve_mesh_tp", Mock(return_value=8)):
+                    with self.assertRaises(ValueError):
+                        Qwen38ForCausalLM.initialize_vllm_model(None, object(), batch, 1024)
 
 
 class FakeGenerator:

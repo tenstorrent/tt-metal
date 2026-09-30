@@ -102,6 +102,22 @@ identical output across replays. Paged KV cache and warmed traced decode replay 
 400 decode steps with 16 scheduler-style slot remaps held a flat 6.4 s per 50 steps with no
 drift, and 40 cycles of interleaved prefill and decode were equally stable.
 
+### Serving batch is bounded at 16 by a correctness failure, not by capacity
+
+Attention decode returns wrong results at batch 32 on this mesh: per-user PCC 0.019, against
+roughly 0.9999 at batches 1, 2, 4, 8 and 16. Nothing between 17 and 31 has been measured. The
+model, the generator and the vLLM adapter therefore all refuse a batch above 16 before weights
+load, and the refusal is unconditional: it cannot depend on `QWEN_DECODE_BUCKETS`, because the
+served configuration leaves that unset and so takes the `_decode_fixed` path that produces the
+wrong values rather than the bucket path that already rejected the width.
+
+This is a separate limit from the capacity frontier in `doc/context_contract.json`, which shows
+batch 32 at 32768 tokens needing 9.07 GiB against a 7.192 GiB budget. Batch 32 is unusable on
+both grounds, and the memory result should not be read as the reason.
+
+The cause is not diagnosed. It is per-user PCC, so it is a slot-indexing or state-partitioning
+suspicion rather than a numerics one, but nothing here narrows it further.
+
 ## Instrumented run
 
 Waypoint-and-assert clean over a full prefill and traced decode: 21542 lines, zero trip
