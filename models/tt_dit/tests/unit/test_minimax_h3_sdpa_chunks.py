@@ -121,6 +121,23 @@ def test_a_non_windowed_non_ring_call_keeps_the_generic_rule():
     assert (cfg.q_chunk_size, cfg.k_chunk_size) == (256, 512)
 
 
+@pytest.mark.parametrize("seq_local", P300X2_SERVED_LENGTHS)
+def test_a_served_length_with_no_pad_rows_bypasses_the_head_count_rule(seq_local):
+    """The head-count rule only governs the WINDOWED path, and a served request can miss it.
+
+    `cu_window_seqlens` is the SP=1 pad-row fence, so the pipeline passes it only when
+    `seq_len < padded_len`. A prompt whose packed sequence happens to land on a tile boundary has no
+    pad rows, takes the unwindowed branch, and gets the generic rule at ANY head count -- observed
+    live on the 1x4: one of five prompts packed to exactly 37728 rows and produced bit-identical
+    output on both sides of a head-count-rule flip, at 8.96 s a step against ~10.53 for the four
+    windowed ones. Pinned so that widening the rule to the unwindowed path is a deliberate act with
+    a failing test in front of it, rather than a change nobody notices.
+    """
+    cfg = _config(seq_local, ring=False, windowed=False, n_local_heads=P300X2_LOCAL_HEADS)
+    assert (cfg.q_chunk_size, cfg.k_chunk_size) != MiniMaxH3Attention.plain_windowed_sdpa_chunk_sizes_few_heads
+    assert (cfg.q_chunk_size, cfg.k_chunk_size) == (256, 512)
+
+
 def test_ring_lengths_are_untouched():
     """Every `measured_sdpa_chunk_sizes` entry still wins over both generic rules."""
     for seq_local, expected in MiniMaxH3Attention.measured_sdpa_chunk_sizes.items():
