@@ -7,6 +7,8 @@ Attempt 2 (2026-09-30 ~19:40 UTC, after the 19:18 reboot):
 - Detached driver on blx03: ~/fasth3/drive16.sh, log ~/fasth3/drive16.log (prints JOB=<id>, ends DRIVE16_DONE). It waits for other smarton jobs (879, t20) to finish, then queues
   `W=~/fasth3/t16 bash tmp/blx03/run25.sh seeds5 LTX_SEEDS=0,1,2,3,4 LTX_FRESH_PROMPTS=0 PYTEST_TIMEOUT=1140` (timeout 1200). Output: blx03:~/fasth3/out/ltx25_1080p_6s/seeds5/.
 
+Attempt 3 (19:42): job 880 failed in 45s: `_ttnncpp.so` not found. _ttnn.so's RUNPATH is $ORIGIN/../../build/lib and ~/fasth3/t16 had no `build` symlink (t17 has one). Added `build -> build_Release`; import + pytest --collect-only pass on CPU. drive16.sh relaunched (old log: drive16.880.log); it waits for t17 job 884 first.
+
 Next, once `ssh g14blx03 grep -q DRIVE16_DONE ~/fasth3/drive16.log`:
 1. Check the job passed (drive16.log status, run.log ends " passed").
 2. `python3 tmp/t16/post.py <job>` → tt-project/baselines/ltx25_1080p_6s/ref_dv145/{seed0..4.mp4, meta.json, raw/run.log}.
