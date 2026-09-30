@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -124,6 +125,16 @@ enum class StreamRole : uint8_t {
     TENSIX_RELAY_FREE_SLOTS,  // pinned to id 30 -- dual-use with VC2 sender; see the aliasing note
 };
 
+// One register serving one role. The keys are what the role is indexed by: a receiver channel for
+// RECEIVER_PKTS_SENT; a VC and sender channel for the sender roles; a VC and downstream compact index
+// for DOWNSTREAM_FREE_SLOTS; neither for the pinned roles, whose name already says which consumer it is.
+struct StreamUse {
+    uint32_t stream_id = 0;
+    StreamRole role = StreamRole::RECEIVER_PKTS_SENT;
+    std::optional<uint32_t> vc;
+    std::optional<uint32_t> index;
+};
+
 // Placement inputs, fabric-scoped by type: the kernel resolves a downstream router's register id
 // through its own table, which is only correct if the flat-channel -> id map is identical on every
 // router that can be another's downstream. Deriving placement from the fabric's family maxima
@@ -154,7 +165,6 @@ struct StreamRequirements {
     // Carried from the shape so the assignment can answer by flat sender index.
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts{};
-
     // Pinned consumers that are live in this configuration, declared from the build site's facts
     // (requires_vc2, UDM mode) -- the allocator asserts its own bookkeeping on them, it does not
     // re-derive the upstream exclusivity.
@@ -183,6 +193,10 @@ public:
     // against the declared set: a duplicate paired with an omission has the right count and must
     // not pass.
     std::vector<std::pair<std::string, uint32_t>> named_args() const;
+
+    // Every allocated register use, the live pinned ones included, ordered by stream id. These are all
+    // BUF_SPACE_AVAILABLE uses; the scratch uses of 30 and 31 (StreamRegAssignments::Scratch) are not listed.
+    std::vector<StreamUse> uses() const;
 
     // The credit plan this assignment was derived for, carried so consumers need one object.
     const CreditTransportPlan& plan() const { return plan_; }

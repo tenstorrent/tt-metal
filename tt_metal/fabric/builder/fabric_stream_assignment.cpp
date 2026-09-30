@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include <algorithm>
 #include <set>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
@@ -265,6 +266,38 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
         emitted == expected_stream_name_set(),
         "Emitted stream-register names do not match the kernel's declared set (mirror of "
         "fabric_erisc_router_ct_args.hpp)");
+    return out;
+}
+
+std::vector<StreamUse> StreamAssignment::uses() const {
+    std::vector<StreamUse> out;
+    for (const auto& entry : entries_) {
+        for (uint32_t i = 0; i < entry.count; ++i) {
+            StreamUse use{.stream_id = entry.first_id + i, .role = entry.role};
+            if (entry.role == StreamRole::RECEIVER_PKTS_SENT) {
+                // The group is keyed by receiver channel, held in the entry's vc slot.
+                use.index = entry.vc;
+            } else {
+                use.vc = entry.vc;
+                use.index = i;
+            }
+            out.push_back(use);
+        }
+    }
+    if (vc2_present_) {
+        out.push_back(StreamUse{
+            .stream_id = StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id,
+            .role = StreamRole::VC2_SENDER_FREE_SLOTS});
+        out.push_back(StreamUse{
+            .stream_id = StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id,
+            .role = StreamRole::VC2_RECEIVER_FREE_SLOTS});
+    }
+    if (tensix_relay_present_) {
+        out.push_back(StreamUse{
+            .stream_id = StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id,
+            .role = StreamRole::TENSIX_RELAY_FREE_SLOTS});
+    }
+    std::ranges::stable_sort(out, {}, &StreamUse::stream_id);
     return out;
 }
 
