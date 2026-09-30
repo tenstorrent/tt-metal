@@ -27,3 +27,9 @@ then relaunch `setsid nohup bash ~/fasth3/t37/drive37.sh > ~/fasth3/t37/drive37.
 blx03 broker still HELD (degraded) 25 min after reboot: 8/32 chips off PCIe, bridge-reset and glx_reset keep
 failing (jobs 906-912). No job submitted, driver not relaunched. Waiting on the broker hold to clear
 (retry_when checks that "HELD" is gone from the RUNNING section of `tt-device-mcp status 1` on blx03).
+
+## 2026-09-30 20:59 UTC (woken by a false probe, still degraded)
+The old probe fired because the broker's RUNNING line changed from "HELD" to "hold-deadline-escalate: glx_reset".
+The device is not back: `lspci -d 1e52:` shows 24 of 32 chips; chips 8-15 (one tray) stay off PCIe; bridge-reset
+and glx_reset keep failing (jobs 906-914). Nothing submitted, driver not relaunched.
+New probe: 32 chips on PCIe and no broker job in RUNNING (see result.json retry_when).
