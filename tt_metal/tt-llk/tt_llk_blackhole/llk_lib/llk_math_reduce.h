@@ -137,6 +137,56 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
+// Replay buffer layout of the MAX ROW specialisation, in the FPU half of the math thread's replay buffer (the
+// SFPU uses the entries below math::replay_buf_offset): the pools and the transpose of one face row (10 or 11
+// instructions), then the DEST advance to the next face row (2 or 4 SETRWCs). Recorded by
+// reduce_row_max_record_replay at init and replayed per face row by _llk_math_reduce_, so that the RISC issues
+// three REPLAYs per tile where it issued 22 to 24 instructions.
+constexpr std::uint32_t reduce_row_max_transpose_len        = 9;
+constexpr std::uint32_t reduce_row_max_pool_replay_start    = ckernel::math::replay_buf_offset;
+constexpr std::uint32_t reduce_row_max_advance_replay_start = reduce_row_max_pool_replay_start + 2 + reduce_row_max_transpose_len;
+
+inline std::uint32_t reduce_row_max_pool_replay_len(const ckernel::TensorShape& tensor_shape)
+{
+    return tensor_shape.num_faces_c_dim + reduce_row_max_transpose_len;
+}
+
+inline std::uint32_t reduce_row_max_advance_replay_len(const bool is_narrow_tile)
+{
+    return is_narrow_tile ? 2 : 4;
+}
+
+/**
+ * @brief Record the MAX ROW per face row instruction sequences into the replay buffer (see the layout above).
+ *
+ * The recorded instructions are the ones _llk_math_reduce_ issued directly before: num_faces_c_dim GMPOOLs and the
+ * nine instructions of reduce_row_perform_transpose, then the SETRWCs of reduce_row_advance_dest. The lengths
+ * passed to load_replay_buf equal the number of instructions the callables issue.
+ *
+ * @param tensor_shape: Tile shape (face counts decide the pool count and the advance length).
+ */
+inline void reduce_row_max_record_replay(const ckernel::TensorShape& tensor_shape)
+{
+    const bool is_narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
+
+    load_replay_buf(
+        reduce_row_max_pool_replay_start,
+        reduce_row_max_pool_replay_len(tensor_shape),
+        [&tensor_shape]
+        {
+            reduce_row_pool_all_faces<PoolType::MAX, false>(tensor_shape.num_faces_c_dim);
+            reduce_row_perform_transpose<false>();
+        });
+
+    load_replay_buf(
+        reduce_row_max_advance_replay_start,
+        reduce_row_max_advance_replay_len(is_narrow_tile),
+        [is_narrow_tile]
+        {
+            reduce_row_advance_dest(is_narrow_tile);
+        });
+}
+
 /**
  * @brief Configure the reduce MOP for all paths: REDUCE_ROW SUM/AVG records a dual replay-buffer
  *        MOP, high-fidelity COL/SCALAR programs a multi-phase GAPOOL loop, all other paths need no MOP.
@@ -278,14 +328,32 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             // instruction issued. GMPOOL does not read the flag, so the pool phase runs under preserve as well.
             math::_configure_preserve_zero_flag_state_();
 
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-            reduce_row_perform_transpose<is_int_fpu_en>();
-
-            if (tensor_shape.num_faces_r_dim > 1)
+            if constexpr (is_int_fpu_en)
             {
-                reduce_row_advance_dest(is_narrow_tile);
+                // The int path interleaves SFPU casts with the transpose and issues the sequence directly.
                 reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_perform_transpose<is_int_fpu_en>();
+
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    reduce_row_advance_dest(is_narrow_tile);
+                    reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                    reduce_row_perform_transpose<is_int_fpu_en>();
+                }
+            }
+            else
+            {
+                // The same instructions, replayed from the buffer _llk_math_reduce_init_ recorded
+                // (reduce_row_max_record_replay): the pools and the transpose of face row 0, the DEST advance,
+                // the pools and the transpose of face row 1.
+                const std::uint32_t pool_len = reduce_row_max_pool_replay_len(tensor_shape);
+                lltt::replay(reduce_row_max_pool_replay_start, pool_len);
+
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    lltt::replay(reduce_row_max_advance_replay_start, reduce_row_max_advance_replay_len(is_narrow_tile));
+                    lltt::replay(reduce_row_max_pool_replay_start, pool_len);
+                }
             }
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
@@ -472,7 +540,8 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 }
 
 /**
- * @brief Configure the math (FPU) thread for a reduce operation: programs address mods and the MOP.
+ * @brief Configure the math (FPU) thread for a reduce operation: programs address mods and the MOP; for MAX ROW it
+ *        also records the per face row pool and transpose sequences into the replay buffer.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -507,6 +576,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // (MOVD2B, MOVB2A) and keeps the default it always had; whether it needs preserve is not settled.
     if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
     {
+        reduce_row_max_record_replay(tensor_shape);
         math::_configure_preserve_zero_flag_state_();
     }
     else
