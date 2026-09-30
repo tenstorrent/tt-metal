@@ -1333,6 +1333,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 2
+  frozen:
+    at: '2026-09-30T15:19:21'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_09_ffn_norm.py: e95134e9f30482a372262244c02945ef1b610ae32e7189c38ebc2cb38dc10b7c
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: C.moe.router
   title: moe router (router) on device, layer 2
   step: implement
