@@ -27,6 +27,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
+# PCC is scale-invariant, so a K off by a constant (e.g. a missing yarn cos/sin amplitude) still passes it.
+K_SCALE_TOL = 0.01
 
 # The production chunk width: 5120 global, 640 per chip on the target 8x4 mesh (sp=8).
 CHUNK_GLOBAL = PREFILL_CHUNK_TOKENS
@@ -172,11 +174,13 @@ def test_dflash_pcc(
         rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
-        logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
+        k_scale = (dk[i].norm() / rk.norm()).item()
+        logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k}) scale={k_scale:.4f}  V pcc={pcc_v} (ok={ok_v})")
         # V (matmul-only) should be ~1.0; if V passes but K fails, suspect the RoPE (deepseek-yarn vs the
         # trained model's rope) or k_norm, not the weights.
         assert ok_v, f"V layer {i}: device vs HF PCC {pcc_v} < {PCC_THRESHOLD} (matmul/weights mismatch)"
         assert ok_k, f"K layer {i}: device vs HF PCC {pcc_k} < {PCC_THRESHOLD} (norm/rope mismatch if V passed)"
+        assert abs(k_scale - 1.0) <= K_SCALE_TOL, f"K layer {i}: ||device|| / ||HF|| = {k_scale:.4f} (yarn amplitude?)"
 
 
 _MULTITURN_ITERS = [
