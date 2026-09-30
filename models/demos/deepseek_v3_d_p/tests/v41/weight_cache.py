@@ -10,7 +10,9 @@ Key = SOURCE + CONVERSION + mesh shape, nothing else:
   verifies the snapshot's index blob; the directory path is not identity); synthetic weights -> the seed, the
   weight-shaping model args and a digest of the synthetic-init source (``testing.py``).
 * CONVERSION: the routed-expert dtype plus a digest of the conversion code only — the functions that turn
-  weights into the stored device tensors (``CONVERSION_CODE``). Layout and mapper are fixed inside that code.
+  weights into the stored device tensors (``CONVERSION_CODE``) — and of the conversion data (``CONVERSION_DATA``:
+  the expert load profile, which decides the per-chip expert placement). Layout and mapper are fixed inside that
+  code.
 * mesh shape: device tensors are per-chip shards.
 
 Excluded: the forward-pass sources (model.py / kernel_cpu.py / engram.py outside the conversion functions), so a
@@ -42,6 +44,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.v41 import expert_placement
+from models.demos.deepseek_v3_d_p.tt.v41 import moe as v41_moe
 from models.demos.deepseek_v3_d_p.tt.v41 import weights as checkpoint_weights
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from models.demos.deepseek_v3_d_p.tt.v41.weights import begin_layer, complete_layer  # noqa: F401 (re-export)
@@ -64,7 +68,11 @@ CONVERSION_CODE = (
     checkpoint_weights.load_routed_experts,
     checkpoint_weights._prepare,
     checkpoint_weights._dense_params,
-    # both: torch weights -> stored device tensors (V4.1 bias recentring, shared-expert dtype; TtMoe caches)
+    # both: torch weights -> stored device tensors (V4.1 expert placement and bias recentring, shared-expert dtype;
+    # TtMoe caches)
+    expert_placement.place,
+    expert_placement.expert_order,
+    v41_moe._to_slot_order,
     TtV41Moe.__init__,
     TtMoe.build_ttnn_cache,
     TtMoEGatePrefill._convert_and_cache_gate_weights,
@@ -73,6 +81,7 @@ CONVERSION_CODE = (
     TtSharedExpert._convert_and_cache_weights,
     TtSharedExpert.build_ttnn_cache,
 )
+CONVERSION_DATA = (expert_placement.PROFILE_PATH,)
 SYNTHETIC_INIT_SOURCE = Path(orc.__file__).parent / "testing.py"
 # model args that describe the schedule or the runtime, not the stored weights of a layer (its role comes from its id)
 SCHEDULE_ARGS = frozenset(
@@ -100,7 +109,8 @@ def _sha(data: bytes) -> str:
 
 
 def conversion_digest() -> str:
-    return _sha("\n".join(inspect.getsource(f) for f in CONVERSION_CODE).encode())
+    code = "\n".join(inspect.getsource(f) for f in CONVERSION_CODE).encode()
+    return _sha(code + b"".join(path.read_bytes() for path in CONVERSION_DATA))
 
 
 def _check_roles(spec: OracleSpec) -> None:

@@ -31,9 +31,18 @@ VL routing bias (bead 10.2): image-span tokens select with ``bias_vl`` instead (
 0: mean 21.2, spread 0.10). A per-row constant does not change a row's top-k either, so ``bias_vl`` is recentred by
 its own mean. With an image mask the gate reads a per-token bias ``where(image, bias_vl, bias)`` for that call
 (``moe_grouped_topk`` takes a bias of the scores' shape, one row per token); without one it is the text path.
+
+Expert placement (bead 8y7.9.8): the in-tree MoE stores expert slot ``s`` on linear chip ``s // experts_per_chip``.
+``expert_placement.expert_order`` relabels the experts so that the chips carry a balanced MoE cost on real text:
+device slot ``s`` holds checkpoint expert ``expert_order[s]`` (gate rows, both biases and the routed experts are
+permuted together, so routing and output are unchanged up to top-k ties). The relabelling stays internal: the
+intermediates return gate logits and indices in checkpoint expert ids. ``expert_order`` is None (checkpoint order)
+for layers without a load profile.
 """
 
 from types import SimpleNamespace
+
+import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -41,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
+from models.demos.deepseek_v3_d_p.tt.v41.expert_placement import expert_order
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp8_qdq
 
 
@@ -58,6 +68,10 @@ class TtV41Moe(LightweightModule):
         """``weights``: the ``TtMoe`` state-dict entries ``gate_weights`` (weight, e_score_correction_bias),
         ``routed_expert_weights`` (one {gate_proj, up_proj, down_proj} per expert) and
         ``shared_expert_weights``, in checkpoint ``[out, in]`` orientation (``weights.load_layer``)."""
+        self.expert_order = expert_order(layer, config.NUM_ROUTED_EXPERTS, *tuple(mesh_device.shape))  # (SP, TP)
+        if self.expert_order is not None:
+            weights = _to_slot_order(weights, list(self.expert_order))
+        self._checkpoint_id_tables = {}
         gate = weights.get("gate_weights")  # absent when the device tensors come from weight_cache_path
         if gate is not None:
             bias = gate["e_score_correction_bias"].float()
@@ -131,4 +145,47 @@ class TtV41Moe(LightweightModule):
                 ttnn.deallocate(gate.bias)
                 gate.bias = text_bias
         out = ttnn.unsqueeze(out, dim=0)
+        if return_intermediates and self.expert_order is not None:
+            self._to_checkpoint_ids(intermediates)
         return (out, intermediates) if return_intermediates else out
+
+    def _id_table(self, name: str, shape, dtype) -> ttnn.Tensor:
+        """Replicated lookup of ``shape`` whose last dim is ``slot_of`` (checkpoint expert -> slot) or ``order``
+        (slot -> checkpoint expert)."""
+        shape = tuple(shape)
+        key = (name, shape, dtype)
+        if key not in self._checkpoint_id_tables:
+            order = torch.tensor(self.expert_order, dtype=torch.int64)
+            row = torch.argsort(order) if name == "slot_of" else order
+            self._checkpoint_id_tables[key] = ttnn.from_torch(
+                row.expand(*shape).contiguous().to(torch.int32),
+                device=self.moe.mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.moe.mesh_device),
+            )
+        return self._checkpoint_id_tables[key]
+
+    def _to_checkpoint_ids(self, intermediates) -> None:
+        """Gate logits (expert columns) and indices of ``intermediates`` from device slots to checkpoint experts."""
+        logits = intermediates.gate_logits
+        intermediates.gate_logits = ttnn.gather(logits, -1, self._id_table("slot_of", logits.shape, ttnn.uint32))
+        indices = intermediates.gate_indices
+        tiled = ttnn.to_layout(indices, ttnn.TILE_LAYOUT) if indices.layout != ttnn.TILE_LAYOUT else indices
+        table = self._id_table("order", (*tuple(tiled.shape)[:-1], len(self.expert_order)), tiled.dtype)
+        ids = ttnn.gather(table, -1, tiled)
+        intermediates.gate_indices = ttnn.to_layout(ids, indices.layout) if indices.layout != ttnn.TILE_LAYOUT else ids
+
+
+def _to_slot_order(weights: dict, order: list[int]) -> dict:
+    """``weights`` with every per-expert entry present (gate rows, correction bias, VL bias, routed experts) in
+    device slot order: slot ``s`` gets checkpoint expert ``order[s]``."""
+    weights = dict(weights)
+    if (gate := weights.get("gate_weights")) is not None:
+        weights["gate_weights"] = {k: v[order] for k, v in gate.items()}  # weight rows, e_score_correction_bias
+    if (bias_vl := weights.get("gate_bias_vl")) is not None:
+        weights["gate_bias_vl"] = bias_vl[order]
+    if (experts := weights.get("routed_expert_weights")) is not None:
+        weights["routed_expert_weights"] = [experts[e] for e in order]
+    return weights
