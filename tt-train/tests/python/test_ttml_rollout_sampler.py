@@ -20,6 +20,7 @@ import pytest
 import ttml
 
 from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.modules import RunMode
 from ttml.trainers.grpo_trainer import RolloutBatch
 
 
@@ -212,6 +213,7 @@ def test_llama_rollout_sampler_capital_of_france():
     prompt_ids = tokenizer.encode(prompt_str)
 
     batch = sampler.generate([prompt_ids])
+    assert sampler.model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
 
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Llama completion, got: {completion_str!r}"
@@ -246,6 +248,7 @@ def test_qwen3_rollout_sampler_capital_of_france():
     prompt_ids = tokenizer.encode(prompt_str)
 
     batch = sampler.generate([prompt_ids])
+    assert sampler.model.get_run_mode() == RunMode.TRAIN, "generate() must restore the model's run mode"
 
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Qwen3 completion, got: {completion_str!r}"
