@@ -64,6 +64,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "params.h" // build.h: KT_DIM, NT_DIM and the DST_FIRST knob, needed by the DEST placement below
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -105,7 +106,6 @@ static_assert(!DST_FIRST || (KT_DIM + 1) / 2 + SRC_TILE <= 8, "P tiles above O m
 #include "experimental/llk_unpack_A_sdpa.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -166,7 +166,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -206,7 +205,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
