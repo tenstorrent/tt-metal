@@ -1340,7 +1340,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         routed = {q for g in groups for q in g}
         remainder = [q for q in range(B) if q not in routed]
 
+        # The serial impl pads short prompts to get_padded_prefill_len inside
+        # prepare; the group walk gets raw-width tokens, so pad here or the
+        # sliding fill hands SDPA a sub-tile V (TT_FATAL K=32 vs V=25 on the
+        # ~25-token gate prompts).
         S = int(tokens.shape[-1])
+        S_pad = int(get_padded_prefill_len(S))
         gpt = full_page_tables[g_idxs[0]]
         gpt = gpt if gpt.dim() > 1 else gpt.unsqueeze(0)
         out = torch.zeros(B, 1, model.vocab_size)
@@ -1349,14 +1354,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             B,
             len(groups),
             len(remainder),
-            S,
+            S_pad,
         )
         for group in groups:
-            toks4 = torch.zeros(lanes, S, dtype=tokens.dtype)
+            toks4 = torch.zeros(lanes, S_pad, dtype=tokens.dtype)
             plens4 = [1] * lanes
             tables4 = torch.zeros(lanes, 1, int(gpt.shape[-1]), dtype=torch.int32)
             for ln, q in enumerate(group):
-                toks4[ln] = tokens[q]
+                toks4[ln, :S] = tokens[q]
                 plens4[ln] = plens[q]
                 # Plugin per-layer tables arrive in LOCAL prefill order (row
                 # i = request i), not slot-indexed (the debt #1 lesson).
