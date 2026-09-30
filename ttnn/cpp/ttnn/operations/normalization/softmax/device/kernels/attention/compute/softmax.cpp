@@ -107,7 +107,14 @@ void kernel_main() {
     const std::uint32_t out0_pad = pad_to_fifo_base ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
     const std::uint32_t exps_pad = pad_to_fifo_base ? (exps_t - Wt) : 0;
     const std::uint32_t attn_pad = exps_pad;  // in4_t is also round_up(Wt, ndst); reader pushes the pad
-    const std::uint32_t scale_mask_pad = pad_to_fifo_base ? (exps_pad + ndst) : 0;  // im3_t = exps_t + ndst
+    const std::uint32_t scale_mask_t = exps_t + ndst;
+    std::uint32_t scale_mask_tiles_pushed = Wt;
+#if defined(FUSED_SCALE_MASK) && defined(MASK_PADDED_DATA)
+    if (Wt > 0) {
+        scale_mask_tiles_pushed += 1;
+    }
+#endif
+    const std::uint32_t scale_mask_pad = (scale_mask_t - (scale_mask_tiles_pushed % scale_mask_t)) % scale_mask_t;  // im3_t = exps_t + ndst
 
     constexpr std::uint32_t onetile = 1;
     // reserve one tile for zeros on dfb_in2
@@ -192,6 +199,67 @@ void kernel_main() {
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
+#ifdef MASK_PADDED_DATA
+        if (Wt > 1) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(Wt - 1).block_size(ndst),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(
+                    dfb_x,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
+                    ckl::DataFormatReconfig::Disabled)>{});
+        }
+        if (Wt > 0) {
+            // last tile of the row gets the -inf padding mask
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_mask_padded,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None)>{},
+                ckl::PackTile<ckl::output(
+                    dfb_scale_mask,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
+
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block, ckl::DataFormatReconfig::Enabled, ckl::TileAddressing::Offset)>(0, Wt - 1),
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(
+                    dfb_x,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
+        }
+#else
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(ndst),
             ckl::BinaryFpu<
@@ -210,6 +278,7 @@ void kernel_main() {
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Disabled)>{});
+#endif
 
 // add numeric_stable
 // fuse exp with sub tiles
