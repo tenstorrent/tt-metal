@@ -659,13 +659,14 @@ inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
     reconfig_data_format(cb_eye, cb_eye);
     pack_reconfig_data_format(out);
     copy_init(cb_eye);
+    constexpr uint32_t DST_RHS = 0, DST_X = 1;
     tile_regs_acquire();
-    copy_tile(cb_eye, 0, 0);  // RHS = I -> DST[0]
+    copy_tile(cb_eye, 0, DST_RHS);  // RHS = I
     triangle_solve_tile_init();
-    triangle_solve_tile<DataFormat::Float32, /*L_NEGATED=*/true>(l, 0, /*idst_in=*/0, /*idst_out=*/1);
+    triangle_solve_tile<DataFormat::Float32, true /*L_NEGATED*/>(l, 0 /*l_tile_idx*/, DST_RHS, DST_X);
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(1, out, 0);
+    pack_tile(DST_X, out, 0);
     tile_regs_release();
     cb_push_back(out, 1);
 }
@@ -796,9 +797,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_negn");
         // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
-        // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
-        // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
-        // merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
+        // The WY inverse. With GDN_TINV_SFPU (FORWARD_SUBSTITUTION, AUTO on Blackhole at chunk 32) it is one
+        // SFPU forward substitution on negN, see sfpu_tinv. HORNER mirrors FLA's solve_tril: block down to 16x16
+        // (invert_block splits each 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded
+        // Horners, and merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
         // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
         // negN = -(strictly_lower(kk * L_mask)) = -A_strict, kept in cb.scr3: one DST pass per tile (kk from the
         // matmul, L_mask and the (I - 1) mask applied on the SFPU) instead of four packed blocks.

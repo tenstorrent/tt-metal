@@ -325,7 +325,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
-    compute.defines = gdn_prep_defines(attrs.tinv, /*hoist_reconfig=*/false);
+    compute.defines = gdn_prep_defines(attrs.tinv, false /*hoist_reconfig*/);
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
