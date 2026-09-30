@@ -553,6 +553,7 @@ void bind_unary_operation_with_int_parameter(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -766,6 +767,7 @@ void bind_unary_rdiv(
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
