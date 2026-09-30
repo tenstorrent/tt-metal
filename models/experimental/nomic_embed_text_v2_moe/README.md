@@ -90,12 +90,13 @@ tests/
   perf/perf_common.py         shared scaffolding for the perf tests, not a test file itself
 tt/
   model_config.py             dtypes, layout and compute kernel configs, bound to a device
+  matmul_config.py            program configs for every matmul, derived from the call's shape
   common.py                   weight reorientation, rotary tables, attention mask, reshapes
   embeddings.py               word lookup, token-type embedding folded into the table
   attention.py                fused QKV, rotary, bidirectional SDPA, output projection
   mlp.py                      dense FFN, even-numbered layers
   router.py                   fp32 softmax, top-k, dense routing weights
-  experts.py                  all experts as two broadcast-batch matmuls, gate and reduce
+  experts.py                  every token through every expert's w1 and w2, gate and reduce
   moe.py                      router plus experts, odd-numbered layers
   block.py                    one encoder block, post-norm with fused residual adds
   encoder.py                  the 12 blocks in sequence

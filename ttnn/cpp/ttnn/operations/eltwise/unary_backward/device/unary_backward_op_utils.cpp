@@ -26,6 +26,17 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
             };
             return spec;
         }
+        case UnaryBackwardOpType::TANH_BW: {
+            // d/dx tanh = sech^2(x), computed directly by TanhDerivative rather than as
+            // 1 - tanh^2, so there is no cancellation to hold at float32 and DEST follows the
+            // operand dtypes.
+            static const UnaryBackwardKernelSpec spec{
+                .compute_kernel_path =
+                    "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/compute/"
+                    "eltwise_bw_tanh.cpp",
+            };
+            return spec;
+        }
     }
     TT_THROW("Unary backward op type {} has no kernel spec", static_cast<int>(op_type));
 }
@@ -33,6 +44,7 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
 std::string_view to_string(UnaryBackwardOpType op_type) {
     switch (op_type) {
         case UnaryBackwardOpType::SIGMOID_BW: return "SIGMOID_BW";
+        case UnaryBackwardOpType::TANH_BW: return "TANH_BW";
     }
     TT_THROW("Unary backward op type {} has no name", static_cast<int>(op_type));
 }

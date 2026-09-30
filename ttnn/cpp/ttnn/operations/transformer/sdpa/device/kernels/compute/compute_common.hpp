@@ -127,8 +127,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Postcondition: out_cb has rows produced
     // If do_eltwise_max == true, prev_cb has rows produced.
 
-    constexpr uint32_t num_tiles = rows * cols;
-
 #if defined REDUCE_GRANULARITY
     constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
     constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows / REDUCE_GRANULARITY) : 1;
@@ -249,15 +247,10 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif
 
@@ -270,7 +263,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     reconfig_data_format_srca(in_cb);
     copy_init(in_cb);
-    recip_tile_init();
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);
@@ -892,7 +886,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_out.reserve_back(num_tiles);
     sub_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
+    // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -916,8 +910,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column(0 /*dst_index*/)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);
@@ -1013,7 +1006,6 @@ ALWI void matmul_blocks(
     const uint32_t& M,
     const uint32_t& N,
     const uint32_t& K,
-    const uint32_t& num_blocks,
     const uint32_t& in0_num_subblocks,
     const uint32_t& in1_num_subblocks,
     const uint32_t& in0_block_w,
@@ -1129,9 +1121,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     reconfig_data_format(in1_cb, out_cb);
     matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    constexpr uint32_t output_num_tiles = M * N;
-    constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
     pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
@@ -1492,13 +1481,11 @@ enum SDPAType {
  * @param qk_subblock_h - QK matmul subblock height
  * @param qk_in0_num_subblocks - QK input0 subblocks
  * @param qk_in1_num_subblocks - QK input1 subblocks
- * @param qk_num_blocks - QK number of blocks
  * @param out_in0_block_w - Output matmul block width
  * @param out_subblock_w - Output matmul subblock width
  * @param out_subblock_h - Output matmul subblock height
  * @param out_in0_num_subblocks - Output input0 subblocks
  * @param out_in1_num_subblocks - Output input1 subblocks
- * @param out_num_blocks - Output number of blocks
  * @param iter_q_start - Query iteration start
  * @param iter_q_end - Query iteration end
  * @param q_num_chunks - Total query chunks
@@ -1571,13 +1558,11 @@ void sdpa_inner_loop(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
@@ -1754,7 +1739,6 @@ void sdpa_inner_loop(
                 Sq_chunk_t,
                 Sk_chunk_t,
                 DHt,
-                qk_num_blocks,
                 qk_in0_num_subblocks,
                 qk_in1_num_subblocks,
                 qk_in0_block_w,
@@ -1917,7 +1901,6 @@ void sdpa_inner_loop(
                 Sq_chunk_t,
                 vDHt,
                 Sk_chunk_t,
-                out_num_blocks,
                 out_in0_num_subblocks,
                 out_in1_num_subblocks,
                 out_in0_block_w,
@@ -2145,13 +2128,11 @@ void sdpa_standard(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
@@ -2208,13 +2189,11 @@ void sdpa_standard(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         iter_q_start,
         iter_q_end,
         q_num_chunks,
@@ -2280,13 +2259,11 @@ void sdpa_joint(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t local_q_start,
     const uint32_t local_q_end,
     const uint32_t k_num_chunks,
@@ -2333,13 +2310,11 @@ void sdpa_joint(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         local_q_start,  // iter_q_start
         local_q_end,    // iter_q_end
         0,              // q_num_chunks (not used)
@@ -2406,13 +2381,11 @@ void sdpa_ring(
     const uint32_t qk_subblock_h,
     const uint32_t qk_in0_num_subblocks,
     const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
     const uint32_t out_in0_block_w,
     const uint32_t out_subblock_w,
     const uint32_t out_subblock_h,
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
     const uint32_t global_q_start,
     const uint32_t global_q_end,
     const uint32_t q_num_chunks,
@@ -2484,13 +2457,11 @@ void sdpa_ring(
         qk_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_subblock_w,
         out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
         q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)

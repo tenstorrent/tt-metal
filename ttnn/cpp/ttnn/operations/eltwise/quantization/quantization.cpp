@@ -296,7 +296,9 @@ Tensor quantize(
 
                 return ttnn::prim::binary_ng(
                     input_a,
-                    ttnn::reciprocal(scale),
+                    // QUANT LLK's scale operand B must be float32.
+                    ttnn::reciprocal(
+                        scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32)),
                     operations::binary::BinaryOpType::QUANT,
                     c_dtype,
                     memory_config,
@@ -614,7 +616,8 @@ Tensor dequantize(
                     static_cast<float>(-zero_point) - dequant_int8_in_offset}};
                 return ttnn::prim::binary_ng(
                     input_tensor,
-                    scale,
+                    // DEQUANT LLK's scale operand B must be float32.
+                    scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32),
                     operations::binary::BinaryOpType::DEQUANT,
                     c_dtype,
                     memory_config,

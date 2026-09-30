@@ -600,12 +600,12 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = q::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = q::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = q::multiply(input_a, result, std::nullopt, output_mem_config);
     }
@@ -782,7 +782,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -793,7 +794,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        /*fast_and_approximate_mode=*/std::nullopt,
+        fast_and_approximate_mode.value_or(false),
         sub_core_grids,
         sub_device_id);
 }
@@ -808,7 +809,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -828,7 +830,7 @@ Tensor bias_gelu(
             {},
             {},
             resolved_sub_core_grids),
-        true,
+        fast_and_approximate_mode.value_or(false),
         memory_config,
         optional_output_tensor,
         resolved_sub_core_grids);

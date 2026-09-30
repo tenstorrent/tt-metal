@@ -27,6 +27,7 @@
 // Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
 thread_local std::uint32_t num_sw_threads __attribute__((used));
 thread_local std::uint32_t my_thread_id __attribute__((used));
+thread_local std::uint32_t my_barrier_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
 std::uint32_t _start() {
@@ -95,6 +96,10 @@ std::uint32_t _start() {
     // Setup after the go signal so the previous kernel has completed.
     num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
     my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+    // Barrier slot for this kernel. thread_0_hartid is the lowest hart running this same kernel
+    // text, so every thread of a kernel derives the same slot and two co-resident kernels derive
+    // different ones, keeping their sync_threads() rendezvous separate.
+    my_barrier_id = thread_0_hartid;
 
     // Paint stack after all thread_local writes and CRT init are done.
     mark_stack_usage();
@@ -107,11 +112,12 @@ std::uint32_t _start() {
 #ifdef TT_DM_CACHED_SEM_STUBS
         // When the kernel binds DM_LOCAL_CACHED semaphores: seed their
         // pool rows once per program, and restore them on the way out.
-        sem_internal::init_dm_local_cached();
+        sem_internal::init_dm_local_cached<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(
+            sem_internal::kCachedSemaphores);
 #endif
         kernel_main();
 #ifdef TT_DM_CACHED_SEM_STUBS
-        sem_internal::finish_dm_local_cached();
+        sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
 #endif
         WAYPOINT("KD");
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so

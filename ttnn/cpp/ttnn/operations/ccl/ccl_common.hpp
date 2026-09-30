@@ -204,14 +204,6 @@ struct RingTopology {
     bool is_linear;
 };
 
-struct TensorPartition {
-    TensorPartition(uint32_t partition_size, uint32_t partition_index) :
-        partition_size(partition_size), partition_index(partition_index) {}
-
-    uint32_t partition_size;
-    uint32_t partition_index;
-};
-
 class CclOpTensorConfig {
 public:
     static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(const Tensor& tensor);
@@ -687,16 +679,6 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
 
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index);
-
 class GenericWrappedTensorSlicer {
 public:
     GenericWrappedTensorSlicer(
@@ -838,14 +820,9 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
-// ProgramDescriptor (Contract-2) variant of fabric_mux_connection_rt_args.
-// Mirrors the legacy Program& helper but allocates the five mux-side semaphores by
-// pushing SemaphoreDescriptors into desc.semaphores and recording their IDs into
-// worker_rt_args at the same positions. Semaphore IDs are obtained from
-// ProgramDescriptor::find_available_semaphore_id so they don't collide with IDs
-// already allocated on the same worker_logical_core. An optional
-// termination_master_semaphore_id can be supplied if the caller already owns one
-// (e.g. the termination master worker on this core).
+// ProgramDescriptor variant of the Program& helper above; produces the same 17-word client ABI. New semaphores are
+// appended to desc.semaphores with IDs from find_available_semaphore_id, so they do not collide with IDs already
+// allocated on worker_logical_core. A supplied termination_master_semaphore_id is reused, not allocated.
 void fabric_mux_connection_rt_args(
     bool mux_connection_valid,
     bool is_termination_master,
