@@ -101,9 +101,9 @@ static_assert(
 // alignas(16) pads sizeof up to 64 B, so the whole record is one aligned L1 block and no field
 // straddles a line. Host sizes the ring slot stride from this sizeof and hands it to both kernels.
 struct alignas(PLAN_L1_ALIGNMENT) GroupedRouteInfo {
-    uint32_t direction;  // fabric direction shared by every destination in the group
-    uint32_t num_dests;  // live array entries (1 .. GROUPED_ROUTE_MAX_DESTS)
-    uint32_t token_idx;  // global token index; a per-token constant, shared by the whole group
+    uint32_t direction;                          // fabric direction shared by every destination in the group
+    uint32_t num_dests;                          // live array entries (1 .. GROUPED_ROUTE_MAX_DESTS)
+    uint32_t token_idx;                          // global token index; a per-token constant, shared by the whole group
     uint32_t page_idx[GROUPED_ROUTE_MAX_DESTS];  // destination DRAM page
     uint32_t distance[GROUPED_ROUTE_MAX_DESTS];  // hop count, ascending
     uint32_t k[GROUPED_ROUTE_MAX_DESTS];         // top-k slot (metadata field 2), the only per-destination field
