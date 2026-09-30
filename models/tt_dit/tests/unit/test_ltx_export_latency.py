@@ -118,3 +118,49 @@ def test_yuv_export_encodes_audio_alongside_video(tmp_path, monkeypatch):
     with av.open(out) as c:
         samples = sum(f.samples for f in c.decode(audio=0))
     assert abs(samples - 48000) <= 2048  # AAC priming/padding only
+
+
+def test_background_export_is_byte_identical_and_off_thread(tmp_path, monkeypatch):
+    for k in ("LTX_EXPORT_PRESET", "LTX_EXPORT_CRF", "LTX_EXPORT_LOSSLESS"):
+        monkeypatch.delenv(k, raising=False)
+    clip = _yuv_clip(t=24)
+    audio = video.Audio(waveform=torch.zeros(2, 48000).uniform_(-0.1, 0.1), sampling_rate=48000)
+    fg = str(tmp_path / "fg.mp4")
+    video.export_video_audio_yuv(clip, fg, fps=24, audio=audio)
+
+    threads = []
+
+    def export(*args, **kwargs):
+        threads.append(threading.current_thread())
+        video.export_video_audio_yuv(*args, **kwargs)
+
+    bg = str(tmp_path / "bg.mp4")
+    future = video.export_in_background(bg, export, clip, bg, fps=24, audio=audio)
+    assert future.result(timeout=60) == bg
+    assert threads and threads[0] is not threading.main_thread()
+    assert open(fg, "rb").read() == open(bg, "rb").read()
+
+
+def test_wait_for_background_export_blocks_until_done_and_leaves_errors_to_the_future():
+    release = threading.Event()
+    done = []
+
+    def slow():
+        release.wait(10)
+        done.append(True)
+
+    video.export_in_background("a.mp4", slow)
+    waiter = threading.Thread(target=video.wait_for_background_export)
+    waiter.start()
+    waiter.join(0.2)
+    assert waiter.is_alive() and not done  # still encoding: the wait must hold
+    release.set()
+    waiter.join(10)
+    assert not waiter.is_alive() and done
+
+    def boom():
+        raise RuntimeError("encode failed")
+
+    failed = video.export_in_background("b.mp4", boom)
+    video.wait_for_background_export()  # the error belongs to the request that owns the future
+    assert isinstance(failed.exception(), RuntimeError)

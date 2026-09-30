@@ -188,6 +188,17 @@ def test_pipeline_distilled(
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
+    # LTX_ASYNC_EXPORT=N: gens N and later hand the mp4 encode to the export thread, so it overlaps the next
+    # gen as it would in a served queue. REQUEST_S is the time between consecutive gens returning.
+    async_export_from = int(os.environ.get("LTX_ASYNC_EXPORT", "-1"))
+    pending_exports = []
+    last_return = [None]
+
+    def settle_exports():
+        for future in pending_exports:
+            future.result()
+        pending_exports.clear()
+
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
@@ -199,7 +210,9 @@ def test_pipeline_distilled(
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
             return
 
-        pipeline.generate(
+        export_async = 0 <= async_export_from <= number
+        t0 = time.time()
+        result = pipeline.generate(
             prompt,
             output_path=output_filename,
             images=images,
@@ -208,7 +221,14 @@ def test_pipeline_distilled(
             width=width,
             seed=seed,
             fps=fps,
+            export_async=export_async,
         )
+        t1 = time.time()
+        if export_async:
+            pending_exports.append(result)
+        period = f"{t1 - last_return[0]:.3f}" if last_return[0] is not None else "n/a"
+        logger.info(f"REQUEST_S gen#{number} async={int(export_async)} generate={t1 - t0:.3f} period={period}")
+        last_return[0] = t1
         logger.info(f"Saved video to: {output_filename}")
         print_ltx_timing_table(
             pipeline,
@@ -277,6 +297,7 @@ def test_pipeline_distilled(
         __import__("decord")
 
     def check_output_with_vbench(prompt, number, seed=None):
+        settle_exports()
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
@@ -340,6 +361,7 @@ def test_pipeline_distilled(
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
         # against the prompt with CLIP, assert the mean clears a floor. LTX writes the video to
         # disk (generate() returns only the path), so frames are read back from the mp4.
+        settle_exports()
         if not run_clip:
             logger.info("RUN_CLIP=0, skipping CLIP score check")
             return
@@ -413,6 +435,7 @@ def test_pipeline_distilled(
             check_output_with_clip(prompt, i)
             check_output_with_vbench(prompt, i)
 
+    settle_exports()
     if traced:
         pipeline.release_traces()
 

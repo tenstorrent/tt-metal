@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import os
 import subprocess
-from concurrent.futures import Future, ThreadPoolExecutor
+import time
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -160,6 +161,38 @@ def _encode_audio_async(audio_stream, audio: Audio | None) -> Future | None:
     if _audio_pool is None:
         _audio_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mp4-audio")
     return _audio_pool.submit(_encode_audio, audio_stream, audio)
+
+
+_export_pool: ThreadPoolExecutor | None = None
+_pending_export: Future | None = None
+
+
+def export_in_background(output_path: str, export_fn, *args, **kwargs) -> Future:
+    """Run ``export_fn(*args, **kwargs)`` on the export thread; the future resolves to ``output_path``.
+
+    One export at a time: any earlier one is waited for first. The yuv readback lands in a host buffer every
+    decode reuses, so the caller must also call ``wait_for_background_export`` before its next decode."""
+    global _export_pool, _pending_export
+    wait_for_background_export()
+    if _export_pool is None:
+        _export_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mp4-export")
+
+    def run() -> str:
+        t0 = time.time()
+        export_fn(*args, **kwargs)
+        logger.info(f"Video export (background): {time.time() - t0:.2f}s")
+        return output_path
+
+    _pending_export = _export_pool.submit(run)
+    return _pending_export
+
+
+def wait_for_background_export() -> None:
+    """Block until the pending background export has finished. Its error, if any, stays on its future."""
+    global _pending_export
+    if _pending_export is not None:
+        wait([_pending_export])
+        _pending_export = None
 
 
 def _x264_options() -> dict[str, str]:

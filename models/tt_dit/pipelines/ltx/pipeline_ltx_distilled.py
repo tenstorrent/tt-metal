@@ -29,7 +29,7 @@ from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
-from ...utils.video import export_video_audio, export_video_audio_yuv
+from ...utils.video import export_in_background, export_video_audio, export_video_audio_yuv, wait_for_background_export
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
@@ -1574,10 +1574,13 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int = 768,
         seed: int = 10,
         fps: float | None = None,
+        export_async: bool = False,
     ):
         """Run the distilled 2-stage AV pipeline.
 
-        output_path given → encode an AV MP4 and return its path (str).
+        output_path given → encode an AV MP4 and return its path (str). With ``export_async`` the encode runs
+                            on a background thread and a ``Future`` resolving to the path is returned, so
+                            the encode overlaps the next request's text encode and denoise.
         output_path None  → return ``(frames, audio)`` for the caller to encode: frames per
                             ``output_type`` (see ``decode_latents``), audio = decoded ``Audio``.
 
@@ -1952,6 +1955,8 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"LTX_PROFILE_DENOISE_ONLY=1: denoise-only total {sum(s for _, s in timings):.1f}s")
             return None, None
 
+        # The previous request's background export may still be reading the host buffer this decode reuses.
+        wait_for_background_export()
         t0 = time.time()
         self._ensure_vae_decoder_frames(num_frames)  # tail-pad decodes one extra latent frame
         self._prepare_vae()
@@ -2012,16 +2017,18 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | frames={tuple(video_pixels.shape)}")
             return video_pixels, audio_obj
 
-        t0 = time.time()
-        if yuv_export:
-            export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
+        export = export_video_audio_yuv if yuv_export else export_video_audio
+        if export_async:
+            result = export_in_background(output_path, export, video_pixels, output_path, fps=fps, audio=audio_obj)
         else:
-            export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
-        logger.info(f"Video export: {time.time() - t0:.1f}s")
+            t0 = time.time()
+            export(video_pixels, output_path, fps=fps, audio=audio_obj)
+            logger.info(f"Video export: {time.time() - t0:.1f}s")
+            result = output_path
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
         # capture is last and nothing left will reclaim its activation region. Capturing it here keeps
         # that cost out of the next request's encode.
         if self._traced and not self.dynamic_load:
             self.gemma_encoder_pair.open_trace_gate(capture_prompt=prompt)
-        return output_path
+        return result
