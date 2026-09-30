@@ -55,4 +55,19 @@ MeshPlacement decide_placement(
 std::vector<tt::tt_metal::CoreCoord> spare_cores(
     const tt::tt_metal::CoreRangeSet& allowed_cores, const StreamPlacements& streams);
 
+// Spare cores for the untilizer pool: `per_link` per link, capped at `num_tile_rows` because an extra core
+// would do no work. Taken from the core row directly under the streams and dealt round robin over the
+// streams' columns, so every stream gets one untilizer before any gets a second and the pool's DRAM traffic
+// stays near the columns the streams already use.
+//
+// A sub-device without that core row is refused: on the streams' own row the pool would share the NoC row
+// the streams already fill. `*spilled` is set when that row holds too few spare cores and the rest are taken
+// from elsewhere, which the caller reports.
+std::vector<tt::tt_metal::CoreCoord> decide_untilizer_pool(
+    const tt::tt_metal::CoreRangeSet& allowed_cores,
+    const StreamPlacements& streams,
+    uint32_t num_tile_rows,
+    uint32_t per_link,
+    bool* spilled);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

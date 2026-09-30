@@ -239,4 +239,80 @@ std::vector<tt::tt_metal::CoreCoord> spare_cores(
     return spare;
 }
 
+std::vector<tt::tt_metal::CoreCoord> decide_untilizer_pool(
+    const tt::tt_metal::CoreRangeSet& allowed_cores,
+    const StreamPlacements& streams,
+    uint32_t num_tile_rows,
+    uint32_t per_link,
+    bool* spilled) {
+    *spilled = false;
+    const auto spare = spare_cores(allowed_cores, streams);
+    const std::size_t num_links = streams.size() / 2u;  // two streams per link
+    const std::size_t want = std::min<std::size_t>(per_link * num_links, num_tile_rows);
+
+    // A stream leaves its row only when that row is full (decide_placement), so the pool goes under all of them.
+    std::size_t lowest_stream_row = 0;
+    std::vector<std::size_t> stream_cols;
+    for (const auto& [stream, placement] : streams) {
+        lowest_stream_row = std::max(lowest_stream_row, placement.worker_logical.y);
+        stream_cols.push_back(placement.worker_logical.x);
+    }
+    std::sort(stream_cols.begin(), stream_cols.end());
+    stream_cols.erase(std::unique(stream_cols.begin(), stream_cols.end()), stream_cols.end());
+    const std::size_t pool_row = lowest_stream_row + 1;
+
+    std::vector<tt::tt_metal::CoreCoord> below;
+    for (const auto& core : spare) {
+        if (core.y == pool_row) {
+            below.push_back(core);
+        }
+    }
+    // Refused: on the streams' core row, the pool's DRAM traffic would share the NoC row the streams already
+    // fill and slow them down.
+    TT_FATAL(
+        !below.empty(),
+        "dispatch_fabric2d: a TILE input needs its sub-device to include row {}, the row under the streams "
+        "(row {}), for the untilizers. Give the op at least two rows, or pass a ROW_MAJOR input.",
+        pool_row,
+        lowest_stream_row);
+
+    std::vector<tt::tt_metal::CoreCoord> pool;
+    std::vector<bool> taken(below.size(), false);
+    const auto distance = [](std::size_t a, std::size_t b) { return a > b ? a - b : b - a; };
+    while (pool.size() < want) {
+        bool progressed = false;
+        for (const std::size_t col : stream_cols) {
+            if (pool.size() == want) {
+                break;
+            }
+            std::size_t best = below.size();
+            for (std::size_t i = 0; i < below.size(); i++) {
+                if (!taken[i] && (best == below.size() || distance(below[i].x, col) < distance(below[best].x, col))) {
+                    best = i;
+                }
+            }
+            if (best < below.size()) {
+                taken[best] = true;
+                pool.push_back(below[best]);
+                progressed = true;
+            }
+        }
+        if (!progressed) {
+            break;  // the core row is exhausted
+        }
+    }
+    if (pool.size() < want) {
+        *spilled = true;
+        for (const auto& core : spare) {
+            if (pool.size() == want) {
+                break;
+            }
+            if (core.y != pool_row) {
+                pool.push_back(core);  // everything in pool_row is already taken, so this cannot repeat one
+            }
+        }
+    }
+    return pool;
+}
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

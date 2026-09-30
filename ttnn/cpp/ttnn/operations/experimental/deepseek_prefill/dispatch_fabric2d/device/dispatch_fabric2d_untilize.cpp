@@ -4,7 +4,6 @@
 
 #include "dispatch_fabric2d_untilize.hpp"
 
-#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -31,84 +30,6 @@ uint32_t untilize_block_ct_dim(uint32_t tiles_per_row) {
 
 constexpr const char* kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/";
-
-// Picks the spare cores for the pool. The streams take turns, each taking the nearest free core in the
-// core row under it, so every stream gets one untilizer before any gets a second. This keeps the untilizers'
-// traffic near the columns the streams already use.
-std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
-    const CoreRangeSet& allowed_cores,
-    const StreamPlacements& streams,
-    uint32_t num_tile_rows,
-    UntilizerPoolFallback* fallback) {
-    const auto spare = spare_cores(allowed_cores, streams);
-    const std::size_t num_links = streams.size() / 2u;  // two streams per link
-    // At most one core per tile row; an extra core would do no work.
-    const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_tile_rows);
-
-    // A stream leaves its row only when that row is full (decide_placement); the pool goes under all of them.
-    std::size_t lowest_stream_row = 0;
-    std::vector<std::size_t> stream_cols;
-    for (const auto& [stream, placement] : streams) {
-        lowest_stream_row = std::max(lowest_stream_row, placement.worker_logical.y);
-        stream_cols.push_back(placement.worker_logical.x);
-    }
-    std::sort(stream_cols.begin(), stream_cols.end());
-    stream_cols.erase(std::unique(stream_cols.begin(), stream_cols.end()), stream_cols.end());
-    const std::size_t pool_row = lowest_stream_row + 1;
-
-    std::vector<tt::tt_metal::CoreCoord> below;
-    for (const auto& core : spare) {
-        if (core.y == pool_row) {
-            below.push_back(core);
-        }
-    }
-    // Refused: on the streams' core row, the pool's DRAM traffic would share the NoC row the streams already
-    // fill and slow them down.
-    TT_FATAL(
-        !below.empty(),
-        "dispatch_fabric2d: a TILE input needs its sub-device to include row {}, the row under the streams "
-        "(row {}), for the untilizers. Give the op at least two rows, or pass a ROW_MAJOR input.",
-        pool_row,
-        lowest_stream_row);
-
-    std::vector<tt::tt_metal::CoreCoord> pool;
-    std::vector<bool> taken(below.size(), false);
-    const auto distance = [](std::size_t a, std::size_t b) { return a > b ? a - b : b - a; };
-    while (pool.size() < want) {
-        bool progressed = false;
-        for (const std::size_t col : stream_cols) {
-            if (pool.size() == want) {
-                break;
-            }
-            std::size_t best = below.size();
-            for (std::size_t i = 0; i < below.size(); i++) {
-                if (!taken[i] && (best == below.size() || distance(below[i].x, col) < distance(below[best].x, col))) {
-                    best = i;
-                }
-            }
-            if (best < below.size()) {
-                taken[best] = true;
-                pool.push_back(below[best]);
-                progressed = true;
-            }
-        }
-        if (!progressed) {
-            break;  // the core row is exhausted
-        }
-    }
-    if (pool.size() < want) {
-        *fallback = UntilizerPoolFallback::kRowTooNarrow;
-        for (const auto& core : spare) {
-            if (pool.size() == want) {
-                break;
-            }
-            if (core.y != pool_row) {
-                pool.push_back(core);  // everything in pool_row is already taken, so this cannot repeat one
-            }
-        }
-    }
-    return pool;
-}
 
 }  // namespace
 
@@ -155,8 +76,10 @@ UntilizerPoolFallback add_untilizer_pool(
     const StreamPlacements& streams,
     const CoreRangeSet& allowed_cores,
     const UntilizePlan& plan) {
-    UntilizerPoolFallback fallback = UntilizerPoolFallback::kNone;
-    const auto pool = decide_untilizer_cores(allowed_cores, streams, plan.num_tile_rows, &fallback);
+    bool spilled = false;
+    const auto pool = decide_untilizer_pool(allowed_cores, streams, plan.num_tile_rows, UNTILIZERS_PER_LINK, &spilled);
+    const UntilizerPoolFallback fallback =
+        spilled ? UntilizerPoolFallback::kRowTooNarrow : UntilizerPoolFallback::kNone;
     const uint32_t pool_size = static_cast<uint32_t>(pool.size());
     const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 
