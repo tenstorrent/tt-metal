@@ -86,3 +86,9 @@ bridge-reset / glx_reset jobs 906-910 failed. No device timings yet. JIT cache /
 (5.2 GB) is still warm. Next, once the broker is healthy: on blx03 run
 `cd ~/fasth3/t27 && setsid nohup bash -c 'tt-device-mcp run-bg "bash tmp/blx03_ab.sh thread" -w $PWD -t 590 -e tmp/blx03_env.yaml' ...`
 i.e. edit drive27c.sh to submit thread first (drop the drive27b wait), then process; same greps and md5 check as attempt 4.
+
+## 2026-09-30 21:13 (attempt 9, blx03 healthy again)
+Broker power-cycled blx03 (job 918), all 32 chips back, fabric check 921 passed, queue empty.
+Detached driver ~/fasth3/t27/tmp/drive27d.sh on blx03: thread job 922, then process job, one at a time.
+Log ~/fasth3/t27/tmp/drive27d.log ends DRIVE27D_DONE; job logs tmp/job_thread_d.log, tmp/job_process_d.log.
+Next: same greps and md5 check as attempt 4 on those two logs/outputs; then cleanup (see attempt 7) and the #20 follow-up.
