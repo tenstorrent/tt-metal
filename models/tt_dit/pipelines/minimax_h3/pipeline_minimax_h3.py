@@ -269,6 +269,12 @@ class _BucketState:
     assembly_idx: StateTensor = field(default_factory=StateTensor)
     adaln_tile_map: StateTensor = field(default_factory=StateTensor)
     adaln_expanded: StateTensor = field(default_factory=StateTensor)
+    local_static_rows: StateTensor = field(default_factory=StateTensor)
+    local_static_mask: StateTensor = field(default_factory=StateTensor)
+    local_audio_rows: StateTensor = field(default_factory=StateTensor)
+    local_audio_mask: StateTensor = field(default_factory=StateTensor)
+    local_video_rows: StateTensor = field(default_factory=StateTensor)
+    local_video_mask: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -1353,7 +1359,7 @@ class MiniMaxH3Pipeline:
         offsets["video"] = cursor + caps.audio_rows
         return offsets
 
-    def _assembly_indices(
+    def _assembly_rows(
         self,
         condition_spec: Sequence[tuple[str, int]],
         caps: MiniMaxH3ArenaCaps,
@@ -1361,7 +1367,7 @@ class MiniMaxH3Pipeline:
         a_len: int,
         v_len: int,
         rung: int,
-    ) -> ttnn.Tensor:
+    ) -> torch.Tensor:
         """Source-table row of each packed row: `[text | condition blocks | audio | video | pad]`.
 
         Pad rows point at source row 0 so the gathered content is finite.
@@ -1379,7 +1385,41 @@ class MiniMaxH3Pipeline:
         indices[pos : pos + a_len] = torch.arange(src["audio"], src["audio"] + a_len)
         pos += a_len
         indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
-        return self._replicated_indices(indices)
+        return indices
+
+    def _assembly_indices(self, *args) -> ttnn.Tensor:
+        """`_assembly_rows` as a replicated device index tensor."""
+        return self._replicated_indices(self._assembly_rows(*args))
+
+    def _local_assembly(
+        self,
+        state: _BucketState,
+        condition_spec: Sequence[tuple[str, int]],
+        caps: MiniMaxH3ArenaCaps,
+        l_len: int,
+        a_len: int,
+        v_len: int,
+        rung: int,
+        traced: bool,
+    ) -> dict[str, ttnn.Tensor]:
+        """Per-device row indices into each source stream and 0/1 row masks (MINIMAX_H3_LOCAL_ASSEMBLY=1)."""
+        rows = self._assembly_rows(condition_spec, caps, l_len, a_len, v_len, rung)
+        src = self._assembly_source_offsets(caps)
+        bounds = {"static": (0, src["audio"]), "audio": (src["audio"], src["video"]), "video": (src["video"], 1 << 31)}
+        out = {}
+        for name, (lo, hi) in bounds.items():
+            sel = (rows >= lo) & (rows < hi)
+            rows_state, mask_state = getattr(state, f"local_{name}_rows"), getattr(state, f"local_{name}_mask")
+            rows_state.update(self._row_indices(torch.where(sel, rows - lo, torch.zeros_like(rows)), rung), traced=traced)
+            mask = from_torch(
+                sel.to(torch.bfloat16).reshape(1, 1, rung, 1),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                mesh_axes=[..., self.sp_axis, None],
+            )
+            mask_state.update(mask, traced=traced)
+            out[f"{name}_rows"], out[f"{name}_mask"] = rows_state.value, mask_state.value
+        return out
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
         """Padded-global-sequence row of each target row of one modality, at the arena capacity."""
@@ -2474,6 +2514,11 @@ class MiniMaxH3Pipeline:
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
         )
+        local_kwargs = {}
+        if transformer.local_assembly:
+            local_kwargs = {
+                "local_assembly": self._local_assembly(state, condition_spec, caps, l_len, a_target, v_target, rung, traced)
+            }
         self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
         audio_start = l_len + num_cond + num_cond_audio
         video_start = audio_start + a_target
@@ -2545,6 +2590,7 @@ class MiniMaxH3Pipeline:
                 traced=traced,
                 timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
                 **tilerow_kwargs,
+                **local_kwargs,
                 **({} if traced else reuse_plan.kwargs(i)),
             )
 

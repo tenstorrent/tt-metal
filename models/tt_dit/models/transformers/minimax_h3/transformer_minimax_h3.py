@@ -319,6 +319,9 @@ class MiniMaxH3Transformer3DModel(Module):
         self.fused_heads = os.environ.get("MINIMAX_H3_FUSED_HEADS", "0") == "1"
         self._fused_head_weight: ttnn.Tensor | None = None
         self._fused_head_bias: ttnn.Tensor | None = None
+        # MINIMAX_H3_LOCAL_ASSEMBLY=1: each device gathers and projects only its own packed rows (the pipeline
+        # passes per-device row indices and 0/1 masks); exact, and skips the arena-wide projections and gather.
+        self.local_assembly = os.environ.get("MINIMAX_H3_LOCAL_ASSEMBLY", "0") == "1"
 
     def prepare_static_sources(
         self,
@@ -376,6 +379,7 @@ class MiniMaxH3Transformer3DModel(Module):
         reuse_attn_blocks: frozenset[int] | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        local_assembly: dict[str, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -394,6 +398,9 @@ class MiniMaxH3Transformer3DModel(Module):
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
         reuse_stack / reuse_attn_blocks: cross-step reuse for this forward (step_reuse.py); eager path only, and
             only once a computed forward has filled the caches.
+        local_assembly: per-device `{static,audio,video}_rows` ([1, 1, 1, S_padded_local] integers into each
+            source stream) and `{static,audio,video}_mask` ([1, 1, S_padded_local, 1] 0/1 bf16); when given, the
+            source table is never built (MINIMAX_H3_LOCAL_ASSEMBLY=1).
         adaln_tile_map / adaln_expanded_indices: [1, 1, 1, .] integers from `adaln_tilerow.tilerow_remap`, sharded on
             SP; used by MINIMAX_H3_ADALN_GATHER=tilerow (the norms fall back to the per-token gather without them).
 
@@ -420,12 +427,14 @@ class MiniMaxH3Transformer3DModel(Module):
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
-        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
-
-        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
-        hidden = ttnn.unsqueeze(hidden, 0)
-        hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
+        if local_assembly is not None:
+            hidden = self._assemble_locally(static_prefix, audio_1BAC, video_1BVC, local_assembly, as_indices)
+        else:
+            source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
+            source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
+            hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
+            hidden = ttnn.unsqueeze(hidden, 0)
+            hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
         temb = self._temb_state.value
@@ -496,6 +505,30 @@ class MiniMaxH3Transformer3DModel(Module):
                 audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
             )
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+
+    def _assemble_locally(
+        self,
+        static_prefix: ttnn.Tensor,
+        audio_1BAC: ttnn.Tensor,
+        video_1BVC: ttnn.Tensor,
+        la: dict[str, ttnn.Tensor],
+        as_indices,
+    ) -> ttnn.Tensor:
+        """This device's packed rows only: gather each stream's rows, project the raw ones at the local M, and
+        select with the 0/1 row masks (x * 1 + 0 is exact, so the values equal the arena-wide path's)."""
+
+        def gather(stream: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.reshape(stream, (stream.shape[2], stream.shape[3]))
+            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+
+        hidden = ttnn.multiply(gather(static_prefix, la["static_rows"]), la["static_mask"])
+        audio = ttnn.multiply(self.audio_proj_in(gather(audio_1BAC, la["audio_rows"])), la["audio_mask"])
+        hidden = ttnn.add(hidden, audio)
+        ttnn.deallocate(audio)
+        video = ttnn.multiply(self.proj_in(gather(video_1BVC, la["video_rows"])), la["video_mask"])
+        hidden = ttnn.add(hidden, video)
+        ttnn.deallocate(video)
+        return hidden
 
     def _fused_heads_matmul(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
         """Both heads as one matmul on the [video | audio] column-concatenated weights, built once on device."""
