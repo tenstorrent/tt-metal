@@ -723,6 +723,28 @@ jobs:
         with:
           pytest-markers: "quasar"
 
+  # LLK perf single code path (compile-only, no hardware). Mirrors pr-gate's llk-perf-single-code-path.
+  llk-perf-single-code-path:
+    needs: [resolve-docker-pull-refs, resolve-ref]
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && toJSON(inputs.run-llk-sanity-tests) == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        chip-arch: [wormhole, blackhole, quasar]
+    name: llk-perf-single-code-path (${{ matrix.chip-arch }})
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
+      - uses: ./.github/actions/llk-perf-single-code-path
+        with:
+          chip-arch: ${{ matrix.chip-arch }}
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
   # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
