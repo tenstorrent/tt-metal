@@ -108,3 +108,8 @@ Open for the owner: (1) F49 device proof result, then OK to make "no swap review
 step: automated component-test checks (output-kind checks, mistake tests at freeze, "can the test see it") = F56.
 Notes: final dashboards (index 563 KB, teletext 553 KB) exceed the 500 KB large-file hook, published not committed;
 worktrees tt-metal2-f49 and tt-metal2-merge can be removed; owner wants short plain answers.
+- 02:40 post-merge checks: 7 fork suites PASS (rms_norm: 1 pre-existing C++ gap test skipped, 12dd81a17d6), Hy4
+  C.dense_full.indexer / S.moe_full.15 / K.1 / X.1 PASS, GLM on this p150b box B.1 / M.1 (layer PCC >= 0.99995, state
+  0.99914) / L.s4096 PASS; GLM X.3 skipped on the owner's word. F49 device proof PASS (checks="steps" on the Hy4
+  dense_full and moe_full full-block swaps, 2/2). Gate-run records restored from git. Board reset after stopping the
+  GLM X.3 run. Made /localdev/dnijemcevic/bringup world-readable for sjovic (no local account yet).
