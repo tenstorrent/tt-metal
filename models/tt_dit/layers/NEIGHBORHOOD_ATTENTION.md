@@ -569,7 +569,7 @@ build it from the `--diffvae-*` options (`pytest --help`, group "LTX-2.5 DiffVAE
 | `stage5_backend`, `stage5_sp_axis`, `stage5_tp_axis` | the stage-5 executor (`linear_order` replicated, `bricked` replicated, `bricked_sp_w_sharded`), its shard axis and the TP-over-heads axis |
 | `stages_backend`, `stages_sp_axis`, `stages_tp_axis` | the same for the deterministic stages 1–3 — **separate choice**, does not reach stage 5; stage 1 always runs replicated |
 | `det` (a `DetBlockOptions`)  | the deterministic block forms: `fused_qkv`, `colpar_qkv`, `fused_rope`, `fused_swiglu`, `tp_mlp`. `resolve(tp_axis)` applies the implications (colpar implies fused qkv, tp_mlp implies fused swiglu, both need a TP axis) |
-| `stage5_fused_qkv`, `stage5_tp_proj` | the stage-5 projection forms; `tp_proj` is column-parallel qkv over `stage5_tp_axis`, on by default |
+| `stage5_fused_qkv`, `stage5_tp_proj` | the stage-5 projection forms; `tp_proj` is column-parallel qkv over `stage5_tp_axis`, on by default; `production()` also fuses qkv |
 | `gna_stride`                 | stage-5 stride, physical `(t,h,w)`, feeding every stage-5 backend                             |
 | `slab_frames`                | frame banding. **Off by default**; required at 6 s 1080p                                       |
 | `device_boundaries`          | the decode's two host boundaries run on device (ghost pad and flatten in; noise, pad trim and depth-to-space out). Needed by the traced decode and by `yuv` output |
