@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 prefill cache layout (bead F6.3): geometry goldens and device writes over chunks."""
+"""DeepSeek-V4.1 prefill cache layout (bead F6.3): geometry goldens, device writes over chunks, and the device-side
+zero initialization of large caches (bead F10)."""
 
 import pytest
 import torch
@@ -10,7 +11,14 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41CacheGeometry, V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import (
+    WINDOW_SLOT,
+    ZERO_BLOCK_BYTES,
+    V41CacheGeometry,
+    V41PrefillState,
+    replicated_zeros,
+)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 
 def test_geometry_goldens(expect_error):
@@ -26,18 +34,17 @@ def test_geometry_goldens(expect_error):
         V41CacheGeometry(C, max_seq_len=20480, chunk=5120 + 64, sp=2)
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        )
-    ],
-    indirect=True,
-)
+MESH_2X4 = [
+    pytest.param(
+        (2, 4),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-mesh-2x4",
+    )
+]
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
 def test_state_writes_over_chunks(mesh_device, device_params):
     """Two full chunks and a padded tail through SP-sharded rows; host model of the layout as expected."""
     chunk, max_seq = 1024, 3072
@@ -88,3 +95,41 @@ def test_state_writes_over_chunks(mesh_device, device_params):
         assert torch.equal(host(state.kv[source])[w:], expect_kv[source][w:]), f"compressed KV of {source}"
         assert torch.equal(host(state.index_k[source]), expect_idx[source]), f"index-K of {source}"
     assert state.kv_tensor(3) is state.kv[2] and state.kv_tensor(0) is state.swa_scratch
+
+
+def _all_chips(mesh_device, t) -> torch.Tensor:
+    """Raw stored values of every chip's replica, [chips, rows, width] (FP8 leaves through a mesh composer)."""
+    return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, 0].float()
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+def test_large_cache_zeroed_on_device(mesh_device, device_params):
+    """Caches above ZERO_BLOCK_BYTES are zeroed by device copies of one uploaded block, on every chip, over memory
+    that held non-zero data, for both KV storage formats; a tensor within one block is a plain upload."""
+    width = 512
+    step = ZERO_BLOCK_BYTES // (width * 2)
+    rows = 2 * step + 96  # two whole blocks and a partial one
+    # dirty the DRAM the zero tensors are likely to reuse
+    junk = ttnn.from_torch(
+        torch.full((1, 1, 4 * rows, width), 7.0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.deallocate(junk)
+    for dtype in (ttnn.bfloat16, MlaKvCacheFormat.SCALED_FP8.storage_dtype):
+        for n in (rows, 64):
+            t = replicated_zeros(mesh_device, n, width, dtype)
+            assert list(t.shape) == [1, 1, n, width] and t.dtype == dtype and t.layout == ttnn.ROW_MAJOR_LAYOUT
+            values = _all_chips(mesh_device, t)
+            assert values.shape[0] == mesh_device.get_num_devices() and bool((values == 0).all()), (dtype, n)
+            ttnn.deallocate(t)
+    # the state's ratio-1 KV tensor (window region + one row per token) spans several zero blocks
+    chunk, max_seq = 1024, 8192
+    for fmt in V41PrefillState.FORMATS:
+        state = V41PrefillState(mesh_device, C, max_seq, chunk, [0, 2, 3, 20], kv_format=fmt)
+        kv = state.kv[20]
+        assert kv.shape[2] == state.geometry.kv_rows(1) and kv.shape[2] * kv.shape[3] > ZERO_BLOCK_BYTES
+        for t in (kv, state.kv[2], state.index_k[20], state.swa_scratch, state.window_carry[20]):
+            assert bool((_all_chips(mesh_device, t) == 0).all()), fmt

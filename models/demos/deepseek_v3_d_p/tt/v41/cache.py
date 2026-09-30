@@ -46,6 +46,38 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
 SUPERBLOCK = 32  # the candidate selection's first level: 32 rows (one 64-byte bf16 run), 4 candidate blocks
+# per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
+# replicated 0.5 GB host upload is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout)
+ZERO_BLOCK_BYTES = 4 << 20
+
+
+def replicated_zeros(mesh_device, rows: int, width: int, dtype):
+    """Replicated row-major DRAM zeros [1, 1, rows, width] of ``dtype``: one host upload of at most ZERO_BLOCK_BYTES
+    per chip (whole 32-row groups), copied on device over the rest of the rows."""
+    step = max(ZERO_BLOCK_BYTES // (width * 2), 32) // 32 * 32  # rows of the block (<= 2 bytes per element)
+
+    def upload(n):
+        return ttnn.from_torch(
+            torch.zeros(1, 1, n, width),
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    if rows <= step:
+        return upload(rows)
+    block = upload(step)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, width]), dtype, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    for first in range(0, rows, step):
+        n = min(step, rows - first)
+        piece = block if n == step else ttnn.slice(block, [0, 0, 0, 0], [1, 1, n, width])
+        ttnn.experimental.slice_write(piece, out, [0, 0, first, 0], [1, 1, first + n, width], [1, 1, 1, 1])
+    ttnn.deallocate(block)
+    return out
 
 
 def dram_banks(mesh_device) -> int:
@@ -258,13 +290,7 @@ class V41PrefillState:
         g, idim = self.geometry, config.INDEX_HEAD_DIM
 
         def zeros(rows, width, fmt=MlaKvCacheFormat.BF16_RM):
-            return ttnn.from_torch(
-                torch.zeros(1, 1, rows, width),
-                device=mesh_device,
-                dtype=fmt.storage_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
+            return replicated_zeros(mesh_device, rows, width, fmt.storage_dtype)
 
         def kv_zeros(rows, ratio):
             fmt = self.kv_format(ratio)

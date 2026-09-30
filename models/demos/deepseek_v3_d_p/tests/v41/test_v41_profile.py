@@ -42,7 +42,6 @@ import json
 import os
 import statistics
 import time
-from contextlib import contextmanager
 
 import pytest
 import torch
@@ -134,42 +133,6 @@ def _instrument(block, flag):
     wrap(block, "ffn", "moe")
 
 
-ZERO_UPLOAD_LIMIT = 64 << 20  # bytes of one host upload of a replicated zero cache tensor (per chip)
-
-
-@contextmanager
-def _device_zeroed_caches(mesh_device):
-    """``V41PrefillState`` uploads its zero caches from the host; a replicated 0.5 GB KV tensor (S2's ratio-1 source)
-    is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout (reported as a hang). While active, a
-    zero upload above ``ZERO_UPLOAD_LIMIT`` is instead allocated on device and zeroed by device copies of one small
-    uploaded zero block (same shape, dtype, layout and contents)."""
-    upload = ttnn.from_torch
-
-    def from_torch(t, *args, **kwargs):
-        big = isinstance(t, torch.Tensor) and t.dim() == 4 and t.numel() * t.element_size() > ZERO_UPLOAD_LIMIT
-        if not big or kwargs.get("device") is None or t.any():
-            return upload(t, *args, **kwargs)
-        rows, width = t.shape[2], t.shape[3]
-        step = max(ZERO_UPLOAD_LIMIT // (width * t.element_size()), 32) // 32 * 32
-        block = upload(torch.zeros(1, 1, step, width, dtype=t.dtype), *args, **kwargs)
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, rows, width]), block.dtype, block.layout, mesh_device, ttnn.DRAM_MEMORY_CONFIG
-        )
-        for first in range(0, rows, step):
-            n = min(step, rows - first)
-            piece = block if n == step else ttnn.slice(block, [0, 0, 0, 0], [1, 1, n, width])
-            ttnn.experimental.slice_write(piece, out, [0, 0, first, 0], [1, 1, first + n, width], [1, 1, 1, 1])
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(block)
-        return out
-
-    ttnn.from_torch = from_torch
-    try:
-        yield
-    finally:
-        ttnn.from_torch = upload
-
-
 class ScenarioStack:
     """The six real-weight blocks for ``chunk``, the device embedding, the text and a state filled up to ``start``."""
 
@@ -201,10 +164,9 @@ class ScenarioStack:
         self.embedding = TtV41Embedding(mesh_device, C, ckpt.read(["embed.weight"])["embed.weight"])
         self.tokens = scenario_tokens(self.start + self.chunk)
         self.pre0 = initial_pre_mix(mesh_device, C, self.chunk)
-        with _device_zeroed_caches(mesh_device):
-            self.state = V41PrefillState(
-                mesh_device, C, self.start + self.chunk, self.chunk, list(LAYERS), kv_format=MlaKvCacheFormat.BF16_RM
-            )
+        self.state = V41PrefillState(
+            mesh_device, C, self.start + self.chunk, self.chunk, list(LAYERS), kv_format=MlaKvCacheFormat.BF16_RM
+        )
         _event(f"setup chunk {self.chunk} start {self.start} fill {self.fill}: {time.perf_counter() - t0:.1f}s")
 
     def chunk_input(self, first: int):
