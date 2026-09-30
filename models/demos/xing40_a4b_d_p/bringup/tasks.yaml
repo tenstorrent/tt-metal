@@ -1111,6 +1111,14 @@ tasks:
     kind: residual
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T15:08:25'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_residual.py: 4196225339f0e6c729da5b783b48ed0b9d6ae74a20edcbd77991b5eaa1215842
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.06
   title: 'moe block with steps 1-6 on device (last: attn_residual)'
   step: implement
