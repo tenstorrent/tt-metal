@@ -1855,12 +1855,46 @@ tasks:
       device_ms_ffn_residual: < 60
       host_transfers_per_layer: == 0
       pcc_chunk_out: '>= 0.97'
+- id: P.2b
+  title: mHC coefficients + collapse on the fused ttnn.bringup.mhc_pre (Xing mode) (owner pick)
+  step: perf
+  role: perf
+  deps:
+  - P.2
+  device: true
+  paths: *id004
+  brief:
+    details: 'Required (owner: adopt both mhc ops): after P.2 (mhc_post in the residuals, 9f62db92023), move attn_hc / ffn_hc and attn_collapse / ffn_collapse
+      onto ttnn.bringup.mhc_pre (ttnn/ttnn/bringup/mhc_pre_ttnn). Baseline (P.2 profile): attn_hc 39.2 + ffn_hc 39.1 + attn_collapse 22.1 + ffn_collapse
+      22.1 = 122.5 ms per chunk; device 1255 ms. Extend the fork, every option default-off so the current program is unchanged: (a) an entry (or option)
+      that takes the already all-reduced [S/4, 32] fp32 row (24 mixes + sum of squares, as tt/mhc.py builds it with its partial matmul + all_reduce over
+      axis 1) plus the local column-split streams [S/4, 4 x 1792], and does the RMS scale, sigmoid gates, Sinkhorn and collapse (collapse is column-local);
+      (b) Xing math options: pre = sigmoid(...) with no +eps; comb logits clamped to [-30, 30]; exp(L - rowmax) then 20 x (row / (sum + eps), column / (sum
+      + eps)) (xing_ref.py hc_weights); post = 2 sigmoid; (c) outputs in the layout P.2''s residual (mhc_post comb_transposed=False) consumes. Add fork
+      test cases for the Xing mode vs a torch reference of xing_ref.hc_weights, rebuild, keep the old path behind a switch. "Too much work" is not a stop
+      reason: stop only with measured numbers if, after a real implementation, the frozen hc / collapse tests fail. Frozen tests must pass unchanged; never
+      edit a frozen test or its limits. Report before/after per op.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_hc.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_hc.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_hc.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_attn_collapse.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_collapse.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_dense_ffn_collapse.py && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_ffn_collapse.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_dense_11_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/xing40_a4b_d_p/tests/bringup/test_swap_moe_14_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile
+      --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_attn_hc: < 25
+      device_ms_ffn_hc: < 25
+      host_transfers_per_layer: == 0
+      pcc_chunk_out: '>= 0.97'
 - id: P.3
   title: 'Routed experts: HiFi2 (owner pick)'
   step: perf
   role: perf
   deps:
-  - P.2
+  - P.2b
   device: true
   paths: *id004
   brief:
