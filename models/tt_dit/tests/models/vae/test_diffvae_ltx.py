@@ -595,6 +595,11 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, timing_tree, diffvae_optio
         f"\n[decode {bench.describe(diffvae_options)} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw})"
         f" -> {tuple(px.shape)}: {dt:8.0f} ms\n"
     )
+    if out := os.environ.get("DIFFVAE_DUMP_PIXELS"):
+        # uint8, as the video encoder sees them: a float dump of 145 1080p frames is 3.6 GB.
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(((px.float().clamp(-1, 1) + 1) * 127.5).round().to(torch.uint8), out)
+        print(f"\nwrote decoded pixels {tuple(px.shape)} to {out}")
 
 
 # The decode tail: host unpatchify + pull (float) against on-device YUV 4:2:0 (yuv). Both run the
