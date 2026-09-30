@@ -152,8 +152,10 @@ class LTXAttention(Module):
         # Cross-attention may gather K across SP before rotating it, so it keeps
         # the separate rotation until that layout is validated independently.
         self.fuse_qk_rope = os.environ.get("LTX_FUSE_QK_ROPE", "0") in ("1", "true", "True")
-        self.rope_active_cores_only = os.environ.get("LTX_ROPE_ACTIVE_CORES_ONLY", "0") == "1"
-        self.preserve_qk_rope_rounding = os.environ.get("LTX_FUSE_QK_ROPE_PRESERVE_BF16", "0") in ("1", "true", "True")
+        # On by default: both are bit-identical to the unfused rotation (1080p/145f BH 4x8 e2e latents and
+        # mp4 match) and fall back to it on layouts they do not support.
+        self.rope_active_cores_only = os.environ.get("LTX_ROPE_ACTIVE_CORES_ONLY", "1") == "1"
+        self.preserve_qk_rope_rounding = os.environ.get("LTX_FUSE_QK_ROPE_PRESERVE_BF16", "1") in ("1", "true", "True")
         self.query_input_dim = query_input_dim or dim
         self.output_dim = output_dim or dim
 

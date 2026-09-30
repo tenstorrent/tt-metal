@@ -91,8 +91,8 @@ def _build_shim_namespace() -> dict:
 
     bct = _lines(_top("build_conditioning_tensors"))
     i2v_dc = "@dataclass\n" + _lines(_top("_I2VConditioning"))
-    static_methods = ("_post_process_latent_tt", "_noise_video_latent")
-    plain_methods = ("_build_i2v_conditioning", "_denoise_no_guidance")
+    static_methods = ("_post_process_latent_tt", "_noise_video_latent", "_draw_seeded_noise")
+    plain_methods = ("_build_i2v_conditioning", "_denoise_no_guidance", "_seeded_noise")
     method_blocks = ["    @staticmethod\n" + _lines(_method(n)) for n in static_methods]
     method_blocks += [_lines(_method(n)) for n in plain_methods]
 
