@@ -5,6 +5,7 @@
 define, every kernel source marks its phases through it with per-kernel names, and nothing is compiled in -- the
 kernel descriptors are the served build's, byte for byte -- unless the environment says ``QWEN38_FUSED_ZONES=1``."""
 
+import hashlib
 import inspect
 import re
 from pathlib import Path
@@ -15,7 +16,18 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import router_tail
 
 FUSED = Path(fp.__file__).parent
 HEADER = FUSED / "kernels" / "zones.h"
-KERNELS = sorted(FUSED.glob("*/kernels/*.cpp"))
+# Keep Samuel Jett's frozen cd9 source chunk files byte-identical. They retain
+# their original profiling zones rather than the optional model zone macro.
+SOURCE_CHUNK_SHA256 = {
+    "compute_prep.cpp": "922d2b203e2d43c369e320cdc5a186da115d808da11dea644e2dce53652eff6d",
+    "reader_prep.cpp": "a125d1141506f18150eef80b6e6dc60fc5c14615fa9c637eca144bf7590be300",
+    "writer_prep.cpp": "1bca1d55b8f0a335760d16784df7c1983ff7a413e5bc4a20bc387797fe67bec2",
+    "compute_scan.cpp": "8ab5fa5d85585c7325be1a4b0bc1b6c50416d870738a4e812351076502b5a82b",
+    "reader_scan.cpp": "8c6dce017af78ede0c4c6ebeaa6e5e2ba8c496b3a59eced8fdd62655c823daf0",
+    "writer_scan.cpp": "1c515df4f939a07b94d935e63d72a1da21ae01dcda52768441d83e0f6d709ea8",
+}
+ALL_KERNELS = sorted(FUSED.glob("*/kernels/*.cpp"))
+KERNELS = [p for p in ALL_KERNELS if p.parent.parent.name != "gdn_source_chunk"]
 BUILDERS = sorted(FUSED.glob("**/*.py"))
 INCLUDE = '#include "../../kernels/zones.h"'
 ZONE = re.compile(r'FUSED_ZONE\("([^"]+)"\)')
@@ -96,6 +108,13 @@ def test_every_kernel_marks_its_phases_through_the_header():
         assert code.count("{") == code.count("}"), path
         names.extend(found)
     assert len(names) == ZONES and len(set(names)) == ZONES, "zone names are distinct over the kernels"
+
+
+def test_source_chunk_keeps_exact_pinned_kernel_bytes():
+    paths = [p for p in ALL_KERNELS if p.parent.parent.name == "gdn_source_chunk"]
+    assert {p.name for p in paths} == set(SOURCE_CHUNK_SHA256)
+    for path in paths:
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == SOURCE_CHUNK_SHA256[path.name]
 
 
 def test_zone_defines_follow_the_environment_switch():

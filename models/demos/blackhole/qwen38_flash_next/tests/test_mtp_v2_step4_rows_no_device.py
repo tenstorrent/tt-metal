@@ -567,6 +567,36 @@ def make_fake_ttnn(chunk: FakeChunk) -> SimpleNamespace:
     )
 
 
+def install_source_chunk_fake(monkeypatch, chunk):
+    """Composition tests replace only the numerical recurrence boundary.
+
+    The real model-owned descriptors have independent device/source-word tests.
+    This retains the host oracle for projection, history, masks and ownership.
+    """
+
+    def source_chunk(q, k, v, g, beta, initial_state, constants, *, rows_total, scale):
+        assert q.shape[1] == rows_total
+        eye, tril, ones, masks = constants
+        return chunk.chunk_gated_delta_rule(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            scale=scale,
+            initial_state=initial_state,
+            output_final_state=True,
+            chunk_size=32,
+            output_head_major=True,
+            eye=eye,
+            tril=tril,
+            ones=ones,
+            masks=masks,
+        )
+
+    monkeypatch.setattr(gdn_module.fused.gdn_source_chunk, "chunk_token_major", source_chunk)
+
+
 class FakeContract:
     """Shape/topology validation is the modules' own ``_require_shape``; placement checks are no-ops here."""
 
@@ -664,6 +694,7 @@ def _gdn_module(weights) -> gdn_module.Qwen38TTNNGDN:
 def fake(monkeypatch):
     chunk = FakeChunk()
     fake_ttnn = make_fake_ttnn(chunk)
+    install_source_chunk_fake(monkeypatch, chunk)
     for module in (gdn_module, ple_module, layer_module):
         monkeypatch.setattr(module, "ttnn", fake_ttnn)
         monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)
@@ -1068,8 +1099,11 @@ def test_rows_paths_never_upload_or_take_per_pass_host_ints() -> None:
     ]
     assert calls["_chunk_rows_composite"].count("ttnn.transformer.chunk_gated_delta_rule") == 1
     assert calls["_chunk_rows_composite"].count("fused.gdn_source_chunk.chunk_token_major") == 1
-    source_call = next(node for node in ast.walk(methods["_chunk_rows_composite"])
-                       if isinstance(node, ast.Call) and ast.unparse(node.func) == "fused.gdn_source_chunk.chunk_token_major")
+    source_call = next(
+        node
+        for node in ast.walk(methods["_chunk_rows_composite"])
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "fused.gdn_source_chunk.chunk_token_major"
+    )
     source_keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in source_call.keywords}
     assert source_keywords == {"rows_total": "constants.tile_rows", "scale": "HEAD_DIM ** (-0.5)"}
     # The forward pass reads the committed state and writes only rows buffers; the commit is the only writer.

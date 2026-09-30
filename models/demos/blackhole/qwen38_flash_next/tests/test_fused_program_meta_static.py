@@ -17,11 +17,11 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 
 FUSED = Path(fp.__file__).parent
 MODULES = sorted(FUSED.glob("*/__init__.py"))
-KERNELS = 23  # sub-packages under ttnn/fused
-LAUNCHES = 65  # run_program call sites over them (every one passes its meta)
+KERNELS = 24  # sub-packages under ttnn/fused
+LAUNCHES = 67  # run_program call sites over them (every one passes its meta)
 # a program's ``kernel`` is a registered name; the QSA block's mirrors and probes that are not a kernel of their own say
 # ``qsa_block``; the names bound in the modules that hold a kernel name
-KERNEL_NAMES = set(fused.kernels()) | {"qsa_block"}
+KERNEL_NAMES = set(fused.kernels()) | {"qsa_block", "gdn_source_chunk"}
 KERNEL_NAME_BINDINGS = {"NAME", "ADVANCE_NAME", "CANDIDATE_ROW", "kernel"}
 
 
@@ -109,6 +109,7 @@ def test_every_meta_names_a_kernel_and_a_distinct_variant():
     # the verify rows' fold (a default): the scan and its commit pick, and their lanes forms
     assert seen["gdn_rows_scan"] == {"verify_rows", "commit_pick", "verify_rows_lanes", "commit_pick_lanes"}
     assert seen["qsa_rows"] == {"score_pages", "post_attention_rows"}  # programs 1-3 launch through qsa_block
+    assert seen["gdn_source_chunk"] == {"prepare", "scan"}
 
 
 def _fake(shape, dtype, *, l1=False, padded=None):

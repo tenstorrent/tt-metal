@@ -103,7 +103,9 @@ def _multiply_device_zero(base_multiply):
 @pytest.fixture
 def fake(monkeypatch):
     monkeypatch.setenv("QWEN38_FUSED_OFF", "ple")  # the fused PLE lane body serves by default; the fake runs the chain
-    fake_ttnn = step4.make_fake_ttnn(step4.FakeChunk())
+    chunk = step4.FakeChunk()
+    fake_ttnn = step4.make_fake_ttnn(chunk)
+    step4.install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn.matmul = _matmul_per_tile
     fake_ttnn.multiply = _multiply_device_zero(fake_ttnn.multiply)
     fake_ttnn.empty_like = lambda t, dtype=None, layout=None, memory_config=None: FakeTensor(
