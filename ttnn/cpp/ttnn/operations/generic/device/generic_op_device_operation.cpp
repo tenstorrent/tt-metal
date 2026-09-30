@@ -128,14 +128,13 @@ ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 namespace {
 
-using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
-
-OperationType::tensor_args_t make_tensor_args(const std::vector<Tensor>& io_tensors) {
+ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t make_tensor_args(
+    const std::vector<Tensor>& io_tensors) {
     TT_FATAL(
         io_tensors.size() >= 2,
         "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
         io_tensors.size());
-    return OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+    return {.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
 }
 
 }  // namespace
@@ -143,12 +142,14 @@ OperationType::tensor_args_t make_tensor_args(const std::vector<Tensor>& io_tens
 ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
 
-ttnn::device_operation::detail::ProgramPreparationResult prepare_generic_op(
+void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
-    return ttnn::device_operation::detail::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    ttnn::device_operation::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
 }  // namespace ttnn::prim

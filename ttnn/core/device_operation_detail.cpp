@@ -14,7 +14,6 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -22,15 +21,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation::detail {
-
-ProgramPreparationResult summarize_prepared_workload(
-    tt::tt_metal::distributed::MeshWorkload& workload, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    auto result = tt::tt_metal::experimental::program_preparation::prepare(workload, *mesh_device);
-    return {
-        .max_program_config_size_bytes = result.max_program_config_size_bytes,
-        .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,
-    };
-}
 
 // Bring mesh coordinate types into scope for readability.
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;

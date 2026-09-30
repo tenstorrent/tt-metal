@@ -7,7 +7,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include "ttnn/types.hpp"
-#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn {
 
@@ -27,12 +26,13 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
 
 namespace experimental {
 
-using GenericOpPreparationResult = ttnn::device_operation::detail::ProgramPreparationResult;
-
-GenericOpPreparationResult prepare_generic_op(
+// Compiles and finalizes the program that generic_op would enqueue, without enqueueing it. Throws if the program does
+// not compile or does not fit the kernel-configuration buffer. The prepared workload is inserted into the program
+// cache, so the next generic_op with the same tensors and descriptor is a cache hit.
+void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
-GenericOpPreparationResult prepare_generic_op(
+void prepare_generic_op(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
 }  // namespace experimental

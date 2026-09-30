@@ -14,7 +14,6 @@
 
 namespace tt::tt_metal {
 namespace distributed {
-class MeshWorkload;
 class MeshWorkloadImpl;
 class MeshDevice;
 }  // namespace distributed
@@ -101,8 +100,6 @@ private:
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
-    friend experimental::program_preparation::ProgramCapacity experimental::program_preparation::prepare(
-        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice&);
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;

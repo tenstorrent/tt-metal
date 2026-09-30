@@ -64,10 +64,7 @@ def _oversized_kernel_source(descriptor_type):
 
 
 def test_prepare_generic_op_is_experimental():
-    assert not hasattr(ttnn, "prepare_generic_op"), "prepare_generic_op must not be exported at the ttnn root"
-    assert (
-        ttnn.experimental.prepare_generic_op is ttnn._ttnn.operations.experimental.prepare_generic_op
-    ), "ttnn.experimental.prepare_generic_op must be the experimental binding itself, not a wrapper"
+    assert not hasattr(ttnn, "prepare_generic_op"), "prepare_generic_op must only be exported under ttnn.experimental"
 
 
 @pytest.mark.parametrize("descriptor_type", ["program", "mesh_program"])
@@ -77,19 +74,12 @@ def test_prepare_generic_op_warms_program_cache(device, descriptor_type):
     program = _single_core_program(f"// {descriptor_type}\nvoid kernel_main() {{}}\n", descriptor_type)
 
     entries_before = device.num_program_cache_entries()
-    result = ttnn.experimental.prepare_generic_op(io_tensors, program)
-    assert result.max_program_config_size_bytes > 0, "preparation reported no program configuration"
-    assert result.max_kernel_binary_size_bytes > 0, "preparation reported no kernel binary"
+    ttnn.experimental.prepare_generic_op(io_tensors, program)
     assert (
         device.num_program_cache_entries() == entries_before + 1
     ), "a successful preparation must add the workload to the program cache"
 
-    repeated = ttnn.experimental.prepare_generic_op(io_tensors, program)
-    assert (repeated.max_program_config_size_bytes, repeated.max_kernel_binary_size_bytes) == (
-        result.max_program_config_size_bytes,
-        result.max_kernel_binary_size_bytes,
-    ), "repeating the preparation must report the cached workload's sizes"
-
+    ttnn.experimental.prepare_generic_op(io_tensors, program)
     ttnn.generic_op(io_tensors, program)
     assert (
         device.num_program_cache_entries() == entries_before + 1

@@ -139,7 +139,7 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     if (is_finalized()) {
-        const int finalized_mesh_device_id = finalized_metadata_->mesh_device_id;
+        const int finalized_mesh_device_id = get_finalized_metadata().mesh_device_id;
         TT_FATAL(
             finalized_mesh_device_id == mesh_device->id(),
             "MeshWorkload was finalized for MeshDevice {} and cannot be compiled for MeshDevice {}. Reusing "
@@ -525,28 +525,13 @@ uint32_t MeshWorkload::get_cb_size(
 
 namespace tt::tt_metal::experimental::program_preparation {
 
-ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice& mesh_device) {
+void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
     TT_FATAL(!mesh_device.get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
     // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
-    workload.pimpl_->compile(&mesh_device);
-    ProgramCapacity result;
-    const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
-    const uint32_t programmable_core_type_count =
-        MetalContext::instance(extract_context_id(&mesh_device)).hal().get_programmable_core_type_count();
-    TT_FATAL(
-        config_sizes.size() >= programmable_core_type_count,
-        "Prepared workload reported configuration sizes for {} programmable core types; expected at least {}",
-        config_sizes.size(),
-        programmable_core_type_count);
-    for (uint32_t core_type_index = 0; core_type_index < programmable_core_type_count; ++core_type_index) {
-        result.max_program_config_size_bytes =
-            std::max(result.max_program_config_size_bytes, config_sizes[core_type_index]);
-    }
-    result.max_kernel_binary_size_bytes = workload.pimpl_->get_max_program_kernels_sizeB();
-    return result;
+    workload.impl().compile(&mesh_device);
 }
 
 }  // namespace tt::tt_metal::experimental::program_preparation

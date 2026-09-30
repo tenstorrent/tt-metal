@@ -441,9 +441,6 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-experimental.prepare_generic_op = ttnn._ttnn.operations.experimental.prepare_generic_op
-experimental.GenericOpPreparationResult = ttnn._ttnn.operations.experimental.GenericOpPreparationResult
-
 from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div

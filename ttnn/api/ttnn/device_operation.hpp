@@ -25,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -499,15 +500,14 @@ void launch_operation_with_adapter(
 }
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
-ProgramPreparationResult prepare_operation_with_adapter(
+void prepare_operation_with_adapter(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
-    ProgramPreparationResult result;
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
-            return result;
+            return;
         }
     }
 
@@ -519,9 +519,8 @@ ProgramPreparationResult prepare_operation_with_adapter(
         mesh_device,
         lookup,
         [&](tt::tt_metal::distributed::MeshWorkload& workload) {
-            result = summarize_prepared_workload(workload, mesh_device);
+            tt::tt_metal::experimental::program_preparation::prepare(*mesh_device, workload);
         });
-    return result;
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -643,12 +642,12 @@ typename device_operation_t::tensor_return_value_t launch(
 /**
  * Compile and finalize an operation without dispatching it.
  *
- * The returned sizes describe the largest finalized worker-core program
- * configuration and kernel binary in the resulting mesh workload; they are zero
- * for an operation that skips launch.
+ * Validates the operation the same way `launch` does and throws if its program does not compile or does not fit the
+ * kernel-configuration buffer. A successfully prepared workload is inserted into the program cache, so the next launch
+ * of the same operation is a cache hit. An operation that skips launch is not compiled.
  */
 template <DeviceOperationConcept device_operation_t>
-ProgramPreparationResult prepare(
+void prepare(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
@@ -661,7 +660,7 @@ ProgramPreparationResult prepare(
     TT_FATAL(!mesh_device->get_view().get_devices().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
-    return detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+    detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 }
 
@@ -677,5 +676,6 @@ typename device_operation_t::tensor_return_value_t invoke(
 }  // namespace detail
 
 using ttnn::device_operation::detail::launch;
+using ttnn::device_operation::detail::prepare;
 
 }  // namespace ttnn::device_operation

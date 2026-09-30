@@ -4,7 +4,6 @@
 
 #include "generic_op.hpp"
 #include "device/generic_op_device_operation.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 
@@ -35,15 +34,19 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
     return generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
 }
 
-experimental::GenericOpPreparationResult experimental::prepare_generic_op(
+namespace experimental {
+
+void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    return ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
+    ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
 }
 
-experimental::GenericOpPreparationResult experimental::prepare_generic_op(
+void prepare_generic_op(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    return prepare_generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
+    prepare_generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
 }
+
+}  // namespace experimental
 
 }  // namespace ttnn
