@@ -95,6 +95,9 @@ def compile_all(side, arch, family, log, jobs=8, only_ops=()):
         ],
         env={"LLK_PERF_RUN_TYPES": "MATH_ISOLATE"},
         log=log,
+        # A variant that does not build on one side is left out of the comparison
+        # (and reported as unmatched), rather than failing the whole detection.
+        check=False,
     )
 
 

@@ -96,7 +96,15 @@ def pytest(side, arch, args, *, env=None, log=None, check=True):
 
 
 def produce_consume(
-    side, arch, test_args, *, env=None, log=None, producer_jobs=8, consumer_jobs=1
+    side,
+    arch,
+    test_args,
+    *,
+    env=None,
+    log=None,
+    producer_jobs=8,
+    consumer_jobs=1,
+    check=True,
 ):
     """The harness's two-phase flow: compile everything, then run on the device."""
     pytest(
@@ -105,6 +113,7 @@ def produce_consume(
         ["--compile-producer", "-n", str(producer_jobs), *test_args],
         env=env,
         log=log,
+        check=check,
     )
     return pytest(
         side,
@@ -112,4 +121,5 @@ def produce_consume(
         ["--compile-consumer", "-n", str(consumer_jobs), *test_args],
         env=env,
         log=log,
+        check=check,
     )

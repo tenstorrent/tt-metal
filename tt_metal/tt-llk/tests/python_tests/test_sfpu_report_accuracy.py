@@ -73,6 +73,12 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 SPECIALS_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
 
 
+def _arch_is_blackhole():
+    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+
+    return get_chip_architecture() == ChipArchitecture.BLACKHOLE
+
+
 def _cells():
     return [
         (in_fmt, out_fmt, approx, dest)
@@ -84,6 +90,13 @@ def _cells():
         # A float32 input through a 16-bit Dest is truncated before the SFPU sees
         # it: that measures the Dest, not the kernel.
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
+        # Blackhole cannot run a Float16 SFPU input through a 16-bit Dest (the
+        # functional tests skip it too); what comes back is not the kernel's.
+        and not (
+            _arch_is_blackhole()
+            and DataFormat.Float16 in (in_fmt, out_fmt)
+            and dest == DestAccumulation.No
+        )
     ]
 
 
