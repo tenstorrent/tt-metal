@@ -42,7 +42,7 @@ def test_block_cyclic_matches_aligned_256k():
 
     router_config = ttnn.FabricRouterConfig()
     router_config.max_packet_payload_size_bytes = 8192
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, router_config=router_config)
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router_config)
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(8, 4),
         l1_small_size=16384,
