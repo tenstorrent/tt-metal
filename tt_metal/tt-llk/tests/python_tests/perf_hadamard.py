@@ -33,6 +33,8 @@ VARIANTS = [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_hadamard(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     num_vectors, fidelity, normalize = variant
     configuration = PerfConfig(
         "sources/hadamard_perf.cpp",

@@ -34,6 +34,8 @@ VARIANTS = [(8, False, 1), (8, True, 1), (16, False, 1), (16, True, 1), (4, True
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_sfpu_generic_moe_gate_topk(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     k, normalize, stage = variant
     configuration = PerfConfig(
         "sources/sfpu_generic_moe_gate_topk_perf.cpp",

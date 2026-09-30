@@ -40,6 +40,8 @@ VARIANTS = [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_mul_reduce_scalar(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     fidelity, num_tiles = variant
     configuration = PerfConfig(
         "sources/mul_reduce_scalar_perf.cpp",

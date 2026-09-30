@@ -34,6 +34,8 @@ for num_tiles in (1, 2, 4, 8):
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_rmsnorm_bcast_scalar_dest_reuse(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     mathop, fidelity, num_tiles, clear_dest = variant
     configuration = PerfConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp",

@@ -52,6 +52,8 @@ VARIANTS.append((ApproximationMode.No, VectorMode.RC, 8, 0))
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_sfpu_add_rsqrt(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     approx, vector_mode, iterations, stage = variant
     configuration = PerfConfig(
         "sources/sfpu_add_rsqrt_perf.cpp",

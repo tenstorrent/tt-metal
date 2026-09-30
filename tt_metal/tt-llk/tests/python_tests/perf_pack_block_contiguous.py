@@ -46,6 +46,8 @@ VARIANTS = [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_pack_block_contiguous(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     tile_dims, num_tiles, block = variant
     formats = InputOutputFormat(BF16, BF16)
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)

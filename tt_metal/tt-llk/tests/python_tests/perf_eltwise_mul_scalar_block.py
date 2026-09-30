@@ -48,6 +48,8 @@ VARIANTS += [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_eltwise_mul_scalar_block(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     out_fmt, dest_acc, block, math_fidelity = variant
     configuration = PerfConfig(
         "sources/eltwise_mul_scalar_block_perf.cpp",

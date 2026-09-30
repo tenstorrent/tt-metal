@@ -49,6 +49,8 @@ VARIANTS.append((False, 2, ApproximationMode.Yes))
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_generalized_moe_gate(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     grouped, stage, approx = variant
     configuration = PerfConfig(
         "sources/generalized_moe_gate_perf.cpp",

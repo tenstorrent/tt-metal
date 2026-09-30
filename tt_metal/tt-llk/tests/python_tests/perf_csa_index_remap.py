@@ -28,6 +28,8 @@ VARIANTS = [(0, 1), (256, 1), (0, 0)]
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_csa_index_remap(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     row_offset, stage = variant
     configuration = PerfConfig(
         "sources/csa_index_remap_perf.cpp",

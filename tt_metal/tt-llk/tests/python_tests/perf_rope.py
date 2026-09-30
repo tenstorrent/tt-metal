@@ -36,6 +36,8 @@ VARIANTS = [
 @pytest.mark.perf
 @parametrize(variant=VARIANTS)
 def test_perf_rope(perf_report, variant):
+    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
+        (variant,) = variant
     ht, wt, stride, fused, per_row, stage = variant
     geometry = _geometry(ht, wt, stride)
     tiles = _dest_tiles(geometry)
