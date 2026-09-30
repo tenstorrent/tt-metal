@@ -56,8 +56,9 @@ for 4000 programs (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000`), since a 6-la
   for the bugs the golden cannot show: a wrong norm epsilon, iHC stream order at layer 0, a clamp.
 - At freeze a CPU sweep injects every standard mistake and requires the test to catch each; if one slips through,
   the review agent starts with that log. Switch: `agents.component_review` (default `all`: review on).
-- Proof: `dev/f56_mutation_proof.md` (CPU, 11 reviewed Hy4 tests) and BREADCRUMBS F56 (device, 6 Hy4 components,
-  no false alarms).
+- Proof: `dev/f56_mutation_proof.md` (CPU, all 42 reviewed Hy4 component tests: 309 mistakes, none caught by a
+  reviewed test and missed by the new checks; 41 of 42 would freeze without a review) and BREADCRUMBS F56 (device,
+  6 Hy4 components, no false alarms).
 
 ## Remains (not started)
 
