@@ -53,6 +53,9 @@ CB_MAX_LANES = 19  # fp32 X only: lane-wise max|v| tile (x row-tile / W slice) -
 CB_MAX_SCALAR = 20  # fp32 X only: reduce<MAX, REDUCE_SCALAR> result (element (0, 0))
 CB_GRID = 21  # fp32 X only: per token row-tile grid rounding constants (+ the W one, once)
 CB_MAX_SCALER = 22  # fp32 X only: reduce scaler for <MAX, REDUCE_SCALAR> (1.0)
+CB_W_OWN_READY = 23  # W column all-gather token (no payload): reader -> compute "own W share landed"
+CB_W_OWN_SPLIT = 24  # W column all-gather token (no payload): compute -> reader "own W share split"
+TOKEN_PAGE_BYTES = 32
 NUM_CB_SLOTS = 64
 UNPACK_TO_DEST_FP32_CBS = (CB_BIAS_COEF, CB_SQ_ACC, CB_GATHERED, CB_COEF_IN, CB_LOGITS_COEF)
 
@@ -122,13 +125,22 @@ L1_SAFETY_MARGIN = 64 * 1024  # headroom below the allocator's unreserved L1 (ke
 # trip, y-mix and y stores (design perf lamp L1). Raise it to trade that overlap for fewer per-block
 # fixed costs.
 BLOCK_TOKEN_TILES_CAP = 1
-# Regime R2 `W column broadcast` (op_design.md Regimes): W does not vary along the token-group split, so
-# rank r of the first group row reads its W slice from DRAM once and multicasts it (in W_CHUNK_TILES
-# chunks, Counter signal, write-once landing => no handshake) down its physical column to rank r of every
-# other group. Applies when groups are one core-row tall (group_h == 1: a physical column holds one rank)
-# and at least two full group rows are active; otherwise every core reads W itself (R1). False disables.
+# Group-width selection (core-assignment knob, perf lamp L2; Refinement 4). When token tile-rows fill the grid
+# (Mt >= grid_y, one-row groups) and X is bf16, pick group_w = the widest width with the fewest blocks per group
+# that fits L1, instead of always the full grid row: fewer ranks x more groups trades per-rank K work for fewer
+# serial gather/fold/mcast round trips. False = always group_w = min(grid_x, Ct) (the pre-Refinement-4 geometry).
+NARROW_GROUPS = True
+# Regime R2 `W column broadcast` (op_design.md Regimes): W does not vary along the token-group split, so the
+# cores of one physical column (= one rank of every group row) need the same W slice. Column all-gather
+# (Refinement 4): each row reads only its 1/rows share of the slice from DRAM and multicasts it down the
+# column (rotating-sender Mcast1D(PerColumn), Counter signal, write-once landing => no handshake); with an
+# fp32 W and bf16 X its compute first splits that share into [W_hi, W_lo] in place, so the one-time W split
+# is also spread 1/rows per core. Applies when groups are one core-row tall (group_h == 1) and at least two
+# full group rows are active; otherwise every core reads (and splits) W itself (R1). False disables.
 W_BCAST = True
-W_ROLE_DRAM, W_ROLE_SENDER, W_ROLE_RECEIVER = 0, 1, 2  # mirrors the reader's W_ROLE_* constants
+# NoC of the W column exchange = the writer's NoC (the writer owns the W fill; the reader's X stream is NoC0).
+W_MCAST_NOC = ttnn.NOC.NOC_1
+W_ROLE_DRAM, W_ROLE_SPREAD = 0, 1  # mirrors the writer's W_ROLE_* constants
 W_MCAST_PLACEHOLDER_CT = [0, SEM_W_READY, 0xFFFFFFFF, 0, 0x2, 0]  # inactive McastArgs wire (Counter)
 
 
@@ -205,6 +217,8 @@ def _cb_table(*, bt, depth, kmax, G, y_chunk, n, x_tile, w_tile, y_tile, x_dtype
         (CB_PRE_COLS, n * bt, fT, f32),
         (CB_Y_OUT, Y_DEPTH * y_chunk, y_tile, y_dtype),
         (CB_OUT_STAGE, OUT_STAGE_PAGES, fT, f32),
+        (CB_W_OWN_READY, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
+        (CB_W_OWN_SPLIT, 1, TOKEN_PAGE_BYTES, ttnn.bfloat16),
     ]
     if xp > 1:
         table += [
@@ -242,19 +256,13 @@ def make_plan(device, x_tensor, w_tensor, n):
     dtypes = dict(x_dtype=x_tensor.dtype, w_dtype=w_tensor.dtype, y_dtype=x_tensor.dtype)
     budget = ttnn.get_max_worker_l1_unreserved_size() - L1_SAFETY_MARGIN
 
-    group_w = min(grid_x, Ct)
-    if Mt >= grid_y:
-        group_h = 1
-    else:
-        group_h = max(1, min(grid_y // Mt, Ct // group_w, GROUP_CORES_CAP // group_w))
-
-    while True:
+    def fit(group_w, group_h):
+        """(bt, depth, geometry) of a group_w x group_h group shape, or None if no block fits L1."""
         group_cores = group_w * group_h
         kmax = n * math.ceil(Ct / group_cores)
         y_chunk = min(math.ceil(Ct / group_cores), Y_CHUNK_TILES_CAP)
         groups_x, groups_y = grid_x // group_w, grid_y // group_h
-        num_groups = groups_x * groups_y
-        core_token_tiles, t_start = _split(Mt, num_groups)
+        core_token_tiles, t_start = _split(Mt, groups_x * groups_y)
         ctt_max = max(core_token_tiles)
 
         def l1_at(bt_, depth_):
@@ -277,14 +285,57 @@ def make_plan(device, x_tensor, w_tensor, n):
             per_bt = l1_at(1, depth) - fixed
             bt = min(bt_cap, (budget - fixed) // per_bt) if budget > fixed else 0
             if bt >= 1:
+                return dict(
+                    group_w=group_w,
+                    group_h=group_h,
+                    group_cores=group_cores,
+                    kmax=kmax,
+                    y_chunk=y_chunk,
+                    groups_x=groups_x,
+                    groups_y=groups_y,
+                    core_token_tiles=core_token_tiles,
+                    t_start=t_start,
+                    bt=bt,
+                    depth=depth,
+                    blocks=math.ceil(ctt_max / bt),
+                )
+        return None
+
+    chosen = None
+    if Mt >= grid_y and NARROW_GROUPS and x_pieces(x_tensor.dtype) == 1:
+        # Group width = the core-assignment knob (design perf lamp L2): fewest serial blocks per group
+        # (each block pays one gather -> fold -> mcast round trip), widest group among those (least
+        # per-rank K work), subject to the L1 fit. Total K work per core is ~independent of the width;
+        # what grows with the per-rank slice is the one-time W prelude. For bf16 X that is spread over the
+        # column (W column all-gather) or absent, but the fp32-X W grid split needs the whole slice's max,
+        # so it grows with the slice: measured a loss there (1280x4096 415 -> 506 us, 4096x1792 634 ->
+        # 712 us), and fp32 X keeps the full-row width.
+        for group_w in range(min(grid_x, Ct), 0, -1):
+            f = fit(group_w, 1)
+            if f is not None and (chosen is None or f["blocks"] < chosen["blocks"]):
+                chosen = f
+    if chosen is None:
+        group_w = min(grid_x, Ct)
+        if Mt >= grid_y:
+            group_h = 1
+        else:
+            group_h = max(1, min(grid_y // Mt, Ct // group_w, GROUP_CORES_CAP // group_w))
+        while True:
+            chosen = fit(group_w, group_h)
+            if chosen is not None:
                 break
-        if bt >= 1:
-            break
-        # Still does not fit: grow the group (smaller per-rank K slice).
-        if group_h * 2 <= grid_y and group_w * group_h * 2 <= GROUP_CORES_CAP and group_w * group_h * 2 <= Ct:
-            group_h *= 2
-            continue
-        raise RuntimeError(f"mhc_pre: no blocking fits L1 (C={C}, Mt={Mt}, grid={grid_x}x{grid_y}, budget={budget} B)")
+            # Still does not fit: grow the group (smaller per-rank K slice).
+            if group_h * 2 <= grid_y and group_w * group_h * 2 <= GROUP_CORES_CAP and group_w * group_h * 2 <= Ct:
+                group_h *= 2
+                continue
+            raise RuntimeError(
+                f"mhc_pre: no blocking fits L1 (C={C}, Mt={Mt}, grid={grid_x}x{grid_y}, budget={budget} B)"
+            )
+    group_w, group_h, group_cores = chosen["group_w"], chosen["group_h"], chosen["group_cores"]
+    groups_x, groups_y = chosen["groups_x"], chosen["groups_y"]
+    num_groups = groups_x * groups_y
+    core_token_tiles, t_start = chosen["core_token_tiles"], chosen["t_start"]
+    kmax, y_chunk, bt, depth = chosen["kmax"], chosen["y_chunk"], chosen["bt"], chosen["depth"]
 
     core_c_tiles, c_start = _split(Ct, group_cores)
     return Plan(
@@ -382,9 +433,16 @@ def create_program_descriptor(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.groups_x * plan.group_w - 1, active_rows - 1))]
         )
         w_cfg = ttnn.McastConfig(
-            noc=ttnn.NOC.NOC_0, handshake=False, data_ready=ttnn.McastDataReady.Counter, sem_ids=[SEM_W_READY]
+            noc=W_MCAST_NOC,
+            handshake=False,
+            data_ready=ttnn.McastDataReady.Counter,
+            rotating_sender=True,
+            sem_ids=[SEM_W_READY],
         )
         w_mcast = ttnn.Mcast1D(device, w_rect, ttnn.Mcast1DShape.PerColumn, 0, w_cfg)
+
+    # fp32 W hi/lo split done per column share (bf16 X only: the fp32-X grid split needs the whole slice's max).
+    w_presplit = w_mcast is not None and w_pieces(w_tensor.dtype) > 1 and x_pieces(x_tensor.dtype) == 1
 
     # ---- group combine mcast (one Mcast2D per group; identical CT wire across groups) ----
     mcast_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_1, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
@@ -410,23 +468,16 @@ def create_program_descriptor(
     # ---- kernel CT args ----
     reader_ct = [
         CB_X_RESIDENT,
-        CB_WEIGHT,
-        CB_BIAS_COEF,
         CB_REDUCE_SCALER,
         n,
         bt,
         kmax,
         plan.Ct,
-        n * (n + 2),
-        W_CHUNK_TILES,
         CB_MAX_SCALER,
         int(x_pieces(x_tensor.dtype) > 1),
     ]
-    assert len(reader_ct) == 12  # W_MCAST_CT_BASE in the reader
-    reader_ct += list(w_mcast.compile_time_args()) if w_mcast is not None else W_MCAST_PLACEHOLDER_CT
+    assert len(reader_ct) == 8  # TensorAccessorArgs base in the reader
     reader_ct += ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args()
-    reader_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
-    reader_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()
 
     compute_ct = [
         CB_X_RESIDENT,
@@ -467,6 +518,9 @@ def create_program_descriptor(
         PRODUCT_ORDER_MAX,
         PRODUCT_LO_ORDER,
         X_LO_FIDELITY.value,
+        CB_W_OWN_READY,
+        CB_W_OWN_SPLIT,
+        int(w_presplit),
     ]
 
     writer_ct = [
@@ -488,11 +542,16 @@ def create_program_descriptor(
         SEM_GATHER,
         n * (n + 2),
     ]
-    assert len(writer_ct) == 17  # MCAST_CT_BASE in the writer
+    # The writer also produces the resident constants: the coefficient-major bias and the W slice (NoC1).
+    writer_ct += [CB_BIAS_COEF, CB_WEIGHT, W_CHUNK_TILES, CB_W_OWN_READY, CB_W_OWN_SPLIT, int(w_presplit)]
+    assert len(writer_ct) == 23  # MCAST_CT_BASE in the writer
     writer_ct += mcast_ct
+    writer_ct += list(w_mcast.compile_time_args()) if w_mcast is not None else W_MCAST_PLACEHOLDER_CT
     writer_ct += ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args()
     writer_ct += ttnn.TensorAccessorArgs(post_tensor).get_compile_time_args()
     writer_ct += ttnn.TensorAccessorArgs(comb_tensor).get_compile_time_args()
+    writer_ct += ttnn.TensorAccessorArgs(b_tensor).get_compile_time_args()
+    writer_ct += ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args()
 
     # ---- per-core RT args ----
     a_pre, a_post, a_res = scale
@@ -520,37 +579,39 @@ def create_program_descriptor(
                 rank = dy * plan.group_w + dx
                 cc = plan.core_c_tiles[rank]
                 cs = plan.c_start[rank]
+                own = [0, 0]
                 if w_mcast is None:
-                    w_rt = [W_ROLE_DRAM, 0, 0, 0, 0]
+                    w_rt, w_mc_rt = [W_ROLE_DRAM, 0, 0, 0], [0, 0, 0, 0]
                 else:
-                    core = ttnn.CoreCoord(x, y)
-                    role = W_ROLE_SENDER if w_mcast.is_sender(core) else W_ROLE_RECEIVER
-                    w_rt = [role] + list(w_mcast.runtime_args(core))
-                reader_rt[x][y] = [
-                    x_tensor.buffer_address(),
-                    w_tensor.buffer_address(),
-                    b_tensor.buffer_address(),
-                    ts,
-                    ctt,
-                    cs,
-                    cc,
-                    num_blocks,
-                ] + w_rt
+                    # Column share: row y of the column reads / splits / multicasts W tiles [own0, own1).
+                    sizes, starts = _split(n * cc, active_rows)
+                    own = [starts[y], starts[y] + sizes[y]]
+                    events = sum(1 for sz in sizes if sz > 0) - (1 if sizes[y] > 0 else 0)
+                    w_rt = [W_ROLE_SPREAD] + own + [events]
+                    w_mc_rt = list(w_mcast.runtime_args(ttnn.CoreCoord(x, y)))
+                reader_rt[x][y] = [x_tensor.buffer_address(), ts, ctt, cs, cc, num_blocks]
                 mcast_rt = list(helpers[g].runtime_args(ttnn.CoreCoord(x, y))) if G > 1 else [0, 0, 0, 0]
-                writer_rt[x][y] = [
-                    y_tensor.buffer_address(),
-                    post_tensor.buffer_address(),
-                    comb_tensor.buffer_address(),
-                    ts,
-                    ctt,
-                    cs,
-                    cc,
-                    num_blocks,
-                    rank,
-                    root_virtual.x,
-                    root_virtual.y,
-                ] + mcast_rt
-                compute_rt[x][y] = [num_blocks, ctt, cc, rank] + scalar_bits
+                writer_rt[x][y] = (
+                    [
+                        y_tensor.buffer_address(),
+                        post_tensor.buffer_address(),
+                        comb_tensor.buffer_address(),
+                        ts,
+                        ctt,
+                        cs,
+                        cc,
+                        num_blocks,
+                        rank,
+                        root_virtual.x,
+                        root_virtual.y,
+                        b_tensor.buffer_address(),
+                        w_tensor.buffer_address(),
+                    ]
+                    + w_rt
+                    + mcast_rt
+                    + w_mc_rt
+                )
+                compute_rt[x][y] = [num_blocks, ctt, cc, rank] + scalar_bits + own
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_pre_reader.cpp"),

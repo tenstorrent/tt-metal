@@ -57,6 +57,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #ifdef TRISC_MATH
 #include "sfpi.h"
@@ -113,6 +114,10 @@ constexpr uint32_t w_grid_bits = get_compile_time_arg_val(34);        // W0 like
 constexpr uint32_t product_order_max = get_compile_time_arg_val(35);  // keep piece products with q + p <= this
 constexpr uint32_t product_lo_order = get_compile_time_arg_val(36);   // products with q + p >= this at x_lo_fidelity
 constexpr auto x_lo_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(37));
+// W column all-gather with the fp32-W hi/lo split done per share (see w_split_own_share).
+constexpr uint32_t cb_w_own_ready = get_compile_time_arg_val(38);
+constexpr uint32_t cb_w_own_split = get_compile_time_arg_val(39);
+constexpr bool w_presplit = get_compile_time_arg_val(40) != 0;
 constexpr uint32_t x_window_pages = x_pieces * x_chunk_k_tiles * x_piece_rows;  // nominal push per window
 constexpr bool x_grid_split = x_pieces > 1;
 // fp32 X + fp32 W: the W hi/lo split is replaced by the W grid split (same 2 bf16 pieces, same alias).
@@ -421,21 +426,25 @@ ALWI void combine_block() {
 // w_split_block (once, before block 0): cb_weight fp32 tile k (bytes [4096k, 4096k+4096)) -> cb_weight_split
 // bf16 pages 2k (W_hi) and 2k+1 (W_lo), the SAME bytes. In place is safe: tile k is fully unpacked into DEST
 // before its pair is packed, and later unpacks only touch tiles > k.
-ALWI void w_split_block(uint32_t core_k_tiles) {
+// Splits W tiles [p0, p1) in place. CHUNK_WAITS: the tiles arrive in w_chunk_tiles chunks (cumulative waits,
+// R1 DRAM fill); otherwise the caller guarantees they are in L1 (W_ROLE_SPREAD own share, token-guarded).
+template <bool CHUNK_WAITS>
+ALWI void w_split_range(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
     constexpr uint32_t pair_limit = compute_kernel_lib::DEST_AUTO_LIMIT / 2;  // one DEST pair per W tile
     constexpr uint32_t tiles_per_window = pair_limit < w_chunk_tiles ? pair_limit : w_chunk_tiles;
     static_assert(w_chunk_tiles % tiles_per_window == 0, "a DEST window must not straddle a W chunk");
-    cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
     reconfig_data_format_srca(cb_weight);
     pack_reconfig_data_format(cb_weight_split);
     copy_tile_to_dst_init_short(cb_weight);
     custom_sfpu_init();
-    for (uint32_t k0 = 0; k0 < core_k_tiles; k0 += tiles_per_window) {
-        const uint32_t nt = (core_k_tiles - k0) < tiles_per_window ? (core_k_tiles - k0) : tiles_per_window;
-        if (k0 % w_chunk_tiles == 0) {
-            // W arrives in chunks; waits are cumulative (cb_weight is never popped).
-            const uint32_t upto = k0 + w_chunk_tiles;
-            cb_wait_front(cb_weight, upto < core_k_tiles ? upto : core_k_tiles);
+    for (uint32_t k0 = p0; k0 < p1; k0 += tiles_per_window) {
+        const uint32_t nt = (p1 - k0) < tiles_per_window ? (p1 - k0) : tiles_per_window;
+        if constexpr (CHUNK_WAITS) {
+            if (k0 % w_chunk_tiles == 0) {
+                // W arrives in chunks; waits are cumulative (cb_weight is never popped).
+                const uint32_t upto = k0 + w_chunk_tiles;
+                cb_wait_front(cb_weight, upto < core_k_tiles ? upto : core_k_tiles);
+            }
         }
         tile_regs_acquire();
         for (uint32_t j = 0; j < nt; ++j) {
@@ -449,6 +458,26 @@ ALWI void w_split_block(uint32_t core_k_tiles) {
         }
         tile_regs_release();
     }
+}
+
+ALWI void w_split_block(uint32_t core_k_tiles) {
+    cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
+    w_split_range<true>(0, core_k_tiles, core_k_tiles);
+    cb_push_back(cb_weight_split, 2 * core_k_tiles);
+    cb_wait_front(cb_weight_split, 2 * core_k_tiles);  // resident for the whole kernel, never popped
+}
+
+// W_ROLE_SPREAD (column all-gather): split only this core's share [p0, p1) — the reader multicasts it split,
+// and the other rows' shares land already split — then wait for the whole slice. The copy_tile reads of the
+// own share run before cb_weight is published: the reader's cb_w_own_ready token guarantees they landed.
+ALWI void w_split_own_share(uint32_t p0, uint32_t p1, uint32_t core_k_tiles) {
+    cb_reserve_back(cb_weight_split, 2 * core_k_tiles);
+    cb_wait_front(cb_w_own_ready, 1);
+    w_split_range<false>(p0, p1, core_k_tiles);
+    cb_pop_front(cb_w_own_ready, 1);
+    cb_reserve_back(cb_w_own_split, 1);  // packs above are complete when the push lands (pack thread order)
+    cb_push_back(cb_w_own_split, 1);
+    cb_wait_front(cb_weight, core_k_tiles);
     cb_push_back(cb_weight_split, 2 * core_k_tiles);
     cb_wait_front(cb_weight_split, 2 * core_k_tiles);  // resident for the whole kernel, never popped
 }
@@ -769,13 +798,15 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_resident, cb_w_matmul, cb_partial);
 
     if constexpr (x_grid_split && w_pieces > 1) {
+        DeviceZoneScopedN("C-wsplit");
         w_grid_split_block(core_k_tiles);
+    } else if constexpr (w_presplit) {
+        DeviceZoneScopedN("C-wsplit");
+        w_split_own_share(get_arg_val<uint32_t>(11), get_arg_val<uint32_t>(12), core_k_tiles);
     } else if constexpr (w_pieces > 1) {
+        DeviceZoneScopedN("C-wsplit");
         w_split_block(core_k_tiles);
     }
-
-    // Resident constant: the bias tile is waited once and never popped.
-    cb_wait_front(cb_bias_coef, 1);
 
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t row0 = block_idx * block_token_tiles;
@@ -790,39 +821,151 @@ void kernel_main() {
                 break;
             }
         }
-        if constexpr (x_grid_split) {
-            // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
-            // reader's data is guaranteed by the cb_x_resident wait).
-            cb_reserve_back(cb_x_fp32, x_block_pages);
-            cb_push_back(cb_x_fp32, x_block_pages);
-            cb_wait_front(cb_x_resident, extent * core_k_tiles);
-            cb_wait_front(cb_x_fp32, x_block_pages);
-            x_stats_block(extent, core_k_tiles);
-            project_block_split(extent, core_k_tiles, sb_h);
-        } else if constexpr (w_pieces > 1) {
-            project_block_pieces<w_pieces>(extent, core_k_tiles, sb_h);
-        } else {
-            matmul_block<
-                false,
-                false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndRetainOnLastBlock,
-                InputPolicy::WaitAndRetainOnLastBlock>(
-                x_buf,
-                w_buf,
-                partial_buf,
-                partial_buf,
-                MatmulBlockShape::of(extent / sb_h, 1, sb_h, 1, core_k_tiles, 1));
+        {
+            DeviceZoneScopedN("C-xwait");
+            cb_wait_front(cb_x_resident, x_block_pages);
+        }
+        {
+            DeviceZoneScopedN("C-proj");
+            if constexpr (x_grid_split) {
+                // cb_x_fp32 tracks cb_x_resident page for page (compute is its producer and consumer; the
+                // reader's data is guaranteed by the cb_x_resident wait).
+                cb_reserve_back(cb_x_fp32, x_block_pages);
+                cb_push_back(cb_x_fp32, x_block_pages);
+                cb_wait_front(cb_x_resident, extent * core_k_tiles);
+                cb_wait_front(cb_x_fp32, x_block_pages);
+                x_stats_block(extent, core_k_tiles);
+                project_block_split(extent, core_k_tiles, sb_h);
+            } else if constexpr (w_pieces > 1) {
+                project_block_pieces<w_pieces>(extent, core_k_tiles, sb_h);
+            } else {
+                matmul_block<
+                    false,
+                    false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::WaitAndRetainOnLastBlock>(
+                    x_buf,
+                    w_buf,
+                    partial_buf,
+                    partial_buf,
+                    MatmulBlockShape::of(extent / sb_h, 1, sb_h, 1, core_k_tiles, 1));
+            }
+        }
+        {
+            DeviceZoneScopedN("C-sumsq");
+            // ---- sumsq_block: per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse ----
+            for (uint32_t t = 0; t < extent; ++t) {
+                const uint32_t base = t * core_k_tiles;
+                if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
+                    eltwise_chain(
+                        IterationShape::tiles(core_k_tiles),
+                        BinaryFpu<
+                            BinaryFpuOp::Mul,
+                            input(
+                                cb_x_resident,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            input(
+                                cb_x_resident,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            Dst::D0,
+                            DestAccumulation::WholeShape>{base, base},
+                        PackTile<output(
+                            cb_sq_acc,
+                            ReservePolicy::OneUpfront,
+                            PushPolicy::OneAtEnd,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Direct,
+                            DestAccumulation::WholeShape)>{});
+                }
+                reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_sq_acc,
+                    cb_reduce_scaler,
+                    cb_partial,
+                    ReduceInputPolicy::WaitAndPopPerTile,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
+            }
+        }
+        // ---- combine_block (root only) ----
+        if (rank == 0) {
+            {
+                DeviceZoneScopedN("C-gwait");
+                cb_wait_front(cb_gathered, group_cores * 2 * block_token_tiles);
+            }
+            DeviceZoneScopedN("C-comb");
+            combine_block();
+        }
+        {
+            DeviceZoneScopedN("C-cwait");
+            cb_wait_front(cb_coef_in, extent);
         }
 
-        // ---- sumsq_block: per row, Q = sum_k x_k*x_k (DEST-accumulated), then fp32 row-collapse ----
-        for (uint32_t t = 0; t < extent; ++t) {
-            const uint32_t base = t * core_k_tiles;
-            if constexpr (!x_grid_split) {  // fp32 X: cb_sq_acc was filled exactly by x_stats_block
+        // ---- coefficients_block ----
+        {
+            DeviceZoneScopedN("C-coef");
+            cb_wait_front(cb_bias_coef, 1);  // resident constant (writer-produced): waited, never popped
+            cb_wait_front(cb_coef_in, extent);
+            cb_reserve_back(cb_coef_out, extent);
+            reconfig_data_format_srca(cb_coef_in);
+            pack_reconfig_data_format(cb_coef_out);
+            copy_tile_to_dst_init_short(cb_coef_in);
+            custom_sfpu_init();
+            for (uint32_t t = 0; t < extent; ++t) {
+                const bool owned = ((row0 + t) % group_cores) == rank;
+                if (owned) {
+                    cb_reserve_back(cb_logits_coef, 1);
+                }
+                tile_regs_acquire();
+                copy_tile(cb_coef_in, t, 0);
+                copy_tile(cb_bias_coef, 0, 1);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(
+                    mhc_sfpu::coefficients,
+                    0,
+                    VectorMode::None,
+                    a_pre_bits,
+                    a_post_bits,
+                    a_res_bits,
+                    eps_bits,
+                    norm_eps_bits,
+                    inv_nc_bits)));
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_coef_out);
+                if (owned) {
+                    pack_tile(0, cb_logits_coef);
+                }
+                tile_regs_release();
+                if (owned) {
+                    cb_push_back(cb_logits_coef, 1);
+                }
+            }
+            cb_push_back(cb_coef_out, extent);
+            cb_pop_front(cb_coef_in, extent);
+        }
+        {
+            DeviceZoneScopedN("C-pwait");
+            cb_wait_front(cb_pre_cols, n_streams * extent);
+        }
+        {
+            DeviceZoneScopedN("C-ymix");
+            // ---- ymix_block: y[c] = sum_i x[i][c] * bcast_col(pre_i), n-deep DEST accumulation per output ----
+            cb_wait_front(cb_pre_cols, n_streams * extent);
+            for (uint32_t t = 0; t < extent; ++t) {
                 eltwise_chain(
-                    IterationShape::tiles(core_k_tiles),
+                    IterationShape::grid(core_c_tiles, n_streams),
                     BinaryFpu<
                         BinaryFpuOp::Mul,
                         input(
@@ -833,116 +976,32 @@ void kernel_main() {
                             DataFormatReconfig::Enabled,
                             TileAddressing::Offset),
                         input(
-                            cb_x_resident,
-                            WaitPolicy::None,
-                            PopPolicy::None,
-                            InputTileMapping::Block,
-                            DataFormatReconfig::Enabled,
-                            TileAddressing::Offset),
+                            input(
+                                cb_pre_cols,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Row,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            BroadcastDim::Col),
                         Dst::D0,
-                        DestAccumulation::WholeShape>{base, base},
+                        DestAccumulation::PerRow>{t * core_k_tiles, t * n_streams},
                     PackTile<output(
-                        cb_sq_acc,
-                        ReservePolicy::OneUpfront,
-                        PushPolicy::OneAtEnd,
+                        cb_y_out,
+                        ReservePolicy::PerOuter,
+                        PushPolicy::PerOuter,
                         DataFormatReconfig::Enabled,
                         TileAddressing::Direct,
-                        DestAccumulation::WholeShape)>{});
+                        DestAccumulation::PerRow)>{});
             }
-            reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
-                cb_sq_acc,
-                cb_reduce_scaler,
-                cb_partial,
-                ReduceInputPolicy::WaitAndPopPerTile,
-                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                ReduceFp32Mode::Accurate>(ReduceInputBlockShape::single());
-        }
-
-        // ---- combine_block (root only) ----
-        if (rank == 0) {
-            combine_block();
-        }
-
-        // ---- coefficients_block ----
-        cb_wait_front(cb_coef_in, extent);
-        cb_reserve_back(cb_coef_out, extent);
-        reconfig_data_format_srca(cb_coef_in);
-        pack_reconfig_data_format(cb_coef_out);
-        copy_tile_to_dst_init_short(cb_coef_in);
-        custom_sfpu_init();
-        for (uint32_t t = 0; t < extent; ++t) {
-            const bool owned = ((row0 + t) % group_cores) == rank;
-            if (owned) {
-                cb_reserve_back(cb_logits_coef, 1);
+            cb_pop_front(cb_pre_cols, n_streams * extent);
+            if constexpr (x_grid_split) {
+                cb_pop_front(cb_grid, extent);
+                cb_pop_front(cb_x_fp32, x_block_pages);  // alias kept in lockstep
             }
-            tile_regs_acquire();
-            copy_tile(cb_coef_in, t, 0);
-            copy_tile(cb_bias_coef, 0, 1);
-            MATH((_llk_math_eltwise_unary_sfpu_params_(
-                mhc_sfpu::coefficients,
-                0,
-                VectorMode::None,
-                a_pre_bits,
-                a_post_bits,
-                a_res_bits,
-                eps_bits,
-                norm_eps_bits,
-                inv_nc_bits)));
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_coef_out);
-            if (owned) {
-                pack_tile(0, cb_logits_coef);
-            }
-            tile_regs_release();
-            if (owned) {
-                cb_push_back(cb_logits_coef, 1);
-            }
+            cb_pop_front(cb_x_resident, x_block_pages);  // X block freed: the reader may load block+2
         }
-        cb_push_back(cb_coef_out, extent);
-        cb_pop_front(cb_coef_in, extent);
-
-        // ---- ymix_block: y[c] = sum_i x[i][c] * bcast_col(pre_i), n-deep DEST accumulation per output ----
-        cb_wait_front(cb_pre_cols, n_streams * extent);
-        for (uint32_t t = 0; t < extent; ++t) {
-            eltwise_chain(
-                IterationShape::grid(core_c_tiles, n_streams),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(
-                        cb_x_resident,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Block,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    input(
-                        input(
-                            cb_pre_cols,
-                            WaitPolicy::None,
-                            PopPolicy::None,
-                            InputTileMapping::Row,
-                            DataFormatReconfig::Enabled,
-                            TileAddressing::Offset),
-                        BroadcastDim::Col),
-                    Dst::D0,
-                    DestAccumulation::PerRow>{t * core_k_tiles, t * n_streams},
-                PackTile<output(
-                    cb_y_out,
-                    ReservePolicy::PerOuter,
-                    PushPolicy::PerOuter,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Direct,
-                    DestAccumulation::PerRow)>{});
-        }
-        cb_pop_front(cb_pre_cols, n_streams * extent);
-        if constexpr (x_grid_split) {
-            cb_pop_front(cb_grid, extent);
-            cb_pop_front(cb_x_fp32, x_block_pages);  // alias kept in lockstep
-        }
-        cb_pop_front(cb_x_resident, x_block_pages);  // X block freed: the reader may load block+2
+        DeviceZoneScopedN("C-sink");
 
         // ---- sinkhorn_block (owned rows), after the y-mix (stall-shadow reorder) ----
         bool sinkhorn_initialized = false;
