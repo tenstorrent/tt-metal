@@ -768,6 +768,26 @@ def at_gamma_pole(op: str, x: float) -> bool:
     return xf <= 0.0 and float(xf).is_integer()
 
 
+# The rest of the registry's singular inputs, per op. Needed for the same reason
+# GAMMA_POLE_OPS is: "the fp64 golden is non-finite" does NOT mean "undefined".
+# I1(3.3e38) and expm1(3.3e38) are +inf in fp64 because they OVERFLOWED it, and
+# +inf is then the correct fp32 answer -- a kernel returning a finite value or a
+# -inf there is wrong, which is exactly the rpow/expm1cw signature. Only a genuine
+# singular input is undefined, and those are enumerable.
+RECIPROCAL_POLE_OPS = frozenset({"rsqrtcompat", "rdiv"})
+
+
+def at_pole(op: str, x: float) -> bool:
+    """True iff `x` is a singular input of `op` -- undefined, not merely huge."""
+    if at_gamma_pole(op, x):
+        return True
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return False
+    return op in RECIPROCAL_POLE_OPS and xf == 0.0
+
+
 def claim_status(op: str, x: float) -> str:
     """Is `x` inside the kernel's DOCUMENTED accuracy range? Reporting only.
 
