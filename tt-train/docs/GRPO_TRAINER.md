@@ -634,19 +634,19 @@ same `GRPOTrainer`; they differ in where token generation runs.
 - [`tt-train/sources/examples/grpo/`](../sources/examples/grpo/)
   — **Single-process, ttml-only.** Both the training forward/backward
   and the rollout token generation run inside the same ttml process on
-  one device mesh. The completer (`LlamaGRPOCompleter` or
-  `Qwen3GRPOCompleter` under
-  [`utils/`](../sources/examples/grpo/utils/)) owns the ttml policy
-  model and drives generation itself. Entry point:
+  one device mesh. `TTMLRolloutSampler` (under
+  [`utils/`](../sources/examples/grpo/utils/)) builds the ttml policy
+  model, which the trainer shares, and drives generation itself. Entry point:
   [`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)
-  (`--model llama` or `--model qwen3`, optional `--config <yaml>`).
+  (optional `--config <yaml>`; the model family comes from the config's
+  model yaml).
   Also ships an accuracy-eval sibling
   ([`boolq_accuracy_example.py`](../sources/examples/grpo/boolq_accuracy_example.py))
   and a plotting helper
   ([`boolq_plot_example.py`](../sources/examples/grpo/boolq_plot_example.py)).
 
-Each task lives in its own subdirectory; the model-specific completers in
-[`utils/`](utils/) are shared between them.
+Each task lives in its own subdirectory; the rollout sampler in
+[`utils/`](utils/) is shared between them.
 
 #### BoolQ Training
 
@@ -658,10 +658,11 @@ function, CSV logging via the framework's built-in `GRPOMonitor`, and DDP on 2 d
 python3 boolq/boolq_training_example.py
 ```
 
-To train Qwen3 32B sharded across all 32 galaxy cards with FSDP:
+To train Qwen3 32B sharded across all 32 galaxy cards with FSDP, pick the Qwen3
+config:
 
 ```bash
-python3 boolq/boolq_training_example.py --model qwen3 \
+python3 boolq/boolq_training_example.py \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
