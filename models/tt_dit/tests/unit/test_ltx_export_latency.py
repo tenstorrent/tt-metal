@@ -5,6 +5,8 @@
 """Host-only checks for the two request-latency costs outside the device: the mp4 export and the deferred
 Gemma encode-trace capture. No device needed."""
 
+import threading
+
 import av
 import numpy as np
 import pytest
@@ -96,3 +98,23 @@ def test_gate_without_prompt_or_trace_does_not_encode():
     untraced.defer_trace_capture()
     untraced.open_trace_gate(capture_prompt="a cat")
     assert untraced.captured == []
+
+
+def test_yuv_export_encodes_audio_alongside_video(tmp_path, monkeypatch):
+    threads = []
+    encode_audio = video._encode_audio
+
+    def spy(stream, audio):
+        threads.append(threading.current_thread())
+        return encode_audio(stream, audio)
+
+    monkeypatch.setattr(video, "_encode_audio", spy)
+    clip = _yuv_clip(t=24)
+    audio = video.Audio(waveform=torch.zeros(2, 48000).uniform_(-0.1, 0.1), sampling_rate=48000)
+    out = str(tmp_path / "clip.mp4")
+    video.export_video_audio_yuv(clip, out, fps=24, audio=audio)
+
+    assert threads and threads[0] is not threading.main_thread()
+    with av.open(out) as c:
+        samples = sum(f.samples for f in c.decode(audio=0))
+    assert abs(samples - 48000) <= 2048  # AAC priming/padding only

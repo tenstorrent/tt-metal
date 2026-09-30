@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -108,6 +109,12 @@ def _add_audio_stream(container, audio: Audio | None):
 
 def _mux_audio(container, audio_stream, audio: Audio) -> None:
     """Encode + mux the decoded waveform into ``audio_stream`` (created by ``_add_audio_stream``)."""
+    for packet in _encode_audio(audio_stream, audio):
+        container.mux(packet)
+
+
+def _encode_audio(audio_stream, audio: Audio) -> list:
+    """Encode the decoded waveform into ``audio_stream``'s AAC packets without muxing them."""
     import av
 
     samples = audio.waveform
@@ -136,11 +143,23 @@ def _mux_audio(container, audio_stream, audio: Audio) -> None:
         layout=cc.layout or "stereo",
         rate=cc.sample_rate or audio.sampling_rate,
     )
+    packets = []
     for resampled in resampler.resample(frame_in):
-        for packet in audio_stream.encode(resampled):
-            container.mux(packet)
-    for packet in audio_stream.encode():
-        container.mux(packet)
+        packets.extend(audio_stream.encode(resampled))
+    packets.extend(audio_stream.encode())
+    return packets
+
+
+_audio_pool: ThreadPoolExecutor | None = None
+
+
+def _encode_audio_async(audio_stream, audio: Audio | None) -> Future | None:
+    global _audio_pool
+    if audio is None or audio_stream is None:
+        return None
+    if _audio_pool is None:
+        _audio_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mp4-audio")
+    return _audio_pool.submit(_encode_audio, audio_stream, audio)
 
 
 def _x264_options() -> dict[str, str]:
@@ -197,6 +216,11 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     stream.thread_type = "AUTO"
 
     audio_stream = _add_audio_stream(container, audio)
+    # The AAC encode (~0.15 s for 6 s of audio) runs beside the video encode instead of after it. Only its
+    # codec context is touched off-thread: every stream is opened and the header written here, and all
+    # muxing stays on this thread.
+    container.start_encoding()
+    audio_packets = _encode_audio_async(audio_stream, audio)
 
     # Wrap each frame in place: a copy per frame (~0.45 GB per clip) is as slow as the ultrafast encode itself.
     # The encoder is flushed before return, so no frame outlives ``yuv_planar``.
@@ -207,8 +231,9 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     for packet in stream.encode():
         container.mux(packet)
 
-    if audio is not None and audio_stream is not None:
-        _mux_audio(container, audio_stream, audio)
+    if audio_packets is not None:
+        for packet in audio_packets.result():
+            container.mux(packet)
 
     container.close()
     _dump_audio_sidecar(output_path, audio)
