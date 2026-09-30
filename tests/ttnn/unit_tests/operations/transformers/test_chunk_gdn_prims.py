@@ -196,6 +196,25 @@ def test_prep_outputs_vs_torch(device, bh, nc):
 # ---------------------------------------------------------------------------
 
 
+def test_prep_qk_norm_needs_chunk_32(device, expect_error):
+    """The in-kernel q/k norm holds the normalized q and k in the CBs the chunk-64 WY inverse uses as
+    scratch, so the kernel compiles it for chunk_size 32 only; the prim refuses the pair on the host."""
+    q, k, v, g, beta, _ = _make_inputs(1, 2, seed=20260930, scale=1.0)
+    c64 = lambda t: t.reshape(1, 1, 64, t.shape[-1])  # two 32-row chunks as one 64-row chunk
+    with expect_error(RuntimeError, "qk_norm needs chunk_size 32"):
+        _t.chunk_gdn_prep(
+            _dev(device, c64(q), ttnn.bfloat16),
+            _dev(device, c64(k), ttnn.bfloat16),
+            _dev(device, c64(v), ttnn.bfloat16),
+            _dev(device, c64(g.unsqueeze(-1)), ttnn.float32),
+            _dev(device, c64(beta.unsqueeze(-1)), ttnn.float32),
+            *_const_tiles(device, chunk_size=64),
+            chunk_size=64,
+            qk_norm=True,
+            scale=KDIM**-0.5,
+        )
+
+
 def test_scan_requires_initial_state(device, expect_error):
     """The scan reader streams the initial state unconditionally (there is no in-kernel zeroing), so the
     private prim refuses to launch without one instead of reading a null buffer. The public op builds

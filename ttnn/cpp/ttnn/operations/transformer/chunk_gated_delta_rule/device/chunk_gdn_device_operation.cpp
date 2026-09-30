@@ -55,6 +55,11 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
+    TT_FATAL(
+        !attrs.qk_norm || attrs.chunk_size == TILE_HEIGHT,
+        "qk_norm needs chunk_size {} (got {}): the in-kernel norm holds q and k in the WY inverse's scratch",
+        TILE_HEIGHT,
+        attrs.chunk_size);
     check_gdn_tensor(in.g, "g", DataType::FLOAT32);
     check_gdn_tensor(in.beta, "beta", DataType::FLOAT32);
     check_gdn_tensor(in.eye_c, "eye_c", DataType::FLOAT32);
