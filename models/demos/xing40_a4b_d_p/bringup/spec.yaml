@@ -1,7 +1,7 @@
 # Model spec for the gated bring-up framework (models/demos/common/bringup). Written by the /bringup intake skill,
 # approved by a person (python -m models.demos.common.bringup approve intake --spec <this file>).
 # Xing4.0-29B-A4B (China Telecom, formerly TeleChat), text decoder only (MTP layer 40 skipped), all 40 layers, chunked
-# prefill on the 8x Blackhole p150b LoudBox, mesh 2x4, FABRIC_2D. mHC 4-stream residual (20-iteration Sinkhorn) +
+# prefill on the 8x Blackhole p150b LoudBox, mesh 4x2, FABRIC_2D. mHC 4-stream residual (20-iteration Sinkhorn) +
 # dense MLA (DeepSeek-V3 style, YaRN) + DeepSeek MoE (64 experts top-4, 1 shared, sigmoid noaux_tc, x2.0).
 model: xing40_a4b_d_p
 display_name: Xing4.0-29B-A4B
@@ -12,9 +12,9 @@ num_layers: 40
 prior: null
 layers: all
 box:
-  name: Blackhole LoudBox, 8x p150b, mesh 2x4 (FABRIC_2D)
+  name: Blackhole LoudBox, 8x p150b, mesh 4x2 (FABRIC_2D)
   chip: Blackhole p150b
-  mesh: [2, 4]                     # the box's default mesh descriptor (p150_x8: 2x4)
+  mesh: [4, 2]                     # owner: 4x2 for SP=4 x TP=2 (the p150_x8 descriptor is 2x4; 4x2 opens with FABRIC_2D, probe 05:40)
   chip_dram_gb: 32
   device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
   test_timeout_s: 3600
@@ -95,8 +95,17 @@ checkpoint:
 contract: {adapter: xing40_a4b_d_p}
 agents:
   rules:                           # the owner's rules, shown in every brief
-    - "Always use 2D fabric: the mesh (2x4) opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure
+    - "Always use 2D fabric: the mesh (4x2) opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure
       CCLs, dispatch and combine for it; never open a device or build a test with FABRIC_1D, FABRIC_1D_RING or a torus."
+    - "Parallelization (owner): SP=4 x TP=2 on the 4x2 mesh, the Kimi K2.7 4x4 layout
+      (https://claude.ai/artifact/4MC3c1hvkErCYxByJwdPZ9) with 2 columns. Rows (axis 0, 4 chips) split the tokens of
+      each chunk (sequence parallel, 1280 of 5120 per row, balanced for the causal mask, e.g. hy4_preview_d_p's
+      block-cyclic MLA latent cache or a zigzag split); columns (axis 1, 2 chips) split the weights (tensor parallel:
+      16 of 32 heads per chip, dense MLP / shared expert by intermediate, reductions within the row). Routed experts:
+      8 per chip, dispatch / combine up and down each column (axis 0), then a reduce over the 2 columns. The mHC
+      residual streams stay split by row, like the tokens, never replicated over all 8 chips. hy4_preview_d_p (SP2 x TP2
+      with MLA + iHC, tt/ihc.py, tt/layout.py) is the closest working code. Do not fall back to a replicated-residual
+      TP=8 plan."
     - "Text decoder only: never build, load or test the MTP layer (model.layers.40.*: eh_proj, enorm, hnorm,
       shared_head). There is no vision or audio part."
     - "Closest repo models: glm53_flash_d_p (the same mHC: 4 streams, 20-iteration Sinkhorn, tt/residual.py mix as one
@@ -132,6 +141,7 @@ agents:
       - models/demos/mimo_v2_6_d_p_2x2/tt
   policy: {}
   swap_review: none
+  component_review: none           # F56 (owner 2026-09-30): component tests freeze without review when their CPU mistake sweep passes
 paths:
   hf: /localdev/dnijemcevic/bringup/xing40_a4b_d_p/hf
 intake:
