@@ -3,14 +3,14 @@
 //
 // Union compute kernel: both implementations in ONE binary on the TRISC triple.
 //
-// This is the two-op routed-expert forward folded into one dispatch: the fused half runs every
-// expert at or below the model's measured token threshold, then the unified half runs the rest --
-// the same work on the same full core grid, but as one program so the layer can be overlapped
-// with combine.
+// This is the two-op routed-expert forward folded into one dispatch: the unified half runs every
+// expert above the model's measured token threshold, then the fused half runs the rest -- the same
+// work on the same full core grid, but as one program so the layer can be overlapped with combine.
 //
-// The pass order is the REVERSE of the two-op forward, which dispatches unified first. Nothing
-// depends on it: every expert is claimed by exactly one half, so the passes write disjoint output
-// rows, and swapping them measures as a wash across the whole ISL sweep.
+// Unified first because combine, overlapped, still has the last expert released to do after the
+// routed expert ends; ending on the small, fused experts keeps that tail short. For the routed
+// expert alone the order is a wash: every expert is claimed by exactly one half, so the passes
+// write disjoint output rows.
 //
 // What a swap DOES have to carry with it is the once-per-kernel hardware startup, which belongs
 // to whichever half runs first -- hybrid_compute.cpp owns it for that reason. Bound to a half
@@ -30,6 +30,10 @@
 // Declarations only -- the real CB API is not in scope until a half pulls it in.
 #include "hybrid_cb_shims.hpp"
 
+// Only when the pass exists. A threshold of zero leaves every expert to the unified half, and this
+// body is the largest single thing in the binary -- the kernel config ring is what this op is
+// short of, so an unreachable half is not worth the space it would take.
+#ifdef HYB_RUN_FUSED_PASS
 #define HYB_NS hyb_fused
 #define HYB_CT_BASE 0
 #define HYB_RT_BASE 0
@@ -37,6 +41,7 @@
 #undef HYB_NS
 #undef HYB_CT_BASE
 #undef HYB_RT_BASE
+#endif
 
 // The namespace wrapper isolates SYMBOLS, not the preprocessor: a macro either half defines at
 // file scope is still live when the other half is compiled. These are each half's PRIVATE macros
@@ -78,16 +83,14 @@ void kernel_main() {
     // half that starts the hardware itself would tie the startup to its identity rather than to
     // its position, and reordering the passes would then leave the units unconfigured -- which
     // hangs the grid with no diagnostic.
-#ifdef HYB_RUN_FUSED_PASS
-    hyb_fused::hyb_hw_startup();
-    // Pass A: every expert at or below the threshold, on the whole grid.
-    hyb_fused::kernel_main();
-    // Both halves' buffers and semaphores share this core's L1, so pass B cannot start anywhere
-    // until pass A has finished everywhere.
-    hybrid_pass_barrier();
-#else
     hyb_unified::hyb_hw_startup();
-#endif
-    // Pass B: the rest.
+    // First pass: every expert above the threshold, on the whole grid.
     hyb_unified::kernel_main();
+#ifdef HYB_RUN_FUSED_PASS
+    // Both halves' buffers and semaphores share this core's L1, so the second pass cannot start anywhere
+    // until the first has finished everywhere.
+    hybrid_pass_barrier();
+    // Second pass: the rest.
+    hyb_fused::kernel_main();
+#endif
 }

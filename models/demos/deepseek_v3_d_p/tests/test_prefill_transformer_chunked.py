@@ -44,7 +44,11 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -1078,7 +1082,7 @@ def run_chunked_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1120,7 +1124,7 @@ def test_ds_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1178,7 +1182,7 @@ _PADDED_MODES = ["notrace", "traced"]
             (8, 4),
             # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1237,7 +1241,7 @@ def test_kimi_prefill_transformer_chunked_padded(
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
             # semaphores; GLM needs 1216, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM51Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1303,7 +1307,7 @@ def test_glm_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(MistralSmall4Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1371,7 +1375,7 @@ def test_mistral4_prefill_transformer_chunked_padded(
             # trace_region_size: without it the captured buffers fall back to general DRAM and
             # trace_bytes() reads 0.
             torus_xy_device_params(
-                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(MistralSmall4Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1461,7 +1465,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM51Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1477,7 +1481,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM51Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -2558,7 +2562,7 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2651,7 +2655,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK27Config),
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2748,7 +2752,7 @@ def test_kimi_prefill_transformer_chunked(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(KimiK3Config),
                 l1_small_size=KimiK3Config.L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -2816,7 +2820,7 @@ def test_kimi_k3_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -2890,7 +2894,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM51Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -2903,7 +2907,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=GLM_L1_SMALL_SIZE
+                fabric_payload_size=moe_fabric_payload(GLM51Config), l1_small_size=GLM_L1_SMALL_SIZE
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),

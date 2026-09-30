@@ -25,6 +25,13 @@ using unified::RoutedExpertActivation;
 //
 // This replaces dispatching moe_fused_swiglu and unified_routed_expert_moe back to back, which is
 // what lets the layer be overlapped with the combine op downstream.
+//
+// Passing `dispatched_metadata` overlaps combine_fabric2d in the same program: combine runs on rows
+// 0-1, takes each expert as soon as it is written, and its output is what this returns. x must be bfloat16
+// ROW_MAJOR, and the routed expert's output is the internal bfloat8_b TILE buffer the row-major path always
+// writes -- the same handoff as running the two ops back to back -- which combine's untilizers dequantise. The
+// remaining combine arguments are required in that mode and ignored otherwise; the index table there is the full
+// (groups, extent, experts_per_chip) one, replicated on every device.
 ttnn::Tensor hybrid_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -39,7 +46,14 @@ ttnn::Tensor hybrid_routed_expert_moe(
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
+    const std::optional<ttnn::Tensor>& dispatched_metadata = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_offsets = std::nullopt,
+    const std::optional<ttnn::Tensor>& replicated_global_expert_idx_table = std::nullopt,
+    uint32_t combine_axis = 0,
+    uint32_t combine_num_links = 2,
+    uint32_t num_experts_per_tok = 0,
+    uint32_t seq_len_per_chip = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
 

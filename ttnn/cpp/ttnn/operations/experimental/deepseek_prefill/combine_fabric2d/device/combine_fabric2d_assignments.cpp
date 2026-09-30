@@ -91,19 +91,19 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 }  // namespace
 
-std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
+std::vector<::cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
     const bool is_cw = stream_is_cw(stream);
     const uint32_t link = stream / 2;
     const uint32_t m = ring_extent / 2;
     const int32_t travel = is_cw ? 1 : -1;
 
-    std::vector<cmbf2d::ChunkDescriptor> chunks;
+    std::vector<::cmbf2d::ChunkDescriptor> chunks;
     for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
         // A counter-clockwise stream mirrors the offsets through 0; then both land on a dispatch-group index
         // by adding where this chip sits on the ring.
         const uint32_t distance = static_cast<uint32_t>(dst - src);
-        chunks.push_back(cmbf2d::ChunkDescriptor{
+        chunks.push_back(::cmbf2d::ChunkDescriptor{
             .origin_dg_index = static_cast<uint32_t>(
                 (static_cast<int32_t>(my_dg_index) + travel * src + static_cast<int32_t>(ring_extent)) % ring_extent),
             .dst_dg_index = static_cast<uint32_t>(
