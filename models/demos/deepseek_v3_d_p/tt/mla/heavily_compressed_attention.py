@@ -49,6 +49,7 @@ class _TtHCABase(LightweightModule):
     _SHARED_DENSE_MASKS: dict = (
         {}
     )  # (device, chunk, cap, window, head_dim, dtype) -> (mask, mask_col, kv_pad, carry_cols)
+    _SHARED_ROPE_TABLES: dict = {}  # (device, rope kind, count, stride, dtype, fingerprint) -> (cos, sin), DS4F-0295
 
     """Helpers shared by the compressor and the block. Subclasses must set ``device`` / ``dtype`` /
     ``weights_dtype`` / ``memory_config`` / ``rotary_emb`` and the mesh attributes before calling these."""
@@ -178,15 +179,30 @@ class _TtHCABase(LightweightModule):
 
         Kept whole on every chip rather than split, because which rows a chip needs moves with the chunk:
         chip c reads from ``kv_actual + c*local``, which walks out of any fixed slice. A row is 128 B, so
-        the table is 14 MB for a 56K-token context -- cheap enough to keep whole."""
-        positions = (torch.arange(count) * stride).unsqueeze(0)
+        the table is 14 MB for a 56K-token context -- cheap enough to keep whole.
+
+        DS4F-0295: one device copy per (device, rope kind, count, stride, dtype) serves every layer -- the layers of a
+        kind rotate by the same model-level embedding, so per-layer copies were 105 identical tables (1.9 GB per chip at
+        128k, 14.4 GB at 1M, INFERRED from shapes). The key carries a 3-position fingerprint of this layer's
+        ``rotary_emb`` so a layer with different rope parameters never picks up another's table. Built ROW_MAJOR:
+        ``ttnn.embedding`` converts a TILE weight to row-major on every call (embedding.cpp:30), i.e. a full-table
+        copy per gather per chunk; a row-major weight with ``layout=TILE`` gathers straight into tiles."""
         # "compress" (yarn, theta 160000) for the HCA/CSA layers; the two sliding-window layers use "main"
         layer_type = getattr(self, "rope_layer_type", "compress")
+        probe = (torch.tensor([0, 1, max(count - 1, 0)]) * stride).unsqueeze(0).to(torch.long)
+        pc, ps = self.rotary_emb(torch.zeros(1), position_ids=probe, layer_type=layer_type)
+        key = (id(self.device), layer_type, int(count), int(stride), str(self.dtype))
+        key += (tuple(pc.flatten().tolist()), tuple(ps.flatten().tolist()))
+        shared = _TtHCABase._SHARED_ROPE_TABLES.get(key)
+        if shared is not None:
+            return shared
+        positions = (torch.arange(count) * stride).unsqueeze(0)
         cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type=layer_type)
         pair = []
         for t in (cos, sin):
             t = t.repeat_interleave(2, dim=-1)  # [1, count, rope_head_dim]
-            pair.append(self._from_torch(t))
+            pair.append(self._from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT))
+        _TtHCABase._SHARED_ROPE_TABLES[key] = tuple(pair)
         return tuple(pair)
 
     def _rope_index_base(self, rows: int):
