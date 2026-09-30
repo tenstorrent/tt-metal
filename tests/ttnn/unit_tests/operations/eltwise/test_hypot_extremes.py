@@ -16,6 +16,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Everything a bfloat16 can hold, as one 64-tile input.
 ALL_BF16 = torch.arange(0, 65536, dtype=torch.int64).to(torch.int32).to(torch.int16).view(torch.bfloat16)
@@ -127,3 +128,48 @@ def test_hypot_specials_fp32(device, a, b, expected):
         assert math.isnan(got), f"hypot({a}, {b}) = {got}, expected NaN"
     else:
         assert got == expected, f"hypot({a}, {b}) = {got}, expected {expected}"
+
+
+# Operands far outside the square band, so a composite would return inf.
+FAR = 2.0**70
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        ((1, 1, 64, 64), (1, 1, 64, 1)),  # COL_B
+        ((1, 1, 64, 1), (1, 1, 64, 64)),  # COL_A
+        ((1, 1, 64, 64), (1, 1, 1, 64)),  # ROW_B
+        ((1, 1, 64, 64), (1, 1, 1, 1)),  # SCALAR_B
+        ((1, 1, 1, 64), (1, 1, 64, 1)),  # ROW_A_COL_B
+    ],
+)
+def test_hypot_subtile_broadcast(device, dtype, a_shape, b_shape):
+    """A subtile broadcast selects the kernels_ng broadcast compute kernels."""
+    torch.manual_seed(0)
+    t = TORCH_DTYPE[dtype]
+    a = torch.randn(a_shape, dtype=t) * FAR
+    b = torch.randn(b_shape, dtype=t) * FAR
+
+    got = _hypot(device, a, b, dtype).to(torch.float64)
+    ref = torch.hypot(a.to(torch.float64), b.to(torch.float64)).to(t).to(torch.float64)
+
+    bits = 7 if dtype == ttnn.bfloat16 else 23
+    within = (got == ref) | ((got - ref).abs() <= ref.abs() * 2.0**-bits)
+    assert within.all(), f"{int((~within).sum())} of {within.numel()} off by more than one ULP"
+
+
+@pytest.mark.parametrize("dtype, pcc", [(ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.97)])
+@pytest.mark.parametrize("b_shape", [(1, 1, 64, 64), (1, 1, 64, 1)])
+def test_hypot_block_float(device, dtype, pcc, b_shape):
+    """Block-float operands take the SFPU kernel, including under a broadcast."""
+    torch.manual_seed(0)
+    ta = ttnn.from_torch(torch.randn(1, 1, 64, 64) * FAR, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(torch.randn(b_shape) * FAR, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    got = ttnn.to_torch(ttnn.hypot(ta, tb)).to(torch.float64)
+    ref = torch.hypot(ttnn.to_torch(ta).to(torch.float64), ttnn.to_torch(tb).to(torch.float64))
+
+    assert torch.isfinite(got).all(), f"{int((~torch.isfinite(got)).sum())} non-finite results"
+    assert_with_pcc(ref, got, pcc)
