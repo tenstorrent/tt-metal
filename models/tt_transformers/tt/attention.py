@@ -451,11 +451,11 @@ class Attention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
-                    else None
-                ),
+                # Not cached: loading this tensor from a cache file onto the device
+                # hangs on this build (load_tensor_flatbuffer with a device, a
+                # 1024x8x32x256 BFLOAT8_B KV cache), while building the zeros on the
+                # host and moving them takes well under a second.
+                cache_file_name=None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
