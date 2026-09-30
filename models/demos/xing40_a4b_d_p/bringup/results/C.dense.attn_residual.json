@@ -1,0 +1,153 @@
+{
+ "metrics": {
+  "auto_attn_residual_L00_big_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0
+  },
+  "auto_attn_residual_L00_big_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.0000001192092896
+  },
+  "auto_attn_residual_L00_big_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999998211860657
+  },
+  "auto_attn_residual_L00_big_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 3.6948883064269467e-08
+  },
+  "auto_attn_residual_L00_big_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.03
+  },
+  "auto_attn_residual_L00_big_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 7.453663641854291e-08
+  },
+  "auto_attn_residual_L00_layer39_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0
+  },
+  "auto_attn_residual_L00_layer39_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.0000001192092896
+  },
+  "auto_attn_residual_L00_layer39_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999998807907104
+  },
+  "auto_attn_residual_L00_layer39_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 5.684479109646645e-09
+  },
+  "auto_attn_residual_L00_layer39_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.03
+  },
+  "auto_attn_residual_L00_layer39_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 6.800277674301469e-08
+  },
+  "auto_attn_residual_L00_mixed_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0
+  },
+  "auto_attn_residual_L00_mixed_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.0000001192092896
+  },
+  "auto_attn_residual_L00_mixed_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999998211860657
+  },
+  "auto_attn_residual_L00_mixed_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 4.751152715698481e-08
+  },
+  "auto_attn_residual_L00_mixed_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.03
+  },
+  "auto_attn_residual_L00_mixed_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 6.212842151853692e-08
+  },
+  "auto_attn_residual_L00_small_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0
+  },
+  "auto_attn_residual_L00_small_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.0000001192092896
+  },
+  "auto_attn_residual_L00_small_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999998211860657
+  },
+  "auto_attn_residual_L00_small_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 3.715291541084298e-08
+  },
+  "auto_attn_residual_L00_small_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.03
+  },
+  "auto_attn_residual_L00_small_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 7.35961194209267e-08
+  },
+  "auto_attn_residual_L00_vs_cpu_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0
+  },
+  "auto_attn_residual_L00_vs_cpu_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.0000001192092896
+  },
+  "auto_attn_residual_L00_vs_cpu_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999998211860657
+  },
+  "auto_attn_residual_L00_vs_cpu_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 3.6948883064269467e-08
+  },
+  "auto_attn_residual_L00_vs_cpu_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0044403900392353535
+  },
+  "auto_attn_residual_L00_vs_cpu_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 7.453663641854291e-08
+  },
+  "auto_attn_residual_L00_vs_golden_bias": {
+   "t": "2026-09-30T14:10:05",
+   "value": -3.6716461181640625e-05
+  },
+  "auto_attn_residual_L00_vs_golden_ratio_max": {
+   "t": "2026-09-30T14:10:05",
+   "value": 1.003005862236023
+  },
+  "auto_attn_residual_L00_vs_golden_ratio_min": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9970448613166809
+  },
+  "auto_attn_residual_L00_vs_golden_rel": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.0024867907632142305
+  },
+  "auto_attn_residual_L00_vs_golden_rel_limit": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.006927181035280228
+  },
+  "auto_attn_residual_L00_vs_golden_row": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.003919508308172226
+  },
+  "pcc_attn_residual_L00": {
+   "t": "2026-09-30T14:10:05",
+   "value": 0.9999969096585258
+  }
+ },
+ "task": "C.dense.attn_residual"
+}

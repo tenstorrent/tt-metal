@@ -26,7 +26,7 @@ def reference(spec, layers=None, dtype=None):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention"},
+    "dense": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "attention", "attn_residual"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcWeights) -> checkpoint prefix under model.layers.<i>.
@@ -40,6 +40,8 @@ _NORM_STEPS = {"attn_norm"}
 _QA_STEPS = {"q_a"}
 # Dense causal MLA (tt/attention.py:TtMlaAttention), stateful: owns the layer's block-cyclic device latent cache.
 _ATTENTION_STEPS = {"attention"}
+# mHC residual mix (tt/residual.py:TtHcResidual): (streams, hc, y column-split) -> streams, no weights, no CCL.
+_RESIDUAL_STEPS = {"attn_residual", "ffn_residual"}
 
 
 def _loader(spec):
@@ -128,6 +130,28 @@ def _qa_host_fn(mesh, module):
     return fn
 
 
+def _residual_host_fn(mesh, module, hidden):
+    """fn(ctx, streams_host [S * 4, H], hc_host [S, 24], y_host [S, H]) -> streams host [S * 4, H] fp32 (harness
+    boundary: streams / hc / column-split y in, streams back)."""
+    import ttnn
+    from models.demos.xing40_a4b_d_p.tt.layout import col_split_to_device, row_split_to_device, streams_to_device
+
+    def fn(ctx, x, hc, y):
+        from models.demos.xing40_a4b_d_p.tt.layout import streams_to_host
+
+        xd = streams_to_device(mesh, x, hidden)
+        hd = row_split_to_device(mesh, hc)
+        yd = col_split_to_device(mesh, y)
+        od = module(xd, hd, yd)
+        out = streams_to_host(mesh, od, hidden).float()
+        for t in (xd, hd, yd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 class _AttentionHostFn:
     """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 768]) -> attn_out host [S, H] fp32.
 
@@ -178,6 +202,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         from models.demos.xing40_a4b_d_p.tt.attention import build_attention
 
         return _AttentionHostFn(mesh, build_attention(mesh, loader, cfg, layer))
+    if step in _RESIDUAL_STEPS:
+        from models.demos.xing40_a4b_d_p.tt.residual import build_residual
+
+        return _residual_host_fn(mesh, build_residual(cfg, mesh), cfg.hidden_size)
     if step in _COLLAPSE_STEPS:
         from models.demos.xing40_a4b_d_p.tt.collapse import build_collapse
 
