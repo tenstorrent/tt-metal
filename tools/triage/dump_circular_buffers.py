@@ -29,11 +29,10 @@ from dataclasses import dataclass
 
 from dispatcher_data import DispatcherData, run as get_dispatcher_data
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, hex_serializer, log_warning_location, run_script, triage_field
+from triage import ScriptConfig, hex_serializer, run_script, triage_field
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device, read_word_from_device
-from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
@@ -112,21 +111,15 @@ def remote_rows(location: OnChipCoordinate, kernel_config, config_base: int, arc
 
 def read_core(location: OnChipCoordinate, dispatcher_data: DispatcherData) -> list[CircularBufferRow] | None:
     arch = WORMHOLE if location.device.is_wormhole() else BLACKHOLE if location.device.is_blackhole() else None
-    try:
-        core = dispatcher_data.get_cached_core_data(location, "brisc")
-        if arch is None or core.go_message == "DONE" or core.mailboxes is None:
-            return None
-        kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
-        if int(kernel_config.enables) == 0:
-            return None
-        rows = local_rows(location, kernel_config, core.kernel_config_base, arch)
-        rows += remote_rows(location, kernel_config, core.kernel_config_base, arch)
-        return rows or None
-    except TimeoutDeviceRegisterError:
-        raise
-    except Exception as e:
-        log_warning_location(location, f"Skipping circular buffers: {e}")
+    core = dispatcher_data.get_cached_core_data(location, "brisc")
+    if arch is None or core.go_message == "DONE" or core.mailboxes is None:
         return None
+    kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
+    if int(kernel_config.enables) == 0:
+        return None
+    rows = local_rows(location, kernel_config, core.kernel_config_base, arch)
+    rows += remote_rows(location, kernel_config, core.kernel_config_base, arch)
+    return rows or None
 
 
 def run(args, context: Context):
