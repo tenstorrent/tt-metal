@@ -47,8 +47,10 @@ fix: |
 perf: |
   Role: perf. Make one performance change to $model and keep it correct:
   $details
-  Keep the previous behaviour selectable (a named setting or an env var, recorded in the profile's settings): the
-  orchestrator measures the change on and off with it. Do not change thresholds, goldens or frozen tests.
+  Keep the previous behaviour selectable with the switch the task names ($ab_switch; recorded in the profile's
+  settings): the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
+  Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not
+  change thresholds, goldens or frozen tests.
   Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
   the gate below, in gate order, each once. If one fails and the details above give no way around it, stop at once:
   do not profile, do not try settings the details do not name; append the failing metric(s) with their limits (the
