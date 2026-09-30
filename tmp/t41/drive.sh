@@ -6,7 +6,8 @@ args="$*"
 while true; do
   out=$(ssh -o BatchMode=yes g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 5400 bash /home/smarton/fasth3/t41/tmp/t41/job.sh $args" 2>&1)
   rc=$?
-  [ $rc -eq 75 ] || [ -z "$out" ] || echo "$out" | grep -q "busy" || break
+  # 75/busy: another job holds blx03; 255: ssh failed (host down or rebooting)
+  [ $rc -eq 75 ] || [ $rc -eq 255 ] || [ -z "$out" ] || echo "$out" | grep -q "busy" || break
   sleep 120
 done
 echo "$out"

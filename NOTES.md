@@ -20,6 +20,12 @@ Branch ttp/t41-... = t20 tip (1eadde3ce6c) + 63c8860f08e. Pushed.
   project job runs on blx03, then submits tmp/t41/job.sh 2: eager dense gen + dump, then eager band W=2 gen, seed 0.
 - Outputs on blx03: ~/fasth3/out/t41/{dense,band2}/{run.log,*.mp4}; /var/tmp/fasth3/t41/{qkv,lat_dense*,lat_band2*}.
 
+## Status 2026-09-30 20:25
+- Driver ran at 20:24 but blx03 was down (ssh: no route to host, ping 100% loss). Nothing submitted, no job id.
+- drive.sh now also retries on ssh rc 255. On wake: confirm blx03 is up and g14blx03-device is not paused,
+  check ~/fasth3/t41 and /var/tmp/fasth3 survived, then relaunch:
+  `setsid nohup tmp/t41/drive.sh 2 > tmp/t41/drive.log 2>&1 &` and wait on `grep -q T41_DRIVE_DONE tmp/t41/drive.log`.
+
 ## Next
 1. `ssh g14blx03 "cd ~/fasth3/t41 && ~/fasth3/tt-metal/python_env/bin/python tmp/t41/analyze.py /var/tmp/fasth3/t41/qkv"`
    -> attention mass by frame distance + per-W rel_l2 vs dense.
