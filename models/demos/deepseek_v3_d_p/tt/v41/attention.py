@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import _cores, _split
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -41,6 +42,33 @@ TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chun
 
 def _round_up(x: int, m: int) -> int:
     return -(-x // m) * m
+
+
+def compact_leading_rows(rows, n: int, window: int):
+    """In place on the uint32 row-major [1, 1, R, K] index rows (DRAM-interleaved): each of the first ``n`` rows is
+    shifted left by its count m of sentinels (0xFFFFFFFF) among its first ``window`` entries, the last m entries set
+    to the sentinel. One data-movement op (kernels/index_rows_compact.cpp): a row per core, rows with m = 0 are
+    not written. Returns ``rows`` (generic_op io: the input doubles as the output)."""
+    memory = rows.memory_config()
+    assert rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.dtype == ttnn.uint32, (rows.layout, rows.dtype)
+    assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), "index rows: DRAM-interleaved"
+    k = rows.shape[3]
+    assert 0 < n <= rows.shape[2] and window <= k, (n, tuple(rows.shape), window)
+    coords, cores = _cores(rows.device(), n)
+    args = ttnn.RuntimeArgs()
+    for (cx, cy), (first, count) in zip(coords, _split(n, len(coords))):
+        args[cx][cy] = [rows.buffer_address(), first, count]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="models/demos/deepseek_v3_d_p/tt/v41/kernels/index_rows_compact.cpp",
+        core_ranges=cores,
+        compile_time_args=[0, k, window] + ttnn.TensorAccessorArgs(rows).get_compile_time_args(),
+        runtime_args=args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    scratch = 64 + k * 4
+    page = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)
+    cbs = [ttnn.CBDescriptor(total_size=scratch, core_ranges=cores, format_descriptors=[page])]
+    return ttnn.generic_op([rows, rows], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
 
 
 # Dense projections on a 2D-multicast program config (bead 8y7.9.7): ttnn's default config for these shapes is 1.4-2x
@@ -150,16 +178,7 @@ class TtV41Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate,
         )
-        # column iota of the index-row compaction (``_compact_leading``): the widest row is window + top-k
-        self.compact_rows = _round_up(self.window - 1, 32)  # queries that can lack window rows
-        width = _round_up(self.window + (config.INDEX_TOPK if self.ratio else 0), TOPK_ALIGN)
-        self.column_iota = ttnn.from_torch(
-            torch.arange(width, dtype=torch.int32).expand(self.compact_rows, width).reshape(1, 1, -1, width),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=replicate,
-        )
+        self.compact_rows = self.window - 1  # a chip's leading query rows that can lack window rows
 
         self.is_kv_source = layer in config.KV_SOURCE_LAYERS
         self.is_index_source = layer in config.INDEX_SOURCE_LAYERS
@@ -190,7 +209,9 @@ class TtV41Attention(LightweightModule):
 
         Both parts are valid-first except the window of a query with fewer than ``window`` earlier tokens: its
         missing rows are a leading run of -1 (``_window_table``); the top-k has a sentinel tail. So [window | top-k]
-        is valid-first for every query at or after position window - 1; the earlier ones are compacted."""
+        is valid-first for every query at or after position window - 1; the earlier ones are compacted: a chip's rows
+        are contiguous query positions, so only its first ``compact_rows`` rows can lack window rows (the others,
+        with m = 0, are left as they are)."""
         if compressed is None:
             rows = window
         else:
@@ -201,27 +222,11 @@ class TtV41Attention(LightweightModule):
         k = _round_up(width, TOPK_ALIGN)
         if k != width:
             rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - width)], -1)
+        rows = ttnn.to_layout(ttnn.typecast(rows, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
         if start < self.window - 1:
-            rows = self._compact_leading(rows, window)
-        return ttnn.to_layout(ttnn.typecast(rows, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
-
-    def _compact_leading(self, rows, window):
-        """Rotate each of the chip's first ``compact_rows`` query rows left by its count of missing window rows (the
-        leading -1 run): valid rows first, the -1 run after the top-k's sentinel tail. Later queries (all window rows
-        present) rotate by 0; a chip's rows are contiguous query positions, so no later chip needs more rows."""
-        q_rows, k = rows.shape[2], rows.shape[3]
-        n = min(self.compact_rows, q_rows)
-        head_window = ttnn.slice(window, [0, 0, 0, 0], [1, 1, n, window.shape[3]])
-        missing = ttnn.sum(ttnn.typecast(ttnn.eq(head_window, -1), ttnn.float32), dim=-1, keepdim=True)
-        shift = ttnn.add(ttnn.slice(self.column_iota, [0, 0, 0, 0], [1, 1, n, k]), ttnn.typecast(missing, ttnn.int32))
-        # sentinel columns past the end keep every shifted index in range
-        head = ttnn.pad(
-            ttnn.slice(rows, [0, 0, 0, 0], [1, 1, n, k]), [(0, 0), (0, 0), (0, 0), (0, window.shape[3])], -1
-        )
-        head = ttnn.gather(head, -1, ttnn.typecast(shift, ttnn.uint32))
-        if n == q_rows:
-            return head
-        return ttnn.concat([head, ttnn.slice(rows, [0, 0, n, 0], [1, 1, q_rows, k])], dim=2)
+            # the missing window rows are the leading -1 run: shift it past the top-k's sentinel tail
+            rows = compact_leading_rows(rows, min(self.compact_rows, rows.shape[2]), window.shape[3])
+        return rows
 
     # --- forward -------------------------------------------------------------------------------------
     def forward(self, x, state: V41PrefillState, length: int):

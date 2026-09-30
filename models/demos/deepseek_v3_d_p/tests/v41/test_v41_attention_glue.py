@@ -161,15 +161,7 @@ def test_v41_index_rows_valid_first(mesh_device, device_params, size, compressed
     window_width = cfg.SLIDING_WINDOW
     width = -(-(window_width + (cfg.INDEX_TOPK if compressed else 0)) // TOPK_ALIGN) * TOPK_ALIGN
     g = _glue(mesh_device, cfg)
-    g.compact_rows = -(-(g.window - 1) // 32) * 32
-    g.column_iota = ttnn.from_torch(
-        torch.arange(width, dtype=torch.int32).expand(g.compact_rows, width).reshape(1, 1, -1, width),
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    g._compact_leading = lambda rows, window: TtV41Attention._compact_leading(g, rows, window)
+    g.compact_rows = g.window - 1
     window = tables.window_rows(start)
     window_host = _down(mesh_device, window).reshape(-1, window_width)  # chip order = query order
     comp, comp_host, base = None, None, 128 + chunk
