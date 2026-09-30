@@ -1965,61 +1965,20 @@ def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_pat
 #: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
 #: handful of inputs does not belong here: name the inputs in
 #: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
-_GOLDEN_IN_INPUT_FORMAT = (
-    "the golden is tilized and untilized in the input format, so an fp16 input's "
-    "reference overflows at 65504 where the kernel's 32-bit Dest holds the answer "
-    "(exp2(16) reads inf against an exact 65536); #58590 fixes the golden"
-)
 _NO_INFINITY_IN_A_16BIT_DEST = (
-    "a 16-bit Dest has no infinity: where the answer overflows, the kernel's result "
-    "reads as the Dest's largest magnitude (-130560 for sinh(-65504)), a finite answer "
-    "to an infinite golden"
+    "the golden models a 16-bit Dest as IEEE fp16, whose range ends at 65504, while the "
+    "hardware's 16-bit Dest carries a magnitude up to ~131008 and no infinity: where the "
+    "answer is past 65504 the kernel reads a finite value (-66560 for tan(177.5), -130560 "
+    "for sinh(-65504)) against the golden's -inf"
 )
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
-    **{
-        (MathOperation.Tan, DataFormat.Float16, out, None, None): (
-            _GOLDEN_IN_INPUT_FORMAT
-            + "; tan(177.5) is -66347, which fp16 has no room for"
-        )
-        for out in (DataFormat.Float16_b, DataFormat.Float32)
-    },
-    # -- the golden, not the kernel -----------------------------------------------
-    **{
-        (
-            op,
-            DataFormat.Float16,
-            out,
-            None,
-            DestAccumulation.Yes,
-        ): _GOLDEN_IN_INPUT_FORMAT
-        for op in (
-            MathOperation.Cosh,
-            MathOperation.Exp,
-            MathOperation.Exp2,
-            MathOperation.ExpWithBase,
-            MathOperation.Expm1,
-            MathOperation.Selu,
-            MathOperation.Sinh,
-            MathOperation.Square,
-            MathOperation.UnaryPower,
-            MathOperation.Xielu,
-        )
-        for out in (DataFormat.Float16_b, DataFormat.Float32)
-    },
-    (
-        MathOperation.Cbrt,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        None,
-        DestAccumulation.Yes,
-    ): (
-        "the golden is rounded to the bfloat16 input format, so cbrt(2.8e14) = 65439 "
-        "reads 65536 -> inf against the kernel's correct 65440; #58590 fixes the golden"
-    ),
     # -- the store or the Dest, not the op ------------------------------------------
-    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): (
-        _NO_INFINITY_IN_A_16BIT_DEST
-    ),
+    **{
+        (op, DataFormat.Float16, None, None, DestAccumulation.No): (
+            _NO_INFINITY_IN_A_16BIT_DEST
+        )
+        for op in (MathOperation.Sinh, MathOperation.Tan)
+    },
     # -- the approximation's own shortfall at the fp16 overflow edge ----------------
     (
         MathOperation.Exp,
@@ -2040,33 +1999,26 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         None,
     ): ("the same shortfall from a strided Float32 input, one lane"),
     (
-        MathOperation.ExpWithBase,
+        MathOperation.Exp,
         DataFormat.Float16,
-        DataFormat.Float16,
-        ApproximationMode.Yes,
-        None,
-    ): (
-        "the same shortfall through the 0.5 scale: approximate exp(0.5 x) answers "
-        "64256..64640 for x in 22.19..22.22, where the answer is past 65504"
-    ),
-    (
-        MathOperation.ExpWithBase,
         DataFormat.Float32,
-        DataFormat.Float16,
         ApproximationMode.Yes,
-        None,
+        DestAccumulation.Yes,
     ): (
-        "the same shortfall through the 0.5 scale from a strided Float32 input, one lane"
+        "the same shortfall at fp32's overflow edge: exp(88.75) is 3.497e38, past "
+        "FLT_MAX, and the approximation answers 3.396e38, one lane"
     ),
-    # -- kernel behaviour over a wide band of the format -----------------------------
+    # -- kernel behaviour over a wide band of the format, not yet triaged -----------
     # Each is what the sweep found and the row records; none is a golden or store
-    # artefact, and none is a handful of lanes an issue could name. Each names the issue
-    # that tracks it, or says why it is no defect, so retiring the entry is tied to
-    # something: the stale check below fails once no row needs it.
+    # artefact, and none is a handful of lanes an issue could name. They hold their
+    # cells on tolerance until the kernel is looked at.
     (MathOperation.Digamma, None, None, None, None): (
-        "wrong for negative x, which the LUT has no branch for (#58682): -inf of the "
-        "wrong sign for large negative x, and a finite -61312 where a block-quantized "
-        "input lands on the pole at 0 (the saturation below the fit range is #51128)"
+        "non-finite of the wrong sign for |x| above ~1e36, and a finite -61312 where a "
+        "block-quantized input lands on the pole at 0"
+    ),
+    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): (
+        "past the overflow point the approximate kernel returns x itself instead of "
+        "inf, and NaN for large negative x where the answer is 0"
     ),
     (MathOperation.Expm1Cw, None, None, None, None): (
         "past the overflow point (x ~ 89) the kernel returns -1, the x -> -inf limit, "
@@ -2439,7 +2391,9 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
         if not any(_acknowledges(key, cell) for cell in cells)
     ]
     assert not stale, "acknowledgements no row needs any more: " + ", ".join(
-        f"{op.name} {i.name}->{o.name}" for op, i, o, _, _ in stale
+        f"{op.name} {i and i.name}->{o and o.name} approx={a and a.name} "
+        f"dest={d and d.name}"
+        for op, i, o, a, d in stale
     )
     wildcard = [
         k for k in _UNMEASURABLE_CELLS_ACKNOWLEDGED if any(v is None for v in k[1:])
