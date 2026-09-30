@@ -35,3 +35,9 @@ Wake check: DRIVE19_DONE in the log, or the driver is gone (e.g. blx03 rebooted)
 ## 2026-09-30 14:12 PT (both hosts rebooted)
 g15blx02 and blx03 rebooted ~14:05 PT. blx03 broker power-cycled, hold 919 ended, startup 920 saw all 32 chips, fabric-check 921 passed.
 No dumps exist yet. Relaunched drive19.sh detached on blx03 (pid 14880, log ~/fasth3/drive19.log). Same next steps as above.
+
+## 2026-09-30 (run 178 wake)
+Woke on probe, but g14blx03 is unreachable (ping 100% loss, ssh "No route to host"): likely down or rebooting again.
+Driver state, dumps and broker state unknown. Nothing submitted, nothing changed on blx03.
+Next: once blx03 answers ssh, check ~/fasth3/drive19.log and `tt-device-mcp status 1` (HELD?). If DRIVE19_DONE, follow steps 1-4.
+If the driver is gone and no dumps exist, relaunch drive19.sh detached (setsid nohup, log ~/fasth3/drive19.log).
