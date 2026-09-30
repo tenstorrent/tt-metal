@@ -323,8 +323,9 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
     [
         (0, "reduction_size must be positive"),
         (10, "must be divisible by reduction_size"),
+        (3, "must be divisible by reduction_size"),
     ],
-    ids=["zero_reduction_size", "batch_seq_not_divisible"],
+    ids=["zero_reduction_size", "batch_seq_not_divisible", "batch_seq_ragged_tail"],
 )
 def test_moe_expert_token_remap_invalid_reduction_size(
     mesh_device, mesh_shape, input_memory_config, reduction_size, error_match, expect_error
