@@ -13,9 +13,11 @@ from helpers.format_config import (
     QUASAR_DATA_FORMAT_ENUM_VALUES,
     WORMHOLE_DATA_FORMAT_ENUM_VALUES,
 )
+from helpers.logger import logger
 
 from .arch_common import _get_parser
 from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from .fuser_config import FuserConfig
 from .operand import L1_PACKERS
 
 SweepValue = str | bool | int | float
@@ -170,11 +172,32 @@ def expand_fuser_configs(
         yield case_name, config_dict
 
 
+def validated_fuser_configs(
+    test_name: str, definition: dict
+) -> Iterator[tuple[str, FuserConfig]]:
+    """Build valid cases before parametrization, filtering rejected sweep combinations."""
+    supported_archs = definition.get("supported_archs")
+    if (
+        supported_archs is not None
+        and get_chip_architecture().value not in supported_archs
+    ):
+        return
+
+    for case_name, config_dict in expand_fuser_configs(test_name, definition):
+        try:
+            config = FuserConfigSchema.load(case_name, config_dict)
+        except ValueError as error:
+            if case_name == test_name:
+                raise
+            logger.debug(f"Excluding invalid fuser sweep case {case_name}: {error}")
+            continue
+        yield case_name, config
+
+
 def collect_fuser_cases(yaml_files):
     cases = {}
     for yaml_path in yaml_files:
         test_name = str(yaml_path.relative_to(FUSER_CONFIG_DIR).with_suffix(""))
         definition = FuserConfigSchema.load_definition(test_name)
-        for case_name, config_dict in expand_fuser_configs(test_name, definition):
-            cases[case_name] = config_dict
+        cases.update(validated_fuser_configs(test_name, definition))
     return cases
