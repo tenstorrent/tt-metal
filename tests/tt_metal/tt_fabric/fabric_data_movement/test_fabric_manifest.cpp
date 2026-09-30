@@ -143,6 +143,11 @@ void check_layout_structure(const nlohmann::json& layout, uint32_t unreserved_ba
 
 // Compare the generated fabric manifest with the live fabric state.
 void check_manifest_matches_live_fabric(FabricConfig expected_config) {
+    // The fixture brings up fabric before the test body runs, so the option must come from the environment.
+    if (!metal_context.rtoptions().get_generate_fabric_manifest()) {
+        GTEST_SKIP() << "Set TT_METAL_FABRIC_GENERATE_MANIFEST=1 to generate the fabric manifest";
+    }
+    
     auto& metal_context = tt::tt_metal::MetalContext::instance();
     const auto manifest_path = fabric_manifest_path(metal_context.rtoptions());
     ASSERT_TRUE(std::filesystem::exists(manifest_path)) << manifest_path;

@@ -63,7 +63,7 @@ public:
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
-    ManifestRouterInstance make_manifest_router_instance() const override;
+    manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const override;
 
     // ============ Compute-Mesh Specific Methods ============
 

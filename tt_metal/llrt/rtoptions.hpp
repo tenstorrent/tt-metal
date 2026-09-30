@@ -295,6 +295,9 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
+    // Generate the fabric manifest
+    bool generate_fabric_manifest = false;
+
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
@@ -800,6 +803,9 @@ public:
 
     bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
     void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    bool get_generate_fabric_manifest() const { return generate_fabric_manifest; }
+    void set_generate_fabric_manifest(bool enable) { generate_fabric_manifest = enable; }
 
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 

@@ -298,10 +298,21 @@ void FabricFirmwareInitializer::init(
     // I/O that MockChip discards.
     if (descriptor_->is_mock_device()) {
         const auto fabric_manager = descriptor_->fabric_manager();
-        if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
-            has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+        const bool init_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC);
+        const bool terminate_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
+        const bool generate_fabric_manifest = rtoptions_.get_generate_fabric_manifest();
+
+        if (init_fabric) {
+            // Remove regardless of whether generate_fabric_manifest is set to clean up any stale manifests
+            remove_stale_fabric_manifest();
+        }
+        if (init_fabric || terminate_fabric) {
             compile_fabric_only();
         }
+        if (init_fabric && generate_fabric_manifest) {
+            write_fabric_manifest();
+        }
+
         return;
     }
 
@@ -320,19 +331,7 @@ void FabricFirmwareInitializer::init(
 
         log_info(tt::LogMetal, "Initializing Fabric");
 
-        // Remove the stale fabric debug manifest, if one exists
-        const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
-        try {
-            if (std::filesystem::remove(manifest_path)) {
-                log_debug(tt::LogFabric, "Removed stale fabric debug manifest: {}", manifest_path.string());
-            }
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogFabric,
-                "Failed to remove stale fabric debug manifest {}: {}",
-                manifest_path.string(),
-                e.what());
-        }
+        remove_stale_fabric_manifest();
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
@@ -349,6 +348,9 @@ void FabricFirmwareInitializer::init(
 #endif
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
+        if (rtoptions_.get_generate_fabric_manifest()) {
+            write_fabric_manifest();
+        }
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
@@ -369,15 +371,6 @@ void FabricFirmwareInitializer::configure() {
     }
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
-
-        // Serialize and write the fabric debug manifest to disk
-        const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
-        try {
-            tt_fabric::serialize_fabric_manifest_to_file(control_plane_, manifest_path);
-        } catch (const std::exception& e) { // don't prevent fabric from running if manifest export fails as its purely a debug tool
-            log_warning(
-                tt::LogFabric, "Failed to export fabric debug manifest {}: {}", manifest_path.string(), e.what());
-        }
     }
     initialized_.test_and_set();
 }
@@ -506,6 +499,29 @@ void FabricFirmwareInitializer::compile_fabric_only() {
         if (!dev->compile_fabric()) {
             log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
         }
+    }
+}
+
+void FabricFirmwareInitializer::remove_stale_fabric_manifest() const {
+    const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
+    try {
+        if (std::filesystem::remove(manifest_path)) {
+            log_debug(tt::LogFabric, "Removed stale fabric manifest: {}", manifest_path.string());
+        }
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to remove stale fabric manifest {}: {}", manifest_path.string(), e.what());
+    }
+}
+
+void FabricFirmwareInitializer::write_fabric_manifest() const {
+    const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
+    try {
+        tt_fabric::serialize_fabric_manifest_to_file(control_plane_, manifest_path);
+    } catch (const std::exception& e) {
+        TT_THROW(
+            "Failed to write fabric manifest {} (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip): {}",
+            manifest_path.string(),
+            e.what());
     }
 }
 

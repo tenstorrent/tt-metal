@@ -288,14 +288,16 @@ void FabricBuilder::create_kernels() {
     }
 }
 
-void FabricBuilder::build_and_publish_manifest_router_instances() {
-    std::vector<ManifestRouterInstance> debug_instances;
-    debug_instances.reserve(routers_.size());
+void FabricBuilder::build_and_publish_manifest_chip() {
+    manifest::Chip chip{.z_port_role = z_role_of(chip_facts_.per_direction_capabilities)};
+    chip.routers.reserve(routers_.size());
+
     for (const auto& [eth_chan, router_builder] : routers_) {
-        debug_instances.push_back(router_builder->make_manifest_router_instance());
+        chip.routers.push_back(router_builder->collect_manifest_router(chip_facts_));
     }
-    std::ranges::sort(debug_instances, {}, &ManifestRouterInstance::eth_chan);
-    builder_context_.publish_manifest_router_instances(device_->id(), std::move(debug_instances));
+    
+    std::ranges::sort(chip.routers, {}, [](const manifest::Router& router) { return router.identity.eth_chan; });
+    builder_context_.publish_manifest_chip(device_->id(), std::move(chip));
 }
 
 }  // namespace tt::tt_fabric
