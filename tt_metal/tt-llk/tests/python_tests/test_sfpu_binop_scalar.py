@@ -141,9 +141,8 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The registry's tolerance arm, as the unary functional driver uses it. A step
-    # budget from the exhaustive sweep is derived from a whole format, far wider than
-    # this sampled domain, and would loosen the gate here.
+    # The whole contract, step budget included, as the binary and ternary drivers gate:
+    # every Scalar* row was measured over this driver's own variants.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -158,7 +157,7 @@ def _run_sfpu_binop_scalar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"
 
 

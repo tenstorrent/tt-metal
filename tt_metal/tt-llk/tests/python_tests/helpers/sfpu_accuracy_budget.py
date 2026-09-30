@@ -56,6 +56,63 @@ from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read i
 #: to the tolerance metric until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
+#: Ops exact by construction: a sign-bit change, a copy, an integer, a predicate's
+#: 1.0/0.0, a constant, a selection or a clamp. A measured 0 on one of these states what
+#: the op guarantees, so the emitter keeps it even from a strided sample, where any
+#: other op's 0 is written as 1. test_sfpu_accuracy_budget.py's finer-grained lists
+#: (EXACT_BY_CONSTRUCTION, EXACT_ZERO_BY_CONSTRUCTION, EXACT_SELECTIONS) must cover
+#: exactly this set.
+EXACT_BY_CONSTRUCTION_OPS = frozenset(
+    {
+        MathOperation.Abs,
+        MathOperation.Neg,
+        MathOperation.Identity,
+        MathOperation.Floor,
+        MathOperation.Ceil,
+        MathOperation.Trunc,
+        MathOperation.Round,
+        MathOperation.Fill,
+        MathOperation.Threshold,
+        MathOperation.Clamp,
+        MathOperation.Hardtanh,
+        MathOperation.Isfinite,
+        MathOperation.Isinf,
+        MathOperation.Isnan,
+        MathOperation.Isneginf,
+        MathOperation.Isposinf,
+        MathOperation.LogicalNot,
+        MathOperation.Signbit,
+        MathOperation.EqualZero,
+        MathOperation.NotEqualZero,
+        MathOperation.LessThanZero,
+        MathOperation.GreaterThanZero,
+        MathOperation.LessThanEqualZero,
+        MathOperation.GreaterThanEqualZero,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryNe,
+        MathOperation.UnaryGt,
+        MathOperation.UnaryGe,
+        MathOperation.UnaryLt,
+        MathOperation.UnaryLe,
+        MathOperation.SfpuElwEq,
+        MathOperation.SfpuElwNe,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwGe,
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuMask,
+        MathOperation.SfpuAddTopRow,
+        MathOperation.ReluMax,
+        MathOperation.ReluMin,
+        MathOperation.UnaryMax,
+        MathOperation.UnaryMin,
+        MathOperation.Frac,
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,
+    }
+)
+
 #: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
 #: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc, arch)``.
 #: *arch* is the one the contract was resolved for, so a reading names which
@@ -155,18 +212,24 @@ class AccuracyContract:
         measured by the exhaustive sweep over every value the format has, so it is far
         wider than the few thousand values that driver samples warrant, and feeding it
         back would loosen its gate rather than tighten it. An op on the ULP metric
-        therefore keeps today's per-format tolerance here. The binary and ternary
-        drivers, and the unary signbit, isinf/isnan and threshold sweeps
-        (``gate_on_step_budget``), take :meth:`passed_test_kwargs` instead: their rows
-        were measured over their own stimuli.
+        therefore keeps today's per-format tolerance here. The binary, ternary and
+        scalar drivers take :meth:`passed_test_kwargs`: their rows were measured over
+        their own sweeps.
         """
         if self.metric is Metric.ULP:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(
-        self, flush_subnormals: Optional[bool] = None
-    ) -> Dict[str, Any]:
+    @property
+    def declares_tolerance(self) -> bool:
+        """A tolerance contract that names an ``atol`` or ``rtol`` -- as opposed to a
+        numberless ``metric: tolerance`` row, which only opts its cell out of the ULP
+        metric and must not retract a number the op declares on a broader row."""
+        return self.metric is Metric.TOLERANCE and (
+            self.atol is not None or self.rtol is not None
+        )
+
+    def passed_test_kwargs(self, flush_subnormals: bool = False) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
         so a call site is one ``**`` expansion and switching metrics is a table edit.
 
@@ -487,22 +550,36 @@ def accuracy_contract(
     if found is None:
         return TOLERANCE_CONTRACT
     key, contract = found
-    if contract.metric is not Metric.ULP:
-        return contract
-    # A step count is trustworthy only where the format has a per-element ULP -- the
-    # block floats' lattice compares are the stronger criterion -- and only on the
-    # architecture it was measured on, which for an unkeyed row is MEASURED_ARCH. A row
-    # whose own key names `arch` was measured there and is exempt.
-    if has_ulp_gate(output_format) and (arch == MEASURED_ARCH or key.arch is not None):
-        return contract
-    # Downgrade onto the op's *own* tolerance row where it has one, not the global
-    # default: a ULP row that wins on specificity must not shadow a broader declared atol.
-    tolerance_rows = {
-        key: contract
-        for key, contract in table.items()
-        if contract.metric is not Metric.ULP
+    if contract.metric is Metric.ULP:
+        # A step count binds only where the format has a per-element ULP (block floats
+        # keep their lattice compares) and on the arch it was measured on: MEASURED_ARCH
+        # for an unkeyed row, or the arch the row's own key names.
+        if has_ulp_gate(output_format) and (
+            arch == MEASURED_ARCH or key.arch is not None
+        ):
+            return contract
+        return _declared_tolerance(table, query, op.name, TOLERANCE_CONTRACT)
+    if not contract.declares_tolerance:
+        # A numberless tolerance row opts its cell out of the ULP metric without
+        # retracting an atol/rtol the op declares on a broader row. The sweep emits one
+        # per over-ceiling cell, more specific than SigmoidAppx's shared `atol 0.13`.
+        return _declared_tolerance(table, query, op.name, contract)
+    return contract
+
+
+def _declared_tolerance(
+    table: _BudgetTable, query: BudgetKey, label: str, fallback: AccuracyContract
+) -> AccuracyContract:
+    """The most specific tolerance row *with numbers* covering *query*, or *fallback*.
+
+    Both downgrades land here rather than on the global default: a ULP row or a bare
+    tolerance row that wins on specificity must not shadow a broader declared atol.
+    """
+    numbered = {
+        key: contract for key, contract in table.items() if contract.declares_tolerance
     }
-    return resolve_contract(tolerance_rows, query, label=op.name)
+    found = _winner(numbered, query, label)
+    return fallback if found is None else found[1]
 
 
 def assert_against_contract(
@@ -567,14 +644,18 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
-    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
-    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    budget at large magnitude, rounded *down* to a whole step because a budget is one:
+    419,430 steps for fp32, 51 for fp16, 6 for bf16, 25 for Bfp8_b. Down, not up: a
+    step is widest relative to the value at the bottom of a binade, where bf16's 6.4
+    lets ``isclose`` accept ``128 -> 134`` and refuse ``128 -> 135``, so a 7-step budget
+    would pass what the tolerance it displaced rejected, with no PCC behind it.
+    ``passed_test`` warns past the unrounded figure at runtime; no row here may cross it.
     """
     from .utils import tolerances
 
     dtype = ulp_dtype(output_format)
     by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
-    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
+    return float(math.floor(min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))))
 
 
 def validate_registry() -> None:

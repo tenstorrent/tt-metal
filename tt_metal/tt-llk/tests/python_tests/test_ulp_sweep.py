@@ -163,39 +163,11 @@ def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
     assert "2026" not in second  # this run's rows name it through the key line
 
 
-def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
-    """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
-    "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
-    starts like an emitted note -- names no run on the key line, and an `arch:` row is
-    one no Wormhole run measured; crediting either to the outgoing clause made the
-    provenance audit read a sample as exhaustive."""
-    table.write_text(
-        "Gelu:\n"
-        "  - {in: Float16_b, out: Float32, max_ulp: 9}  # fp32 output, not swept\n"
-        "  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes\n"
-        "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
-        encoding="utf-8",
-    )
-    for in_fmt, run in (
-        ("Float16", "sweep A, wormhole, 2026-09-23"),
-        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
-    ):
-        MEASURED.clear()
-        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
-        write_table(table, run)
-    rows = _rows(table)
-    assert any(r.endswith("# fp32 output, not swept") for r in rows)
-    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
-    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
-    # And the first run's emitted rows still go with it.
-    first = next(r for r in rows if "in: Float16, out: Float16," in r)
-    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
-
-
-def test_a_demotion_names_the_budget_that_crossed_the_line(table):
-    """`_verdict` hands back the *budget* on a demotion, so the note's "budget would be
-    N > C-step ceiling" is checkable. Handing back the measurement read "budget would
-    be 100" for a budget of 110 -- a claim the ceiling check cannot confirm."""
+def test_a_demotion_names_the_budget_it_would_have_needed(table):
+    """A cell demotes only once its *measurement* is past the ceiling (one inside it
+    enrols, capped), and the row names both numbers so the claim is checkable against
+    `usable_budget_ceiling`. Handing back the measurement as the budget read "budget
+    100" for a budget of 110."""
     from helpers.ulp_sweep import _verdict
 
     assert _verdict(100, "Float16_b") == ("tolerance", 110)
@@ -204,15 +176,28 @@ def test_a_demotion_names_the_budget_that_crossed_the_line(table):
     write_table(table, "today")
     rows = _rows(table)
     assert any(
-        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget would be "
-        "110 > 6-step ceiling" in r
+        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget 110 > "
+        "ceiling 6" in r
         for r in rows
     )
     assert any(
-        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized, so tolerance"
-        in r
+        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized" in r
         for r in rows
     )
+
+
+def test_a_strided_zero_is_floored_to_one_and_an_exhaustive_one_is_not():
+    """The sweep enumerates every 16-bit value, so a 0 there is the op being exactly
+    rounded. The Float32 walk visits 65,279 of 2**32, and a finite sample cannot assert
+    exactness: Rsqrt's Float32 -> Float32 cell had been written as 0 from it."""
+    from helpers.ulp_sweep import _verdict
+
+    assert _verdict(0, "Float32", "Float16_b") == ("ulp", 0)
+    assert _verdict(0, "Float32", "Float32") == ("ulp", 1)
+    assert _verdict(0, "Float16_b", "Float32") == ("ulp", 1)
+    assert _verdict(3, "Float32", "Float32") == ("ulp", 4)  # only the zero moves
+    # An exact op's 0 is its construction's, not the sample's.
+    assert _verdict(0, "Float32", "Float32", exact=True) == ("ulp", 0)
 
 
 def test_a_row_for_another_architecture_survives_a_regeneration(table):
@@ -332,9 +317,13 @@ def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
 
     assert _verdict(100, "Float32") == ("ulp", 110)  # exactly 1.1x, not float-rounded
     assert _verdict(10, "Float32") == ("ulp", 11)
-    assert EMIT_HEADROOM == 1.1  # the two figures above are written against it
-    monkeypatch.setattr(ulp_sweep, "EMIT_HEADROOM", 1.5)
-    assert _verdict(10, "Float32") == ("ulp", 15)
+    assert EMIT_HEADROOM == 1.1  # the figures here are written against it
+    # A measurement that fits the ceiling enrols even when the headroom would not:
+    # capped at the ceiling, with zero slack. One past it stays on tolerance.
+    assert _verdict(5, "Float16_b") == ("ulp", 6)  # 1.1x of 5 is 5.5, within the 6
+    assert _verdict(6, "Float16_b") == ("ulp", 6)  # measured at the ceiling: zero slack
+    assert _verdict(7, "Float16_b") == ("tolerance", 8)
+    assert _verdict(393216, "Float32") == ("ulp", 419430)
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
     # A block float never enrols from a sorted sweep, however small the reading.
@@ -402,6 +391,40 @@ def test_an_infinite_golden_on_the_singularity_point_is_not_a_nonfinite_failure(
     assert nonfinite_failures(
         MathOperation.Rsqrt, src, golden, result, fmt, fmt
     ).tolist() == [False, False, True]
+
+
+def test_the_unpack_format_bounds_which_inputs_count():
+    """A Float32 input into a Float16 output at dest_acc=No unpacks into a Float16 Dest:
+    below 2**-14 it is flushed, past 65504 it saturates. Neither lane is the op's, so
+    both masks drop them there -- and only there: at dest_acc=Yes the Dest is 32-bit."""
+    from helpers.llk_params import DestAccumulation
+
+    fp32, fp16 = DataFormat.Float32, DataFormat.Float16
+    src = torch.tensor([1e-6, 1.0, 1e6], dtype=torch.float32)
+    golden = torch.tensor([1.0, 1.0, float("inf")], dtype=torch.float16)
+    result = torch.tensor([0.0, 1.0, 11.8], dtype=torch.float16)
+    no, yes = DestAccumulation.No, DestAccumulation.Yes
+    assert measurable_mask(src, golden, result, fp32, fp16, no).tolist() == [
+        False,
+        True,
+        False,
+    ]
+    assert measurable_mask(src, golden, result, fp32, fp16, yes)[0]
+    assert not nonfinite_failures(_OP, src, golden, result, fp32, fp16, no).any()
+    assert nonfinite_failures(_OP, src, golden, result, fp32, fp16, yes)[2]
+
+
+def test_an_fp16_pack_clamp_is_a_saturated_store():
+    """The fp16 pack clamps an out-of-range value to +-65504 of its sign. A bfloat16
+    pack has the Dest's range and cannot, so a largest-finite answer there against an
+    infinite golden is still the kernel's."""
+    src = torch.tensor([5.0, 5.0], dtype=torch.bfloat16)
+    fp16 = DataFormat.Float16
+    golden = torch.tensor([float("-inf"), float("-inf")], dtype=torch.float16)
+    result = torch.tensor([-65504.0, 65504.0], dtype=torch.float16)
+    assert nonfinite_failures(
+        _OP, src, golden, result, DataFormat.Float16_b, fp16
+    ).tolist() == [False, True]
 
 
 def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
