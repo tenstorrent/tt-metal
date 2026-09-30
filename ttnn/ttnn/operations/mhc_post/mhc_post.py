@@ -10,14 +10,15 @@ For every token t and output stream j:
 
 from __future__ import annotations
 
+import math
+
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .mhc_post_program_descriptor import create_program_descriptor
+from .mhc_post_program_descriptor import TILE_HW, create_program_descriptor
 
-TILE_HW = 32
-MAX_STREAMS = 5  # mechanism cap: the n*n comb row must sit in one raw tile row (n*n <= 32)
+MAX_STREAMS = math.isqrt(TILE_HW)  # mechanism cap (= 5): the n*n comb row must sit in one raw tile row (n*n <= 32)
 
 
 # ---------------------------------------------------------------------------
