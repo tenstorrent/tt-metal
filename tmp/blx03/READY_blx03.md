@@ -21,9 +21,9 @@ From g15blx02 (one job, then wait for its final status before the next):
 
 | # | label | command |
 |---|-------|---------|
-| 1 | dv145 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh dv145"` |
-| 2 | conv145 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh conv145 LTX25_DIFFVAE=0"` |
-| 3 | dv145_c211 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh dv145_c211 DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1"` |
+| 1 | conv145 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh conv145"` |
+| 2 | dv145 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh dv145 LTX25_DIFFVAE=1"` |
+| 3 | dv145_c211 | `ssh g14blx03 "~/fasth3/tt-metal/tmp/blx03/submit.sh 900 bash tmp/blx03/run25.sh dv145_c211 LTX25_DIFFVAE=1 DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1"` |
 
 Check: `ssh g14blx03 tt-device-mcp status -j <id>`; pass = run.log ends " passed" and RUN_EXIT[<label>]=0.
 Logs: `ssh g14blx03 tt-device-mcp logs <id>`.

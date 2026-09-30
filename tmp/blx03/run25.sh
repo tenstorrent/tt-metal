@@ -1,6 +1,7 @@
 #!/bin/bash
 # LTX-2.5 1080p run on blx03 (g14blx03). Usage: tmp/blx03/run25.sh <label> [VAR=val ...]
-# Labels: dv145 (DiffVAE 145f@24), conv145 (LTX25_DIFFVAE=0), dv145_c211 (DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1).
+# Decodes with the conv decoder (the 2.5 default); LTX25_DIFFVAE=1 selects the DiffVAE.
+# Labels: conv145, dv145 (LTX25_DIFFVAE=1), dv145_c211 (dv145 + DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1).
 # W=<worktree> runs another tree with its own build; outputs land in $OUT/<label>.
 set -o pipefail
 W=${W:-/home/smarton/fasth3/tt-metal}
@@ -9,7 +10,7 @@ label=$1; shift
 cd $W
 source /home/smarton/fasth3/tt-metal/python_env/bin/activate
 export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools
-export LTX_VERSION=2.5 LTX25_DIFFVAE=1
+export LTX_VERSION=2.5 LTX25_DIFFVAE=0
 export LTX_CHECKPOINT=/home/smarton/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors
 export LTX25_VIDEO_VAE=$LTX_CHECKPOINT
 export LTX25_ROOT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941
