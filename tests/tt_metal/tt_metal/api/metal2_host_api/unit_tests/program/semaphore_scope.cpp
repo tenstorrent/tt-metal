@@ -20,8 +20,10 @@ namespace {
 
 using test_helpers::BindSemaphoreToKernels;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
+using test_helpers::ProgramSpecTestQuasar;
 
 // ResolveSemaphoreScope picks how each bound semaphore is accessed, and codegen bakes the answer
 // into the kernel's binding token. A wrong answer is therefore a silently wrong *mechanism* on
@@ -73,6 +75,26 @@ TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToCom
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
     EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::LOCAL_NONATOMIC);
+}
+
+// Quasar resolves a compute-only semaphore to COMPUTE_ATOMIC ahead of the Gen2 tiers: a single compute
+// binder is still two writers (UNPACK and PACK), so the one-binder LOCAL_NONATOMIC rule must not apply.
+TEST_F(ProgramSpecTestQuasar, CPU_ComputeBoundSemaphoreResolvesToComputeAtomic) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("bound by both a compute kernel and a data-movement kernel")));
 }
 
 }  // namespace

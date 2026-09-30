@@ -12,8 +12,8 @@
  *        intervention needed. The kernel gets the pick inside its binding token. The pick is
  *        the fastest path that keeps the semaphore's operations atomic.
  *        The cached and NoC tiers are Quasar (tt-2xx) only. Gen1 (Wormhole, Blackhole) DM
- *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole compute binding resolves to
- *        COMPUTE_ATOMIC.
+ *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole or Quasar compute binding
+ *        resolves to COMPUTE_ATOMIC.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
  *                     one binder instance exists.
@@ -24,7 +24,7 @@
  *                     in dev_mem_map.h.
  *  - EXTERNAL:        Stored in L1 and accessed through atomic operations via the NOC. Picked
  *                     whenever the semaphore is reachable beyond a single node.
- *  - COMPUTE_ATOMIC:  Blackhole only. The Tensix hardware (Sync Unit) semaphore, updated atomically
+ *  - COMPUTE_ATOMIC:  Blackhole and Quasar. The Tensix hardware (Sync Unit) semaphore, updated atomically
  *                     by SEMPOST/SEMGET. Picked when every binder is a compute kernel (UNPACK <-> PACK
  *                     only, core-local). Rules and limits: api/semaphore.h.
  *
