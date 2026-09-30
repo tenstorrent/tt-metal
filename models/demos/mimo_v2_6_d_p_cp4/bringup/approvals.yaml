@@ -4,3 +4,12 @@ intake:
   files:
     models/demos/mimo_v2_6_d_p_cp4/bringup/spec.yaml: 272babcb3d1991b6d990c1e3e75afcc46332eb3893d02b61fcf82ed200b077c8
   note: ''
+plan:
+  by: sjovic
+  at: '2026-09-30T23:19:23'
+  files:
+    models/demos/mimo_v2_6_d_p_cp4/bringup/plan.yaml: 3bd17e95acc1ea443af42c7a1c0bb0e77269b300fa6e5c53e343ca9cdf62c49f
+    models/demos/mimo_v2_6_d_p_cp4/bringup/plan.md: a0f7a29eff6201f627d15012e04a7abc98ad93595e3df3a49b4c7bf1c58c42e5
+    models/demos/mimo_v2_6_d_p_cp4/bringup/components.yaml: da38762311f3a231135c2a99f2806e78539df4fa0e537592b0ffcc37f8e16b5e
+  note: ''
+  ledger: bc01c5e6bf73e964afe064f17d9c50568b2b358f84408a6abb52215a208d04e1

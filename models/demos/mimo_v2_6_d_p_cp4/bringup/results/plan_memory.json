@@ -1,0 +1,85 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "activations (planner estimate)",
+   "gb": 4.0
+  },
+  {
+   "group": "extra: routed experts, second mxfp4 value per byte (bfp8)",
+   "gb": 3.99
+  },
+  {
+   "group": "routed experts",
+   "gb": 3.984375
+  },
+  {
+   "group": "embedding",
+   "gb": 1.1640625
+  },
+  {
+   "group": "attention (replicated, TP=1)",
+   "gb": 1.03515625
+  },
+  {
+   "group": "dense mlp (replicated, TP=1)",
+   "gb": 0.375
+  },
+  {
+   "group": "lm_head (vocab-sharded)",
+   "gb": 0.291015625
+  },
+  {
+   "group": "extra: rope tables, dispatch tables, misc",
+   "gb": 0.25
+  },
+  {
+   "group": "extra: attention V-pad rows and o_proj zero columns",
+   "gb": 0.22
+  },
+  {
+   "group": "extra: contract KV copy (bfp8)",
+   "gb": 0.2
+  },
+  {
+   "group": "extra: ring SDPA gather buffers (full layers)",
+   "gb": 0.17
+  },
+  {
+   "group": "state: K sliding (CP slice) layers 1-4",
+   "gb": 0.085601806640625
+  },
+  {
+   "group": "state: V sliding (CP slice; padded 128 -> 192) layers 1-4",
+   "gb": 0.085601806640625
+  },
+  {
+   "group": "state: K full attention (CP slice) layers [0, 5]",
+   "gb": 0.040283203125
+  },
+  {
+   "group": "state: V full attention (CP slice; padded 128 -> 192) layers [0, 5]",
+   "gb": 0.040283203125
+  },
+  {
+   "group": "router",
+   "gb": 0.01953601837158203
+  },
+  {
+   "group": "norms and scalars",
+   "gb": 9.965896606445312e-05
+  }
+ ],
+ "total_gb": 15.951015071868897,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 73081,
+ "mesh": [
+  1,
+  4
+ ],
+ "seq": 56320,
+ "users": 1
+}

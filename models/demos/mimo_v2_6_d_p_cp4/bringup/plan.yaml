@@ -1,0 +1,86 @@
+# MiMo-V2.6-Flash-RL text prefill, layers 0-5, on the 1x4 Blackhole mesh (4x p150b, 32 GB each), owner-approved
+# context parallelism CP=4. Reasoning in plan.md.
+# Each chunk of S tokens is split into 4 contiguous slices of S/4; chip c holds slice c of the residual stream and of
+# the KV cache (chunk-major ring cache). Attention TP=1 (all heads, full qkv_proj and o_proj on every chip, ring SDPA
+# over the CP axis), dense MLP TP=1 (local to the slice), routed experts EP=4 (experts 64c..64c+63 on chip c, fabric
+# dispatch/combine over mesh axis 1, one dispatch group of 4 chips), router replicated (each chip routes its slice).
+# Layers 6-47 are skipped: the spec runs layers 0-5 only; the full model's experts alone need ~75 GiB per chip in bfp8.
+headroom_frac: 0.15
+users: 1
+placements:
+  # --- not part of the text decoder (owner rule: text only; MTP layers are not in the downloaded shards)
+  - {pattern: "visual.*", placement: skip, why: text only (vision encoder)}
+  - {pattern: "audio_encoder.*", placement: skip, why: text only (audio encoder)}
+  - {pattern: "speech_embeddings.*", placement: skip, why: text only (audio)}
+  - {pattern: "model.mtp.*", placement: skip, why: text decoder only (owner rule - no MTP layers)}
+
+  # --- layer subset: the spec runs layers 0-5 (they cover all three block types)
+  - {pattern: "model.layers.[6-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+  - {pattern: "model.layers.[1-4][0-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+
+  # --- block-quantization scales: folded into the device weights at load (fp8 x scale -> bf16, mxfp4 x e8m0 -> bfp8)
+  - {pattern: "model.layers.*.weight_scale_inv", placement: skip, why: fp8 128x128 block scales folded into the bf16 weight at load}
+  - {pattern: "model.layers.*.mlp.experts.*.weight_scale", placement: skip, why: mxfp4 e8m0 scales folded into the bfp8 expert weight at load}
+
+  # --- embedding (replicated: each chip embeds its own slice of ids) and the untied LM head (vocab-sharded)
+  - {pattern: "model.embed_tokens.weight", placement: replicate, dtype: bf16, group: embedding}
+  - {pattern: "lm_head.weight", placement: shard, dtype: bf16, group: lm_head (vocab-sharded)}
+  - {pattern: "model.norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- attention, TP=1: every chip holds the whole fused qkv (all 4 TP-rank slabs, dequantized per slab and
+  #     reassembled into Q [64 x 192] + K + V at load) and the whole o_proj. fp8 -> bf16 on device.
+  #     The V zero-pad 128 -> 192 (ring SDPA needs V head dim == QK head dim) is counted under extra_gb_per_chip.
+  - {pattern: "model.layers.*.self_attn.qkv_proj.weight", placement: replicate, dtype: bf16, group: "attention (replicated, TP=1)"}
+  - {pattern: "model.layers.*.self_attn.o_proj.weight", placement: replicate, dtype: bf16, group: "attention (replicated, TP=1)"}
+  - {pattern: "model.layers.*.self_attn.attention_sink_bias", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- routed experts (layers 1-5): EP=4, experts 64c..64c+63 on chip c as complete experts, bfp8 (owner rule).
+  #     The checkpoint shape is mxfp4-packed (2 values per byte), so this line counts half of the device bytes;
+  #     the other half is under extra_gb_per_chip ("routed experts, second mxfp4 value per byte").
+  - {pattern: "model.layers.*.mlp.experts.*_proj.weight", placement: expert, dtype: bfp8, group: routed experts}
+
+  # --- router: replicated, fp32 (sigmoid top-8 over 256 experts with a large correction bias has near ties)
+  - {pattern: "model.layers.*.mlp.gate.weight", placement: replicate, dtype: fp32, group: router}
+  - {pattern: "model.layers.*.mlp.gate.e_score_correction_bias", placement: replicate, dtype: fp32, group: router}
+
+  # --- dense MLP (layer 0, SwiGLU 16384): TP=1, whole gate/up/down on every chip, fp8 -> bf16 on device
+  - {pattern: "model.layers.*.mlp.*_proj.weight", placement: replicate, dtype: bf16, group: "dense mlp (replicated, TP=1)"}
+
+  # --- per-layer norms
+  - {pattern: "model.layers.*_layernorm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+state:
+  # Full-length K and V per layer, split over the 4 chips by sequence (seq_divisor 4: chip c holds slice c of every
+  # chunk), every KV head on every chip (TP=1, so heads_per_chip = all KV heads; replicated: the head check does not
+  # apply, the sequence split does the sharding). V is counted at 192 (128 + 64 zero columns): ring_joint SDPA needs
+  # V head dim == QK head dim (plan.md). Full layers bf16; sliding layers bfp8 (the ring sliding path requires BFP8_B
+  # K/V, ring_joint_sdpa_device_operation.cpp).
+  - {layers: [0, 5], what: K full attention (CP slice), heads_per_chip: 4, head_dim: 192, tensors: 1, dtype: bf16, seq_divisor: 4, replicated: true}
+  - {layers: [0, 5], what: V full attention (CP slice; padded 128 -> 192), heads_per_chip: 4, head_dim: 192, tensors: 1, dtype: bf16, seq_divisor: 4, replicated: true}
+  - {layers: "1-4", what: K sliding (CP slice), heads_per_chip: 8, head_dim: 192, tensors: 1, dtype: bfp8, seq_divisor: 4, replicated: true}
+  - {layers: "1-4", what: V sliding (CP slice; padded 128 -> 192), heads_per_chip: 8, head_dim: 192, tensors: 1, dtype: bfp8, seq_divisor: 4, replicated: true}
+
+extra_gb_per_chip:
+  # 5 MoE layers x 256 experts x (2 x 2048 x 2048 + 4096 x 1024) packed bytes x 1088/1024 / 4 chips = 3.98 GiB.
+  routed experts, second mxfp4 value per byte (bfp8): 3.99
+  # V pad 128 -> 192 in the qkv weight (full: 4 x 64 rows, sliding: 8 x 64 rows, x 4096 bf16; 22 MB) and o_proj zero
+  # input columns for the pad (64 heads x 64 x 4096 bf16 = 33.5 MB per layer, 201 MB for 6 layers). Dropped if the
+  # implement step slices the SDPA output to 128 before nlp_concat_heads instead.
+  attention V-pad rows and o_proj zero columns: 0.22
+  # ring_joint persistent gather buffers for the full layers: K and V [1, 4, 56320, 192] bf16 (86.5 MB each), shared
+  # by layers 0 and 5 (one pair per key in the CCL manager); sliding halo buffers [1, 8, 128, 192] bfp8 are < 1 MB.
+  ring SDPA gather buffers (full layers): 0.17
+  # Second KV copy in the engine's contract format (bfp8, real head dims 192 + 128), if the contract cannot use the
+  # ring caches directly: 0.36 GiB bf16 total state x 1088/2048 split 4 ways by sequence.
+  contract KV copy (bfp8): 0.20
+  # CP-permuted RoPE cos/sin (chip c holds its chunk-major rows, two thetas, 64 dims, per chunk size), sink tensors,
+  # ring metadata tensors, expert dispatch / global-index tables, program cache slack.
+  rope tables, dispatch tables, misc: 0.25
+
+# Peak transient for one 8192-token chunk (the s16384 rung; 2048 rows per chip; the target chunk is 5120 = 1280 per
+# chip). MoE dispatch buffer in the worst case (all 8 experts of every token on one chip; 4 source chips x S/4 rows
+# each): 8 x 8192 x 4096 bf16 = 0.54 GB, the unified kernel's fp32 partials and gate/up intermediates (<= 0.27 GB),
+# combine output [S/4, 8, 4096] bf16 (0.13 GB); dense MLP intermediates [S/4, 16384] bf16 (67 MB each, 3 live);
+# Q [64, S/4, 192] and SDPA out (50 MB each), qkv output, residual copies (17 MB each); CCL scratch; x2 for
+# fragmentation, rounded up.
+activations_gb_per_chip: 4.0

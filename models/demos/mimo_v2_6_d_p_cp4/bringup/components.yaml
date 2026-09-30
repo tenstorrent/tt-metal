@@ -1,0 +1,321 @@
+# MiMo-V2.6-Flash-RL (layers 0-5) on the 1x4 mesh with context parallelism CP=4: every block step mapped to TTNN.
+# Plan and reasoning in plan.md; re-planned from the 1x4 TP=4 prior (models/demos/mimo_v2_6_d_p) and the 2x2 run.
+# Every step works on chip c's contiguous slice of S/4 rows; the only cross-chip traffic is the ring K/V inside attention,
+# the MoE dispatch/combine (and its histogram all_gather), and the last-token gathers of the LM head.
+components:
+- block_type: full_dense
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'input_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent, so
+    no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: full_dense
+  step: attention
+  tag: COMPOSED
+  ttnn: ttnn.linear Q ([4096, 64 x 192], bf16, HiFi4) + ttnn.linear KV ([4096, 4 x (192 + 192)], V zero-padded 128 -> 192) on the local [S/4,
+    4096] slice -> ttnn.experimental.nlp_create_q_heads_split / nlp_create_qkv_heads -> partial RoPE dims 0-63 (ttnn.experimental.rotary_embedding,
+    theta 1e7, CP-permuted cos/sin sliced on device at local row chunk*S/4) + ttnn.concat -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache
+    K and V (bf16 CP ring cache, cluster_axis=1, kv_actual_global=start) -> ttnn.transformer.ring_joint_scaled_dot_product_attention (is_causal,
+    chunked prefill, cluster_axis=1, Topology.Linear, full-capacity persistent gather buffers, kv_cache_batch_idx, kv_actual_isl=start, HiFi4,
+    scale 192^-0.5) -> ttnn.slice V 192 -> 128 (or o_proj zero columns) -> ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj ([8192 ->
+    4096], full, no CCL)
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtFullAttention (weights, value-scale fold, RoPE split, MIMO_V_PAD=1 padded path), models/demos/gemma4_d_p/tt/attention/ring_prefill.py
+    (ring cache + global_ring_prefill_attention), models/demos/gpt_oss_d_p/tt/attention/dense_sp.py, models/demos/gpt_oss_d_p/tt/ccl.py (ring
+    gather buffers, semaphores)
+  searched:
+  - 'repo_map: Chunked causal attention (ring SDPA in gemma4_d_p/tt/attention), Sliding-window + global attention, SDPA program config'
+  - 'gemma4_d_p/tt/attention/ring_prefill.py: CP chunk-major ring caches (local row chunk*L + j -> global chunk*C + r*L + j), update_padded_kv_cache(cluster_axis=cp_axis),
+    ring_joint_scaled_dot_product_attention for global (full gather buffer) and sliding (compact halo buffer) layers'
+  - 'gpt_oss_d_p/tt/attention/dense_sp.py: ring_joint with attention_sink + sliding_window_size 128 on SP4 (the sink/window ring path), kv_cache_batch_idx
+    = slot * num_layers + layer, kv_actual_isl'
+  - 'ring_joint_sdpa_device_operation.cpp validate: tensor-V mode needs V head dim == QK head dim (latent-V is MLA only); sliding path: ring 4
+    or 8, B 1, GQA, q_chunk 64/128, k_chunk 128, BF16 Q + BFP8_B K/V, compact halo <= per-device Q slab; attention_sink needs causal + streaming
+    compute (fp32_dest_acc_en false), BF16 [1, nqh, 1, 1]'
+  - 'ttnn/ttnn/bringup/INDEX.md: sdpa fork covers scaled_dot_product_attention / chunked_scaled_dot_product_attention (narrow V), not ring_joint'
+  - 'known_issues: SDPA needs V head dim == QK head dim; SDPA attention sink is folded with a bf16-truncated scale; Chunked SDPA rejects a scale
+    fp32 cannot hold; fp32 accumulate disables streaming SDPA'
+  notes: 'Changed for CP=4 (was TP=4 by head + all_reduce): TP=1, every chip holds all 64 Q heads and all 4 KV heads, the whole qkv (the four
+    stored TP-rank slabs [q_r; k_r; v_r] are dequantized each on its own 128-row scale blocks and reassembled into Q heads 0..63 and KV heads
+    0..3 at load) and the whole o_proj, so there is no all_reduce after o_proj. Chip c computes Q/K/V for its S/4 rows (positions start + c*S/4
+    + j), writes its K/V slice into its chunk-major ring cache, and the ring SDPA streams the other chips'' cached K/V over the CP axis (online
+    softmax, causal over the absolute positions). V is zero-padded to 192 for the ring op (tensor-V mode needs V dim == QK dim; the prior''s MIMO_V_PAD=1
+    path); the state read-back returns V[..., :128]. If the pad costs too much, a ring_joint fork with a narrow-V option (default off) goes through
+    agent rule 6, like the existing sdpa fork. KV cache bf16 (the full-causal ring path accepts BF16 K/V; fallback bfp8 like gpt_oss_d_p). Program
+    config: compute grid minus the CCL column; q64/k256 as Gemma''s global ring layers, HiFi4 + fp32 dest (no sink, streaming not required). Carries
+    over: value scale 0.707 folded into the V rows, no sink, RoPE tables built once at load (chip c holds its chunk-major rows, so the per-chunk
+    slice starts at the same local row on every chip). Chunk 5120 -> 1280 rows per chip (ladder 512 and 2048), all tile aligned.'
+- block_type: full_dense
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into ffn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from 1x4.
+- block_type: full_dense
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'post_attention_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent,
+    so no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: full_dense
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate (silu fused) / up ([4096 -> 16384], full, HiFi4 + fp32 acc) on the local [S/4, 4096] slice -> ttnn.mul -> ttnn.linear
+    down ([16384 -> 4096], full), no CCL
+  reuse: models/demos/mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP
+  searched:
+  - 'repo_map: MoE tensor parallel (shared_mlp.py)'
+  - mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP
+  - 'known_issues: HiFi2 matmul shrinks output norms'
+  notes: 'Layer 0 only. Changed for CP=4: TP=1, the whole SwiGLU 16384 on every chip (0.38 GiB bf16), local to the slice, so the prior''s all_reduce
+    is gone. Rows are independent, so the 1x4 module runs unchanged with unsharded weights. Carries over: fp8 x 128x128 block scale dequantized
+    to bf16 at load, HiFi4 + fp32 acc (known issue: HiFi2 shrinks norms).'
+- block_type: full_dense
+  step: mlp_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next block's attn_norm)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + mlp_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from 1x4.
+- block_type: sliding_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'input_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent, so
+    no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: sliding_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear Q ([4096, 64 x 192], true scale folded into the Q rows for the power-of-two SDPA scale 2^-4) + ttnn.linear KV ([4096, 8 x
+    (192 + 192)], V zero-padded) on the local [S/4, 4096] slice -> nlp_create_q_heads_split / nlp_create_qkv_heads -> partial RoPE dims 0-63 (theta
+    1e4, CP-permuted tables) -> ttnn.typecast bfp8 -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache K and V (bfp8 CP ring cache, cluster_axis=1)
+    -> ttnn.transformer.ring_joint_scaled_dot_product_attention (is_causal, chunked, sliding_window_size=128, attention_sink [1, 64, 1, 1] bf16
+    pre-divided by 2^-4, compact halo gather buffers (128 rows), q128/k128, preset S: HiFi4, fp32 dest off (streaming, required for the sink),
+    exact exp) -> ttnn.slice V 192 -> 128 -> ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj (full, no CCL)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtSlidingAttention (weights, sink pre-division, scale fold, preset S), models/demos/gpt_oss_d_p/tt/attention/dense_sp.py
+    (ring_joint with sink + window 128 on SP4), models/demos/gemma4_d_p/tt/attention/ring_prefill.py:sliding_ring_prefill_attention + write_chunk_to_sliding_ring_cache
+  searched:
+  - 'repo_map: Chunked causal attention (ring SDPA in gemma4_d_p/tt/attention), Sliding-window + global attention, SDPA program config'
+  - 'gemma4_d_p/tt/attention/ring_prefill.py: CP chunk-major ring caches (local row chunk*L + j -> global chunk*C + r*L + j), update_padded_kv_cache(cluster_axis=cp_axis),
+    ring_joint_scaled_dot_product_attention for global (full gather buffer) and sliding (compact halo buffer) layers'
+  - 'gpt_oss_d_p/tt/attention/dense_sp.py: ring_joint with attention_sink + sliding_window_size 128 on SP4 (the sink/window ring path), kv_cache_batch_idx
+    = slot * num_layers + layer, kv_actual_isl'
+  - 'ring_joint_sdpa_device_operation.cpp validate: tensor-V mode needs V head dim == QK head dim (latent-V is MLA only); sliding path: ring 4
+    or 8, B 1, GQA, q_chunk 64/128, k_chunk 128, BF16 Q + BFP8_B K/V, compact halo <= per-device Q slab; attention_sink needs causal + streaming
+    compute (fp32_dest_acc_en false), BF16 [1, nqh, 1, 1]'
+  - 'ttnn/ttnn/bringup/INDEX.md: sdpa fork covers scaled_dot_product_attention / chunked_scaled_dot_product_attention (narrow V), not ring_joint'
+  - 'known_issues: SDPA needs V head dim == QK head dim; SDPA attention sink is folded with a bf16-truncated scale; Chunked SDPA rejects a scale
+    fp32 cannot hold; fp32 accumulate disables streaming SDPA'
+  notes: 'Changed for CP=4 (was TP=4 by KV head + all_reduce, local window read-back): TP=1, all 64 Q / 8 KV heads and the whole qkv / o_proj
+    on every chip, no all_reduce. The window crosses slice boundaries: chip c''s first rows need the last 128 positions of chip c-1''s slice (and
+    chip 0 those of chip 3''s slice of the previous chunk); the ring op''s compact halo exchange does exactly this, reading the predecessor''s
+    tail from its ring cache (halo = window rounded up to one 128-row K chunk <= the 1280-row Q slab). Constraints the plan satisfies: ring size
+    4, batch 1, GQA 8:1, head dim 192 tile aligned, q128 divides S/4 (512, 1280, 2048), logical_n on a ring-group boundary (every chunk is full).
+    Two departures forced by the op: the sliding cache is bfp8 (the ring sliding path requires BFP8_B K/V, as gpt_oss_d_p) and V is padded to
+    192. Precision risk: the sink-dominated sliding layers were sensitive (known issues); if the component test fails on bfp8 K/V, extend ring_joint
+    in a ttnn.bringup fork with a bf16-K/V option (default off), agent rule 6. The documented specialization is GPT-OSS (8Q:1KV, D64); MiMo''s
+    64Q:8KV at D192 passes validation but is unexercised, so the implement step first probes it at s4096 (512 rows per chip). Carries over: sink
+    pre-divided by the SDPA scale with the true 192^-0.5 folded into Q (exact in bf16, known issue), window semantics i - 128 < j <= i, value
+    scale in the V rows, full-length cache (the contract migrates it).'
+- block_type: sliding_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into ffn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from 1x4.
+- block_type: sliding_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'post_attention_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent,
+    so no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: sliding_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc, fp32 out) on the local [S/4, 4096] slice -> ttnn.sigmoid -> ttnn.add (fp32 e_score_correction_bias)
+    -> ttnn.topk (8) -> ttnn.gather (unbiased sigmoid) / ttnn.sum / ttnn.div -> idx/weights [S/4, 8]; dense [S/4, 256] via ttnn.scatter (bf16)
+    only for the boundary
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (mode fp32), models/demos/deepseek_v3_d_p/tt/moe/tt_moe_gate_prefill.py
+  searched:
+  - 'repo_map: noaux_tc router with a large correction bias (mimo_v2_6_d_p/tt/router.py)'
+  - 'known_issues: A large correction bias makes noaux_tc top-k selection precision-bound; moe_grouped_topk selects on TF32 keys; scatter has
+    no fp32 TILE path'
+  notes: 'Changed for CP=4: replicated weights, each chip routes only its own S/4 rows (the prior routed all S rows on every chip); no CCL. Carries
+    over: fp32 logits + bias, SFPU sigmoid + ttnn.topk (moe_grouped_topk sorts TF32 keys), weights = unbiased sigmoid of the chosen 8 renormalized,
+    route_scale 1.0.'
+- block_type: sliding_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount (local [S/4, 8] idx) -> ttnn.bringup.offset_cumsum (cluster_axis=1, 4 devices, [1,
+    256] histograms all_gathered) -> ttnn.bringup.dispatch (dispatch_group_size 4, num_dispatch_groups 1, cluster_axis=1, fabric, Topology.Linear)
+    -> ttnn.bringup.unified_routed_expert_moe (Silu, bfp8 weights, bf16 ROW_MAJOR x, high_precision=True, HiFi4 + fp32 dest) -> ttnn.bringup.combine
+    (cluster_axis=1, fabric) -> ttnn.experimental.deepseek_prefill.post_combine_reduce (weighted top-k sum, dispatch table) -> experts_out [S/4,
+    4096] on chip c, no all_reduce / all_gather
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts (the fabric dispatch/combine pipeline on the forks, DISPATCH_AXIS and group size
+    changed), models/demos/mimo_v2_6_d_p/tt/experts.py (LazyExpertWeights, bfp8 cache), models/demos/deepseek_v3_d_p/tt/moe (tt_dispatch.py, tt_combine.py,
+    init_helpers.py:ExpertMapping)
+  searched:
+  - 'repo_map: MoE expert parallel (deepseek_v3_d_p/tt/moe), Fork tests for a dispatch group of several devices, Routed experts at a chosen fidelity'
+  - 'ttnn/ttnn/bringup/INDEX.md: dispatch / combine / offset_cumsum forks (1-device axis patch; source behaviour on a multi-device axis), unified_routed_expert_moe
+    (high_precision)'
+  - 'mimo_v2_6_d_p_2x2/tt/experts.py: dispatch_group_size 2 over axis 0 with fabric works on the forks unchanged'
+  - 'deepseek_v3_d_p/tt/moe/tt_dispatch.py: dispatch_group_size + cluster_axis parameters (DeepSeek runs groups of 4-8 chips)'
+  - 'known_issues: TtReduceModule always reduce-scatters, Expert counts are global, unified_routed_expert_moe works in place, bfp8 expert activations
+    fail on a layer with outlier channels'
+  notes: 'Changed for CP=4: the tokens are already split by sequence, so each chip dispatches its own S/4 rows over the whole 1x4 mesh: one dispatch
+    group of 4 chips along axis 1 (DGS 4, the 2x2 run used DGS 2 on axis 0), experts_per_chip 64, chip c holds experts 64c..64c+63 as complete
+    experts (ExpertMapping device_idx = c; never split). expert_dispatch_table (1, 256) replicated; counts / region offsets [1, 256] global per
+    chip. max_dispatched_tokens_per_expert = 4 x S/4 = S, buffer capacity factor 8 (worst case). With one group, combine + post_combine_reduce
+    leaves each chip with its own rows summed over all 256 experts, so the prior''s all_reduce (1x4) and the 2x2 all_reduce + all_gather are gone.
+    Carries over: bfp8 experts from mxfp4 x e8m0 dequantized on the host at load (low nibble first), high_precision unified kernel at HiFi4 (layer
+    5 outlier channels need bf16 x), no shared expert. Axis 1 with 4 devices is untested for these forks in this repo (the forks keep the source
+    op''s behaviour there); if it misbehaves, fix it in the forks behind a default-off option (rule 6).'
+- block_type: sliding_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next block's attn_norm)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from
+    1x4.
+- block_type: full_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'input_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent, so
+    no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: full_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: ttnn.linear Q ([4096, 64 x 192], bf16, HiFi4) + ttnn.linear KV ([4096, 4 x (192 + 192)], V zero-padded 128 -> 192) on the local [S/4,
+    4096] slice -> ttnn.experimental.nlp_create_q_heads_split / nlp_create_qkv_heads -> partial RoPE dims 0-63 (ttnn.experimental.rotary_embedding,
+    theta 1e7, CP-permuted cos/sin sliced on device at local row chunk*S/4) + ttnn.concat -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache
+    K and V (bf16 CP ring cache, cluster_axis=1, kv_actual_global=start) -> ttnn.transformer.ring_joint_scaled_dot_product_attention (is_causal,
+    chunked prefill, cluster_axis=1, Topology.Linear, full-capacity persistent gather buffers, kv_cache_batch_idx, kv_actual_isl=start, HiFi4,
+    scale 192^-0.5) -> ttnn.slice V 192 -> 128 (or o_proj zero columns) -> ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj ([8192 ->
+    4096], full, no CCL)
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtFullAttention (weights, value-scale fold, RoPE split, MIMO_V_PAD=1 padded path), models/demos/gemma4_d_p/tt/attention/ring_prefill.py
+    (ring cache + global_ring_prefill_attention), models/demos/gpt_oss_d_p/tt/attention/dense_sp.py, models/demos/gpt_oss_d_p/tt/ccl.py (ring
+    gather buffers, semaphores)
+  searched:
+  - 'repo_map: Chunked causal attention (ring SDPA in gemma4_d_p/tt/attention), Sliding-window + global attention, SDPA program config'
+  - 'gemma4_d_p/tt/attention/ring_prefill.py: CP chunk-major ring caches (local row chunk*L + j -> global chunk*C + r*L + j), update_padded_kv_cache(cluster_axis=cp_axis),
+    ring_joint_scaled_dot_product_attention for global (full gather buffer) and sliding (compact halo buffer) layers'
+  - 'gpt_oss_d_p/tt/attention/dense_sp.py: ring_joint with attention_sink + sliding_window_size 128 on SP4 (the sink/window ring path), kv_cache_batch_idx
+    = slot * num_layers + layer, kv_actual_isl'
+  - 'ring_joint_sdpa_device_operation.cpp validate: tensor-V mode needs V head dim == QK head dim (latent-V is MLA only); sliding path: ring 4
+    or 8, B 1, GQA, q_chunk 64/128, k_chunk 128, BF16 Q + BFP8_B K/V, compact halo <= per-device Q slab; attention_sink needs causal + streaming
+    compute (fp32_dest_acc_en false), BF16 [1, nqh, 1, 1]'
+  - 'ttnn/ttnn/bringup/INDEX.md: sdpa fork covers scaled_dot_product_attention / chunked_scaled_dot_product_attention (narrow V), not ring_joint'
+  - 'known_issues: SDPA needs V head dim == QK head dim; SDPA attention sink is folded with a bf16-truncated scale; Chunked SDPA rejects a scale
+    fp32 cannot hold; fp32 accumulate disables streaming SDPA'
+  notes: 'Same module as full_dense attention (theta 1e7, 4 KV heads, no sink), layer 5 weights. Changed for CP=4 (was TP=4 by head + all_reduce):
+    TP=1, every chip holds all 64 Q heads and all 4 KV heads, the whole qkv (the four stored TP-rank slabs [q_r; k_r; v_r] are dequantized each
+    on its own 128-row scale blocks and reassembled into Q heads 0..63 and KV heads 0..3 at load) and the whole o_proj, so there is no all_reduce
+    after o_proj. Chip c computes Q/K/V for its S/4 rows (positions start + c*S/4 + j), writes its K/V slice into its chunk-major ring cache,
+    and the ring SDPA streams the other chips'' cached K/V over the CP axis (online softmax, causal over the absolute positions). V is zero-padded
+    to 192 for the ring op (tensor-V mode needs V dim == QK dim; the prior''s MIMO_V_PAD=1 path); the state read-back returns V[..., :128]. If
+    the pad costs too much, a ring_joint fork with a narrow-V option (default off) goes through agent rule 6, like the existing sdpa fork. KV
+    cache bf16 (the full-causal ring path accepts BF16 K/V; fallback bfp8 like gpt_oss_d_p). Program config: compute grid minus the CCL column;
+    q64/k256 as Gemma''s global ring layers, HiFi4 + fp32 dest (no sink, streaming not required). Carries over: value scale 0.707 folded into
+    the V rows, no sink, RoPE tables built once at load (chip c holds its chunk-major rows, so the per-chunk slice starts at the same local row
+    on every chip). Chunk 5120 -> 1280 rows per chip (ladder 512 and 2048), all tile aligned.'
+- block_type: full_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into ffn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from 1x4.
+- block_type: full_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096] slice, weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'post_attention_layernorm, w * rms(x) (plain w), fp32 normalization. Changed for CP=4: runs on chip c''s own S/4 rows (rows are independent,
+    so no CCL, and the module is the prior''s unchanged; only the input is a CP slice). The previous residual add may be fused in (return_residual_sum=True),
+    as on 1x4.'
+- block_type: full_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc, fp32 out) on the local [S/4, 4096] slice -> ttnn.sigmoid -> ttnn.add (fp32 e_score_correction_bias)
+    -> ttnn.topk (8) -> ttnn.gather (unbiased sigmoid) / ttnn.sum / ttnn.div -> idx/weights [S/4, 8]; dense [S/4, 256] via ttnn.scatter (bf16)
+    only for the boundary
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (mode fp32), models/demos/deepseek_v3_d_p/tt/moe/tt_moe_gate_prefill.py
+  searched:
+  - 'repo_map: noaux_tc router with a large correction bias (mimo_v2_6_d_p/tt/router.py)'
+  - 'known_issues: A large correction bias makes noaux_tc top-k selection precision-bound; moe_grouped_topk selects on TF32 keys; scatter has
+    no fp32 TILE path'
+  notes: 'Changed for CP=4: replicated weights, each chip routes only its own S/4 rows (the prior routed all S rows on every chip); no CCL. Carries
+    over: fp32 logits + bias, SFPU sigmoid + ttnn.topk (moe_grouped_topk sorts TF32 keys), weights = unbiased sigmoid of the chosen 8 renormalized,
+    route_scale 1.0.'
+- block_type: full_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount (local [S/4, 8] idx) -> ttnn.bringup.offset_cumsum (cluster_axis=1, 4 devices, [1,
+    256] histograms all_gathered) -> ttnn.bringup.dispatch (dispatch_group_size 4, num_dispatch_groups 1, cluster_axis=1, fabric, Topology.Linear)
+    -> ttnn.bringup.unified_routed_expert_moe (Silu, bfp8 weights, bf16 ROW_MAJOR x, high_precision=True, HiFi4 + fp32 dest) -> ttnn.bringup.combine
+    (cluster_axis=1, fabric) -> ttnn.experimental.deepseek_prefill.post_combine_reduce (weighted top-k sum, dispatch table) -> experts_out [S/4,
+    4096] on chip c, no all_reduce / all_gather
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts (the fabric dispatch/combine pipeline on the forks, DISPATCH_AXIS and group size
+    changed), models/demos/mimo_v2_6_d_p/tt/experts.py (LazyExpertWeights, bfp8 cache), models/demos/deepseek_v3_d_p/tt/moe (tt_dispatch.py, tt_combine.py,
+    init_helpers.py:ExpertMapping)
+  searched:
+  - 'repo_map: MoE expert parallel (deepseek_v3_d_p/tt/moe), Fork tests for a dispatch group of several devices, Routed experts at a chosen fidelity'
+  - 'ttnn/ttnn/bringup/INDEX.md: dispatch / combine / offset_cumsum forks (1-device axis patch; source behaviour on a multi-device axis), unified_routed_expert_moe
+    (high_precision)'
+  - 'mimo_v2_6_d_p_2x2/tt/experts.py: dispatch_group_size 2 over axis 0 with fabric works on the forks unchanged'
+  - 'deepseek_v3_d_p/tt/moe/tt_dispatch.py: dispatch_group_size + cluster_axis parameters (DeepSeek runs groups of 4-8 chips)'
+  - 'known_issues: TtReduceModule always reduce-scatters, Expert counts are global, unified_routed_expert_moe works in place, bfp8 expert activations
+    fail on a layer with outlier channels'
+  notes: 'Changed for CP=4: the tokens are already split by sequence, so each chip dispatches its own S/4 rows over the whole 1x4 mesh: one dispatch
+    group of 4 chips along axis 1 (DGS 4, the 2x2 run used DGS 2 on axis 0), experts_per_chip 64, chip c holds experts 64c..64c+63 as complete
+    experts (ExpertMapping device_idx = c; never split). expert_dispatch_table (1, 256) replicated; counts / region offsets [1, 256] global per
+    chip. max_dispatched_tokens_per_expert = 4 x S/4 = S, buffer capacity factor 8 (worst case). With one group, combine + post_combine_reduce
+    leaves each chip with its own rows summed over all 256 experts, so the prior''s all_reduce (1x4) and the 2x2 all_reduce + all_gather are gone.
+    Carries over: bfp8 experts from mxfp4 x e8m0 dequantized on the host at load (low nibble first), high_precision unified kernel at HiFi4 (layer
+    5 outlier channels need bf16 x), no shared expert. Axis 1 with 4 devices is untested for these forks in this repo (the forks keep the source
+    op''s behaviour there); if it misbehaves, fix it in the forks behind a default-off option (rule 6).'
+- block_type: full_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next block's attn_norm)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, [S/4, 4096] per chip (CP slice); both operands are slices of the same rows, so no CCL. Module unchanged from
+    1x4.
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.to_layout(TILE) -> ttnn.minimum(ids, 152575) (uint32, exact) -> ttnn.to_layout(ROW_MAJOR) -> ttnn.embedding (replicated [152576,
+    4096] bf16) on the local S/4 ids
+  reuse: models/demos/mimo_v2_6_d_p/tt/model.py:TtEmbedding, models/demos/mimo_v2_6_d_p/tt/runners/adapter.py:_clamp_ids
+  searched:
+  - 'repo_map: All-device model'
+  - 'known_issues: Masking the engine''s pad id when the vocab is not a power of two, Engine input'
+  notes: 'Changed for CP=4: chip c embeds only its S/4 ids (the engine input [sp=4, 1, chunk/4] is already sharded over axis 1), so the residual
+    starts CP-sliced with no CCL; the 2x2 ids all_gather is not needed. Table replicated as before.'
+- block_type: model
+  step: final_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (local [S/4, 4096], model.norm.weight, eps 1e-6)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: Only after layer 5 in this subset bring-up; per slice, no CCL.
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.slice (last 32 rows of the local slice) -> ttnn.all_gather (cluster_axis=1, dim -2) -> ttnn.slice (the block of the chip that holds
+    the last real token, chip 3 for a full chunk) -> ttnn.linear (vocab-sharded lm_head, 38144 rows per chip) -> ttnn.all_gather (cluster_axis=1,
+    dim -1)
+  reuse: models/demos/mimo_v2_6_d_p/tt/model.py, models/demos/deepseek_v3_d_p/tt/tt_lm_head.py
+  searched:
+  - 'repo_map: All-device model'
+  - ls models/demos/deepseek_v3_d_p/tt (tt_lm_head.py)
+  notes: 'Changed for CP=4: the last tokens live on one chip (chip 3 for a full chunk; for a padded last chunk, the chip holding actual_end -
+    1, chosen on the host from the chunk geometry, which is a static slice per program), so a tiny [32, 4096] gather over axis 1 brings them to
+    every chip before the vocab-sharded matmul. 152576 / 4 = 38144 = 1192 tiles per chip; untied lm_head bf16.'
