@@ -84,9 +84,10 @@ void bind_generic_operation_preparation(nb::module_& mod) {
 
         Args:
             io_tensors (List[ttnn.Tensor]): The input and output tensors ``ttnn.generic_op`` would receive.
-            program_descriptor (ttnn.ProgramDescriptor or ttnn.MeshProgramDescriptor): The program to prepare.
-                Use ProgramDescriptor for SPMD mode (same program on all devices) or MeshProgramDescriptor for
-                explicit per-device control.
+            program_descriptor (ttnn.ProgramDescriptor): The program to prepare in SPMD mode (same program on all
+                devices).
+            mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs to prepare, for explicit
+                per-device control. Pass exactly one of ``program_descriptor`` and ``mesh_program_descriptor``.
 
         Raises:
             RuntimeError: If a kernel does not compile, if the program configuration does not fit the
