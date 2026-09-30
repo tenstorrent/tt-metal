@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test kernel for the Blackhole compute semaphore (SemScope::COMPUTE_ATOMIC): the Tensix hardware (Sync
-// Unit) semaphore, index UNPACK_OPERAND_SYNC. One kernel, three patterns selected by the compile-time
-// arg `pattern`:
+// Test kernel for the compute semaphore (SemScope::COMPUTE_ATOMIC): the Tensix hardware (Sync Unit)
+// semaphore, index UNPACK_OPERAND_SYNC on Blackhole and PACK_UNPACK on Quasar. One kernel, patterns
+// selected by the compile-time arg `pattern`:
 //
 //   A  single-thread up/down/wait/wait_min/set/value self-check (run once per thread via thread_sel)
 //   D  real LLKOperand datacopy, compute only (no data-movement kernels): the host writes the input
@@ -12,12 +12,13 @@
 //      copies mid[slot] -> DST -> out[i] (UNPACK wait_min()s before reading, down()s after). The
 //      semaphore is the only thing ordering PACK's write of `mid` before UNPACK's read of it. PACK gates
 //      each pack with wait_not_full() (capacity = kDepth). Host checks out == in bit for bit. `nosync`=1
-//      drops wait_not_full/wait_min/down (negative control: must corrupt).
+//      drops wait_not_full/wait_min/down (and up on Quasar; negative control: must corrupt).
 //   E  producer back-pressure: PACK produces num_iters credits in up(batch)s, each gated by
 //      wait_not_full(batch); UNPACK is a deliberately slow consumer that records the highest value it ever
 //      observes. With the host's max_value = kDepth that high-water mark stays <= kDepth (batch > 1 takes
 //      the RISC-poll form of wait_not_full). `nosync`=1 drops the wait_not_full() (negative control: PACK
-//      runs to the 15 ceiling, posts are lost, UNPACK times out).
+//      runs to the 15 ceiling on Blackhole, posts are lost, UNPACK times out). On Quasar, SEMPOST
+//      back-pressure keeps the value at the programmed maximum and every credit must survive.
 //
 // The hardware semaphore is 4-bit (0..15) and starts every kernel at 0: compute_kernel_hw_startup()
 // seeds it on PACK (pattern D), and every pattern leaves it balanced at 0 for the next program. The
@@ -29,9 +30,27 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#ifdef ARCH_QUASAR
+#if defined(TRISC_UNPACK) || defined(TRISC_PACK)
+#include "llk_bfd_alloc.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "llk_unpack_common.h"
+#include "llk_unpack_unary_operand.h"
+#endif
+#ifdef TRISC_MATH
+#include "llk_math_common.h"
+#include "llk_math_eltwise_unary_datacopy.h"
+#endif
+#ifdef TRISC_PACK
+#include "llk_pack.h"
+#include "llk_pack_common.h"
+#endif
+#else
 #include "api/compute/experimental/2_0/hw_startup.h"
 #include "api/compute/experimental/2_0/pack.h"
 #include "api/compute/experimental/2_0/tile_move_copy.h"
+#endif
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
 
@@ -56,6 +75,9 @@ constexpr std::uint32_t kDepth = 4;
 // Pattern E: RISC busy-loop per consumed credit, so the producer is always ahead of the consumer.
 constexpr std::uint32_t kSlowConsumerSpins = 2000;
 
+// Quasar pattern D: RISC busy-loop before each ring pack, so the packer lags the unpacker.
+constexpr std::uint32_t kPackSkewSpins = 2000;
+
 // Pattern D: full 32x32 Float16_b tiles (2 KB), host-written. Regions are fixed offsets from report_addr,
 // mirrored on the host: in[kDMaxTiles], mid[kDepth] ring, out[kDMaxTiles]. 256 KB above the report so
 // they are clear of the kernel-config region.
@@ -69,11 +91,18 @@ constexpr std::uint32_t kDOutOffset = kDMidOffset + kDepth * kDTileBytes;
 inline std::uint32_t operand_addr(std::uint32_t byte_addr) { return (byte_addr >> 4) - 1u; }
 
 inline void store_u32(std::uint32_t addr, std::uint32_t v) {
+#ifdef ARCH_QUASAR
+    addr += MEM_L1_UNCACHED_BASE;  // UNPACK and PACK share report lines; bypass the TRISC cache
+#endif
     *reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(addr) = v;
 }
 
 inline std::uint32_t load_u32(std::uint32_t addr) {
+#ifdef ARCH_QUASAR
+    addr += MEM_L1_UNCACHED_BASE;
+#else
     invalidate_l1_cache();  // L0 is not coherent with the other thread's L1 writes
+#endif
     return *reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(addr);
 }
 
@@ -142,6 +171,7 @@ void kernel_main() {
     // only thing that orders PACK's L1 writes before UNPACK's L1 reads of the same slot. With nosync=1,
     // UNPACK unpacks mid[slot] right after in[i], long before PACK has written it, so out[i] != in[i].
     // -----------------------------------------------------------------------------------------------
+#ifndef ARCH_QUASAR
     if constexpr (pattern == PATTERN_D) {
         using Op = ckernel::experimental::LLKOperand<DataFormat::Float16_b, ckernel::DEFAULT_TENSOR_SHAPE>;
         const Op in(operand_addr(report_addr + kDInOffset));
@@ -186,6 +216,81 @@ void kernel_main() {
         PACK(store_u32(report_addr + 0u, num_iters);)
         UNPACK(store_u32(report_addr + 8u, sem.value());)
     }
+#else
+
+    //  - Negative control: nosync=1 also drops PACK's up(). Blackhole posts saturate at 15, so its 8
+    //    unconsumed posts are harmless; a Quasar post at Max (kDepth) stalls until a down() that never
+    //    comes, so the 5th up() would hang the kernel instead of corrupting the output.
+    //  - Skew: PACK spins kPackSkewSpins before each ring pack, in both runs, so the packer always lags
+    //    the unpacker. Without it UNPACK is not reliably ahead, and the negative control could come out
+    //    correct by timing alone.
+    //  - Report words: store_u32/load_u32 go through the uncached L1 alias, since UNPACK and PACK write
+    //    the same report lines and the TRISC data cache is not coherent between them.
+    if constexpr (pattern == PATTERN_D) {
+        using namespace ckernel;
+        using namespace ckernel::trisc;
+        [[maybe_unused]] constexpr TensorShape shape = DEFAULT_TENSOR_SHAPE;  // UNPACK and PACK only
+        constexpr auto fmt = DataFormat::Float16_b;
+
+#ifdef TRISC_UNPACK
+        bfd_alloc_and_program<BfdResource::Unp0>(
+            shape, (report_addr + kDInOffset) >> 4, static_cast<std::uint32_t>(fmt));
+        _llk_unpack_configure_unary_<p_unpacr::UNP_A>(fmt);
+        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, false>(bfd_current<BfdResource::Unp0>(), shape, 1);
+        for (std::uint32_t i = 0; i < num_iters; ++i) {
+            _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, shape);  // in[i]
+            if constexpr (!nosync) {
+                sem.wait_min(1);
+            }
+            _llk_unpack_unary_operand_<p_unpacr::UNP_A>(kDMaxTiles + i % kDepth, shape);  // mid[slot]
+            if constexpr (!nosync) {
+                sem.down(1);
+            }
+        }
+        store_u32(report_addr + 8u, sem.value());
+#endif
+#ifdef TRISC_MATH
+        _llk_math_srcAB_hw_configure_<true, false, false>(fmt, fmt);
+        _llk_math_pack_sync_init_<DstSync::SyncHalf>();
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, false>(64, 1);
+        for (std::uint32_t i = 0; i < 2 * num_iters; ++i) {
+            _llk_math_wait_for_dest_available_();
+            _llk_math_eltwise_unary_datacopy_(0);
+            _llk_math_dest_section_done_<DstSync::SyncHalf, false>();
+        }
+#endif
+#ifdef TRISC_PACK
+        sem.set(0);  // no 2.0 hw_startup on Quasar: seed on the producer
+        bfd_alloc_and_program<BfdResource::Pack0>(
+            shape, (report_addr + kDMidOffset) >> 4, static_cast<std::uint32_t>(fmt));
+        _llk_pack_hw_configure_<p_pacr::PACK0, false>(fmt, ReluConfig::none());
+        _llk_pack_init_(bfd_current<BfdResource::Pack0>(), shape, 1);
+        _llk_pack_dest_init_<p_pacr::PACK0, DstSync::SyncHalf>();
+        for (std::uint32_t i = 0; i < num_iters; ++i) {
+            // Round 1: DST -> mid[slot], then publish. The delay holds the packer back in both the positive
+            // and the negative run, so an early ring read by UNPACK is always visible without the semaphore.
+            if constexpr (!nosync) {
+                sem.wait_not_full();
+            }
+            for (volatile std::uint32_t d = 0; d < kPackSkewSpins; ++d) {
+            }
+            _llk_packer_wait_for_math_done_();
+            _llk_pack_(0, i % kDepth, shape);
+            _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DstSync::SyncHalf, false>();
+            if constexpr (!nosync) {
+                // Without a consumer down(), a Quasar post at capacity can stall forever.
+                sem.up(1);
+            }
+
+            // Round 2: DST -> out[i].
+            _llk_packer_wait_for_math_done_();
+            _llk_pack_(0, kDepth + i, shape);
+            _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DstSync::SyncHalf, false>();
+        }
+        store_u32(report_addr + 0u, num_iters);
+#endif
+    }
+#endif
 
     // -----------------------------------------------------------------------------------------------
     // PATTERN E: producer back-pressure. PACK: wait_not_full(batch); up(batch), num_iters/batch times. With
@@ -193,39 +298,62 @@ void kernel_main() {
     // is held behind it, so the SEMPOST cannot execute while Value >= Max. UNPACK: slow consumer, polls value() (the
     // settled Sync Unit value) so the high-water mark it records is exact; with wait_not_full() in place it can never
     // exceed kDepth. Balanced, so the final value is 0 iff no post was lost.
+    // Quasar: a SEMPOST at Max stalls until a SEMGET makes room (Blackhole saturates at 15 and drops the
+    // post instead). So PACK can still be stuck inside up() when UNPACK's poll times out; if UNPACK stopped
+    // there, as on Blackhole, nothing would ever down() and PACK would hang forever. UNPACK therefore keeps
+    // draining past a timeout until PACK reports done (report word 5), and PACK publishes done only after
+    // value() has retired all its posts, including any stalled at capacity.
     // -----------------------------------------------------------------------------------------------
     if constexpr (pattern == PATTERN_E) {
-        PACK(sem.set(0);  // PACK produces: seed on the producer (Max = host max_value)
-             for (std::uint32_t i = 0; i < num_iters; i += batch) {
-                 if constexpr (!nosync) {
-                     sem.wait_not_full(batch);
-                 }
-                 sem.up(batch);
-             } store_u32(report_addr + 0u, num_iters);)
-
-        UNPACK(std::uint32_t consumed = 0; std::uint32_t high_water = 0; std::uint32_t timeout = 0;
-               for (std::uint32_t i = 0; i < num_iters && !timeout; ++i) {
-                   std::uint32_t spins = 0;
-                   std::uint32_t v;
-                   while ((v = sem.value()) < 1u) {
-                       if (++spins >= kPollCap) {
-                           timeout = 1;
-                           break;
-                       }
-                   }
-                   if (timeout) {
-                       break;
-                   }
-                   if (v > high_water) {
-                       high_water = v;
-                   }
-                   for (volatile std::uint32_t d = 0; d < kSlowConsumerSpins; ++d) {
-                   }
-                   sem.down(1);
-                   ++consumed;
-               } store_u32(report_addr + 4u, consumed);
-               store_u32(report_addr + 8u, high_water);
-               store_u32(report_addr + 12u, sem.value());
-               store_u32(report_addr + 16u, timeout);)
+#ifdef TRISC_PACK
+        sem.set(0);  // PACK produces: seed on the producer (Max = host max_value)
+        for (std::uint32_t i = 0; i < num_iters; i += batch) {
+            if constexpr (!nosync) {
+                sem.wait_not_full(batch);
+            }
+            sem.up(batch);
+        }
+        store_u32(report_addr + 0u, num_iters);
+#ifdef ARCH_QUASAR
+        (void)sem.value();
+        store_u32(report_addr + 20u, 1u);
+#endif
+#endif
+#ifdef TRISC_UNPACK
+        std::uint32_t consumed = 0;
+        std::uint32_t high_water = 0;
+        std::uint32_t timeout = 0;
+        for (std::uint32_t i = 0; i < num_iters; ++i) {
+            std::uint32_t spins = 0;
+            std::uint32_t v;
+            while ((v = sem.value()) < 1u) {
+                if (++spins >= kPollCap) {
+                    timeout = 1;
+#ifdef ARCH_QUASAR
+                    // Once done is visible, re-read: the last post may have retired after v.
+                    if (load_u32(report_addr + 20u) == 0u || (v = sem.value()) != 0u) {
+                        spins = 0;
+                        continue;
+                    }
+#endif
+                    break;
+                }
+            }
+            if (v == 0u) {  // timed out
+                break;
+            }
+            if (v > high_water) {
+                high_water = v;
+            }
+            for (volatile std::uint32_t d = 0; d < kSlowConsumerSpins; ++d) {
+            }
+            sem.down(1);
+            ++consumed;
+        }
+        store_u32(report_addr + 4u, consumed);
+        store_u32(report_addr + 8u, high_water);
+        store_u32(report_addr + 12u, sem.value());
+        store_u32(report_addr + 16u, timeout);
+#endif
     }
 }
