@@ -582,7 +582,8 @@ class Qwen36Model:
 
             os.environ["HF_MODEL"] = hf_model
 
-        # enable_mtp: None -> QWEN36_MTP env (default on); False -> no MTP head/weights/KV.
+        # enable_mtp: None -> QWEN36_MTP env if set, else on for dense / off for MoE checkpoints;
+        # False -> no MTP head/weights/KV.
         args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
