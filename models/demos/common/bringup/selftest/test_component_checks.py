@@ -261,4 +261,4 @@ def test_every_column_is_checked_against_its_own_limit():
     assert not CC.float_fails(want * (1 + 1e-4), want, L)[1]
     # a column the precision model finds noisy gets a looser limit on its own terms
     noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False)
-    assert noisy[0] == lim["component_floor"] and noisy[1] == pytest.approx(0.015)
+    assert noisy[0] == lim["component_floor"] and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
