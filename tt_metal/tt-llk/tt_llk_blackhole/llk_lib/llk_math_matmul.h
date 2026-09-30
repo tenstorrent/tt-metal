@@ -293,15 +293,12 @@ inline void matmul_configure_addrmod(
     }
 }
 
-// Set by matmul_configure_mop: true when the programmed MOP covers a whole reuse row of full 32x32 tiles (the DEST
-// advance from tile to tile is in the address mods, the tile count is the MOP's outer loop count), false when it
-// covers one tile (tiny tiles, partial faces, the throttled MOP). _llk_math_matmul_ issues one MOP per row or per tile
-// accordingly.
-static bool matmul_mop_covers_row = false;
-// The block dimensions the row MOP was programmed for (ct_dim in the high half, rt_dim in the low half), which fix
-// its outer loop count (the streamed tiles per row) and the DEST stride from one tile of the row to the next (the
-// DEST increment of ADDR_MOD_3). _llk_math_matmul_ compares a call's dimensions against them with one load and one
-// compare, and refreshes both when they differ.
+// Set by matmul_configure_mop. Zero when the programmed MOP covers one tile (tiny tiles, partial faces, the throttled
+// MOP); otherwise the MOP covers a whole reuse row of full 32x32 tiles (the DEST advance from tile to tile is in the
+// address mods, the tile count is the MOP's outer loop count) and this word holds the block dimensions it was
+// programmed for (ct_dim in the high half, rt_dim in the low half, both at least 1), which fix its outer loop count
+// and the DEST stride from one tile of the row to the next (the DEST increment of ADDR_MOD_3). _llk_math_matmul_
+// reads the word once per call: one load and one compare decide between the row MOP, its refresh and the tile MOP.
 static std::uint32_t matmul_mop_dims = 0;
 
 constexpr std::uint32_t matmul_block_dims(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
@@ -456,11 +453,10 @@ inline void matmul_configure_mop(
         // MVMUL 16 of the last phase of the last tile of the row: clear both source banks, every counter to zero.
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
         tmp.program();
-        matmul_mop_dims       = matmul_block_dims(ct_dim, rt_dim);
-        matmul_mop_covers_row = true;
+        matmul_mop_dims = matmul_block_dims(ct_dim, rt_dim);
         return;
     }
-    matmul_mop_covers_row = false;
+    matmul_mop_dims = 0;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
@@ -728,7 +724,7 @@ inline void matmul_configure_mop_throttled(
         });
 
     // The throttled MOP covers one tile.
-    matmul_mop_covers_row = false;
+    matmul_mop_dims = 0;
 
     constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? to_underlying(math_fidelity) : 1);
     const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
@@ -861,7 +857,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
-    // Read the dimensions the row MOP was programmed for first so that the load's latency overlaps the arithmetic below.
+    // Read the row MOP word first so that the load's latency overlaps the arithmetic below (zero: the MOP covers one tile).
     const std::uint32_t programmed_dims = matmul_mop_dims;
 
     const bool reuse_a           = ct_dim >= rt_dim;
@@ -871,7 +867,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
 
     if constexpr (THROTTLE_LEVEL == 0)
     {
-        if (matmul_mop_covers_row)
+        if (programmed_dims != 0)
         {
             // Full 32x32 tiles: one DEST offset and one MOP per reuse row. The MOP was programmed for the init's block;
             // a call with other block dimensions (matmul_block narrowed to the valid columns of a padded block) first

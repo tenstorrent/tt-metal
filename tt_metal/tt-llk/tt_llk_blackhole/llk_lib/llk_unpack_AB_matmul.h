@@ -285,8 +285,8 @@ inline void _llk_unpack_AB_matmul_held_tile_(const bool partial_face)
  * Every row follows the protocol of the other unpack operations: wait until at most one earlier row is still being
  * unpacked (the UNPACK_SYNC semaphore counts them), write the row's two base addresses into the free config context
  * from the RISC, post the token, hold the UNPACRs until the writes have landed, unpack the held tile, stream the other
- * operand through the MOP, take the token back and switch context. The semaphore is read before the row's address
- * arithmetic so that the read's latency overlaps it, and a row of one streamed tile issues its MOP as an immediate.
+ * operand through the MOP, take the token back and switch context. A row of one streamed tile issues its MOP as an
+ * immediate.
  * The streamed tile stride (SCRATCH_SEC0), which the replay's CFGSHIFTMASK adds after every tile, is copied from the
  * tile size GPRs when it differs from the one programmed, so a data format reconfig between calls is honoured
  * without a re-init.
@@ -357,10 +357,6 @@ inline void _llk_unpack_AB_matmul_(
     const bool held_partial_face = reuse_a ? unpB_partial_face : unpA_partial_face;
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
-        // Read the context semaphore first: the read takes a dozen cycles to return and the row's address arithmetic
-        // runs in its shadow. The value can only fall until this row posts, so a free context stays free.
-        std::uint32_t busy_contexts = semaphore_read(semaphore::UNPACK_SYNC);
-
         std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
         std::uint32_t offset_address_b = tile_size_b * (tile_index_b + (reuse_a ? (0) : (t)));
         if constexpr (kernel_broadcast_a > 0)
@@ -376,11 +372,10 @@ inline void _llk_unpack_AB_matmul_(
         const std::uint32_t address_b = base_address_b + offset_address_b;
 
         // Wait for a free context: at most one earlier row may still be unpacking, so the context written next has
-        // been consumed (the same wait as wait_for_next_context(2)).
-        while (busy_contexts >= 2)
-        {
-            busy_contexts = semaphore_read(semaphore::UNPACK_SYNC);
-        }
+        // been consumed. (Reading the semaphore before the address arithmetic, to overlap the read's latency, saved
+        // 1.4 cycles per tile on k loops of one tile rows but cost 1.5 on kt 1 rows, where a stale busy reading
+        // costs one more read; the plain wait is kept.)
+        wait_for_next_context(2);
 
         // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
         _llk_unpack_configure_addresses_(address_b, address_a, cfg);
