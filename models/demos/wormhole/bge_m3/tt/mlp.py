@@ -100,9 +100,10 @@ class BgeM3MLP(LightweightModule):
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
 
         # Optimizations sets a minimal_matmul config and no program config for the
-        # bfloat8_b S8192 shapes it tuned (N300 B12 data parallel, single-chip demo).
-        # Take minimal_matmul there. Every other shape, including bfloat16 S8192 on
-        # one Wormhole chip, keeps ttnn.linear, whose auto config fits L1.
+        # S8192 shapes it tuned (N300 B12 data parallel, single-chip demo) when the
+        # config's buffers fit L1 for the dtypes in use. Take minimal_matmul there.
+        # Every other case, including bfloat16 S8192 on one Wormhole chip, keeps
+        # ttnn.linear, whose auto config fits L1.
         if self.config.wi_minimal_config is not None and self.config.wi_prg_config is None:
             activated = ttnn.experimental.minimal_matmul(
                 input_tensor=hidden_states,
@@ -159,13 +160,16 @@ class BgeM3MLPJit(BgeM3MLP):
     """MLP for the B12/S8192 data-parallel serving shape.
 
     ModelArgs sets use_jit only for that shape. Optimizations resolves a
-    minimal_matmul config for Wi and Wo there when the model dtype is bfloat8_b,
-    so this path runs both matmuls with minimal_matmul and fuses GELU into Wi.
-    With any other dtype the configs are None and minimal_matmul falls back to
-    its default block sizes.
+    minimal_matmul config for Wi and Wo there when the tuned configs fit L1 for
+    the dtypes in use (bfloat8_b weights and activations), so this path runs both
+    matmuls with minimal_matmul and fuses GELU into Wi. When either config is
+    missing, the dtype mix does not fit and the base class runs ttnn.linear.
     """
 
     def forward(self, hidden_states: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
+        if self.config.wi_minimal_config is None or self.config.wo_minimal_config is None:
+            return super().forward(hidden_states)
+
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
 
