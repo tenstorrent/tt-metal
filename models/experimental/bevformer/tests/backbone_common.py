@@ -6,14 +6,12 @@
 
 import torch
 import torch.nn.functional as F
-from loguru import logger
 
 import ttnn
 from models.experimental.bevformer.config import backbone_config
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ResNet
 from models.experimental.bevformer.tests.backbone_weights import init_dummy_backbone_weights, init_dummy_fpn_weights
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 NUM_CAMS = 6
 
@@ -100,12 +98,6 @@ def from_conv_layout(tt_tensor, nchw_shape):
     """(1, 1, N*H*W, C) device tensor -> NCHW torch tensor of ``nchw_shape``."""
     n, c, h, w = nchw_shape
     return ttnn.to_torch(tt_tensor).reshape(n, h, w, c).permute(0, 3, 1, 2)
-
-
-def assert_pcc(expected, actual, pcc):
-    passed, message = assert_with_pcc(expected, actual, pcc)
-    logger.info(f"PCC {message} (threshold {pcc})")
-    return passed, message
 
 
 def random_image_batch():

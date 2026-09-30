@@ -12,6 +12,10 @@ import numpy as np
 from typing import Tuple, Dict, Any, Optional
 import logging
 
+from loguru import logger as loguru_logger
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 logger = logging.getLogger(__name__)
 
 
@@ -1083,3 +1087,10 @@ def analyze_model_sparsity(model_outputs: Dict[str, torch.Tensor], zero_threshol
 
     print("=" * 50)
     return results
+
+
+def assert_pcc(expected, actual, pcc):
+    """``assert_with_pcc`` that also logs the achieved PCC."""
+    passed, message = assert_with_pcc(expected, actual, pcc)
+    loguru_logger.info(f"PCC {message} (threshold {pcc})")
+    return passed, message

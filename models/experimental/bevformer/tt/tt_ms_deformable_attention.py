@@ -38,6 +38,7 @@ def multi_scale_deformable_attn_ttnn(
     sampling_grids,
     attention_weights,
     device,
+    grid_sample_compute_config=None,
 ):
     """
     ttnn implementation of multi-scale deformable attention core logic.
@@ -56,6 +57,8 @@ def multi_scale_deformable_attn_ttnn(
             when calculate the attention, has shape
             (bs, num_queries, num_heads, num_levels, num_points),
         device: TTNN device
+        grid_sample_compute_config: Compute kernel config for grid_sample's weighted
+            4-corner sum; None keeps grid_sample's default.
 
     Returns:
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
@@ -90,7 +93,15 @@ def multi_scale_deformable_attn_ttnn(
 
         # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
         # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
-        sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
+        # align_corners=False and zero padding are what the ``2 * loc - 1`` grid mapping and
+        # the reference's F.grid_sample assume.
+        sampling_value_l_ = ttnn.grid_sample(
+            value_l_,
+            sampling_grid_l_,
+            padding_mode="zeros",
+            align_corners=False,
+            compute_kernel_config=grid_sample_compute_config,
+        )
 
         # (bs*num_heads, num_queries*num_points, 1, head_dim) -> (bs*num_heads, head_dim, num_queries, num_points)
         sampling_value_l_ = ttnn.squeeze(
@@ -136,7 +147,16 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
+    def __init__(
+        self,
+        config: DeformableAttentionConfig,
+        device,
+        params=None,
+        *,
+        spatial_shapes,
+        grid_dtype=ttnn.bfloat16,
+        grid_sample_compute_config=None,
+    ):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -154,6 +174,13 @@ class TTMSDeformableAttention:
                 module: it is folded into the sampling-offset Linear here and forward takes
                 no shapes of its own. Features at a different resolution require a new
                 instance.
+            grid_dtype: Dtype of the sampling grid, i.e. of the reference-point bias and the
+                sum it is added to. In bfloat16 a point in (0.5, 1) moves in steps of 2^-8,
+                0.8 px on a 200-wide map. float32 keeps the grid sub-pixel exact; the
+                sampling-offset Linear stays bfloat16, its error being relative to the small
+                offsets. grid_sample reads float32 grids directly.
+            grid_sample_compute_config: Passed to grid_sample; see
+                :func:`multi_scale_deformable_attn_ttnn`.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -190,6 +217,8 @@ class TTMSDeformableAttention:
         self.sampling_offsets_weight, self.sampling_offsets_bias = self._fold_grid_scale(self.spatial_shapes)
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.grid_dtype = grid_dtype
+        self.grid_sample_compute_config = grid_sample_compute_config
 
     def _fold_grid_scale(self, spatial_shapes):
         """Pre-scale the ``sampling_offsets`` Linear by ``2 / [W, H]`` per level.
@@ -257,7 +286,10 @@ class TTMSDeformableAttention:
         block = depth_levels * 2
         groups = self.num_heads * self.num_levels * (self.num_points // depth_levels)
 
-        ref = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+        ref = reference_points
+        if ref.dtype != self.grid_dtype:
+            ref = ttnn.typecast(ttnn.to_layout(ref, ttnn.TILE_LAYOUT), self.grid_dtype)
+        ref = ttnn.to_layout(ref, ttnn.ROW_MAJOR_LAYOUT)
         ref = ttnn.reshape(ref, (bs, num_queries, 1, block))
         ref = ttnn.mul(ref, 2.0)
         ref = ttnn.sub(ref, 1.0)
@@ -350,6 +382,8 @@ class TTMSDeformableAttention:
         # pad 2 -> 32. Materializing (heads, levels, points, 2) is deferred until after the add.
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets = ttnn.linear(query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
+        if sampling_offsets.dtype != self.grid_dtype:
+            sampling_offsets = ttnn.typecast(sampling_offsets, self.grid_dtype)
         sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT)
 
         if ENABLE_LOGGING:
@@ -389,6 +423,7 @@ class TTMSDeformableAttention:
             sampling_grids=sampling_grids,
             attention_weights=attention_weights,
             device=self.device,
+            grid_sample_compute_config=self.grid_sample_compute_config,
         )
 
         if ENABLE_LOGGING:
