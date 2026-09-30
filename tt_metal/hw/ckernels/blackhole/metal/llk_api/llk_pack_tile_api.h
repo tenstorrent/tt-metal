@@ -158,3 +158,64 @@ inline void llk_matmul_pack(
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
     }
 }
+
+/**
+ * Whether the tiles of an output operand are written back to back by one run of the pack program: a full 32x32
+ * tile (four faces of FACE_R_DIM rows, the dest tile slot the pack MOP walks through) in a plain 8, 16 or 32 bit
+ * format whose CB page is exactly one packed tile, so tile k of a block lands on page k. Block-float outputs (a
+ * per-tile exponent section) and any other page layout keep the per-tile pack.
+ */
+inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    if (IS_BFP_FORMAT(dst_format)) {
+        return false;
+    }
+    if (get_output_num_faces(output_id) != 4 || get_output_face_r_dim(output_id) != FACE_R_DIM ||
+        get_output_partial_face(output_id)) {
+        return false;
+    }
+    const std::uint32_t tile_words = (TILE_R_DIM * TILE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
+}
+
+/**
+ * Pack ntiles consecutive dest tiles, from start_tile_index, into the next ntiles pages of the output operand.
+ * Same arguments, dest and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>: the
+ * running write-tile pointer advances by ntiles pages. When the output tiles are contiguous plain-format 32x32
+ * tiles the block is one _llk_pack_block_ run, so the dest tile select, the L1 address programming and the
+ * counter reset are issued once per block instead of once per tile; otherwise every tile is packed with its own
+ * _llk_pack_, as llk_matmul_pack does.
+ */
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    std::uint8_t output_id = get_output_id(output);
+
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    if (llk_pack_block_is_contiguous(output_id)) {
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
+            get_local_cb_interface(output_id).fifo_page_size * ntiles;
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
+            start_tile_index, pack_tile_addr, ntiles);
+    } else {
+        for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+            std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
+        }
+    }
+}
