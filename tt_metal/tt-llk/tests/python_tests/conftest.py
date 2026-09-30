@@ -416,8 +416,14 @@ def pytest_configure(config):
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
-        if os.path.exists(log_file):
-            os.remove(log_file)
+        # exists()-then-remove() is a race, and a galaxy shard runs straight into
+        # it: all NPAR slices share one cwd, so two sessions that both see the
+        # file race into remove() and the loser dies with FileNotFoundError
+        # *inside* pytest_configure -- which pytest escalates to INTERNALERROR,
+        # so that session runs no tests and produces no result at all.  Measured
+        # on a 32-chip shard of absint32: 3 of 32 slices lost this way, and the
+        # op's verdict with them.  Same intent, no window.
+        Path(log_file).unlink(missing_ok=True)
 
     else:
         # Workers only need to set their local versions of ORDER_FOLDER_PATH
