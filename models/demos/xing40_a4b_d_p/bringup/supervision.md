@@ -112,3 +112,8 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   GLM default: its branch commit 3682958626d re-ran L.s4096 / s16384 / last / K.1 / O.1 at equal accuracy and 266.8 ->
   224.4 ms; cherry-picked (917e1747647). For Xing: mhc_post fits with a comb-convention option; mhc_pre needs a split
   (external all_reduce) entry and Xing's math options (no pre eps, clamp 30, Sinkhorn order): perf picks.
+- 18:45 X.2 PASS 82bca51af4b; owner perf picks: "Try hifi2 matmuls in sdpa, then try optimizing mhc, then try hifi2 in
+  experts" -> P.1 (SDPA HiFi2: owner exception to rule 7 for the SDPA only; gate: frozen attention component tests,
+  full-block swaps, rung last, profile attention < 1050 / total < 1700 ms), P.2 (fused mHC: mhc_post with a comb
+  option, then mhc_pre split + Xing-math options; gate: frozen hc / collapse / residual tests, swaps, rung last,
+  residuals < 60 ms each), P.3 (experts HiFi2, bfp8 weights; experts < 235 ms). X.3 now depends on P.3. approve perf.
