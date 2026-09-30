@@ -153,7 +153,9 @@
       # the full SC36 aisleD mock and the 112-stage exact fit on the SC28 aisleD subset, plus the SC24
       # 96-stage/6-BigMesh entries. Erratic general-SAT solves; the cpu_medium CI runner is ~4x slower
       # than local (the 4-stage step measured 5m34s on CI). Budgeted from local end-to-end x4 + margin.
-      timeout: 45
+      # Raised 45->90: the 144-stage SC36 exact-fit ring (kissat, ~6 min local -O3) is ~4x slower on
+      # cpu_medium (~24 min) plus the rest of the group; still well under the 280-min cpu_medium unit cap.
+      timeout: 90
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
