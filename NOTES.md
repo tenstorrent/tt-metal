@@ -22,3 +22,11 @@
   then noisepf_ph without -c. Submitter log tmp/submit_attempt5.log; `bash tmp/done.sh` exits 0 when both finish.
   On resume: job IDs = `grep -oE 'Job [0-9]+ queued' tmp/submit_attempt5.log`, then `bash tmp/cmp.sh noisepf <id1>`,
   `bash tmp/cmp.sh noisepf_ph <id2>` (read the log via /var/log/tt-device-broker/*_<id>.log if `logs` says not found).
+- 2026-09-30 15:35 UTC (attempt 6): submitter from attempt 5 had died with capture job 651 still queued (behind 641-643).
+  Root cause of 0/818 hits confirmed: runs resolve kernels under the t22 tree (job 638 log paths), but the
+  offline compile used TT_METAL_HOME=t14, so it skipped t22 recipes as foreign-tree. New driver tmp/drive6.sh
+  (nohup, log tmp/drive6.log) waits for 651, compiles with TT_METAL_HOME=t22/, then run-bg's noisepf and
+  noisepf_ph; IDs land in tmp/drive6.jobs. `bash tmp/done.sh` exits 0 when both finish.
+  On resume: `cat tmp/drive6.log`; IDs = `grep -oE 'Job [0-9]+ queued' tmp/drive6.jobs`; then
+  `bash tmp/cmp.sh noisepf <id1>`, `bash tmp/cmp.sh noisepf_ph <id2>`. If drive6.log shows no DRIVE6_SUBMITTED
+  and the driver is gone, rerun `nohup setsid bash tmp/drive6.sh > tmp/drive6.log 2>&1 &` (edit the wait if 651 is done).
