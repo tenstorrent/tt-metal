@@ -32,14 +32,6 @@ ALWI void binary_unpack_AB_init(uint32_t icb0, uint32_t icb1) {
 #endif
 }
 
-ALWI void binary_unpack_AB(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1) {
-#if defined(ARCH_BLACKHOLE)
-    llk_unpack_AB<BroadcastType::NONE, SrcDvalid::PerTile>(icb0, icb1, itile0, itile1);
-#else
-    llk_unpack_AB(icb0, icb1, itile0, itile1);
-#endif
-}
-
 template <bool acc_to_dest, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_unpack_A_init(uint32_t icb) {
 #if defined(ARCH_BLACKHOLE)
@@ -297,7 +289,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
     // mul_tiles_initf();
     // first = false;
 
-    UNPACK((detail::binary_unpack_AB(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((detail::binary_math<EltwiseBinaryType::ELWMUL, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst)));
 }
@@ -322,7 +314,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    UNPACK((detail::binary_unpack_AB(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((detail::binary_math<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst)));
 }
@@ -347,7 +339,7 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    UNPACK((detail::binary_unpack_AB(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((detail::binary_math<EltwiseBinaryType::ELWSUB, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst)));
 }

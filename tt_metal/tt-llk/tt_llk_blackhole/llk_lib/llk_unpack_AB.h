@@ -155,93 +155,6 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     }
 }
 
-// RISC-side mirror of the unpacker registers that the SrcDvalid::PerTile form of _llk_unpack_AB_ programs through the
-// instruction stream: the base address register of each unpacker in each config context (16-byte words) and the two
-// strides in SCRATCH_SEC0 (unpacker 0, operand A) and SCRATCH_SEC1 (unpacker 1, operand B) that its CFGSHIFTMASK steps
-// add. UNPACK_AB_UNKNOWN marks a base register another operation may have written and a stride of 0 an unknown scratch
-// register (a call never steps by 0: an unchanged address issues nothing): the PerTile init forgets every entry and
-// the first call after it writes the registers in full.
-constexpr std::uint32_t UNPACK_AB_UNKNOWN = 0xFFFFFFFF;
-static std::uint32_t unpack_AB_base[2][2] = {{UNPACK_AB_UNKNOWN, UNPACK_AB_UNKNOWN}, {UNPACK_AB_UNKNOWN, UNPACK_AB_UNKNOWN}}; // [context][unpacker]
-static std::uint32_t unpack_AB_stride[2]  = {0, 0};                                                                        // [unpacker]
-
-/**
- * @brief Forget the unpacker registers the PerTile form of @ref _llk_unpack_AB_ tracks.
- */
-inline void unpack_AB_forget_registers()
-{
-    for (std::uint32_t c = 0; c < 2; c++)
-    {
-        unpack_AB_base[c][0] = UNPACK_AB_UNKNOWN;
-        unpack_AB_base[c][1] = UNPACK_AB_UNKNOWN;
-        unpack_AB_stride[c]  = 0;
-    }
-}
-
-/**
- * @brief How a base address register gets from the address it holds to the address a call needs.
- *
- * @param tracked: The mirror of the register.
- * @param needed: The address the call needs.
- * @param stride: The mirror of the scratch register of that unpacker.
- * @return 0 nothing to do, 1 one CFGSHIFTMASK step by the stride in the scratch register, 2 a full write, 3 a full
- *     write that also loads the scratch register with the new stride (the distance to the previous address, so a
- *     loop over consecutive tiles takes the step from its second call on).
- */
-inline std::uint32_t unpack_AB_base_mode(const std::uint32_t tracked, const std::uint32_t needed, const std::uint32_t stride)
-{
-    if (tracked == needed)
-    {
-        return 0;
-    }
-    if (tracked == UNPACK_AB_UNKNOWN)
-    {
-        return 2;
-    }
-    return ((needed - tracked) == stride) ? 1 : 3;
-}
-
-/**
- * @brief Issue the config instructions that move the two base address registers of one config context.
- *
- * Mode 1 adds the scratch register to the base register (CFGSHIFTMASK operation 0b011 with a 32-bit mask; scratch_sel
- * 0 is SCRATCH_SEC0, 1 is SCRATCH_SEC1). Modes 2 and 3 write the register from the GPR the caller loaded, mode 3 also
- * the scratch register. The caller issues the STALLWAIT that lets the GPR writes land before the WRCFGs.
- *
- * @tparam REG_A: Base address register of unpacker 0 in the context.
- * @tparam REG_B: Base address register of unpacker 1 in the context.
- * @param mode_a: Mode of operand A (see @ref unpack_AB_base_mode).
- * @param mode_b: Mode of operand B.
- */
-template <std::uint32_t REG_A, std::uint32_t REG_B>
-inline void unpack_AB_apply_base(const std::uint32_t mode_a, const std::uint32_t mode_b)
-{
-    if (mode_a == 1)
-    {
-        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, REG_A);
-    }
-    else if (mode_a >= 2)
-    {
-        TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, REG_A);
-        if (mode_a == 3)
-        {
-            TTI_WRCFG(p_gpr_unpack::UNPACK_AB_STRIDE_A, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-        }
-    }
-    if (mode_b == 1)
-    {
-        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 1, REG_B);
-    }
-    else if (mode_b >= 2)
-    {
-        TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, REG_B);
-        if (mode_b == 3)
-        {
-            TTI_WRCFG(p_gpr_unpack::UNPACK_AB_STRIDE_B, p_cfg::WRCFG_32b, SCRATCH_SEC1_val_ADDR32);
-        }
-    }
-}
-
 /**
  * @brief Whether the two-operand unpack hands each operand over as one source bank holding the whole tile.
  *
@@ -299,13 +212,6 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
         config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
     }
 
-    if constexpr (src_dvalid == SrcDvalid::PerTile)
-    {
-        // Another operation may have written the base address and scratch registers since the last PerTile call; the
-        // first call after this init writes them in full.
-        unpack_AB_forget_registers();
-    }
-
     _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape, tile_dvalid); // transpose of faces 0,2,1,3
 }
 
@@ -360,32 +266,20 @@ inline void _llk_unpack_AB_uninit_()
 /**
  * @brief Unpack two tiles from L1 memory into SrcA and SrcB registers
  *
- * Programs the two base addresses and runs the configured MOP. With SrcDvalid::PerFace (the default) the addresses
- * are written from the RISC into the config context the call runs in, once the context semaphore says the UNPACRs
- * that last used that context have been accepted. With SrcDvalid::PerTile they are written through the instruction
- * stream instead: one CFGSHIFTMASK step when the address is one learned stride past the register (a loop over the
- * tiles of a circular buffer from its second call on), a SETDMAREG and WRCFG write otherwise. The thread orders those
- * writes after the UNPACRs of the previous call by itself, so the PerTile call makes no RISC register write and no
- * semaphore read, which on Blackhole were the per-call cost that held a two-operand tile at 27 cycles against the
- * 16 cycles its data takes. Both forms post the UNPACK_SYNC token from the RISC before their UNPACRs and take it back
- * in the instruction stream after them, so the RISC-side pollers of the other unpack operations still see how many
- * calls the unpacker has yet to accept, and both switch the config context at the end.
+ * Performs the actual unpacking operation by programming base addresses and running
+ * the configured MOP. Handles context switching and synchronization with the unpacker.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; the same value as the init's
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
  * @param bcast_row_idx: Row index within source B tile for ROW broadcast
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
- *       @ref _llk_unpack_AB_uninit_ after it to restore modified state. Run the init again after any other unpack
- *       operation: the PerTile form steps its base address registers from the RISC-side mirror the init resets, so
- *       a base address or scratch register another operation wrote in between would be stepped from silently (the
- *       same sequence would also run that operation's MOP program, which every unpack init reprograms).
+ *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
  * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 
-template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
+template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_(
     const std::uint32_t address_a,
     std::uint32_t address_b,
@@ -422,74 +316,14 @@ inline void _llk_unpack_AB_(
         }
     }
 
-    if constexpr (src_dvalid == SrcDvalid::PerTile)
-    {
-        LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
-        LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
+    // Program srcA and srcB base addresses
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-        // Base addresses through the instruction stream (see the function description).
-        const std::uint32_t context = unp_cfg_context;
-        std::uint32_t &tracked_a    = unpack_AB_base[context][0];
-        std::uint32_t &tracked_b    = unpack_AB_base[context][1];
-        const std::uint32_t mode_a  = unpack_AB_base_mode(tracked_a, address_a, unpack_AB_stride[0]);
-        const std::uint32_t mode_b  = unpack_AB_base_mode(tracked_b, address_b, unpack_AB_stride[1]);
+    // Wait for free context
+    wait_for_next_context(2);
 
-        if (mode_a >= 2)
-        {
-            TT_SETDMAREG(0, LOWER_HALFWORD(address_a), 0, LO_16(p_gpr_unpack::TMP0));
-            TT_SETDMAREG(0, UPPER_HALFWORD(address_a), 0, HI_16(p_gpr_unpack::TMP0));
-            if (mode_a == 3)
-            {
-                const std::uint32_t stride = address_a - tracked_a;
-                TT_SETDMAREG(0, LOWER_HALFWORD(stride), 0, LO_16(p_gpr_unpack::UNPACK_AB_STRIDE_A));
-                TT_SETDMAREG(0, UPPER_HALFWORD(stride), 0, HI_16(p_gpr_unpack::UNPACK_AB_STRIDE_A));
-                unpack_AB_stride[0] = stride;
-            }
-        }
-        if (mode_b >= 2)
-        {
-            TT_SETDMAREG(0, LOWER_HALFWORD(address_b), 0, LO_16(p_gpr_unpack::TMP1));
-            TT_SETDMAREG(0, UPPER_HALFWORD(address_b), 0, HI_16(p_gpr_unpack::TMP1));
-            if (mode_b == 3)
-            {
-                const std::uint32_t stride = address_b - tracked_b;
-                TT_SETDMAREG(0, LOWER_HALFWORD(stride), 0, LO_16(p_gpr_unpack::UNPACK_AB_STRIDE_B));
-                TT_SETDMAREG(0, UPPER_HALFWORD(stride), 0, HI_16(p_gpr_unpack::UNPACK_AB_STRIDE_B));
-                unpack_AB_stride[1] = stride;
-            }
-        }
-        if (mode_a >= 2 || mode_b >= 2)
-        {
-            // The GPR writes run on THCON; the WRCFGs read the GPRs.
-            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        }
-        if (context == 0)
-        {
-            unpack_AB_apply_base<THCON_SEC0_REG3_Base_address_ADDR32, THCON_SEC1_REG3_Base_address_ADDR32>(mode_a, mode_b);
-        }
-        else
-        {
-            unpack_AB_apply_base<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, THCON_SEC1_REG3_Base_cntx1_address_ADDR32>(mode_a, mode_b);
-        }
-        if (mode_a != 0 || mode_b != 0)
-        {
-            // A config write takes two cycles; the UNPACRs must see the new base addresses.
-            TTI_NOP;
-        }
-        tracked_a = address_a;
-        tracked_b = address_b;
-    }
-    else
-    {
-        // Program srcA and srcB base addresses
-        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-        // Wait for free context
-        wait_for_next_context(2);
-
-        // Validate and configure addresses
-        _llk_unpack_configure_addresses_(address_a, address_b, cfg);
-    }
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);

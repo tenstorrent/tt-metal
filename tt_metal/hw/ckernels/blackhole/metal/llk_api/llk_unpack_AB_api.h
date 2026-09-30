@@ -25,7 +25,7 @@ inline void llk_unpack_AB_init_impl(const ckernel::TensorShape& tensor_shape, co
     _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, transpose);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
+template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_impl(
     const std::uint32_t address_a,
     const std::uint32_t address_b,
@@ -33,9 +33,9 @@ inline void llk_unpack_AB_impl(
     [[maybe_unused]] const std::uint32_t operandB_src_format) {
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::ROW) {
-        _llk_unpack_AB_<BType, src_dvalid>(address_a, address_b, bcast_row_idx, operandB_src_format);
+        _llk_unpack_AB_<BType>(address_a, address_b, bcast_row_idx, operandB_src_format);
     } else {
-        _llk_unpack_AB_<BType, src_dvalid>(address_a, address_b);
+        _llk_unpack_AB_<BType>(address_a, address_b);
     }
     WAYPOINT("UABD");
 }
@@ -77,7 +77,7 @@ inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t
     llk_unpack_AB_init<BType, src_dvalid>(operandA, operandB, ckernel::Transpose::None);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
+template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -120,5 +120,5 @@ inline void llk_unpack_AB(
         StateDiscard<std::uint32_t>(tile_index_b),
         StateDiscard<std::uint32_t>(bcast_row_idx)));
 
-    llk_unpack_AB_impl<BType, src_dvalid>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
+    llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }

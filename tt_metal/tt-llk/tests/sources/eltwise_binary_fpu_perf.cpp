@@ -76,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    _llk_unpack_AB_<BroadcastType::NONE, SRC_DVALID>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
+                    _llk_unpack_AB_<>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
                 }
             }
         }

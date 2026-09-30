@@ -78,7 +78,7 @@ void run_unpack(RUNTIME_PARAMETERS params)
         _llk_unpack_AB_init_<BROADCAST_TYPE, src_dvalid>(tensor_shape, transpose);
         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
         {
-            _llk_unpack_AB_<BROADCAST_TYPE, src_dvalid>(L1_ADDRESS(params.buffer_A[block_base + tile]), L1_ADDRESS(params.buffer_B[block_base + tile]));
+            _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[block_base + tile]), L1_ADDRESS(params.buffer_B[block_base + tile]));
         }
 
         _llk_unpack_A_init_<BroadcastType::NONE, true /* acc_to_dest */, REUSE_DEST_TYPE, false /* unpack_to_dest */, src_dvalid>(
@@ -106,7 +106,7 @@ void run_unpack(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < num_total_tiles; ++i)
     {
-        _llk_unpack_AB_<BROADCAST_TYPE, src_dvalid>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
+        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
     }
 #endif
 }

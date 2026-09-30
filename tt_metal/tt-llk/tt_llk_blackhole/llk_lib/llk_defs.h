@@ -62,8 +62,7 @@ enum class EltwiseBinaryReuseDestType
 // face (one UNPACR and one data valid per face), PerTile publishes one source bank holding every face of the tile
 // (one UNPACR and one data valid per operand per tile). The unpack init and the math init of one op must be given
 // the same value; PerTile takes effect only where both sides support it (see the inits) and falls back to PerFace
-// otherwise. The PerTile form of the two-operand unpack also programs its L1 addresses through the instruction
-// stream instead of the RISC register path (see _llk_unpack_AB_).
+// otherwise.
 enum class SrcDvalid : std::uint8_t
 {
     PerFace = 0,
