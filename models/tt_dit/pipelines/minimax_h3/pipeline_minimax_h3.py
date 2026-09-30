@@ -270,11 +270,9 @@ class _BucketState:
     adaln_tile_map: StateTensor = field(default_factory=StateTensor)
     adaln_expanded: StateTensor = field(default_factory=StateTensor)
     local_static_rows: StateTensor = field(default_factory=StateTensor)
-    local_static_mask: StateTensor = field(default_factory=StateTensor)
     local_audio_rows: StateTensor = field(default_factory=StateTensor)
-    local_audio_mask: StateTensor = field(default_factory=StateTensor)
     local_video_rows: StateTensor = field(default_factory=StateTensor)
-    local_video_mask: StateTensor = field(default_factory=StateTensor)
+    local_select_rows: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -1402,23 +1400,23 @@ class MiniMaxH3Pipeline:
         rung: int,
         traced: bool,
     ) -> dict[str, ttnn.Tensor]:
-        """Per-device row indices into each source stream and 0/1 row masks (MINIMAX_H3_LOCAL_ASSEMBLY=1)."""
+        """Per-device row indices into each source stream, plus the row of the stacked [static | audio | video]
+        local candidates to keep per position (MINIMAX_H3_LOCAL_ASSEMBLY=1). Pad rows select static row 0."""
         rows = self._assembly_rows(condition_spec, caps, l_len, a_len, v_len, rung)
         src = self._assembly_source_offsets(caps)
+        s_local = rung // self.sp_factor
+        local = torch.arange(rung, dtype=torch.int32) % s_local
         bounds = {"static": (0, src["audio"]), "audio": (src["audio"], src["video"]), "video": (src["video"], 1 << 31)}
+        select = torch.zeros(rung, dtype=torch.int32)
         out = {}
-        for name, (lo, hi) in bounds.items():
+        for kind, (name, (lo, hi)) in enumerate(bounds.items()):
             sel = (rows >= lo) & (rows < hi)
-            rows_state, mask_state = getattr(state, f"local_{name}_rows"), getattr(state, f"local_{name}_mask")
+            select = torch.where(sel, local + kind * s_local, select)
+            rows_state = getattr(state, f"local_{name}_rows")
             rows_state.update(self._row_indices(torch.where(sel, rows - lo, torch.zeros_like(rows)), rung), traced=traced)
-            mask = from_torch(
-                sel.to(torch.bfloat16).reshape(1, 1, rung, 1),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                mesh_axes=[..., self.sp_axis, None],
-            )
-            mask_state.update(mask, traced=traced)
-            out[f"{name}_rows"], out[f"{name}_mask"] = rows_state.value, mask_state.value
+            out[f"{name}_rows"] = rows_state.value
+        state.local_select_rows.update(self._row_indices(select, rung), traced=traced)
+        out["select_rows"] = state.local_select_rows.value
         return out
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
