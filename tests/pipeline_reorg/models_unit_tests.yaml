@@ -503,6 +503,20 @@
   team: models
   budget_type: unit
 
+- name: PaddleOCR-VL-1.6 unit tests
+  cmd: |
+    export HF_MODEL=PaddlePaddle/PaddleOCR-VL-1.6 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/PaddlePaddle/PaddleOCR-VL-1.6
+    pytest --timeout 170 models/demos/blackhole/paddleocr_vl/tests/test_text_decoder_pcc.py models/demos/blackhole/paddleocr_vl/tests/test_vision_permutation.py
+  model: paddleocr-vl-1.6
+  model_family: PaddleOCR
+  skus:
+    bh_p150:
+      timeout: 3
+      tier: 3
+  owner_id: U08LRGDNXSM # Sam Tisi
+  team: models
+  budget_type: unit
+
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
@@ -1195,7 +1209,8 @@
 # Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
 - name: TT-DiT Flux.2-dev multihost unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1 # Program size (28864) too large for kernel config buffer (26624) on ACTIVE_ETH
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
