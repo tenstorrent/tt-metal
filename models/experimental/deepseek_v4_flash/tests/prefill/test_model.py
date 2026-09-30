@@ -51,7 +51,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4ForCausalLM,
     DeepseekV4RotaryEmbedding,
 )
-from models.experimental.deepseek_v4_flash.tt.prefill.model import DeepSeekV4PrefillModel
+from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4PrefillModel
 
 _SEED = 1234
 _HIDDEN = 4096
