@@ -2537,10 +2537,14 @@ class UnarySFPUGolden:
         )
 
         if not skip_tilize:
+            # As Float32, like the cumsum path below and the untilize after the op: this
+            # is a permutation, and `result` is also where the op's Dest-rounded output is
+            # stored. Tilized in the *input* format, that store rounded every result to
+            # the input dtype a second time.
             result = tilize_block(
                 result,
                 dimensions,
-                input_format,
+                DataFormat.Float32,
                 tile_dimensions=tile_dimensions,
             ).flatten()
             if whole_tensor_res is not None:
@@ -2603,9 +2607,15 @@ class UnarySFPUGolden:
         result[window] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
+            # As Float32: untilize_block casts to the format it is handed, and this is a
+            # pure permutation. Handed the *input* format, it rounded the Dest result to
+            # it -- a Float16 input's golden overflowed at 65504 (cosh(-89.4) read inf
+            # against the kernel's correct 3.27e38), and a bfloat16 input's Float32
+            # golden kept bf16 precision, one bf16 step (65536 fp32 steps) from a kernel
+            # that kept fp32. The one rounding is the output cast at the end.
             result = untilize_block(
                 result,
-                input_format,
+                DataFormat.Float32,
                 dimensions,
                 tile_dimensions=tile_dimensions,
             ).flatten()
