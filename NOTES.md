@@ -31,3 +31,7 @@ drive19.sh busy() now also waits while a broker recovery row runs or the latest 
 (and no longer waits on drive16). Relaunched detached on blx03: pid 122727, log ~/fasth3/drive19.log.
 It submits by itself once the hold ends and no other smarton job is running or queued.
 Wake check: DRIVE19_DONE in the log, or the driver is gone (e.g. blx03 rebooted) -> check state, relaunch if needed.
+
+## 2026-09-30 14:12 PT (both hosts rebooted)
+g15blx02 and blx03 rebooted ~14:05 PT. blx03 broker power-cycled, hold 919 ended, startup 920 saw all 32 chips, fabric-check 921 passed.
+No dumps exist yet. Relaunched drive19.sh detached on blx03 (pid 14880, log ~/fasth3/drive19.log). Same next steps as above.
