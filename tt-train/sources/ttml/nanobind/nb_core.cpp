@@ -138,6 +138,12 @@ void py_module(nb::module_& m) {
             &ttnn_fixed::distributed::disable_fabric,
             "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
             "Safe to call only when no devices are open; close the mesh device first.");
+        py_distributed.def(
+            "release_metal_env",
+            &ttnn_fixed::distributed::release_metal_env,
+            "Destroy the process-global MetalContext and the MetalEnv it owns, so the next "
+            "device access rebuilds both from the current environment. Raises if any device "
+            "is still open.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
