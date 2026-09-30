@@ -11,12 +11,12 @@ from models.experimental.bevformer.tests.backbone_common import (
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
     NUM_CAMS,
+    assert_pcc,
     build_reference_fpn,
     from_conv_layout,
     to_conv_layout,
     tt_fpn_kwargs,
 )
-from models.experimental.bevformer.tests.test_utils import assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing_backbone import create_fpn_parameters
 from models.experimental.bevformer.tt.tt_fpn import TtFPN
 

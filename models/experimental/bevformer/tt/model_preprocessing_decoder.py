@@ -4,10 +4,11 @@
 
 """Device parameters for ``TtDetectionTransformerDecoder`` from the PyTorch reference.
 
-Structure (heads, points, dims) is recorded next to the weights, so the TT modules take
-it from here rather than from separate arguments.
+Structure (heads, points, dims, the cross-attention config) is recorded next to the
+weights, so the TT modules take it from here rather than from separate arguments.
 """
 
+import dataclasses
 from types import SimpleNamespace
 
 import torch
@@ -46,12 +47,11 @@ def _self_attn_parameters(mha, device, dtype):
 
 
 def _cross_attn_parameters(msda, device, dtype):
+    """The reference module's parameters and its config, run batch-first on device."""
     if msda.num_levels != 1:
         raise ValueError(f"the decoder cross-attention is single-level, got {msda.num_levels} levels")
     params = preprocess_ms_deformable_attention_parameters(msda, device=device, dtype=dtype)
-    params.embed_dims = msda.embed_dims
-    params.num_heads = msda.num_heads
-    params.num_points = msda.num_points
+    params.config = dataclasses.replace(msda.config, batch_first=True)
     return params
 
 
@@ -72,6 +72,7 @@ def _layer_parameters(layer, device, dtype):
 
 
 def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
+    """Parameters for one ``TtDetectionTransformerDecoder``, which consumes part of them."""
     return SimpleNamespace(layers=[_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 
