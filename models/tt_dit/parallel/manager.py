@@ -154,7 +154,9 @@ class CCLManager:
         """
         rows = []
         for key, buffers in self._ping_pong_buffer_cache.items():
-            nbytes = sum(b.volume() * b.element_size() for b in buffers)
+            # Reduce-scatter entries hold [intermediate, output-or-None] pairs; the rest hold tensors.
+            tensors = [t for b in buffers for t in (b if isinstance(b, (list, tuple)) else [b]) if t is not None]
+            nbytes = sum(t.volume() * t.element_size() for t in tensors)
             rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
         return sorted(rows, reverse=True)
 
