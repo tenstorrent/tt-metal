@@ -79,6 +79,28 @@ class Qwen38ForCausalLM:
         self._decode_bound = False
         self._last_device_sampling = None
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
+        # A served step costs more than this entry point does. Timing decode_forward from the
+        # inside is the only way to split that: the difference against the harness's reported
+        # TPOT is the work the plugin and vLLM do around the call.
+        period = os.getenv("QWEN_DECODE_STEP_TIMING", "0")
+        self._step_period = int(period) if period.isascii() and period.isdecimal() else 0
+        self._step_times = []
+
+    def _record_step(self, seconds):
+        self._step_times.append(seconds * 1e3)
+        if len(self._step_times) < self._step_period:
+            return
+        ordered = sorted(self._step_times)
+        n = len(ordered)
+        logger.info(
+            "Qwen3.8 decode_forward: p50={:.2f} ms p10={:.2f} p90={:.2f} n={} batch={}",
+            ordered[n // 2],
+            ordered[n // 10],
+            ordered[(9 * n) // 10],
+            n,
+            self.batch_size,
+        )
+        self._step_times.clear()
 
     # vLLM inspects this protocol before selecting the TT loader. Execution is
     # through the TT plugin's prefill/decode APIs, never the GPU forward API.
@@ -276,39 +298,44 @@ class Qwen38ForCausalLM:
         slot_remap=None,
         **kwargs,
     ):
-        self._cache(kv_cache)
-        if slot_remap is not None:
-            self.generator.remap_recurrent_slots(slot_remap)
-        refresh = (
-            reset_batch
-            or not self._decode_bound
-            or (sampling_params is not None and self._last_device_sampling is False)
-        )
-        positions = torch.as_tensor(start_pos).reshape(-1)
-        device_sampling = self._sampling(
-            sampling_params, reset=refresh, output_positions=(positions + 1).tolist() if refresh else None
-        )
-        active = (positions >= 0).nonzero().reshape(-1).tolist() if refresh else None
-        # Page growth is independent of reset_batch. The generator compares tables
-        # and copies only changes, preserving pending device tokens and positions.
-        table = self._table(page_table)
-        result = self.generator.decode_forward(
-            tokens=tokens if refresh or not device_sampling else None,
-            start_pos=positions if refresh or not device_sampling else None,
-            page_table=table,
-            kv_cache=kv_cache,
-            enable_trace=enable_trace,
-            read_from_device=False,
-            active_slots=active,
-            host_sampling=not device_sampling,
-        )
-        self._decode_bound = True
-        self._last_device_sampling = device_sampling
-        if not device_sampling:
-            return result.reshape(self.batch_size, 1, -1)
-        if read_from_device:
-            return self.process_decode_output_host(self.read_decode_output(result), is_tokens=True)
-        return result
+        start = time.perf_counter() if self._step_period else None
+        try:
+            self._cache(kv_cache)
+            if slot_remap is not None:
+                self.generator.remap_recurrent_slots(slot_remap)
+            refresh = (
+                reset_batch
+                or not self._decode_bound
+                or (sampling_params is not None and self._last_device_sampling is False)
+            )
+            positions = torch.as_tensor(start_pos).reshape(-1)
+            device_sampling = self._sampling(
+                sampling_params, reset=refresh, output_positions=(positions + 1).tolist() if refresh else None
+            )
+            active = (positions >= 0).nonzero().reshape(-1).tolist() if refresh else None
+            # Page growth is independent of reset_batch. The generator compares tables
+            # and copies only changes, preserving pending device tokens and positions.
+            table = self._table(page_table)
+            result = self.generator.decode_forward(
+                tokens=tokens if refresh or not device_sampling else None,
+                start_pos=positions if refresh or not device_sampling else None,
+                page_table=table,
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                read_from_device=False,
+                active_slots=active,
+                host_sampling=not device_sampling,
+            )
+            self._decode_bound = True
+            self._last_device_sampling = device_sampling
+            if not device_sampling:
+                return result.reshape(self.batch_size, 1, -1)
+            if read_from_device:
+                return self.process_decode_output_host(self.read_decode_output(result), is_tokens=True)
+            return result
+        finally:
+            if start is not None:
+                self._record_step(time.perf_counter() - start)
 
     def read_decode_output(self, tt_out, async_read=False):
         if isinstance(tt_out, torch.Tensor):

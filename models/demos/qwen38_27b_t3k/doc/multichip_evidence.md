@@ -331,6 +331,34 @@ The batch-1 figure recorded under Batch-1 performance is a traced-decode measure
 `generate()`, and it does not survive the serving loop. Nothing here supersedes it; the two
 measure different things, and the serving number is the one a user sees.
 
+Most of that difference is outside this tree. `decode_forward`, the entry point the plugin
+calls, was driven directly on this mesh in both the configuration the plugin uses and the one
+the local loop uses, with nothing else changed:
+
+| batch | plugin's reload path | steady-state path | reload cost | served TPOT | above `decode_forward` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 63.7 ms | 58.3 ms | 5.37 ms | 168.6 ms | 104.9 ms, 62% |
+| 8 | 93.6 ms | 89.1 ms | 4.51 ms | 159.5 ms | 65.9 ms, 41% |
+
+So the model path accounts for 38% of a served step at batch 1 and 59% at batch 8, and the rest
+is work the plugin and vLLM do around the call. The steady-state figures also confirm the
+traced-decode numbers reproduce through the adapter rather than only through `generate()`:
+58.3 ms against 60.3 ms at batch 1, and 89.1 ms against 89.5 ms at batch 8.
+
+`reset_batch` is what separates the two arms. `decode_forward` treats it as
+`refresh = reset_batch or not self._decode_bound or ...`, and a refresh rebinds sampling and
+rewrites tokens and positions from host; the plugin passes it on every step while it reports
+that this adapter does not advertise `decode_input_update_contract >= 1`. That costs 4.5 to
+5.4 ms, about 5%, measured at both batches. Worth advertising the contract for, but it is not
+the gap, and the earlier guess that it was is wrong.
+
+The remaining cost is measured, not explained. It is **not** a fixed per-step host cost: a fixed
+cost would be equal at both batches and it is 105 ms against 66 ms, so something in it
+amortizes with batch. Attributing it needs a profile above `decode_forward`, which is why that
+entry point now carries optional timing: `QWEN_DECODE_STEP_TIMING=N` logs its own p50, p10 and
+p90 every N steps, so a serving run reports the split against the harness's TPOT directly. The
+instrumentation agrees with external timing to 0.1 ms.
+
 The shape of the gap identifies where it is not. TPOT is flat within 13 ms across every input
 length from 128 to 32768, so it is not attention or KV work, which grow with context. It barely
 improves from concurrency 1 to 8, 168.6 ms to 159.5 ms, where this tree's own local measurement
