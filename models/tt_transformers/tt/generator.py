@@ -2116,16 +2116,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # under concurrency). Pair the device token with the device position.
             for i, tok_chunk in enumerate(tokens):
                 trace_in = self.trace_inputs_decode[on_device_sampling][i]
-                dev_toks = (
-                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0])
-                    .reshape(-1)[: tok_chunk.shape[0]]
-                    .to(tok_chunk.dtype)
-                )
-                dev_pos = (
-                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0])
-                    .reshape(-1)[: tok_chunk.shape[0]]
-                    .to(torch.int64)
-                )
+                read_feedback = getattr(self.model[i], "read_decode_feedback", None)
+                if read_feedback is not None:
+                    dev_toks, dev_pos = read_feedback(trace_in[0], trace_in[1])
+                else:
+                    dev_toks = ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0])
+                    dev_pos = ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0])
+                dev_toks = dev_toks.reshape(-1)[: tok_chunk.shape[0]].to(tok_chunk.dtype)
+                dev_pos = dev_pos.reshape(-1)[: tok_chunk.shape[0]].to(torch.int64)
                 if slot_remap is not None:
                     chunk = dev_toks.shape[0]
                     remap = slot_remap[i * chunk : (i + 1) * chunk]
@@ -2145,17 +2143,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # The host position itself may lag the device by one step under
                 # async scheduling, so accept both.
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
-                # The device token/position buffers are read from a single device
-                # shard (get_device_tensors(...)[0]). That holds the full per-chunk
-                # batch only when the decode inputs are replicated across the mesh
-                # (e.g. Llama-3.1-8B, which this async-ahead keep was designed for).
-                # Models that shard the decode batch across mesh devices
-                # (users_row_sharded, e.g. GPT-OSS) expose only B/num_shards entries
-                # on shard 0, so dev_toks/dev_pos are shorter than the full host
-                # chunk. Reconstructing the full batch needs the model's mesh layout,
-                # which the shared generator doesn't have; rather than crash on the
-                # mismatched comparison, fall back to the host-provided tokens and
-                # positions for this chunk (the pre-fix behaviour).
+                # Models with sharded decode inputs reconstruct their complete
+                # batch through read_decode_feedback. Preserve the host fallback
+                # for layouts that do not yet provide that hook.
                 if dev_pos.shape[0] != host_pos.shape[0] or dev_toks.shape[0] != tok_chunk.reshape(-1).shape[0]:
                     new_tokens.append(tok_chunk)
                     new_start_pos.append(start_pos[i])
@@ -3889,6 +3879,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 padded_page_table[user, :] = page_table[i, :]
             return padded_page_table
         else:
+            # Scheduler rows can retain a previous request's block IDs beyond
+            # the current prompt. Padded prefill tokens must not write them.
+            owned_blocks = num_blocks_in_seq(prefill_len, block_size)
+            page_table = page_table[:, :owned_blocks]
             # Compatibility with VLLM warmup: prefill kernels run on the padded
             # prefill length (for example 32-token prompts become 128-token
             # kernels), so the page table must expose blocks for that padded
