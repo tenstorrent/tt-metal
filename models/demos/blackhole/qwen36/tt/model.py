@@ -3897,10 +3897,28 @@ class Qwen36Model:
         (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
         for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
         No-op for an identity remap. ``timing``: optional dict, per-phase seconds summed over the GDN
-        layers (GDNTP.remap_slots; perf triage only, it synchronizes the device between phases)."""
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                layer.attention.remap_slots(remap, timing=timing)
+        layers (GDNTP.remap_slots; perf triage only, it synchronizes the device between phases).
+
+        QWEN36_GDN_REMAP_FAST (unset = on at TP=2 only, "1" on at any TP, "0" = the slice/concat path): move only the
+        rows whose slot changed, with the index tensors uploaded once for all layers (gdn.tp.RemapCtx) and the packed
+        conv history's cross-parity re-tag done on device. Measured at TP=2 (lane R, profiles/opt_round5/REMAP.md): the
+        old path rebuilt all 5 state buffers of every GDN layer from 32 single-row slices (~380 ms, host-dispatch
+        bound) plus one host round trip per cross-parity row per layer (~16 ms per row); the result is bit-identical
+        on every row (tests/test_gdn_remap_fast_tp2_scratch.py)."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import RemapCtx, gdn_remap_fast_enabled
+
+        ctx = (
+            RemapCtx(self.mesh_device, [int(remap[i]) for i in range(len(remap))])
+            if gdn_remap_fast_enabled(self.mesh_device)
+            else None
+        )
+        try:
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    layer.attention.remap_slots(remap, timing=timing, ctx=ctx)
+        finally:
+            if ctx is not None:
+                ctx.close()
 
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op

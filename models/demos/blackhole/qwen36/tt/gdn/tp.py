@@ -173,6 +173,82 @@ def spec_ctrl_page(mi, n_users, nv, parity, hold=None):
     return words.reshape(1, -1)
 
 
+# QWEN36_GDN_REMAP_FAST: up to this many moved rows the recurrent state is written row by row in place (ttnn.fill_cache,
+# ~0.26 ms per row over 48 layers at TP=2); above it one indexed_fill + copy of the whole buffer (~30-36 ms) is cheaper.
+_REMAP_FILL_CACHE_MAX_ROWS = 16
+
+
+def gdn_remap_fast_enabled(mesh):
+    """QWEN36_GDN_REMAP_FAST: unset = on for a 2-device mesh (TP=2, where it was validated), "1" = on at any TP,
+    "0" = the slice/concat remap path. Anything else raises."""
+    v = os.environ.get("QWEN36_GDN_REMAP_FAST")
+    if v is None:
+        return mesh.get_num_devices() == 2
+    v = v.strip()
+    if v not in ("0", "1"):
+        raise ValueError(f"QWEN36_GDN_REMAP_FAST must be 0 or 1, got {v!r}")
+    return v == "1"
+
+
+class RemapCtx:
+    """Per-remap state shared by every GDN layer's remap_slots (QWEN36_GDN_REMAP_FAST): the moved-row plan and the
+    device index tensors, uploaded once per remap (at first use) instead of once per layer. close() frees them.
+
+    plan = (same-parity moves, cross-parity moves), each a list of (dst, src) sorted by src so consecutive source
+    slots come out as one slice; the dim-0 row order everywhere is same + cross (row_ids)."""
+
+    def __init__(self, mesh, idx):
+        self.mesh = mesh
+        self.idx = [int(s) for s in idx]
+        moved = sorted(((i, s) for i, s in enumerate(self.idx) if s != i), key=lambda p: p[1])
+        self.plan = (
+            [p for p in moved if (p[0] ^ p[1]) & 1 == 0],
+            [p for p in moved if (p[0] ^ p[1]) & 1 == 1],
+        )
+        self._row_ids = None
+        self._conv_index = {}
+        self._swap = None
+
+    def _replicated(self, t, dtype, layout):
+        return ttnn.from_torch(
+            t, dtype=dtype, layout=layout, device=self.mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        )
+
+    def row_ids(self):
+        """[1, 1, 1, n_moved] uint32 destination slots, in plan order (ttnn.indexed_fill's batch_id)."""
+        if self._row_ids is None:
+            dst = [d for d, _ in self.plan[0] + self.plan[1]]
+            self._row_ids = self._replicated(
+                torch.tensor(dst, dtype=torch.int32).reshape(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            )
+        return self._row_ids
+
+    def conv_index(self, like):
+        """[1, B, C] uint32 TILE gather index (row i reads row idx[i]) for tap buffers shaped like `like`."""
+        key = tuple(like.shape)
+        t = self._conv_index.get(key)
+        if t is None:
+            _, B, C = key
+            src = torch.tensor(self.idx[:B], dtype=torch.int32).view(1, B, 1).expand(1, B, C).contiguous()
+            t = self._conv_index[key] = self._replicated(src, ttnn.uint32, ttnn.TILE_LAYOUT)
+        return t
+
+    def swap_matrix(self):
+        """[1, 1, 32, 32] bf16 permutation swapping rows (and columns) 2c <-> 2c+1."""
+        if self._swap is None:
+            p = torch.arange(32) ^ 1
+            s = torch.zeros(32, 32, dtype=torch.bfloat16)
+            s[torch.arange(32), p] = 1
+            self._swap = self._replicated(s.reshape(1, 1, 32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        return self._swap
+
+    def close(self):
+        for t in [self._row_ids, self._swap, *self._conv_index.values()]:
+            if t is not None:
+                ttnn.deallocate(t)
+        self._row_ids, self._swap, self._conv_index = None, None, {}
+
+
 @dataclass
 class SpecCfg:
     """One registered spec-verify GEOMETRY (a bucket) of a GDN layer: n_users users x T = K+1 candidate rows.
@@ -1682,7 +1758,7 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
         self._conv_win_stale = True
 
-    def remap_slots(self, remap, timing=None):
+    def remap_slots(self, remap, timing=None, ctx=None):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
         previously at slot remap[i] (identity entries are no-ops). Mirrors
         seed_manager.apply_slot_remap for GDN's per-slot recurrent+conv state, which the plugin's
@@ -1693,7 +1769,11 @@ class TPGatedDeltaNet:
         (``taps_s`` sync_conv_taps, ``rec_s`` recurrent gather, ``conv_s`` the K tap gathers, ``packed_s`` the
         packed-history remap incl. its cross-parity host round trips, ``hist_sync_s`` the rebuild fallback),
         with the device synchronized around every phase, plus ``moved`` / ``cross_parity`` row counts and
-        ``packed`` (the packed path ran). None (the default) adds no sync and no work."""
+        ``packed`` (the packed path ran). None (the default) adds no sync and no work.
+
+        ``ctx`` (a RemapCtx, QWEN36_GDN_REMAP_FAST): move only the rows whose slot changed, with a few device ops per
+        buffer (_remap_slots_fast) instead of 32 single-row slices per buffer and a host round trip per cross-parity
+        row. None keeps the slice/concat path below."""
         idx = [int(remap[i]) for i in range(self.B)]
         if all(idx[i] == i for i in range(self.B)):
             return
@@ -1705,15 +1785,22 @@ class TPGatedDeltaNet:
             ttnn.synchronize_device(self.mesh)
             _mark = [time.perf_counter()]
 
-            def _phase(name):
+            def _phase(name, packed=False):
                 ttnn.synchronize_device(self.mesh)
                 now = time.perf_counter()
                 timing[name] = timing.get(name, 0.0) + now - _mark[0]
                 _mark[0] = now
+                if packed:
+                    timing["packed"] = True
 
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         if _phase:
             _phase("taps_s")
+        if ctx is not None:
+            if ctx.idx != idx:
+                raise ValueError(f"RemapCtx built for {ctx.idx}, remap_slots called with {idx}")
+            self._remap_slots_fast(idx, ctx, _phase)
+            return
         self._gather_indices(self.rec_state, idx, dim=0)
         if _phase:
             _phase("rec_s")
@@ -1733,6 +1820,108 @@ class TPGatedDeltaNet:
             if _phase:
                 _phase("hist_sync_s")
         self._conv_win_stale = True
+
+    def _remap_slots_fast(self, idx, ctx, _phase=None):
+        """remap_slots with only the moved rows touched (QWEN36_GDN_REMAP_FAST). Bit-identical to the slice/concat path
+        on EVERY row (identity rows are never read or written; every op is a pure data move, or a 0/1 selector matmul
+        that is exact in bf16):
+          * rec_state [B, Nv, Dk, Dv] fp32 (slot = dim 0, whole tiles): per moved row one slice + one in-place
+            ttnn.fill_cache; above _REMAP_FILL_CACHE_MAX_ROWS rows the conv_hist_packed scheme instead;
+          * conv_hist_packed [B, Nv, 4, 32, 32] bf16: one slice per run of consecutive source slots, one concat,
+            ttnn.indexed_fill (output[ids[k]] = rows[k]) and one in-place copy;
+          * the packed rows of cross-parity moves (see _remap_conv_hist_packed) are re-tagged ON DEVICE: tile rows
+            2c <-> 2c+1 swapped by one selector matmul (transpose, @ swap, transpose) over all of them at once;
+          * conv_states[m] [1, B, C] bf16 (slot = a row inside the tiles): one ttnn.gather along dim 1 + copy.
+        The index tensors are built once per remap and shared by every GDN layer (ctx, a RemapCtx)."""
+        rows_same, rows_cross = ctx.plan
+        order = rows_same + rows_cross  # (dst, src) in concat order
+        if len(order) <= _REMAP_FILL_CACHE_MAX_ROWS:
+            # in place, one row at a time: every source row is sliced (materialized) before the first write, so cycles
+            # are safe; no full-buffer traffic (the 50 MB indexed_fill + copy costs ~0.6 ms per layer on device)
+            rows = [(dst, self._slice_along(self.rec_state, 0, src, src + 1)) for dst, src in order]
+            for dst, r in rows:
+                ttnn.fill_cache(self.rec_state, r, dst)
+            for _, r in rows:
+                ttnn.deallocate(r)
+        else:
+            new = self._indexed_rows(self.rec_state, order, ctx)
+            ttnn.copy(new, self.rec_state)
+            ttnn.deallocate(new)
+        if _phase:
+            _phase("rec_s")
+        index = ctx.conv_index(self.conv_states[0])
+        for m in range(self.K):
+            new = ttnn.gather(self.conv_states[m], 1, index)
+            ttnn.copy(new, self.conv_states[m])
+            ttnn.deallocate(new)
+        if _phase:
+            _phase("conv_s")
+        if self.conv_hist_packed is not None and self._hist_packed_valid:
+            buf = self.conv_hist_packed
+            shp = tuple(buf.shape)  # [B, Nv, 4, 32, 32]
+            buf4 = ttnn.reshape(buf, (shp[0], shp[1] * shp[2], shp[3], shp[4]))  # indexed_fill is rank-4 only
+            parts = []
+            if rows_same:
+                parts.append(self._gather_rows(buf4, rows_same))
+            if rows_cross:
+                x = self._gather_rows(buf4, rows_cross)
+                parts.append(self._swap_packed_parity_dev(x, ctx))
+                ttnn.deallocate(x)
+            rows = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=0)
+            new = ttnn.indexed_fill(ctx.row_ids(), buf4, rows)
+            if rows is not parts[0]:
+                ttnn.deallocate(rows)
+            for p in parts:
+                ttnn.deallocate(p)
+            new5 = ttnn.reshape(new, shp)
+            ttnn.copy(new5, buf)
+            ttnn.deallocate(new5)
+            if _phase:
+                _phase("packed_s", packed=True)
+        else:
+            self._sync_conv_hist_packed()
+            if _phase:
+                _phase("hist_sync_s")
+        self._conv_win_stale = True
+
+    def _gather_rows(self, buf, pairs):
+        """[len(pairs), ...] tensor of buf's dim-0 rows src for (dst, src) in `pairs` (in that order): one slice per
+        run of consecutive source slots, one concat."""
+        runs = []  # [lo, hi) source runs
+        for _, src in pairs:
+            if runs and runs[-1][1] == src:
+                runs[-1][1] = src + 1
+            else:
+                runs.append([src, src + 1])
+        # a full-range ttnn.slice returns `buf` itself, which the caller frees: clone instead
+        parts = [ttnn.clone(buf) if hi - lo == buf.shape[0] else self._slice_along(buf, 0, lo, hi) for lo, hi in runs]
+        if len(parts) == 1:
+            return parts[0]
+        out = ttnn.concat(parts, dim=0)
+        for p in parts:
+            ttnn.deallocate(p)
+        return out
+
+    def _indexed_rows(self, buf, order, ctx):
+        """New tensor = buf with row dst replaced by old row src for every (dst, src) in `order` (dim 0)."""
+        rows = self._gather_rows(buf, order)
+        new = ttnn.indexed_fill(ctx.row_ids(), buf, rows)
+        ttnn.deallocate(rows)
+        return new
+
+    def _swap_packed_parity_dev(self, x, ctx):
+        """Device twin of _swap_packed_parity for [n, Nv*4, 32, 32] packed rows: tile rows 2c <-> 2c+1 swapped.
+        rows(X) swapped = (X^T @ S)^T with S the symmetric 32x32 pair-swap permutation; a 0/1 selector matmul is exact
+        in bf16 with HiFi4 + fp32 accumulation (_cfg_onehot), transposes are data moves."""
+        shp = tuple(x.shape)
+        xt = ttnn.transpose(x, -2, -1)
+        # one tall [n*Nv*4*32, 32] @ [32, 32] matmul (a view: whole tiles stacked); ~25x faster than the batched form
+        tall = ttnn.reshape(xt, (1, 1, shp[0] * shp[1] * shp[2], shp[3]))
+        y = ttnn.matmul(tall, ctx.swap_matrix(), compute_kernel_config=self._cfg_onehot, dtype=ttnn.bfloat16)
+        ttnn.deallocate(xt)
+        out = ttnn.transpose(ttnn.reshape(y, shp), -2, -1)
+        ttnn.deallocate(y)
+        return out
 
     def _remap_conv_hist_packed(self, idx):
         """Reindex the fused-conv packed history: slot i takes old packed slot idx[i].
