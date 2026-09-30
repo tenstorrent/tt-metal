@@ -23,11 +23,15 @@ struct Geometry {
     uint32_t group_size;
 };
 
-// Read one uint32 from element 0 of a 1-element DRAM metadata tensor.
+// Read one uint32 from element 0 of a 1-element DRAM metadata tensor into a CB page base (scratch_l1).
+// The tensor sits at a fixed address the host rewrites between trace replays: the barrier orders the DMA but does not
+// invalidate the RISC data cache, so without invalidate_l1_cache() a replay would read the previous chunk's value
+// (same sequence as trace_metadata::read_metadata_scalar_u32).
 template <typename Accessor>
 FORCE_INLINE uint32_t read_metadata_word(const Accessor& accessor, uint32_t scratch_l1) {
     noc_async_read(accessor.get_noc_addr(0), scratch_l1, sizeof(uint32_t));
     noc_async_read_barrier();
+    invalidate_l1_cache();
     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
 }
 
