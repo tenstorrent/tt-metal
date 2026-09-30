@@ -223,3 +223,19 @@ def test_gate_commit_skips_shared_paths_that_do_not_exist(fx):
     led = Ledger(s.bringup_dir)
     got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
     assert not [p for p in got if p.startswith(("ttnn/", "models/demos/common/"))]
+
+
+def test_gate_outputs_are_allowed_for_the_agent(fx):
+    """F55: files the task's gate writes (e.g. O.1's results/fork_calls.json) never count as an agent path violation."""
+    from models.demos.common.bringup.core.gate import gate_outputs
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+    from models.demos.common.bringup.orchestrator import Orchestrator, allowed
+
+    s = Spec.load(fx())
+    o = Orchestrator(s)
+    task = {"id": "O.1", "step": "optests", "role": "optests", "paths": []}
+    pats = o.allowed_paths(task, "optests")
+    b = str(Ledger(s.bringup_dir).results_dir.relative_to(s.repo))
+    assert allowed(f"{b}/fork_calls.json", pats) and allowed(f"{b}/O.1.json", pats)
+    assert [p.name for p in gate_outputs(Ledger(s.bringup_dir), task)][-1] == "fork_calls.json"
