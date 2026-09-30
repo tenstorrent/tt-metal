@@ -115,9 +115,10 @@ class StimuliSpec:
             Exhaustive 1-ULP sweep: enumerates every finite representable
             value in [low, high] for the target format (sorted, deduplicated),
             pads with zeros to fill the tensor.  Float16_b, Float16, and
-            Float32 are supported (Float32 over a range only — its full domain
-            is far too large to enumerate).  Bypasses the face loop
-            (tensor-level operation).  Uses *low*, *high*, and *offset*;
+            Float32 are supported; Float32's full domain is too large to
+            enumerate, so over a wide range give it a *stride*.  Bypasses the
+            face loop (tensor-level operation).  Uses *low*, *high*, *offset*
+            and *stride*;
             ignores *seed*, *mean*, *std*, *value*, *intervals*, *face_specs*,
             *masked_faces*.
 
@@ -207,6 +208,12 @@ class StimuliSpec:
         For "ulp_sweep" only: skip the first *offset* in-range values before
         filling the tensor.  This lets a range too large for one run be swept
         in batches (offset = 0, N, 2N, …). Defaults to 0.
+    stride: int
+        For "ulp_sweep" only: take every *stride*-th representable value rather
+        than consecutive ones.  A range with more values than one tensor can hold
+        is otherwise covered only at its start; striding the total order instead
+        spreads the sample evenly over every binade, because each binade holds the
+        same number of representable values.  Defaults to 1 (consecutive).
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -221,6 +228,7 @@ class StimuliSpec:
     masked_faces: Optional[Set[int]] = None
     intervals: Optional[List[Tuple[float, float]]] = None
     offset: int = 0
+    stride: int = 1
 
     def __post_init__(self) -> None:
         if not (
@@ -398,8 +406,9 @@ class StimuliSpec:
 
         Enumerates every finite representable value for the target format,
         sorted and deduplicated, padding with zeros to fill the tensor.
-        Float16_b, Float16, and Float32 are supported (Float32 over a range
-        only — its full domain is too large to enumerate).
+        Float16_b, Float16, and Float32 are supported. Float32's full domain is
+        too large to enumerate, so pass ``stride`` to sample it across the range
+        (``ulp_sweep.sweep_spec`` does, for [-inf, inf]).
 
         When used as spec_A, generate_stimuli uses input_dimensions_A if given,
         otherwise auto-sizes it (mirroring to B when spec_B is omitted).
