@@ -823,6 +823,14 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-30T14:38:30'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/xing40_a4b_d_p/tests/bringup/test_c_moe_attn_hc.py: 7f22354a7cfad15f4c89b2763c79381ad0e466e8f44d1d3e0e8ae3840ecb0b6d
+      /localdev/dnijemcevic/bringup/xing40_a4b_d_p/golden/s4096_c2048/manifest.json: 79d9cdd021caafd43983e4508ae02f5e2a7b7612ce9b5c6b54244552b55ea9c8
 - id: S.moe.01
   title: 'moe block with steps 1-1 on device (last: attn_hc)'
   step: implement
