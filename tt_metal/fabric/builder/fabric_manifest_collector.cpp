@@ -774,6 +774,9 @@ manifest::Lifecycle collect_lifecycle(
             .interrupts_enabled = risc.enable_interrupts(),
             .teardown_check_iterations =
                 static_cast<uint32_t>(risc.iterations_between_ctx_switch_and_teardown_checks()),
+            // Decided while emitting: the configured mask, or 0 when this ERISC's telemetry is off.
+            .telemetry_stats_mask = static_cast<FabricTelemetryStatisticMask>(
+                get_named_arg(args.at(risc_id), "FABRIC_TELEMETRY_STATS_MASK")),
         };
         check_risc_named_arg(args, risc_id, "ENABLE_ETHERNET_HANDSHAKE", features.handshake_enabled);
         check_risc_named_arg(args, risc_id, "ENABLE_CONTEXT_SWITCH", features.context_switch_enabled);
@@ -785,6 +788,43 @@ manifest::Lifecycle collect_lifecycle(
 
     lifecycle.kernel_params = collect_kernel_params(erisc_builder, args);
     return lifecycle;
+}
+
+// The diagnostics buffers in the builder's buffer map, each at the address the kernel receives.
+manifest::Diagnostics collect_diagnostics(
+    const FabricEriscDatamoverBuilder& erisc_builder, const std::vector<NamedArgs>& named_ct_args_per_risc) {
+    const auto map = erisc_builder.config.get_telemetry_and_metadata_buffer_map();
+    const auto addresses_to_clear = builder_context().get_fabric_router_addresses_to_clear();
+    const auto buffer =
+        [&](const FabricRouterDiagnosticBufferMap::BufferRegion& region) -> std::optional<manifest::L1Region> {
+        if (!region.is_enabled()) {
+            return std::nullopt;
+        }
+        return l1_region(region.l1_address, region.size_bytes, "raw", addresses_to_clear);
+    };
+
+    // Both addresses are emitted as 0 when the buffer is not allocated.
+    check_named_arg(
+        named_ct_args_per_risc, "PERF_TELEMETRY_BUFFER_ADDR", static_cast<uint32_t>(map.perf_telemetry.l1_address));
+    check_named_arg(
+        named_ct_args_per_risc, "CODE_PROFILING_BUFFER_ADDR", static_cast<uint32_t>(map.code_profiling.l1_address));
+    const bool trimming_capture = map.channel_trimming_capture.is_enabled();
+    check_named_arg(
+        named_ct_args_per_risc,
+        "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE",
+        static_cast<uint32_t>(trimming_capture));
+    if (trimming_capture) {
+        check_named_arg(
+            named_ct_args_per_risc,
+            "RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS",
+            static_cast<uint32_t>(map.channel_trimming_capture.l1_address));
+    }
+
+    return {
+        .perf_telemetry = buffer(map.perf_telemetry),
+        .code_profiling = buffer(map.code_profiling),
+        .channel_trimming = buffer(map.channel_trimming_capture),
+    };
 }
 
 }  // namespace
@@ -812,6 +852,7 @@ manifest::Router collect_manifest_router(
         .credit_counters = collect_credit_counters(erisc_builder, named_ct_args_per_risc),
         .channels = std::move(channels),
         .lifecycle = collect_lifecycle(erisc_builder, named_ct_args_per_risc),
+        .diagnostics = collect_diagnostics(erisc_builder, named_ct_args_per_risc),
     };
 }
 
