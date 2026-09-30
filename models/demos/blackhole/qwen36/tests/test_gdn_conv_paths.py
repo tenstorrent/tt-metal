@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The three GDN prefill conv paths (KDA fused op, native ttnn.conv1d, FIR) against one torch reference.
+"""The GDN prefill conv paths (the KDA fused op and the FIR) against one torch reference.
 
 Random data, no checkpoint. Data is replicated to every device of the TP mesh and asserted on device 0.
 Run:
@@ -15,27 +15,24 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp, replicate_to_device
-from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, kda_channel_chunk_size, kda_conv_prefill
+from models.demos.blackhole.qwen36.tt.gdn.tp import kda_channel_chunk_size, kda_conv_prefill
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 K = 4  # conv kernel width; the carry holds K-1 = 3 rows
 PCC_VS_REF = 0.999
-PCC_KDA_VS_NATIVE = 0.9999
 # The first K-1 rows are the only ones that read the carry, and 3 rows in 2048 do not move a whole-chunk PCC (a
 # dropped carry still scores 0.9996), so their max-abs error is held to a multiple of the other rows' (measured:
 # 0.016 vs 0.045 with the carry, 2.45 without).
 CARRY_ROWS_HEADROOM = 4
 
-# (T, kd, vd, native_chunks, fir) per device: the 27B TP-4 production shape (C = 2560), the 35B-A3B TP-4
-# shape (C = 2048; its native conv needs the layer's two channel chunks, one call overflows L1), the 9B
-# single-device shape (C = 8192; only the KDA op runs there: the native conv's L1_FULL slice cannot hold the
-# 33 MB input and the FIR's shifted copies do not fit L1 next to the L1 qkv) and a small one (C = 192).
-# native_chunks = 0 leaves the native arm out; fir = False the FIR arm.
+# (T, kd, vd, fir) per device: the 27B TP-4 production shape (C = 2560), the 35B-A3B TP-4 shape (C = 2048), the 9B
+# single-device shape (C = 8192; the KDA op only: the FIR's shifted copies do not fit L1 next to the L1 qkv) and a
+# small one (C = 192).
 SHAPES = [
-    pytest.param(2048, 512, 1536, 1, True, id="T2048-kd512-vd1536"),
-    pytest.param(2048, 512, 1024, 2, True, id="T2048-kd512-vd1024"),
-    pytest.param(2048, 2048, 4096, 0, False, id="T2048-kd2048-vd4096"),
-    pytest.param(64, 64, 64, 1, True, id="T64-kd64-vd64"),
+    pytest.param(2048, 512, 1536, True, id="T2048-kd512-vd1536"),
+    pytest.param(2048, 512, 1024, True, id="T2048-kd512-vd1024"),
+    pytest.param(2048, 2048, 4096, False, id="T2048-kd2048-vd4096"),
+    pytest.param(64, 64, 64, True, id="T64-kd64-vd64"),
 ]
 
 
@@ -96,29 +93,6 @@ def _actual_start(mesh):
     )
 
 
-def _native_stub(mesh, w, n_cc):
-    """A TPGatedDeltaNet shell carrying only what _conv1d_prefill reads. conv_w1d is built exactly as the
-    layer's loader does: host ROW_MAJOR [nd*cw, 1, K] sharded on dim 0, here the same [cw, 1, K] per device,
-    one tensor per channel chunk (a list when n_cc > 1, as for gdn_conv_channel_chunks > 1)."""
-    C = w.shape[0]
-    nd = mesh.get_num_devices()
-    cw = C // n_cc
-    stub = TPGatedDeltaNet.__new__(TPGatedDeltaNet)
-    stub.mesh, stub.K, stub.qkv_dim_tp, stub._conv1d_wprep = mesh, K, C, None
-
-    def _shard(w_chunk):
-        return ttnn.from_torch(
-            w_chunk.reshape(cw, 1, K).contiguous().repeat(nd, 1, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-
-    chunks = [_shard(w[i * cw : (i + 1) * cw]) for i in range(n_cc)]
-    stub.tw = {"conv_w1d": chunks[0] if n_cc == 1 else chunks}
-    return stub
-
-
 def _slice3(conv, T, kd, vd):
     """q | k | v column split of a [1, T, C] conv output (the non-fused paths' epilogue)."""
     C = 2 * kd + vd
@@ -166,11 +140,10 @@ def _compare(name, got, ref):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("T, kd, vd, native_chunks, fir", SHAPES)
-def test_conv_paths_match_reference(mesh_device, T, kd, vd, native_chunks, fir, reset_seeds, ensure_gc, request):
-    """KDA fused op, native ttnn.conv1d (the layer's _conv1d_prefill) and the FIR, where each fits, on the same
-    L1 qkv and the same nonzero TILE carry: each within PCC of the fp32 reference, KDA and native agree more
-    tightly, and all honour the same output contract."""
+@pytest.mark.parametrize("T, kd, vd, fir", SHAPES)
+def test_conv_paths_match_reference(mesh_device, T, kd, vd, fir, reset_seeds, ensure_gc, request):
+    """The KDA fused op and the FIR (where it fits) on the same L1 qkv and the same nonzero TILE carry: each
+    within PCC of the fp32 reference, the carry rows included, and both honour the same output contract."""
     mesh = mesh_device
     C = 2 * kd + vd
     x, hist, w = _random_inputs(T, C, seed=223)
@@ -180,14 +153,9 @@ def test_conv_paths_match_reference(mesh_device, T, kd, vd, native_chunks, fir, 
     carry = replicate_to_device(mesh, hist)  # TILE DRAM, as the layer's conv_carry
     taps = _taps(mesh, w)
     start = _actual_start(mesh)
-    stub = _native_stub(mesh, w, native_chunks) if native_chunks else None
 
     def run_kda():
         return kda_conv_prefill(qkv, T, carry, taps, (kd, kd, vd), start)
-
-    def run_native():
-        conv, ns = TPGatedDeltaNet._conv1d_prefill(stub, qkv, T, carry)
-        return (*_slice3(conv, T, kd, vd), ns)
 
     def run_fir():
         conv, ns = _causal_conv1d_fir(
@@ -204,11 +172,7 @@ def test_conv_paths_match_reference(mesh_device, T, kd, vd, native_chunks, fir, 
         )
         return (*_slice3(conv, T, kd, vd), ns)
 
-    arms = (
-        [("kda", run_kda)]
-        + ([("native", run_native)] if stub is not None else [])
-        + ([("fir", run_fir)] if fir else [])
-    )
+    arms = [("kda", run_kda)] + ([("fir", run_fir)] if fir else [])
     outs = {}
     for name, fn in arms:
         q, k, v, ns = fn()
@@ -217,13 +181,6 @@ def test_conv_paths_match_reference(mesh_device, T, kd, vd, native_chunks, fir, 
         for t in (q, k, v, ns):
             ttnn.deallocate(t)
         _compare(name, outs[name], ref)
-
-    if stub is None:
-        return
-    kn_pccs = [_pcc(a, b) for a, b in zip(outs["kda"], outs["native"])]
-    kn_mad = max((a - b).abs().max().item() for a, b in zip(outs["kda"], outs["native"]))
-    logger.info(f"kda vs native: pcc q/k/v {kn_pccs[0]:.6f} {kn_pccs[1]:.6f} {kn_pccs[2]:.6f} | max-abs {kn_mad:.3e}")
-    assert min(kn_pccs) >= PCC_KDA_VS_NATIVE, f"kda vs native pcc {min(kn_pccs):.6f} < {PCC_KDA_VS_NATIVE}"
 
 
 @torch.no_grad()
