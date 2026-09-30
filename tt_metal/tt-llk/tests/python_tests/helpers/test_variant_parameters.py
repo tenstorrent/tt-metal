@@ -2058,3 +2058,30 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
         )
+
+
+
+@dataclass
+class SFPU_DROPOUT_PROBE(TemplateParameter):
+    """Dropout parameters for sources/sfpu_dropout_test.cpp.
+
+    ``dropout_probability`` is the 31-bit threshold the body compares the PRNG draw against (0
+    keeps every element, 0x7FFFFFFF drops every element), ``dropout_scale_bits`` the fp32 bit
+    pattern of the scale, ``dropout_binary_init_before`` runs the eltwise binary init between
+    the datacopy and the body in the same DEST section.
+    """
+
+    dropout_binary_init_before: bool = False
+    dropout_probability: int = 0
+    dropout_scale_bits: int = 0x3F800000  # 1.0f
+    dropout_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool DROPOUT_BINARY_INIT_BEFORE = {'true' if self.dropout_binary_init_before else 'false'};",
+                f"constexpr std::uint32_t DROPOUT_PROBABILITY = {self.dropout_probability}u;",
+                f"constexpr std::uint32_t DROPOUT_SCALE_BITS = {self.dropout_scale_bits}u;",
+                f"constexpr std::uint32_t DROPOUT_SEED = {self.dropout_seed}u;",
+            ]
+        )

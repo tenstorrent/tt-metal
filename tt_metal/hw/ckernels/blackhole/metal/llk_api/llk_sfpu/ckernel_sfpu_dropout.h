@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -23,13 +24,19 @@ inline void calculate_dropout(uint probability, uint scale) {
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
     TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);
-#pragma GCC unroll 0
+    // Unrolled: the RISC then issues the eight-instruction row bodies back to back instead of paying the
+    // loop iteration per row that idled the SFPU about two cycles per row.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         ////////////////////////
         // Scale samples
         // dst_reg[0] = dst_reg[0] * sFloat16b(scale);
         ///////////////////////
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, 3, 0);
+        // DEST is addressed through ADDR_MOD_7, the slot the SFPU inits program to a zero DEST step on
+        // Blackhole. Slot 3 is the Wormhole SFPU slot; here it belongs to the FPU programs, and the eltwise
+        // binary init sets it to a DEST step of 8 rows, so a body that used it read and wrote the wrong rows
+        // when dropout ran after add_tiles in one DEST section.
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 
         ////////////////////////
@@ -49,7 +56,7 @@ inline void calculate_dropout(uint probability, uint scale) {
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, 3, 0);
+        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
         sfpi::dst_reg++;
     }
